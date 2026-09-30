@@ -9269,6 +9269,68 @@ function itemPath(project, item) {
 	return vigilPath(project, slug);
 }
 //#endregion
+//#region app/lib/tone.ts
+var BAD_OUTCOMES = /* @__PURE__ */ new Set([
+	"failed",
+	"refused",
+	"error",
+	"gate-broken",
+	"harness-unchecked",
+	"profile-invalid",
+	"subagents-unproven",
+	"tool-missing"
+]);
+function outcomeTone(outcome) {
+	if (outcome === null) return "idle";
+	if (outcome === "complete" || outcome === "done" || outcome === "ok") return "ok";
+	if (BAD_OUTCOMES.has(outcome)) return "bad";
+	return "idle";
+}
+function ritualBadge(ritual) {
+	if (ritual.heldRun !== null) return {
+		tone: "wait",
+		label: "held"
+	};
+	if (ritual.openRun !== null) return {
+		tone: "run",
+		label: "running"
+	};
+	if (ritual.lifecycle !== "active") return {
+		tone: "idle",
+		label: ritual.lifecycle
+	};
+	if (ritual.overdueDays > 0) return {
+		tone: "late",
+		label: `overdue ${ritual.overdueDays} d`
+	};
+	if (ritual.isDue) return {
+		tone: "gold",
+		label: "due"
+	};
+	if (ritual.nextDue === null) return {
+		tone: "idle",
+		label: "dormant"
+	};
+	return {
+		tone: "ok",
+		label: "scheduled"
+	};
+}
+function vigilBadge(vigil) {
+	if (vigil.state === "closed") return {
+		tone: vigil.verdict === "failed" ? "bad" : "ok",
+		label: vigil.verdict ?? "closed"
+	};
+	if (vigil.flagged) return {
+		tone: "bad",
+		label: "flagged"
+	};
+	return {
+		tone: "idle",
+		label: "armed"
+	};
+}
+//#endregion
 //#region app/lib/view.ts
 /** True when darius itself starts this ritual. */
 function isUnattended(ritual) {
@@ -9369,15 +9431,6 @@ function stuckText(runningFor) {
 /** What a vigil waits for, in words: "due in 3 d", "waits for: the first batch", or both. */
 function vigilWaits(vigil, today) {
 	return [vigil.due === null ? null : `due ${relativeDate(vigil.due, today)}`, vigil.until === null ? null : `waits for: ${vigil.until}`].filter((part) => part !== null);
-}
-/** The questions that wait for the operator: a held run's (one without a question counts as one), and a result's nobody answered. */
-function questionCount(runs) {
-	const held = runs.filter((run) => run.phase === "held").reduce((sum, run) => sum + Math.max(run.questions.length, 1), 0);
-	return runs.filter((run) => asksYou(run)).reduce((sum, run) => sum + (run.result?.questions ?? 0), held);
-}
-/** "2 questions wait for you". */
-function questionsText(count) {
-	return `${count} question${count === 1 ? "" : "s"} wait${count === 1 ? "s" : ""} for you`;
 }
 /** "every day", "every 7 days", "every week"; null without a cadence. */
 function cadenceText(cadence) {
@@ -9552,308 +9605,6 @@ function excerpt(findings, chars = EXCERPT_CHARS) {
 /** The report of a run, when it has one. */
 function reportExcerpt(detail) {
 	return detail === null ? null : excerpt(detail.findings);
-}
-//#endregion
-//#region app/components/shell.tsx
-/**
-* The frame around every page. On a desktop: one 48 px bar with the wordmark,
-* the two main tabs (Home, Runs) and a project switcher at the far end. On a
-* phone the bar keeps the wordmark and the current project, and the tabs move
-* to a bar at the bottom, where a thumb reaches them; its Projects tab opens
-* the project list as a sheet above it. One footer line holds the host facts.
-*/
-function navClass({ isActive }) {
-	return isActive ? "nav-link on" : "nav-link";
-}
-function tabClass({ isActive }) {
-	return isActive ? "tab on" : "tab";
-}
-/** The number of questions that wait, in the colour of waiting. */
-function Count({ questions }) {
-	if (questions === 0) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "count tone-wait",
-		title: questionsText(questions),
-		children: questions
-	});
-}
-/** One link per project, with its open questions and a mark when darius could not read it. */
-function ProjectLinks({ projects }) {
-	return projects.map((project) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
-		to: projectPath(project.name),
-		className: ({ isActive }) => isActive ? "on" : void 0,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "menu-name",
-			children: project.name
-		}), project.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "count tone-bad",
-			children: "!"
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { questions: project.questions })]
-	}, project.name));
-}
-/** Closes an open menu on a press outside it and on Escape; a link inside closes it by changing the path. */
-function useMenuDismiss() {
-	(0, import_react.useEffect)(() => {
-		const close = (except) => {
-			for (const menu of document.querySelectorAll("details[data-menu][open]")) if (except === null || !(except instanceof Node) || !menu.contains(except)) menu.open = false;
-		};
-		const onPress = (event) => close(event.target);
-		const onKey = (event) => {
-			if (event.key === "Escape") close(null);
-		};
-		document.addEventListener("pointerdown", onPress);
-		document.addEventListener("keydown", onKey);
-		return () => {
-			document.removeEventListener("pointerdown", onPress);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, []);
-}
-function Shell({ data, children }) {
-	const { questions } = data;
-	useMenuDismiss();
-	const location = useLocation();
-	const isHome = location.pathname === "/";
-	const current = /^\/p\/([^/]+)/u.exec(location.pathname)?.[1];
-	const currentProject = current === void 0 ? null : decodeURIComponent(current);
-	const inProject = currentProject !== null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "app",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
-				className: "bar",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bar-in wa",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: "/",
-							className: "brand",
-							children: "darius"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-							"aria-label": "Main",
-							className: "nav",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
-								to: "/",
-								end: true,
-								className: navClass,
-								title: questions > 0 ? questionsText(questions) : void 0,
-								children: ["Home", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { questions })]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavLink, {
-								to: "/runs",
-								end: true,
-								className: navClass,
-								children: "Runs"
-							})]
-						}),
-						data.projects.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "bar-end",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-								"data-menu": true,
-								className: "menu",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "menu-cap",
-									children: "Project"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "menu-now",
-									children: currentProject ?? "All"
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "menu-list",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProjectLinks, { projects: data.projects })
-								})]
-							}, location.pathname)
-						}),
-						inProject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bar-ctx",
-							children: currentProject
-						}) : null
-					]
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
-				className: "wa page-main",
-				children
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
-				className: "wa",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "foot",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "foot-left",
-						children: [isHome ? data.selftest.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: line.href,
-							className: "foot-selftest",
-							children: line.text
-						}, line.href)) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushSwitch, {})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "foot-host",
-						children: [
-							data.host,
-							", darius ",
-							data.version,
-							", updated ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
-								dateTime: data.generatedAt,
-								children: clockTime(data.generatedAt, data.utcOffset)
-							}),
-							", seen by ",
-							data.viewer,
-							". ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-								to: "/profiles",
-								children: "Profiles"
-							})
-						]
-					})]
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-				"aria-label": "Tabs",
-				className: "tabbar",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
-						to: "/",
-						end: true,
-						className: tabClass,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-							viewBox: "0 0 24 24",
-							"aria-hidden": "true",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 11 12 3l9 8M5 9.5V21h5v-6h4v6h5V9.5" })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Home", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { questions })] })]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
-						to: "/runs",
-						end: true,
-						className: tabClass,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-							viewBox: "0 0 24 24",
-							"aria-hidden": "true",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4 6h16M4 12h16M4 18h10" })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Runs" })]
-					}),
-					data.projects.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-						"data-menu": true,
-						className: "tabmenu",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
-							className: inProject ? "tab on" : "tab",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-								viewBox: "0 0 24 24",
-								"aria-hidden": "true",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 4h7v7H3zM14 4h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" })
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Projects" })]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "tabmenu-list",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProjectLinks, { projects: data.projects })
-						})]
-					}, location.pathname)
-				]
-			})
-		]
-	});
-}
-//#endregion
-//#region app/lib/clock.tsx
-/**
-* The page clock. The server and the first client render both use the
-* status time from the root loader, so hydration sees the same text. After
-* hydration the clock follows the browser and ticks every 30 seconds.
-*/
-var ClockContext = (0, import_react.createContext)({
-	now: 0,
-	today: "1970-01-01",
-	offset: 0
-});
-function useClock() {
-	return (0, import_react.useContext)(ClockContext);
-}
-var TICK_MS = 3e4;
-function ClockProvider({ generatedAt, today, offset, children }) {
-	const [browserNow, setBrowserNow] = (0, import_react.useState)(null);
-	(0, import_react.useEffect)(() => {
-		setBrowserNow(Date.now());
-		const timer = setInterval(() => setBrowserNow(Date.now()), TICK_MS);
-		return () => clearInterval(timer);
-	}, []);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClockContext, {
-		value: {
-			now: browserNow ?? Date.parse(generatedAt),
-			today,
-			offset
-		},
-		children
-	});
-}
-//#endregion
-//#region app/lib/status.ts
-var cache = /* @__PURE__ */ new WeakMap();
-function statusOf(context) {
-	const cached = cache.get(context);
-	if (cached !== void 0) return cached;
-	const status = context.status();
-	cache.set(context, status);
-	return status;
-}
-//#endregion
-//#region app/lib/tone.ts
-var BAD_OUTCOMES = /* @__PURE__ */ new Set([
-	"failed",
-	"refused",
-	"error",
-	"gate-broken",
-	"harness-unchecked",
-	"profile-invalid",
-	"subagents-unproven",
-	"tool-missing"
-]);
-function outcomeTone(outcome) {
-	if (outcome === null) return "idle";
-	if (outcome === "complete" || outcome === "done" || outcome === "ok") return "ok";
-	if (BAD_OUTCOMES.has(outcome)) return "bad";
-	return "idle";
-}
-function ritualBadge(ritual) {
-	if (ritual.heldRun !== null) return {
-		tone: "wait",
-		label: "held"
-	};
-	if (ritual.openRun !== null) return {
-		tone: "run",
-		label: "running"
-	};
-	if (ritual.lifecycle !== "active") return {
-		tone: "idle",
-		label: ritual.lifecycle
-	};
-	if (ritual.overdueDays > 0) return {
-		tone: "late",
-		label: `overdue ${ritual.overdueDays} d`
-	};
-	if (ritual.isDue) return {
-		tone: "gold",
-		label: "due"
-	};
-	if (ritual.nextDue === null) return {
-		tone: "idle",
-		label: "dormant"
-	};
-	return {
-		tone: "ok",
-		label: "scheduled"
-	};
-}
-function vigilBadge(vigil) {
-	if (vigil.state === "closed") return {
-		tone: vigil.verdict === "failed" ? "bad" : "ok",
-		label: vigil.verdict ?? "closed"
-	};
-	if (vigil.flagged) return {
-		tone: "bad",
-		label: "flagged"
-	};
-	return {
-		tone: "idle",
-		label: "armed"
-	};
 }
 //#endregion
 //#region app/lib/home.ts
@@ -10268,109 +10019,209 @@ function unreadableCard(project) {
 		}]
 	};
 }
-function countPieces(value, tone) {
-	return [{
-		text: String(value),
-		ink: value === 0 ? "mute" : tone
-	}];
-}
 /**
-* The hourly run-due timer. The status has no timer log, so the gauge reads
+* The hourly run-due timer. The status has no timer log, so the line reads
 * the runs: the newest run the timer started anywhere (the self-test counts,
 * it proves the timer fires), and the djinns that are overdue but did not
 * start today.
 */
-function timerGauge(clock, status, states) {
+function timerPiece(clock, status, states) {
 	const last = status.projects.flatMap((project) => project.runs).filter((run) => run.who === "timer").toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
 	const missed = states.filter((state) => state.missed).length;
 	if (missed > 0) {
 		if (last === void 0) return {
-			label: "Timer",
-			value: [{
-				text: "never ran",
-				ink: "late"
-			}]
+			text: "Timer never ran.",
+			ink: "late"
 		};
 		if (hostDate(last.startedAt, clock.offset) !== clock.today) return {
-			label: "Timer",
-			value: [{
-				text: `silent since ${shortDate(hostDate(last.startedAt, clock.offset))}`,
-				ink: "late"
-			}]
+			text: `Timer silent since ${shortDate(hostDate(last.startedAt, clock.offset))}.`,
+			ink: "late"
 		};
 		return {
-			label: "Timer",
-			value: [{
-				text: `${plural$1(missed, "djinn")} not started`,
-				ink: "late"
-			}]
+			text: `Timer: ${plural$1(missed, "djinn")} not started.`,
+			ink: "late"
 		};
 	}
 	if (last === void 0) return {
-		label: "Timer",
-		value: [{
-			text: "no run yet",
-			ink: "mute"
-		}]
+		text: "Timer has no run yet.",
+		ink: "mute"
 	};
 	return {
-		label: "Timer",
-		value: [{
-			text: `ok, last run ${when(clock, last.startedAt)}`,
-			ink: "plain"
-		}]
+		text: `Timer ok, last run ${when(clock, last.startedAt)}.`,
+		ink: "plain"
 	};
 }
-function syncGauge(clock, status) {
+function syncPiece(clock, status) {
 	const last = status.projects.map((project) => project.lastSync).filter((sync) => sync !== null).toSorted().at(-1);
 	if (last === void 0) return {
-		label: "Sync",
-		value: [{
-			text: "never",
-			ink: "mute"
-		}]
+		text: " Never synced.",
+		ink: "mute"
 	};
 	const stale = clock.now - Date.parse(last) > SYNC_STALE_MS;
 	return {
-		label: "Sync",
-		value: [{
-			text: when(clock, last),
-			ink: stale ? "late" : "plain"
-		}]
+		text: ` Synced ${when(clock, last)}.`,
+		ink: stale ? "late" : "plain"
 	};
 }
-var TALLY = [
-	[
-		"held",
-		"Held",
-		"wait"
-	],
-	[
-		"asks",
-		"Asks you",
-		"wait"
-	],
-	[
-		"failed",
-		"Failed",
-		"bad"
-	],
-	[
-		"stuck",
-		"Stuck",
-		"late"
-	],
-	[
-		"flagged",
-		"Flagged",
-		"bad"
-	],
-	[
-		"unreadable",
-		"Unreadable",
-		"bad"
-	]
-];
+function projectNeeds(clock, generatedAt, project) {
+	const runs = activity([project], { withImported: false }).filter((run) => !isNoise(run));
+	const states = project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => djinnState(clock, project.name, ritual, runs));
+	const flagged = project.vigils.filter((vigil) => vigil.flagged);
+	const flaggedChecks = new Set(flagged.map((vigil) => `vigil/${vigil.slug}`));
+	const stuck = runs.flatMap((run) => {
+		const size = stuckFor(run, generatedAt);
+		return size === null || flaggedChecks.has(run.item) ? [] : [{
+			run,
+			size
+		}];
+	});
+	return {
+		project,
+		runs,
+		states,
+		held: runs.filter((run) => run.phase === "held"),
+		asks: runs.filter((run) => asksYou(run)),
+		failed: states.filter((state) => state.last !== null && isOpenFailure(state.last)),
+		stuck,
+		flagged,
+		unreadable: project.error !== null
+	};
+}
+function needsSize(needs) {
+	return needs.held.length + needs.asks.length + needs.failed.length + needs.stuck.length + needs.flagged.length + (needs.unreadable ? 1 : 0);
+}
+/** The things that need the operator, per project and in total: what the verdict says and the badges show. */
+function needCounts(status) {
+	const clock = {
+		now: Date.parse(status.generatedAt),
+		today: status.today,
+		offset: status.utcOffset
+	};
+	const byProject = {};
+	let total = 0;
+	for (const project of status.projects) {
+		const size = needsSize(projectNeeds(clock, status.generatedAt, project));
+		byProject[project.name] = size;
+		if (!isSelftest(project.name)) total += size;
+	}
+	return {
+		total,
+		byProject
+	};
+}
+/** "3 things need you", for the badge title. */
+function needsText(count) {
+	return count === 1 ? "1 thing needs you" : `${count} things need you`;
+}
+/** Rows of Up next before the "more" links. */
+var UP_NEXT_SHOWN = 6;
+function padDays(days) {
+	return String(1e6 - days).padStart(7, "0");
+}
+function djinnEntry(clock, state) {
+	const { project, ritual } = state;
+	const base = {
+		key: `${project}/${ritual.slug}`,
+		title: ritual.title,
+		href: ritualPath(project, ritual.slug)
+	};
+	const detail = [{
+		text: project,
+		ink: "plain"
+	}];
+	if (state.missed) return {
+		rank: 0,
+		order: padDays(ritual.overdueDays),
+		project,
+		line: {
+			...base,
+			tone: "late",
+			word: `Overdue ${plural$1(ritual.overdueDays, "day")}`,
+			detail
+		}
+	};
+	if (state.next === null) return null;
+	if (state.next === "now") return {
+		rank: 2,
+		order: "",
+		project,
+		line: {
+			...base,
+			tone: "gold",
+			word: "Due now",
+			detail
+		}
+	};
+	return {
+		rank: 3,
+		order: state.next,
+		project,
+		line: {
+			...base,
+			tone: "idle",
+			word: `Next ${aheadText(clock, state.next)}`,
+			detail
+		}
+	};
+}
+/** A manual ritual (mode off, active) that is overdue or due today. */
+function manualEntry(project, ritual) {
+	if (ritual.lifecycle !== "active" || ritual.mode !== "off") return null;
+	const base = {
+		key: `${project}/${ritual.slug}`,
+		title: ritual.title,
+		href: ritualPath(project, ritual.slug)
+	};
+	const detail = [{
+		text: project,
+		ink: "plain"
+	}];
+	if (ritual.overdueDays > 0) return {
+		rank: 0,
+		order: padDays(ritual.overdueDays),
+		project,
+		line: {
+			...base,
+			tone: "late",
+			word: `Overdue ${plural$1(ritual.overdueDays, "day")}`,
+			detail
+		}
+	};
+	if (ritual.isDue) return {
+		rank: 1,
+		order: "",
+		project,
+		line: {
+			...base,
+			tone: "gold",
+			word: "Due today",
+			detail
+		}
+	};
+	return null;
+}
+function byEntry(left, right) {
+	return left.rank - right.rank || left.order.localeCompare(right.order) || left.line.title.localeCompare(right.line.title);
+}
+function upNext(clock, all) {
+	const entries = all.flatMap((needs) => [...needs.states.map((state) => djinnEntry(clock, state)), ...needs.project.rituals.map((ritual) => manualEntry(needs.project.name, ritual))]).filter((entry) => entry !== null).toSorted(byEntry);
+	const hidden = /* @__PURE__ */ new Map();
+	for (const entry of entries.slice(UP_NEXT_SHOWN)) hidden.set(entry.project, (hidden.get(entry.project) ?? 0) + 1);
+	return {
+		lines: entries.slice(0, UP_NEXT_SHOWN).map((entry) => entry.line),
+		more: [...hidden].map(([project, count]) => ({
+			project,
+			count,
+			href: projectPath(project)
+		}))
+	};
+}
+/** Overdue djinns and overdue manual rituals: the "overdue" segment of the strip. */
+function overdueCount(all) {
+	return all.reduce((sum, needs) => {
+		return sum + needs.project.rituals.filter((ritual) => ritual.lifecycle === "active" && ritual.mode === "off" && ritual.overdueDays > 0).length + needs.states.filter((state) => state.missed).length;
+	}, 0);
+}
 function verdictTone(needs) {
 	const kinds = new Set(needs.map((card) => card.kind));
 	if (kinds.has("failed") || kinds.has("flagged") || kinds.has("unreadable")) return "bad";
@@ -10386,10 +10237,71 @@ function quietText(clock, states) {
 	const seen = last.acknowledged === null ? "" : ", acknowledged";
 	return `Quiet. The last djinn ran ${whenPhrase(clock, last.startedAt)} and ended ${last.outcome ?? "without an outcome"}${seen}.`;
 }
-/** The Flagged gauge leads to the first flagged card; without one it has nowhere to go. */
-function flaggedLink(needs) {
-	const first = needs.find((card) => card.kind === "flagged");
-	return first === void 0 ? {} : { href: `#${first.id}` };
+/** The segment of one card kind: its count and a link to the first card. Nothing when there is no such card. */
+function cardSegment(needs, kind, label, tone) {
+	const cards = needs.filter((card) => card.kind === kind);
+	const first = cards[0];
+	return first === void 0 ? [] : [{
+		key: kind,
+		label,
+		count: cards.length,
+		tone,
+		href: `#${first.id}`,
+		live: false
+	}];
+}
+/**
+* The status strip. "Need you" always shows (held runs and runs that ask);
+* every other segment shows only above zero: running (not the stuck ones),
+* stuck, failed, flagged, unreadable and overdue.
+*/
+function statusStrip(needs, running, overdue) {
+	const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
+	const runningSegment = running === 0 ? [] : [{
+		key: "running",
+		label: "running",
+		count: running,
+		tone: "run",
+		href: "#now",
+		live: true
+	}];
+	const overdueSegment = overdue === 0 ? [] : [{
+		key: "overdue",
+		label: "overdue",
+		count: overdue,
+		tone: "late",
+		href: "#upnext",
+		live: false
+	}];
+	return [
+		{
+			key: "need",
+			label: "need you",
+			count: waiting,
+			tone: "wait",
+			href: waiting === 0 ? null : "#needs",
+			live: false
+		},
+		...runningSegment,
+		...cardSegment(needs, "stuck", "stuck", "late"),
+		...cardSegment(needs, "failed", "failed", "bad"),
+		...cardSegment(needs, "flagged", "flagged", "bad"),
+		...cardSegment(needs, "unreadable", "unreadable", "bad"),
+		...overdueSegment
+	];
+}
+function newest(left, right) {
+	return right.startedAt.localeCompare(left.startedAt);
+}
+function nowRun(run) {
+	return {
+		id: run.run,
+		title: run.label,
+		project: run.project,
+		href: runPath(run.project, run.run),
+		startedAt: run.startedAt,
+		who: run.who
+	};
 }
 function homeView(status, readRun) {
 	const clock = {
@@ -10397,79 +10309,30 @@ function homeView(status, readRun) {
 		today: status.today,
 		offset: status.utcOffset
 	};
-	const projects = status.projects.filter((project) => !isSelftest(project.name));
-	const runs = activity(projects, { withImported: false }).filter((run) => !isNoise(run));
-	const states = projects.flatMap((project) => project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => djinnState(clock, project.name, ritual, runs)));
-	const held = runs.filter((run) => run.phase === "held");
-	const asks = runs.filter((run) => asksYou(run));
-	const flagged = projects.flatMap((project) => project.vigils.filter((vigil) => vigil.flagged).map((vigil) => ({
-		project,
-		vigil
-	})));
-	const stuck = runs.flatMap((run) => {
-		const size = stuckFor(run, status.generatedAt);
-		return size === null ? [] : [{
-			run,
-			size
-		}];
-	});
-	const flaggedChecks = new Set(flagged.map(({ project, vigil }) => `${project.name}/vigil/${vigil.slug}`));
-	const stuckCards = stuck.filter(({ run }) => !flaggedChecks.has(`${run.project}/${run.item}`));
-	const failed = states.filter((state) => state.last !== null && isOpenFailure(state.last));
+	const all = status.projects.filter((project) => !isSelftest(project.name)).map((project) => projectNeeds(clock, status.generatedAt, project));
+	const states = all.flatMap((needs) => needs.states);
+	const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 	const needs = [
-		...held.map((run) => heldCard(clock, run)),
-		...asks.map((run) => asksCard(clock, readRun, run)),
-		...failed.flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]),
-		...stuckCards.map(({ run, size }) => stuckCard(clock, run, size)),
-		...flagged.map(({ project, vigil }) => flaggedCard(clock, project, vigil, runs, status.generatedAt)),
-		...projects.filter((project) => project.error !== null).map((project) => unreadableCard(project))
+		...all.flatMap((entry) => entry.held).toSorted(newest).map((run) => heldCard(clock, run)),
+		...all.flatMap((entry) => entry.asks).toSorted(newest).map((run) => asksCard(clock, readRun, run)),
+		...all.flatMap((entry) => entry.failed).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]),
+		...all.flatMap((entry) => entry.stuck).toSorted((left, right) => newest(left.run, right.run)).map(({ run, size }) => stuckCard(clock, run, size)),
+		...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
+		...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project))
 	];
 	const lastNight = states.filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY).toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? "")).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]);
-	const tally = TALLY.flatMap(([kind, word, tone]) => {
-		const cards = needs.filter((card) => card.kind === kind);
-		const first = cards[0];
-		return first === void 0 ? [] : [{
-			count: cards.length,
-			word,
-			tone,
-			href: `#${first.id}`
-		}];
-	});
-	const running = runs.filter((run) => run.phase === "running").length;
-	const runningValue = stuck.length === 0 ? countPieces(running, "plain") : [{
-		text: `${running}, `,
-		ink: "plain"
-	}, {
-		text: `${stuck.length} stuck`,
-		ink: "late"
-	}];
+	const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
 	return {
 		verdict: verdictText(needs.length),
 		tone: verdictTone(needs),
 		sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${nextSentence(clock, states)}`,
-		tally,
+		strip: statusStrip(needs, now.length, overdueCount(all)),
+		now,
 		needs,
 		quiet: quietText(clock, states),
 		lastNight,
-		watch: [
-			timerGauge(clock, status, states),
-			{
-				label: "Running",
-				value: runningValue,
-				href: "/runs?state=running"
-			},
-			{
-				label: "Held",
-				value: countPieces(held.length, "wait"),
-				href: "/runs?state=held"
-			},
-			{
-				label: "Flagged",
-				value: countPieces(flagged.length, "bad"),
-				...flaggedLink(needs)
-			},
-			syncGauge(clock, status)
-		],
+		upNext: upNext(clock, all),
+		health: [timerPiece(clock, status, states), syncPiece(clock, status)],
 		djinns: states.map((state) => djinnLine(clock, status.generatedAt, state)).toSorted((left, right) => LINE_ORDER[left.tone] - LINE_ORDER[right.tone])
 	};
 }
@@ -10501,6 +10364,270 @@ function selftestLines(status) {
 	});
 }
 //#endregion
+//#region app/components/shell.tsx
+/**
+* The frame around every page. On a desktop: one 48 px bar with the wordmark,
+* the two main tabs (Home, Runs) and a project switcher at the far end. On a
+* phone the bar keeps the wordmark and the current project, and the tabs move
+* to a bar at the bottom, where a thumb reaches them; its Projects tab opens
+* the project list as a sheet above it. One footer line holds the host facts.
+*/
+function navClass({ isActive }) {
+	return isActive ? "nav-link on" : "nav-link";
+}
+function tabClass({ isActive }) {
+	return isActive ? "tab on" : "tab";
+}
+/** The number of things that need the operator (the number in the home verdict), in the colour of waiting. */
+function Count({ things }) {
+	if (things === 0) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "count tone-wait",
+		title: needsText(things),
+		children: things
+	});
+}
+/** One link per project, with what needs the operator and a mark when darius could not read it. */
+function ProjectLinks({ projects }) {
+	return projects.map((project) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
+		to: projectPath(project.name),
+		className: ({ isActive }) => isActive ? "on" : void 0,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "menu-name",
+			children: project.name
+		}), project.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "count tone-bad",
+			children: "!"
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { things: project.needs })]
+	}, project.name));
+}
+/** Closes an open menu on a press outside it and on Escape; a link inside closes it by changing the path. */
+function useMenuDismiss() {
+	(0, import_react.useEffect)(() => {
+		const close = (except) => {
+			for (const menu of document.querySelectorAll("details[data-menu][open]")) if (except === null || !(except instanceof Node) || !menu.contains(except)) menu.open = false;
+		};
+		const onPress = (event) => close(event.target);
+		const onKey = (event) => {
+			if (event.key === "Escape") close(null);
+		};
+		document.addEventListener("pointerdown", onPress);
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("pointerdown", onPress);
+			document.removeEventListener("keydown", onKey);
+		};
+	}, []);
+}
+/** The close button of the project sheet: it shuts the menu it sits in. */
+function closeMenu(event) {
+	const menu = event.currentTarget.closest("details");
+	if (menu === null) return;
+	menu.open = false;
+	menu.querySelector("summary")?.focus();
+}
+function Shell({ data, children }) {
+	const { needs } = data;
+	useMenuDismiss();
+	const location = useLocation();
+	const isHome = location.pathname === "/";
+	const current = /^\/p\/([^/]+)/u.exec(location.pathname)?.[1];
+	const currentProject = current === void 0 ? null : decodeURIComponent(current);
+	const inProject = currentProject !== null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "app",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
+				className: "bar",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bar-in wa",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: "/",
+							className: "brand",
+							children: "darius"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+							"aria-label": "Main",
+							className: "nav",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
+								to: "/",
+								end: true,
+								className: navClass,
+								title: needs > 0 ? needsText(needs) : void 0,
+								children: ["Home", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { things: needs })]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavLink, {
+								to: "/runs",
+								end: true,
+								className: navClass,
+								children: "Runs"
+							})]
+						}),
+						data.projects.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "bar-end",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+								"data-menu": true,
+								className: "menu",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "menu-cap",
+									children: "Project"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "menu-now",
+									children: currentProject ?? "All"
+								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "menu-list",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProjectLinks, { projects: data.projects })
+								})]
+							}, location.pathname)
+						}),
+						inProject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: projectPath(currentProject),
+							className: "bar-ctx",
+							children: currentProject
+						}) : null
+					]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
+				className: "wa page-main",
+				children
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
+				className: "wa",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "foot",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "foot-left",
+						children: [isHome ? data.selftest.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: line.href,
+							className: "foot-selftest",
+							children: line.text
+						}, line.href)) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushSwitch, {})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "foot-host",
+						children: [
+							data.host,
+							", darius ",
+							data.version,
+							", updated ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
+								dateTime: data.generatedAt,
+								children: clockTime(data.generatedAt, data.utcOffset)
+							}),
+							", seen by ",
+							data.viewer,
+							". ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: "/profiles",
+								children: "Profiles"
+							})
+						]
+					})]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+				"aria-label": "Tabs",
+				className: "tabbar",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
+						to: "/",
+						end: true,
+						className: tabClass,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+							viewBox: "0 0 24 24",
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 11 12 3l9 8M5 9.5V21h5v-6h4v6h5V9.5" })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Home", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Count, { things: needs })] })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(NavLink, {
+						to: "/runs",
+						end: true,
+						className: tabClass,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+							viewBox: "0 0 24 24",
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4 6h16M4 12h16M4 18h10" })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Runs" })]
+					}),
+					data.projects.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+						"data-menu": true,
+						className: "tabmenu",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+							className: inProject ? "tab on" : "tab",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+								viewBox: "0 0 24 24",
+								"aria-hidden": "true",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 4h7v7H3zM14 4h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" })
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Projects" })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "tabmenu-list",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "tabmenu-head",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "label",
+									children: "Projects"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "tabmenu-close",
+									"aria-label": "Close the project list",
+									onClick: closeMenu,
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+										viewBox: "0 0 24 24",
+										"aria-hidden": "true",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 6l12 12M18 6 6 18" })
+									})
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProjectLinks, { projects: data.projects })]
+						})]
+					}, location.pathname)
+				]
+			})
+		]
+	});
+}
+//#endregion
+//#region app/lib/clock.tsx
+/**
+* The page clock. The server and the first client render both use the
+* status time from the root loader, so hydration sees the same text. After
+* hydration the clock follows the browser and ticks every 30 seconds.
+*/
+var ClockContext = (0, import_react.createContext)({
+	now: 0,
+	today: "1970-01-01",
+	offset: 0
+});
+function useClock() {
+	return (0, import_react.useContext)(ClockContext);
+}
+var TICK_MS = 3e4;
+function ClockProvider({ generatedAt, today, offset, children }) {
+	const [browserNow, setBrowserNow] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		setBrowserNow(Date.now());
+		const timer = setInterval(() => setBrowserNow(Date.now()), TICK_MS);
+		return () => clearInterval(timer);
+	}, []);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClockContext, {
+		value: {
+			now: browserNow ?? Date.parse(generatedAt),
+			today,
+			offset
+		},
+		children
+	});
+}
+//#endregion
+//#region app/lib/status.ts
+var cache = /* @__PURE__ */ new WeakMap();
+function statusOf(context) {
+	const cached = cache.get(context);
+	if (cached !== void 0) return cached;
+	const status = context.status();
+	cache.set(context, status);
+	return status;
+}
+//#endregion
 //#region app/root.tsx
 var root_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => ErrorBoundary,
@@ -10513,6 +10640,7 @@ var root_exports = /* @__PURE__ */ __exportAll({
 });
 function loader$8({ context }) {
 	const status = statusOf(context);
+	const needs = needCounts(status);
 	return {
 		nonce: context.nonce,
 		viewer: context.viewer,
@@ -10521,12 +10649,12 @@ function loader$8({ context }) {
 		generatedAt: status.generatedAt,
 		today: status.today,
 		utcOffset: status.utcOffset,
-		questions: questionCount(status.projects.filter((project) => !isSelftest(project.name)).flatMap((project) => project.runs.filter((run) => !isImported(run)))),
+		needs: needs.total,
 		selftest: selftestLines(status),
 		projects: status.projects.map((project) => ({
 			name: project.name,
 			error: project.error !== null,
-			questions: questionCount(project.runs.filter((run) => !isImported(run)))
+			needs: needs.byProject[project.name] ?? 0
 		}))
 	};
 }
@@ -10657,6 +10785,17 @@ var ErrorBoundary = withErrorBoundaryProps(function ErrorBoundary({ error }) {
 * fallback selects the text for a manual copy. The box selects all on one
 * tap even without JavaScript.
 */
+/**
+* The command as text, with each hyphenated word (a project name, say) kept
+* whole: a narrow box then wraps at the spaces, never inside "demo-shop".
+* The copied text is the plain command.
+*/
+function wrapSafe(command) {
+	return command.split(/(\S*\w-\w\S*)/u).map((part, index) => index % 2 === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "nowrap",
+		children: part
+	}, `${index}`) : part);
+}
 function Command({ command }) {
 	const box = (0, import_react.useRef)(null);
 	const [result, setResult] = (0, import_react.useState)("none");
@@ -10682,7 +10821,7 @@ function Command({ command }) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
 				ref: box,
 				className: "cmd-text",
-				children: command
+				children: wrapSafe(command)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "copy",
@@ -10909,6 +11048,13 @@ function summaryTags(summary, isAnswered) {
 function Word({ text }) {
 	return text.split(/(\d+)/u).map((part, index) => /^\d+$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "num",
+		children: part
+	}, `${index}`) : part);
+}
+/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
+function TitleText({ text }) {
+	return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => /^\d{4}-\d{2}-\d{2}$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "whitespace-nowrap",
 		children: part
 	}, `${index}`) : part);
 }
@@ -11194,9 +11340,11 @@ function Actions({ actions }) {
 		}, `${index}`))
 	});
 }
-/** The top of a run page that handed in a result: the banner and tiles, the questions, the items, the actions. */
+/** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
 function ResultPanel({ project, row, result }) {
 	const tone = resultTone(result.status);
+	const hasQuestions = result.questions.length > 0;
+	const tiles = result.metrics.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tiles, { metrics: result.metrics });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
 			title: "Result",
@@ -11216,16 +11364,19 @@ function ResultPanel({ project, row, result }) {
 						children: ["Note for the next run: ", result.handoff]
 					})
 				]
-			}), result.metrics.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tiles, { metrics: result.metrics })]
+			}), hasQuestions ? null : tiles]
 		}),
-		result.questions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+		hasQuestions ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 			title: "Questions for you",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultQuestions, {
 				project,
 				row,
 				questions: result.questions
 			})
-		}),
+		}), tiles === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+			title: "Numbers",
+			children: tiles
+		})] }) : null,
 		result.items.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 			title: "What it found",
 			aside: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -11241,8 +11392,297 @@ function ResultPanel({ project, row, result }) {
 	] });
 }
 //#endregion
+//#region app/components/pulse.tsx
+/** The dashboard head of a project page: the four tiles, and the panels for what is open and what is scheduled. */
+/** One count of the status strip. The whole segment is the link. */
+function Pill({ label, value, sub, tone, href, live = false }) {
+	const on = value > 0;
+	const className = `pill tone-${on ? tone : "idle"}`;
+	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		on && live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "live-bar",
+			"aria-hidden": "true"
+		}) : null,
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pill-dot",
+			"aria-hidden": "true"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pill-n",
+			children: value
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pill-l",
+			children: label
+		}),
+		sub === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pill-sub",
+			children: sub
+		})
+	] });
+	if (href === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className,
+		children: body
+	});
+	if (href.startsWith("#")) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+		href,
+		className,
+		children: body
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+		to: href,
+		className,
+		children: body
+	});
+}
+/** Whether an armed vigil is due today or late; one without a date never is. */
+function vigilIsDue(vigil, today) {
+	return vigil.due !== null && vigil.due <= today;
+}
+/** Running, waiting for you, armed vigils, overdue by hand: one slim strip, each segment opens what it counts. */
+function Pulse({ data }) {
+	const { today } = useClock();
+	const running = data.live.filter(({ run }) => run.phase === "running").length;
+	const waiting = data.live.length - running;
+	const flagged = data.openVigils.filter((vigil) => vigil.flagged).length;
+	const due = data.openVigils.filter((vigil) => vigilIsDue(vigil, today)).length;
+	const runsHref = (state) => `/runs?project=${encodeURIComponent(data.project)}&state=${state}`;
+	const vigilSub = [flagged === 0 ? null : `${flagged} flagged`, due === 0 ? null : `${due} due`].filter((part) => part !== null).join(", ");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		className: "pulse stagger",
+		"aria-label": "Summary",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "running",
+				value: running,
+				tone: "run",
+				href: running === 0 ? runsHref("running") : "#now",
+				live: true
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "need you",
+				value: waiting,
+				tone: "wait",
+				href: waiting === 0 ? runsHref("held") : "#now"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "vigils armed",
+				value: data.openVigils.length,
+				sub: vigilSub === "" ? void 0 : vigilSub,
+				tone: flagged > 0 ? "bad" : due > 0 ? "late" : "gold",
+				href: data.openVigils.length === 0 ? null : "#vigils"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "overdue by hand",
+				value: data.overdue,
+				tone: "late",
+				href: data.manual === 0 ? null : "?show=manual#manual"
+			})
+		]
+	});
+}
+/**
+* A list that is short on a phone: rows marked `phone-extra` stay hidden until
+* the button under them is pressed. On a wide screen every row shows and the button does not.
+*/
+function PhoneMore({ hidden, noun, open = false, children }) {
+	const [expanded, setExpanded] = (0, import_react.useState)(open);
+	(0, import_react.useEffect)(() => {
+		if (open) setExpanded(true);
+	}, [open]);
+	if (hidden <= 0) return children;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: `phone-more${expanded ? " is-open" : ""}`,
+		children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "phone-toggle",
+			"aria-expanded": expanded,
+			onClick: () => setExpanded(!expanded),
+			children: expanded ? "Show fewer" : `Show ${hidden} more ${noun}`
+		})]
+	});
+}
+/** How long a run has run, against the page clock (it ticks every 30 s). */
+function Elapsed({ since }) {
+	const { now } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: duration(since, new Date(now).toISOString()) || "just now" });
+}
+/** Runs that are open now or wait for a person. A running one sweeps a light along its top edge. */
+function LivePanel({ live }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id: "now",
+		className: "section",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Now" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "panel",
+			children: live.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "panel-empty",
+				children: "Nothing runs and nothing waits for you."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "rows stagger",
+				children: live.map(({ run, stuck }) => {
+					const state = runState(run);
+					const running = run.phase === "running";
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+						to: runPath(run.project, run.run),
+						className: `row row-tight${running ? " row-live" : ""}`,
+						children: [
+							running ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "live-bar",
+								"aria-hidden": "true"
+							}) : null,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "row-main",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "row-title",
+										children: run.label
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "row-sub",
+										children: [running ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since: run.startedAt }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt }), run.who === "timer" ? ", by timer" : `, by ${run.who}`]
+									}),
+									stuck === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "row-sub tint tone-late",
+										children: stuckText(stuck)
+									}),
+									run.phase === "held" && run.questions.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "row-sub",
+										children: [
+											run.questions.length,
+											" question",
+											run.questions.length === 1 ? "" : "s"
+										]
+									}) : null
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+								tone: state.tone,
+								label: state.label
+							})
+						]
+					}) }, run.run);
+				})
+			})
+		})]
+	});
+}
+/** What darius runs next, the soonest first. */
+function ScheduledPanel({ project, entries }) {
+	const { today } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id: "scheduled",
+		className: "section",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Scheduled" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "panel",
+			children: entries.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "panel-empty",
+				children: "darius runs no ritual of this project."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "rows stagger",
+				children: entries.map(({ ritual, badge }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+					to: ritualPath(project, ritual.slug),
+					className: "row row-tight",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "row-main",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "row-title",
+							children: ritual.title
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "row-sub",
+							children: [cadenceText(ritual.cadence), nextText(ritual, today)].filter((part) => part !== null).join(", ")
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+						tone: badge.tone,
+						label: badge.label
+					})]
+				}) }, ritual.slug))
+			})
+		})]
+	});
+}
+/** How many armed vigils show before the fold. */
+var VIGILS_SHOWN = 3;
+/** The state of an armed vigil: flagged, late, due today, or waiting. */
+function armedBadge(vigil, today) {
+	if (vigil.flagged) return {
+		tone: "bad",
+		label: "Flagged"
+	};
+	if (vigil.due !== null && vigil.due < today) return {
+		tone: "late",
+		label: "Overdue"
+	};
+	if (vigil.due === today) return {
+		tone: "gold",
+		label: "Due today"
+	};
+	return {
+		tone: "idle",
+		label: "Armed"
+	};
+}
+function VigilRows({ vigils, target }) {
+	const { today } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "rows stagger",
+		children: vigils.map((vigil) => {
+			const badge = armedBadge(vigil, today);
+			const id = vigilAnchor(vigil.slug);
+			const waits = vigilWaits(vigil, today);
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				id,
+				className: `row target-row${vigil.flagged ? " row-flagged tone-bad" : ""}${target === id ? " is-target" : ""}`,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "row-main",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "row-title",
+							children: vigil.title
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "row-sub row-clamp",
+							children: waits.length === 0 ? "no date and no event set" : waits.join(", ")
+						}),
+						vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "row-sub",
+							children: ["last check ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: vigil.lastOutcome })]
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+					tone: badge.tone,
+					label: badge.label
+				})]
+			}, vigil.slug);
+		})
+	});
+}
+/** Armed vigils, the most urgent first (the page sorts them): a few in view, the rest one press away. */
+function VigilPanel({ vigils, target }) {
+	const head = vigils.slice(0, VIGILS_SHOWN);
+	const rest = vigils.slice(VIGILS_SHOWN);
+	const inRest = rest.some((vigil) => vigilAnchor(vigil.slug) === target);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id: "vigils",
+		className: "section",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Vigils" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
+				vigils: head,
+				target
+			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+				open: inRest,
+				summary: `${rest.length} more armed`,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
+					vigils: rest,
+					target
+				})
+			})]
+		})]
+	});
+}
+//#endregion
 //#region app/components/board.tsx
-/** The pieces of the command board: the Needs you card, the Watch gauges and the djinn list. */
+/** The pieces of the command board: the status strip, the Now rows, the Needs you card and the djinn and Up next lists. */
 /** Text in parts, each part in its own colour. */
 function Pieces({ pieces }) {
 	return pieces.map((piece, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -11274,46 +11714,124 @@ function Report({ report, lines, fades }) {
 		})]
 	});
 }
-/** A Needs you card, or a plain Last night card when it has no edge. */
+/** The status strip: the `Pill` segments of the project page, over all projects. Each segment is a link to what it counts. */
+function StatusStrip({ segments }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+		className: "pulse pulse-home",
+		"aria-label": "Summary",
+		children: segments.map((segment) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+			label: segment.label,
+			value: segment.count,
+			tone: segment.tone,
+			href: segment.href,
+			live: segment.live
+		}, segment.key))
+	});
+}
+/** One compact row per run that runs now, with its project, how long it has run and the sweeping light. */
+function NowList({ runs }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "rows now-rows",
+		children: runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+			to: run.href,
+			className: "row row-live now-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "live-bar",
+					"aria-hidden": "true"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "row-main",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "row-title",
+						children: run.title
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "row-sub",
+						children: [
+							run.project,
+							", ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since: run.startedAt }),
+							", ",
+							run.who === "timer" ? "by timer" : `by ${run.who}`
+						]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+					tone: "run",
+					label: "Running"
+				})
+			]
+		}) }, run.id))
+	});
+}
+/** The commands of a card, closed under one line: a phone reads the question first and types the answer at a terminal. */
+function Commands({ card }) {
+	if (card.ask !== null) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+		summary: "Answer from a terminal",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "hc-cmd-label",
+			children: "Record your decision:"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: card.ask.command })]
+	});
+	if (card.questions.length === 0) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+		summary: "Answer from a terminal",
+		children: card.questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "hc-cmd",
+			children: [card.questions.length === 1 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "hc-cmd-label",
+				children: ["Question ", index + 1]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: question.command })]
+		}, `${index}`))
+	});
+}
+/**
+* A Needs you card, or a plain Last night card when it has no edge. The head
+* (the status word, the age, the title and the meta line) is one tap target
+* to the run; the questions stay plain text and the commands wait in a
+* closed disclosure.
+*/
 function CardView({ card }) {
 	const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
 	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
 		id: card.id,
-		className: `card card-grid ${edge}`,
+		className: `card hcard ${edge}`,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "card-main",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-						className: "card-title",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: card.href,
-							children: card.title
+				className: "hc-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hc-main",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							className: "card-title",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: card.href,
+								children: card.title
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "card-meta",
+							children: card.meta
+						}),
+						card.meta2 === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "card-meta",
+							children: card.meta2
 						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "card-meta",
-						children: card.meta
-					}),
-					card.meta2 === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "card-meta",
-						children: card.meta2
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "card-side",
-				children: [card.word.ink === "plain" || card.word.ink === "mute" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-					tone: card.word.ink,
-					label: card.word.text
-				}), card.side === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: `card-when${card.side.ink === "plain" ? "" : ` ink-${card.side.ink}`}`,
-					children: card.side.text
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hc-side",
+					children: [card.word.ink === "plain" || card.word.ink === "mute" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+						tone: card.word.ink,
+						label: card.word.text
+					}), card.side === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: `card-when${card.side.ink === "plain" ? "" : ` ink-${card.side.ink}`}`,
+						children: card.side.text
+					})]
 				})]
 			}),
 			hasBody ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "card-body",
+				className: "hc-body",
 				children: [
 					card.kind === "held" && card.questions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "empty",
@@ -11321,18 +11839,13 @@ function CardView({ card }) {
 					}) : null,
 					card.questions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 						className: "qs",
-						children: card.questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: question.command })] }, `${index}`))
+						children: card.questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }) }, `${index}`))
 					}),
-					card.ask === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "next",
-						children: [card.ask.questions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "empty",
-							children: "Open the run to read its questions."
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, { questions: card.ask.questions }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "next-cmd",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Record your decision:" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: card.ask.command })]
-						})]
-					}),
+					card.ask === null ? null : card.ask.questions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "empty",
+						children: "Open the run to read its questions."
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, { questions: card.ask.questions }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Commands, { card }),
 					card.report === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Report, {
 						report: card.report,
 						lines: card.edge === null ? 3 : 4,
@@ -11345,7 +11858,7 @@ function CardView({ card }) {
 				]
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "card-acts",
+				className: "hc-acts",
 				children: card.actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 					to: action.href,
 					children: action.text
@@ -11354,65 +11867,47 @@ function CardView({ card }) {
 		]
 	});
 }
-/** The Watch panel: five small gauges, one row each; a 2 by 3 grid on a phone. */
-function Gauges({ gauges }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+/** One row per line: a square in its state colour, its title, and its state in one line. Each row is a 44 px link. */
+function LineList({ label, lines, empty, more = [] }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "panel",
-		"aria-label": "Watch",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
-			className: "gauges",
-			children: gauges.map((gauge) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "gauge",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", {
-					className: "label",
-					children: gauge.label
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", {
-					className: "gauge-v",
-					children: gauge.href === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: gauge.value }) : gauge.href.startsWith("#") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-						href: gauge.href,
-						className: "gauge-link",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: gauge.value })
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: gauge.href,
-						className: "gauge-link",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: gauge.value })
-					})
-				})]
-			}, gauge.label))
-		})
-	});
-}
-/** One row per djinn: a square in its state colour, its title, and its state in one line. */
-function DjinnList({ djinns }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-		className: "panel",
-		"aria-label": "Djinns",
-		children: djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		"aria-label": label,
+		children: [lines.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "panel-empty",
-			children: "No djinn yet. Give a ritual a repo skill with --skill."
+			children: empty
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 			className: "djinns",
-			children: djinns.map((djinn) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				className: `djinn tone-${djinn.tone}`,
+			children: lines.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: `djinn tone-${line.tone}`,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "djinn-sq",
 					"aria-hidden": "true"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "min-w-0",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: djinn.href,
+						to: line.href,
 						className: "djinn-title",
-						children: djinn.title
+						children: line.title
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "djinn-line",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "djinn-word",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: djinn.word })
-						}), djinn.detail.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: djinn.detail }) })]
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: line.word })
+						}), line.detail.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: line.detail }) })]
 					})]
 				})]
-			}, djinn.key))
-		})
+			}, line.key))
+		}), more.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "more",
+			children: more.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+				to: entry.href,
+				children: [
+					entry.count,
+					" more in ",
+					entry.project
+				]
+			}, entry.project))
+		})]
 	});
 }
 //#endregion
@@ -11435,6 +11930,7 @@ function RouteError() {
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 				to: "/",
+				className: "back",
 				children: "Back home"
 			})]
 		});
@@ -11456,6 +11952,7 @@ function RouteError() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 				to: "/",
+				className: "back",
 				children: "Back home"
 			})
 		]
@@ -11474,72 +11971,94 @@ function loader$7({ context }) {
 }
 var meta$6 = () => [{ title: "darius" }];
 /**
-* The command board: the verdict on top, what needs the operator in the wide
-* column, the Watch gauges and the djinns in the rail. Each run shows once.
+* The command board, across all projects. The verdict and the status strip
+* on top; then, on a phone, Now, Needs you and Last night, and Up next, one
+* health line and the djinns below. On a desktop the wide column holds Needs
+* you, Now and Last night, and the rail holds Up next, the health line and
+* the djinns. Each run shows once.
 */
 var overview_default = withComponentProps(function Overview({ loaderData }) {
-	const { verdict, tone, sub, tally, needs, quiet, lastNight, watch, djinns } = loaderData;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "verdict",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-			className: `verdict-h ink-${tone}`,
-			children: verdict
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "verdict-sub",
-			children: sub
-		})] }), tally.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-			className: "tally",
-			"aria-label": "Summary",
-			children: tally.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
-				href: entry.href,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: entry.count }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-					tone: entry.tone,
-					label: entry.word
-				})]
-			}, entry.word))
-		})]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "board",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "board-main",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "section",
-				id: "needs",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Needs you" }), needs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "quiet",
-					children: quiet
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "cards",
-					children: needs.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
-				})]
-			}), lastNight.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "section",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Last night" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "lastnight",
-					children: lastNight.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
-				})]
+	const { verdict, tone, sub, strip, now, needs, quiet, lastNight, upNext, health, djinns } = loaderData;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "verdict",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+				className: `verdict-h ink-${tone}`,
+				children: verdict
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "verdict-sub",
+				children: sub
 			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-			className: "board-rail",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "section",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Watch" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gauges, { gauges: watch })]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "section",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Djinns" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DjinnList, { djinns })]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusStrip, { segments: strip }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "board board-home",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "board-main",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "section sec-needs",
+						id: "needs",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Needs you" }), needs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "quiet",
+							children: quiet
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "cards",
+							children: needs.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
+						})]
+					}),
+					now.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "section sec-now",
+						id: "now",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Now" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NowList, { runs: now })]
+					}),
+					lastNight.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "section sec-last",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Last night" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "lastnight",
+							children: lastNight.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
+						})]
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+				className: "board-rail",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "section sec-up",
+						id: "upnext",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Up next" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineList, {
+							label: "Up next",
+							lines: upNext.lines,
+							more: upNext.more,
+							empty: "Nothing is due. No djinn is scheduled and no manual ritual is late."
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "health sec-health",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: health })
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "section sec-djinns",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Djinns" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineList, {
+							label: "Djinns",
+							lines: djinns,
+							empty: "No djinn yet. Give a ritual a repo skill with --skill."
+						})]
+					})
+				]
 			})]
-		})]
-	})] });
+		})
+	] });
 });
 //#endregion
 //#region app/components/runs.tsx
 /** The run list, the held-question block and the djinn card, shared by several pages. */
 /** Runs as rows: what ran, how it ended, when. Each row opens the run. */
-function RunList({ runs, showProject, showLabel = true, empty }) {
+function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length }) {
 	if (runs.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: empty });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 		className: "rows",
-		children: runs.map((run) => {
+		children: runs.map((run, index) => {
 			const state = runState(run);
 			const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
 			const sub = [
@@ -11547,41 +12066,44 @@ function RunList({ runs, showProject, showLabel = true, empty }) {
 				took === null ? null : `took ${took}`,
 				run.who === "timer" ? "by timer" : `by ${run.who}`
 			].filter((part) => part !== null);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-				to: runPath(run.project, run.run),
-				className: state.tone === "run" ? "row row-live" : "row",
-				children: [
-					state.tone === "run" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "live-bar",
-						"aria-hidden": "true"
-					}) : null,
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "row-main",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "row-title",
-								children: showLabel ? run.label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
-							}),
-							sub.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "row-sub",
-								children: sub.join(", ")
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultTags, {
-								summary: run.result,
-								isAnswered: run.acknowledged !== null
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-						tone: state.tone,
-						label: state.label
-					}),
-					showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "row-time",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
-					}) : null
-				]
-			}) }, `${run.project}/${run.run}`);
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: index >= phoneShown ? "phone-extra" : void 0,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+					to: runPath(run.project, run.run),
+					className: state.tone === "run" ? "row row-live" : "row",
+					children: [
+						state.tone === "run" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "live-bar",
+							"aria-hidden": "true"
+						}) : null,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "row-main",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "row-title",
+									children: showLabel ? run.label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
+								}),
+								sub.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "row-sub",
+									children: sub.join(", ")
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultTags, {
+									summary: run.result,
+									isAnswered: run.acknowledged !== null
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+							tone: state.tone,
+							label: state.label
+						}),
+						showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "row-time",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
+						}) : null
+					]
+				})
+			}, `${run.project}/${run.run}`);
 		})
 	});
 }
@@ -11755,8 +12277,31 @@ var STATE_WORDS = /* @__PURE__ */ new Map([
 function filterText(query) {
 	return `${STATE_WORDS.get(query.state) ?? `Runs that ended ${query.state}`}${query.project === "" ? " of every project" : ` in ${query.project}`}${query.withImported ? ", imported runs included" : ""}, newest first.`;
 }
-function pillClass(isActive) {
-	return isActive ? "pill pill-active" : "pill";
+function chipClass(isActive, isToggle = false) {
+	const kind = isToggle ? "fchip fchip-toggle" : "fchip";
+	return isActive ? `${kind} fchip-on` : kind;
+}
+/**
+* One row of filter chips. On a phone the row scrolls sideways instead of
+* wrapping, so the filter stays two lines tall; the chip that is on is
+* scrolled into view, so the row never hides the current filter.
+*/
+function ChipRow({ label, current, children }) {
+	const row = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const element = row.current;
+		if (element === null) return;
+		const on = element.querySelector(".fchip-on:not(.fchip-toggle)");
+		if (on === null) return;
+		element.scrollLeft = Math.max(0, on.offsetLeft - (element.clientWidth - on.offsetWidth) / 2);
+	}, [current]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: row,
+		role: "group",
+		"aria-label": label,
+		className: "fchips",
+		children
+	});
 }
 var runs_default = withComponentProps(function Runs({ loaderData }) {
 	const { runs, project, state, withImported, projects } = loaderData;
@@ -11784,44 +12329,50 @@ var runs_default = withComponentProps(function Runs({ loaderData }) {
 				empty: "No run matches this filter."
 			})
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
-			className: "board-rail rail-first",
+			className: "board-rail rail-first rail-filter",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 				title: "Filter",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 					"aria-label": "Filter",
 					className: "filters panel panel-pad",
-					children: [projects.length < 2 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "pills",
+					children: [projects.length < 2 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+						label: "Project",
+						current: project,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: href({
 								...query,
 								project: ""
 							}),
-							className: pillClass(project === ""),
+							className: chipClass(project === ""),
+							"aria-current": project === "" ? "true" : void 0,
 							children: "all projects"
 						}), projects.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: href({
 								...query,
 								project: name
 							}),
-							className: pillClass(project === name),
+							className: chipClass(project === name),
+							"aria-current": project === name ? "true" : void 0,
 							children: name
 						}, name))]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "pills",
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+						label: "State",
+						current: state,
 						children: [["", ...STATES].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: href({
 								...query,
 								state: name
 							}),
-							className: pillClass(name === state),
+							className: chipClass(name === state),
+							"aria-current": name === state ? "true" : void 0,
 							children: name === "" ? "any state" : name
 						}, name)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: href({
 								...query,
 								withImported: !withImported
 							}),
-							className: pillClass(withImported),
+							className: chipClass(withImported, true),
+							"aria-current": withImported ? "true" : void 0,
 							children: withImported ? "with imported runs" : "show imported runs"
 						})]
 					})]
@@ -11906,274 +12457,6 @@ var profiles_default = withComponentProps(function Profiles({ loaderData }) {
 	})] });
 });
 //#endregion
-//#region app/components/pulse.tsx
-/** The dashboard head of a project page: the four tiles, and the panels for what is open and what is scheduled. */
-/** One count of the status strip. The whole segment is the link. */
-function Pill({ label, value, sub, tone, href, live = false }) {
-	const on = value > 0;
-	const className = `pill tone-${on ? tone : "idle"}`;
-	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		on && live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "live-bar",
-			"aria-hidden": "true"
-		}) : null,
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pill-dot",
-			"aria-hidden": "true"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pill-n",
-			children: value
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pill-l",
-			children: label
-		}),
-		sub === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pill-sub",
-			children: sub
-		})
-	] });
-	if (href === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className,
-		children: body
-	});
-	if (href.startsWith("#")) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-		href,
-		className,
-		children: body
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-		to: href,
-		className,
-		children: body
-	});
-}
-/** Whether an armed vigil is due today or late; one without a date never is. */
-function vigilIsDue(vigil, today) {
-	return vigil.due !== null && vigil.due <= today;
-}
-/** Running, waiting for you, armed vigils, overdue by hand: one slim strip, each segment opens what it counts. */
-function Pulse({ data }) {
-	const { today } = useClock();
-	const running = data.live.filter(({ run }) => run.phase === "running").length;
-	const waiting = data.live.length - running;
-	const flagged = data.openVigils.filter((vigil) => vigil.flagged).length;
-	const due = data.openVigils.filter((vigil) => vigilIsDue(vigil, today)).length;
-	const runsHref = (state) => `/runs?project=${encodeURIComponent(data.project)}&state=${state}`;
-	const vigilSub = [flagged === 0 ? null : `${flagged} flagged`, due === 0 ? null : `${due} due`].filter((part) => part !== null).join(", ");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-		className: "pulse stagger",
-		"aria-label": "Summary",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
-				label: "running",
-				value: running,
-				tone: "run",
-				href: running === 0 ? runsHref("running") : "#now",
-				live: true
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
-				label: "need you",
-				value: waiting,
-				tone: "wait",
-				href: waiting === 0 ? runsHref("held") : "#now"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
-				label: "vigils armed",
-				value: data.openVigils.length,
-				sub: vigilSub === "" ? void 0 : vigilSub,
-				tone: flagged > 0 ? "bad" : due > 0 ? "late" : "gold",
-				href: data.openVigils.length === 0 ? null : "#vigils"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
-				label: "overdue by hand",
-				value: data.overdue,
-				tone: "late",
-				href: "?show=manual#manual"
-			})
-		]
-	});
-}
-/** How long a run has run, against the page clock (it ticks every 30 s). */
-function Elapsed({ since }) {
-	const { now } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: duration(since, new Date(now).toISOString()) || "just now" });
-}
-/** Runs that are open now or wait for a person. A running one sweeps a light along its top edge. */
-function LivePanel({ live }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id: "now",
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Now" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "panel",
-			children: live.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "panel-empty",
-				children: "Nothing runs and nothing waits for you."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "rows stagger",
-				children: live.map(({ run, stuck }) => {
-					const state = runState(run);
-					const running = run.phase === "running";
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-						to: runPath(run.project, run.run),
-						className: `row${running ? " row-live" : ""}`,
-						children: [
-							running ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "live-bar",
-								"aria-hidden": "true"
-							}) : null,
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "row-main",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "row-title",
-										children: run.label
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "row-sub",
-										children: [running ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since: run.startedAt }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt }), run.who === "timer" ? ", by timer" : `, by ${run.who}`]
-									}),
-									stuck === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "row-sub tint tone-late",
-										children: stuckText(stuck)
-									}),
-									run.phase === "held" && run.questions.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "row-sub",
-										children: [
-											run.questions.length,
-											" question",
-											run.questions.length === 1 ? "" : "s"
-										]
-									}) : null
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-								tone: state.tone,
-								label: state.label
-							})
-						]
-					}) }, run.run);
-				})
-			})
-		})]
-	});
-}
-/** What darius runs next, the soonest first. */
-function ScheduledPanel({ project, entries }) {
-	const { today } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id: "scheduled",
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Scheduled" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "panel",
-			children: entries.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "panel-empty",
-				children: "darius runs no ritual of this project."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "rows stagger",
-				children: entries.map(({ ritual, badge }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-					to: ritualPath(project, ritual.slug),
-					className: "row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "row-main",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-title",
-							children: ritual.title
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-sub",
-							children: [cadenceText(ritual.cadence), nextText(ritual, today)].filter((part) => part !== null).join(", ")
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-						tone: badge.tone,
-						label: badge.label
-					})]
-				}) }, ritual.slug))
-			})
-		})]
-	});
-}
-/** How many armed vigils show before the fold. */
-var VIGILS_SHOWN = 6;
-/** The state of an armed vigil: flagged, late, due today, or waiting. */
-function armedBadge(vigil, today) {
-	if (vigil.flagged) return {
-		tone: "bad",
-		label: "Flagged"
-	};
-	if (vigil.due !== null && vigil.due < today) return {
-		tone: "late",
-		label: "Overdue"
-	};
-	if (vigil.due === today) return {
-		tone: "gold",
-		label: "Due today"
-	};
-	return {
-		tone: "idle",
-		label: "Armed"
-	};
-}
-function VigilRows({ vigils, target }) {
-	const { today } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-		className: "rows stagger",
-		children: vigils.map((vigil) => {
-			const badge = armedBadge(vigil, today);
-			const id = vigilAnchor(vigil.slug);
-			const waits = vigilWaits(vigil, today);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				id,
-				className: `row target-row${vigil.flagged ? " row-flagged tone-bad" : ""}${target === id ? " is-target" : ""}`,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "row-main",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-title",
-							children: vigil.title
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-sub row-clamp",
-							children: waits.length === 0 ? "no date and no event set" : waits.join(", ")
-						}),
-						vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "row-sub",
-							children: ["last check ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: vigil.lastOutcome })]
-						})
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-					tone: badge.tone,
-					label: badge.label
-				})]
-			}, vigil.slug);
-		})
-	});
-}
-/** Armed vigils, the most urgent first (the page sorts them): a few in view, the rest one press away. */
-function VigilPanel({ vigils, target }) {
-	const head = vigils.slice(0, VIGILS_SHOWN);
-	const rest = vigils.slice(VIGILS_SHOWN);
-	const inRest = rest.some((vigil) => vigilAnchor(vigil.slug) === target);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id: "vigils",
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Vigils" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
-				vigils: head,
-				target
-			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-				open: inRest,
-				summary: `${rest.length} more armed`,
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
-					vigils: rest,
-					target
-				})
-			})]
-		})]
-	});
-}
-//#endregion
 //#region app/lib/target.ts
 /**
 * The element a URL hash points at. The server never sees the hash, so the
@@ -12211,8 +12494,12 @@ var project_exports = /* @__PURE__ */ __exportAll({
 	meta: () => meta$3
 });
 var RECENT = 10;
-/** Manual rituals shown in the rail before the fold. */
-var MANUAL_SHOWN = 6;
+/** Manual rituals shown before the fold. */
+var MANUAL_SHOWN = 3;
+/** Djinn cards a phone shows before its own button; the rest repeat what Scheduled says. */
+var DJINNS_PHONE = 1;
+/** Recent runs a phone shows before its own button. */
+var RECENT_PHONE = 3;
 /** Closed vigils shown in their fold; a long-running project has dozens. */
 var CLOSED_SHOWN = 10;
 /** Manual rituals: the ones to do soon first, then the rest by date, retired and dormant ones last. */
@@ -12278,10 +12565,22 @@ function rowClass(target, id, extra = "") {
 function ManualState({ ritual }) {
 	const badge = ritualBadge(ritual);
 	if (badge.label === "scheduled") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DateLabel, { iso: ritual.nextDue });
+	if (badge.tone === "late" && ritual.overdueDays > 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+		tone: badge.tone,
+		label: `overdue ${ritual.overdueDays} ${ritual.overdueDays === 1 ? "day" : "days"}`
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
 		tone: badge.tone,
 		label: badge.label === "due" ? "due today" : badge.label
 	});
+}
+/** A path that may break after each slash, so a long checkout wraps at a folder. */
+function PathText({ path }) {
+	return path.split("/").map((part, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+		index === 0 ? "" : "/",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("wbr", {}),
+		part
+	] }, `${index}`));
 }
 /** "Manual rituals (7), 5 overdue. Done by hand, darius does not run them." */
 function manualSummary(manual) {
@@ -12319,147 +12618,176 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 	const closedTarget = closedVigils.some((vigil) => vigilAnchor(vigil.slug) === target);
 	const manualHead = manual.slice(0, MANUAL_SHOWN);
 	const manualRest = manual.slice(MANUAL_SHOWN);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-			className: "page-head page-head-tight",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-				className: "page-title",
-				children: project.name
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "page-meta",
-				children: [
-					project.checkout === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "not linked on this host" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-						className: "break-all",
-						children: project.checkout
-					}),
-					project.maxMode === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-						"at most ",
-						project.maxMode,
-						" mode"
-					] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["synced ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: project.lastSync })] })
-				]
-			})]
-		}),
-		project.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "card card-accent edge-bad mb-10",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "card-title ink-bad",
-				children: "darius could not read this project"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-				className: "code-block mt-3",
-				children: project.error
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pulse, { data: {
-			project: project.name,
-			live,
-			scheduled,
-			openVigils,
-			overdue
-		} }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "band",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LivePanel, { live }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduledPanel, {
-				project: project.name,
-				entries: scheduled
-			})]
-		}),
-		openVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "band-tail",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilPanel, {
-				vigils: openVigils,
-				target
-			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "board",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "board-main",
-				children: [djinns.length === 0 && scheduled.length > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-					title: "Djinns",
-					children: djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "darius runs no ritual of this project yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "cards stagger",
-						children: djinns.map(({ ritual, last, report }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DjinnCard, {
-							project: project.name,
-							ritual,
-							last,
-							report,
-							showProject: false
-						}, ritual.slug))
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-					title: "Recent runs",
-					aside: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: `/runs?project=${encodeURIComponent(project.name)}`,
-						children: "All runs"
-					}),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunList, {
-						runs: recent,
-						showProject: false,
-						empty: "darius has not run anything here yet."
-					})
-				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-				className: "board-rail",
-				children: [manual.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
-					title: "By hand",
-					id: "manual",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "proj",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "page-head page-head-tight proj-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+					className: "page-title",
+					children: project.name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "page-meta",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "rail-note",
-							children: manualSummary(manual)
+						project.checkout === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "not linked on this host" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "proj-path",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathText, { path: project.checkout })
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
-							project: project.name,
-							rituals: manualHead
-						}),
-						manualRest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-							open: showManual,
-							summary: `${manualRest.length} more`,
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
-								project: project.name,
-								rituals: manualRest
-							})
-						})
+						project.maxMode === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+							"at most ",
+							project.maxMode,
+							" mode"
+						] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["synced ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: project.lastSync })] })
 					]
-				}), closedVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "folds",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
-						open: closedTarget,
-						summary: `Closed vigils (${closedVigils.length})`,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-							className: "rows",
-							children: closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
-								const badge = vigilBadge(vigil);
-								const id = vigilAnchor(vigil.slug);
-								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-									id,
-									className: rowClass(target, id),
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "row-main",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "row-title",
-											children: vigil.title
-										}), vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "row-sub",
-											children: ["last check ", vigil.lastOutcome]
-										})]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-										tone: badge.tone,
-										label: badge.label
-									})]
-								}, vigil.slug);
-							})
-						}), closedVigils.length > CLOSED_SHOWN ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "rail-note mt-3",
-							children: [closedVigils.length - CLOSED_SHOWN, " older ones are not shown."]
-						}) : null]
-					})
 				})]
-			})]
-		})
-	] });
+			}),
+			project.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "card card-accent edge-bad mb-10",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "card-title ink-bad",
+					children: "darius could not read this project"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+					className: "code-block mt-3",
+					children: project.error
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pulse, { data: {
+				project: project.name,
+				live,
+				scheduled,
+				openVigils,
+				overdue,
+				manual: manual.length
+			} }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "proj-body",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "band",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LivePanel, { live }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduledPanel, {
+							project: project.name,
+							entries: scheduled
+						})]
+					}),
+					openVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "band-tail",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilPanel, {
+							vigils: openVigils,
+							target
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "board",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "board-main",
+							children: [djinns.length === 0 && scheduled.length > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+								title: "Djinns",
+								id: "djinns",
+								children: djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "darius runs no ritual of this project yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneMore, {
+									hidden: djinns.length - DJINNS_PHONE,
+									noun: "djinns",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "cards djinn-list stagger",
+										children: djinns.map(({ ritual, last, report }, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: index >= DJINNS_PHONE ? "phone-extra" : void 0,
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DjinnCard, {
+												project: project.name,
+												ritual,
+												last,
+												report,
+												showProject: false
+											})
+										}, ritual.slug))
+									})
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+								title: "Recent runs",
+								id: "recent",
+								aside: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+									to: `/runs?project=${encodeURIComponent(project.name)}`,
+									children: "All runs"
+								}),
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "panel",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneMore, {
+										hidden: recent.length - RECENT_PHONE,
+										noun: "runs",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunList, {
+											runs: recent,
+											showProject: false,
+											empty: "darius has not run anything here yet.",
+											phoneShown: RECENT_PHONE
+										})
+									})
+								})
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+							className: "board-rail",
+							children: [manual.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+								title: "By hand",
+								id: "manual",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "panel",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+											className: "rail-note",
+											children: manualSummary(manual)
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
+											project: project.name,
+											rituals: manualHead
+										}),
+										manualRest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+											open: showManual,
+											summary: `${manualRest.length} more`,
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
+												project: project.name,
+												rituals: manualRest
+											})
+										})
+									]
+								})
+							}), closedVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "folds proj-closed",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+									open: closedTarget,
+									summary: `Closed vigils (${closedVigils.length})`,
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+										className: "rows",
+										children: closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
+											const badge = vigilBadge(vigil);
+											const id = vigilAnchor(vigil.slug);
+											return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+												id,
+												className: rowClass(target, id),
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "row-main",
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+														className: "row-title",
+														children: vigil.title
+													}), vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+														className: "row-sub",
+														children: ["last check ", vigil.lastOutcome]
+													})]
+												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+													tone: badge.tone,
+													label: badge.label
+												})]
+											}, vigil.slug);
+										})
+									}), closedVigils.length > CLOSED_SHOWN ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "rail-note mt-3",
+										children: [closedVigils.length - CLOSED_SHOWN, " older ones are not shown."]
+									}) : null]
+								})
+							})]
+						})]
+					})
+				]
+			})
+		]
+	});
 });
 //#endregion
 //#region app/routes/ritual.tsx
@@ -12538,7 +12866,7 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 			}) }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
 				className: "page-title",
-				children: row.title
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: row.title })
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "page-meta",
@@ -12752,8 +13080,8 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 				children: title === label ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 					to: itemPath(project, row.item),
 					className: "title-link",
-					children: label
-				}) : title
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: label })
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: title })
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "page-meta",
@@ -12894,13 +13222,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DiBl_hhX.js",
+			"module": "/assets/root-CA-AdaUo.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js"
+				"/assets/view-3SNEkFkZ.js"
 			],
-			"css": ["/assets/root-Ts1qulB3.css"],
+			"css": ["/assets/root-j4HyrIWv.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -12919,14 +13247,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-SHZPhb6e.js",
+			"module": "/assets/overview-C37P1Tiw.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/board-CgdTEvkd.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
+				"/assets/board-DiZf9pZ1.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js"
+				"/assets/view-3SNEkFkZ.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -12947,15 +13275,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-C3VSs9N_.js",
+			"module": "/assets/runs-3VB5Qgji.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
-				"/assets/runs-CDvei_gT.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
+				"/assets/runs-DJ2GtR1p.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js",
-				"/assets/board-CgdTEvkd.js"
+				"/assets/view-3SNEkFkZ.js",
+				"/assets/board-DiZf9pZ1.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -12997,11 +13325,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/profiles-DQj3TF9m.js",
+			"module": "/assets/profiles-j2kV5oPS.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
 				"/assets/clock-DOuU4B9z.js"
 			],
 			"css": [],
@@ -13023,15 +13351,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/project-DlCEN-IV.js",
+			"module": "/assets/project-B35VppxL.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
-				"/assets/runs-CDvei_gT.js",
-				"/assets/board-CgdTEvkd.js"
+				"/assets/view-3SNEkFkZ.js",
+				"/assets/board-DiZf9pZ1.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
+				"/assets/runs-DJ2GtR1p.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13052,15 +13380,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-B9qDD5gh.js",
+			"module": "/assets/ritual-oZo9-A5S.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js",
-				"/assets/board-CgdTEvkd.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
-				"/assets/runs-CDvei_gT.js"
+				"/assets/view-3SNEkFkZ.js",
+				"/assets/board-DiZf9pZ1.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
+				"/assets/runs-DJ2GtR1p.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13081,15 +13409,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BDPlvVAa.js",
+			"module": "/assets/run-DwZrZTwa.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-Czd_Xog6.js",
-				"/assets/board-CgdTEvkd.js",
-				"/assets/ui-ygP3CaYf.js",
-				"/assets/route-error-CHK9Mu5h.js",
-				"/assets/runs-CDvei_gT.js"
+				"/assets/view-3SNEkFkZ.js",
+				"/assets/board-DiZf9pZ1.js",
+				"/assets/ui-wVd2PoG1.js",
+				"/assets/route-error-DI3wO4-Y.js",
+				"/assets/runs-DJ2GtR1p.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13110,8 +13438,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/not-found-BwDQjXYE.js",
-			"imports": ["/assets/jsx-runtime-BqQc0GKz.js", "/assets/route-error-CHK9Mu5h.js"],
+			"module": "/assets/not-found-D7xM0T43.js",
+			"imports": ["/assets/jsx-runtime-BqQc0GKz.js", "/assets/route-error-DI3wO4-Y.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -13119,8 +13447,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-87c35d34.js",
-	"version": "87c35d34",
+	"url": "/assets/manifest-f48a747f.js",
+	"version": "f48a747f",
 	"sri": void 0
 };
 //#endregion

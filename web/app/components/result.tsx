@@ -198,9 +198,11 @@ interface ResultPanelProps {
   result: RunResult;
 }
 
-/** The top of a run page that handed in a result: the banner and tiles, the questions, the items, the actions. */
+/** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
 export function ResultPanel({ project, row, result }: ResultPanelProps): React.ReactNode {
   const tone = resultTone(result.status);
+  const hasQuestions = result.questions.length > 0;
+  const tiles = result.metrics.length === 0 ? null : <Tiles metrics={result.metrics} />;
   return (
     <>
       <Section title="Result">
@@ -209,14 +211,17 @@ export function ResultPanel({ project, row, result }: ResultPanelProps): React.R
           <p className="result-summary">{result.summary}</p>
           {result.handoff === undefined ? null : <p className="rail-note">Note for the next run: {result.handoff}</p>}
         </div>
-        {result.metrics.length === 0 ? null : <Tiles metrics={result.metrics} />}
+        {hasQuestions ? null : tiles}
       </Section>
 
-      {result.questions.length === 0 ? null : (
-        <Section title="Questions for you">
-          <ResultQuestions project={project} row={row} questions={result.questions} />
-        </Section>
-      )}
+      {hasQuestions ? (
+        <>
+          <Section title="Questions for you">
+            <ResultQuestions project={project} row={row} questions={result.questions} />
+          </Section>
+          {tiles === null ? null : <Section title="Numbers">{tiles}</Section>}
+        </>
+      ) : null}
 
       {result.items.length === 0 ? null : (
         <Section title="What it found" aside={<span className="text-muted">{itemsText(result.items)}</span>}>

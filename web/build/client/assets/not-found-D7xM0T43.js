@@ -1,0 +1,1 @@
+import{M as e}from"./jsx-runtime-BqQc0GKz.js";import{t}from"./route-error-DI3wO4-Y.js";var n=()=>[{title:`Not found | darius`}],r=e(function(){return null});export{t as ErrorBoundary,r as default,n as meta};

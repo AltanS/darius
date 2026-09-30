@@ -11,6 +11,15 @@ interface CommandProps {
   command: string;
 }
 
+/**
+ * The command as text, with each hyphenated word (a project name, say) kept
+ * whole: a narrow box then wraps at the spaces, never inside "demo-shop".
+ * The copied text is the plain command.
+ */
+function wrapSafe(command: string): React.ReactNode {
+  return command.split(/(\S*\w-\w\S*)/u).map((part, index) => (index % 2 === 1 ? <span key={`${index}`} className="nowrap">{part}</span> : part));
+}
+
 export function Command({ command }: CommandProps): React.ReactNode {
   const box = useRef<HTMLElement>(null);
   const [result, setResult] = useState<"none" | "copied" | "selected">("none");
@@ -40,7 +49,7 @@ export function Command({ command }: CommandProps): React.ReactNode {
     <div className="cmd-wrap">
       <div className="cmd">
         <code ref={box} className="cmd-text">
-          {command}
+          {wrapSafe(command)}
         </code>
         <button type="button" className="copy" onClick={() => void copy()}>
           {result === "copied" ? "Copied" : "Copy"}

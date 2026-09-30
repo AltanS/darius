@@ -148,7 +148,7 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 }
 
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Watch", "Djinns", "Guard soak", "seen by", "owner on phone", "testhost"]],
+  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Up next", "Djinns", "Guard soak", "seen by", "owner on phone", "testhost"]],
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
   ["/profiles", ["careful", "opus", "headless"]],
@@ -179,16 +179,19 @@ test("the run filter keeps only matching runs", async () => {
   assert.equal(page.body.includes(`/p/demo/runs/${DONE}`), false);
 });
 
-test("the home page leaves out what darius does not run: manual rituals and imported runs", async () => {
+test("the home page shows manual rituals only as late rows of Up next, and never imported runs", async () => {
   const project = STATUS.projects[0]!;
   const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 4 };
   const imported = { ...RUNS[2]!, run: "01KDDDDDDDDDDDDDDDDDDDDDDD", item: "ritual/by-hand", who: "import" };
   const busy: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [...project.rituals, manual], runs: [...project.runs, imported] }] };
   const response = await handler(new Request("http://darius.test/"), { ...context, status: () => busy });
   const body = await response.text();
-  assert.equal(body.includes("Done by hand"), false, "no card or row for a manual ritual");
+  assert.equal(body.includes("Done by hand</a></p>"), false, "no djinn line for a manual ritual");
+  assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
-  assert.equal(body.includes("overdue"), false, "no line about manual rituals on home");
+  const upNext = body.slice(body.indexOf('id="upnext"'), body.indexOf("Djinns")).replaceAll(/<[^>]+>/gu, "");
+  assert.ok(upNext.includes("Done by hand") && upNext.includes("Overdue 4 days"), "the late manual ritual is a row of Up next");
+  assert.match(body, /<a href="#upnext" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">overdue<\/span>/su, "and the overdue segment of the strip counts it");
   const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();
   assert.ok(projectPage.replaceAll("<!-- -->", "").includes("Manual rituals (1), 1 overdue."), "one quiet line on the project page");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
@@ -263,7 +266,10 @@ test("a run open far past the run timeout shows as possibly stuck, against the s
   const young = await read(`/p/demo/runs/${FRESH}`);
   assert.equal(young.includes("may be stuck"), false, "a run half an hour old is just running");
   const home = await read("/");
-  const needs = home.slice(home.indexOf("Needs you"), home.indexOf("Watch"));
+  const needs = home.slice(home.indexOf("Needs you"), home.indexOf('id="now"'));
+  const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf('id="upnext"'));
+  assert.match(nowRows, new RegExp(`/p/demo/runs/${FRESH}`, "u"), "Now lists the fresh run");
+  assert.doesNotMatch(nowRows, new RegExp(STUCK, "u"), "the stuck run has its card in Needs you, not a row in Now");
   assert.match(needs, new RegExp(`id="stuck-${STUCK}".*href="/p/demo/runs/${STUCK}".*stuck, 12 h`, "su"), "a Needs you card that opens the run");
   assert.doesNotMatch(needs, new RegExp(FRESH, "u"), "none for the fresh run");
   assert.ok(home.includes("Three things need you."), "held, stuck and flagged count");
@@ -278,27 +284,30 @@ test("the run page title: the report heading for a complete run, the ritual titl
   }
 });
 
-test("the Home badge counts questions, not held runs", async () => {
+test("the Home badge counts the things that need you, like the home verdict: not questions", async () => {
   const page = await get("/p/demo");
-  assert.ok(page.body.includes('title="2 questions wait for you"'), "the badge names the questions");
-  assert.match(page.body, /<span class="count tone-wait" title="2 questions wait for you">2<\/span>/u);
+  assert.ok(page.body.includes('title="2 things need you"'), "the badge names the things");
+  assert.match(page.body, /<span class="count tone-wait" title="2 things need you">2<\/span>/u);
+  assert.equal(h1Of((await get("/")).body), "Two things need you.", "the same number as the verdict");
 });
 
-function gauge(body: string, label: string): string {
-  return (new RegExp(`${label}</dt><dd class="gauge-v">(.*?)</dd>`, "su").exec(body)?.[1] ?? "").replaceAll(/<[^>]+>/gu, "");
+/** The count of one segment of the home status strip, or null when the segment is absent. */
+function segment(body: string, label: string): string | null {
+  return new RegExp(`<span class="pill-n">(\\d+)</span><span class="pill-l">${label}</span>`, "u").exec(body)?.[1] ?? null;
 }
 
-test("the busy home page: the verdict in words, one card per thing, gauges, no recent runs list", async () => {
+test("the busy home page: the verdict in words, the status strip, one card per thing, the health line", async () => {
   const body = (await get("/")).body.replaceAll("<!-- -->", "");
   assert.equal(h1Of(body), "Two things need you.");
   assert.match(body, /<h1 class="verdict-h ink-bad">/u, "a flagged vigil makes the verdict red");
-  assert.ok(body.includes('href="#held-'), "the tally links the held card");
-  assert.ok(body.includes('href="#flagged-demo-soak"'), "the tally links the flagged card");
-  assert.equal(gauge(body, "Held"), "1");
-  assert.equal(gauge(body, "Flagged"), "1");
-  assert.equal(gauge(body, "Running"), "0");
-  assert.equal(gauge(body, "Timer"), "ok, last run 1 h ago", "the newest run the timer started");
-  assert.equal(gauge(body, "Sync"), "5 min ago");
+  assert.ok(body.includes('<a href="#needs" class="pill tone-wait">'), "the strip links the held card");
+  assert.ok(body.includes('href="#flagged-demo-soak"'), "the strip links the flagged card");
+  assert.equal(segment(body, "need you"), "1");
+  assert.equal(segment(body, "flagged"), "1");
+  assert.equal(segment(body, "running"), null, "a zero is left out");
+  assert.equal(segment(body, "failed"), null);
+  assert.match(body.replaceAll(/<[^>]+>/gu, ""), /Timer ok, last run 1 h ago\. Synced 5 min ago\./u, "the newest run the timer started, and the sync");
+  assert.equal(body.includes("Watch"), false, "no gauges");
   assert.equal(body.includes("Recent runs"), false, "the run list lives on /runs");
   assert.equal(body.match(/<article id="[a-z]+-/gu)?.length, 2, "one card per thing: the held run and the flagged vigil");
   assert.equal(body.includes(`/p/demo/runs/${DONE}`), false, "an older run of a held djinn does not show");
@@ -328,7 +337,9 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.ok(body.includes("Quiet. The last djinn ran 1 h ago and completed."));
   assert.ok(body.includes("Last night"), "the completed djinn");
   assert.ok(body.includes("Findings heading"), "with its report excerpt");
-  assert.equal(gauge(body, "Flagged"), "0", "the self-test vigil does not count");
+  assert.equal(segment(body, "flagged"), null, "the self-test vigil does not count");
+  assert.equal(segment(body, "need you"), "0");
+  assert.match(body, /<p class="quiet">/u, "one calm line, no box");
   assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted footer line");
   assert.equal(body.includes("date failed"), false, "no card for the self-test vigil");
   const page = await (await handler(new Request("http://darius.test/p/darius-selftest"), { ...context, status: () => quiet })).text();
@@ -395,7 +406,7 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   assert.equal(rail.includes("tone-bad"), false, "no failure colour in the rail");
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
   assert.match(home, /<h1 class="verdict-h ink-ok">/u);
-  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card card-grid card-plain">/su, "a plain Last night card");
+  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card hcard card-plain">/su, "a plain Last night card");
   assert.match(home, /Last night.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "with the acknowledgement");
 });
 
@@ -540,7 +551,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   const home = await readPage("/", ctx);
   assert.equal(h1Of(home), "One thing needs you.");
   assert.match(home, /<h1 class="verdict-h ink-wait">/u, "the waiting tone");
-  assert.ok(home.includes(`href="#asks-${ASKS}"`), "the tally links the card");
+  assert.ok(home.includes('<a href="#needs" class="pill tone-wait">') && home.includes(`<article id="asks-${ASKS}"`), "the strip links the Needs you section, which holds the card");
   const cardAt = home.indexOf(`<article id="asks-${ASKS}"`);
   const card = between(home, cardAt, home.indexOf("</article>", cardAt));
   assert.ok(card.includes("card-accent edge-wait"), "a waiting edge");
@@ -552,7 +563,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
   assert.match(railOf(home), /<li class="djinn tone-wait">.*<span class="djinn-word">Asks you<\/span>/su, "the rail says so");
-  assert.ok(home.includes('<span class="count tone-wait" title="1 question waits for you">1</span>'), "the Home badge counts the question");
+  assert.ok(home.includes('<span class="count tone-wait" title="1 thing needs you">1</span>'), "the Home badge counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
   assert.ok(runs.includes('<span class="tag tone-late">2 high open</span>'), "open high items");
@@ -581,7 +592,7 @@ test("an answered result: the decision replaces the command, home is quiet, the 
   const home = await readPage("/", ctx);
   assert.equal(h1Of(home), "Nothing needs you.");
   assert.equal(home.includes(`id="asks-`), false);
-  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card card-grid card-plain">.*Answered by owner at 10:30/su, "a plain Last night card with the decision");
+  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card hcard card-plain">.*Answered by owner at 10:30/su, "a plain Last night card with the decision");
   assert.equal(home.includes('class="count tone-wait"'), false, "no badge");
 
   const runs = await readPage("/runs", ctx);

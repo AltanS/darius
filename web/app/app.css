@@ -250,7 +250,7 @@
   }
 
   .menu-cap {
-    font: 600 11px/1 var(--font-sans);
+    font: 600 12px/1 var(--font-sans);
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--color-faint);
@@ -332,14 +332,30 @@
       gap: 16px;
     }
 
+    /* The wordmark and the project are links: each gets a 44 px target inside the 48 px bar. */
+    .brand {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      padding-right: 12px;
+    }
+
     .bar-ctx {
       display: block;
       min-width: 0;
       overflow: hidden;
       font-size: 14px;
+      line-height: 44px;
+      text-align: right;
       text-overflow: ellipsis;
       white-space: nowrap;
       color: var(--color-muted);
+    }
+
+    .bar-ctx:hover,
+    .bar-ctx:active {
+      color: var(--color-parchment);
+      text-decoration: none;
     }
 
     .tabbar {
@@ -362,8 +378,8 @@
       height: 56px;
       margin-top: -1px;
       border-top: 2px solid transparent;
-      font-size: 11px;
-      letter-spacing: 0.06em;
+      font-size: 12px;
+      letter-spacing: 0.04em;
       list-style: none;
       color: var(--color-muted);
       cursor: pointer;
@@ -398,23 +414,90 @@
       gap: 6px;
     }
 
-    /* The project list opens as a sheet above the bar. */
+    /* The badge: 12 px, like the tab labels. */
+    .count {
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    /* The project list opens as a sheet above the bar, on a scrim; a press on the scrim closes it (the menu dismiss handler). */
+    .tabbar:has(.tabmenu[open])::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 calc(56px + env(safe-area-inset-bottom));
+      z-index: -1;
+      background: rgb(8 6 4 / 0.62);
+      animation: fade-in 0.18s ease-out;
+    }
+
     .tabmenu-list {
       position: fixed;
       inset: auto 0 calc(56px + env(safe-area-inset-bottom));
       max-height: 60dvh;
       overflow-y: auto;
-      padding: 6px 0;
+      overscroll-behavior: contain;
+      padding: 0 0 6px;
       border-top: 1px solid var(--color-sand-hi);
       box-shadow: 0 -12px 28px rgb(0 0 0 / 0.5);
+    }
+
+    .tabmenu[open] > .tabmenu-list {
+      animation: sheet-up 0.2s ease-out;
     }
 
     .tabmenu-list a {
       padding: 15px 16px;
     }
 
-    .page-main {
-      padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    /* The header row of the sheet: its name and a 44 px close button; it stays put while the rows scroll. */
+    .tabmenu-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-left: 16px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--color-surface);
+    }
+
+    .tabmenu-close {
+      display: flex;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      border: 0;
+      background: none;
+      color: var(--color-muted);
+      cursor: pointer;
+    }
+
+    .tabmenu-close:hover {
+      color: var(--color-parchment);
+    }
+
+    .tabmenu-close svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.6;
+    }
+
+    @keyframes sheet-up {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+    }
+
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+      }
     }
   }
 
@@ -457,17 +540,39 @@
     color: var(--color-muted);
   }
 
+  /* The tab bar is fixed over the bottom 56 px: the footer, not main, leaves room for it. */
   @media (max-width: 639px) {
+    footer.wa {
+      padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    }
+
     .foot {
       flex-direction: column;
-      margin-top: 40px;
+      gap: 12px;
+      margin-top: 32px;
+      padding-bottom: 24px;
+    }
+
+    .foot-left {
+      gap: 8px;
+    }
+
+    /* Links in the footer are 44 px targets: the padding of an inline link takes hits without moving the text. */
+    .foot-selftest {
+      display: block;
+      padding-block: 12px;
+      margin-block: -12px;
+    }
+
+    .foot-host a {
+      padding: 14px 8px;
+      margin: 0 -8px;
     }
   }
 
   /* --- page heads -------------------------------------------------------------------- */
 
-  .page-head,
-  .verdict {
+  .page-head {
     padding: 56px 0 40px;
   }
 
@@ -482,7 +587,7 @@
     letter-spacing: 0.02em;
     color: var(--color-parchment);
     text-wrap: balance;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
   }
 
   .page-meta {
@@ -528,13 +633,6 @@
   }
 
   /* The home verdict: the largest text on any page, in the state colour. */
-  .verdict {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
-    gap: 16px 48px;
-  }
-
   .verdict-h {
     font: 600 40px/1.1 var(--font-display);
     letter-spacing: 0.02em;
@@ -546,75 +644,19 @@
     color: var(--color-muted);
   }
 
-  .tally {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 10px 28px;
-    padding-bottom: 4px;
-  }
-
-  .tally a {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .tally a:hover {
-    text-decoration: none;
-  }
-
-  .tally a:hover .status {
-    text-decoration: underline;
-    text-underline-offset: 4px;
-  }
-
-  .tally b {
-    font: 700 20px/1 var(--font-sans);
-    font-variant-numeric: tabular-nums;
-    color: var(--color-parchment);
-  }
-
   @media (max-width: 900px) {
-    .page-head,
-    .verdict {
+    .page-head {
       padding: 40px 0 32px;
-    }
-
-    .verdict {
-      grid-template-columns: 1fr;
-    }
-
-    .tally {
-      justify-content: flex-start;
     }
   }
 
   @media (max-width: 639px) {
-    .page-head,
-    .verdict {
+    .page-head {
       padding: 32px 0 24px;
-    }
-
-    .verdict-h {
-      font-size: 32px;
-    }
-
-    .verdict-sub {
-      margin-top: 10px;
-      font-size: 14px;
     }
 
     .page-title {
       font-size: 26px;
-    }
-
-    .tally {
-      gap: 10px 20px;
-    }
-
-    .tally b {
-      font-size: 18px;
     }
   }
 
@@ -725,18 +767,6 @@
 
   .empty {
     color: var(--color-muted);
-  }
-
-  .quiet {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 96px;
-    padding: 16px;
-    border: 1px dashed var(--color-sand);
-    font-size: 15px;
-    text-align: center;
-    color: var(--color-faint);
   }
 
   /* --- cards ------------------------------------------------------------------------- */
@@ -852,11 +882,6 @@
     gap: 24px;
   }
 
-  .lastnight .card-grid {
-    grid-template-columns: minmax(0, 1fr) auto;
-    column-gap: 24px;
-  }
-
   @media (max-width: 1180px) {
     .card-grid {
       grid-template-columns: minmax(0, 1fr) 132px;
@@ -875,8 +900,7 @@
       padding: 16px 16px 18px;
     }
 
-    .card-grid,
-    .lastnight .card-grid {
+    .card-grid {
       grid-template-columns: minmax(0, 1fr);
     }
 
@@ -1219,49 +1243,6 @@
     color: var(--color-faint);
   }
 
-  .gauges {
-    padding: 4px 20px;
-  }
-
-  .gauge {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    height: 40px;
-    border-top: 1px solid var(--line-soft);
-  }
-
-  .gauge:first-child {
-    border-top: 0;
-  }
-
-  .gauge {
-    position: relative;
-  }
-
-  /* A number that leads somewhere is pressable over the whole row. */
-  .gauge-link {
-    color: inherit;
-  }
-
-  .gauge-link::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-  }
-
-  .gauge:has(.gauge-link):hover {
-    background: rgb(42 33 23 / 0.7);
-  }
-
-  .gauge-v {
-    font-size: 15px;
-    text-align: right;
-    white-space: nowrap;
-    color: var(--color-parchment);
-  }
-
   .djinns {
     padding: 4px 20px;
   }
@@ -1323,37 +1304,6 @@
   }
 
   @media (max-width: 639px) {
-    .gauges {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      padding: 0;
-    }
-
-    .gauge {
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      gap: 6px;
-      height: 64px;
-      padding: 0 16px;
-      border-top: 0;
-      border-bottom: 1px solid var(--line-soft);
-    }
-
-    .gauge:nth-child(odd) {
-      border-right: 1px solid var(--line-soft);
-    }
-
-    .gauge:last-child {
-      grid-column: 1 / -1;
-      border-right: 0;
-      border-bottom: 0;
-    }
-
-    .gauge-v {
-      text-align: left;
-    }
-
     .djinns {
       padding: 0 16px 8px;
     }
@@ -1587,41 +1537,7 @@
     margin-top: 12px;
   }
 
-  .pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    font-size: 13px;
-  }
-
-  .pill {
-    flex: none;
-    padding: 3px 10px;
-    border: 1px solid var(--color-sand);
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-
-  .pill:hover {
-    border-color: var(--color-sand-hi);
-    color: var(--color-parchment);
-    text-decoration: none;
-  }
-
-  .pill-active {
-    border-color: var(--color-gold);
-    background: var(--color-raised);
-    color: var(--color-parchment);
-  }
-
-  @media (pointer: coarse) {
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      min-height: 40px;
-      padding-inline: 12px;
-    }
-  }
+  /* The runs filter chips (.fchip) live in the pages block below; .pill is the status strip of pulse.tsx. */
 
   /* The notification switch in the footer: one line of text and one plain button. */
   .push {
@@ -1680,7 +1596,7 @@
     box-shadow: inset 0 1px 0 rgb(163 143 107 / 0.16);
   }
 
-  .pill {
+  .pulse .pill {
     position: relative;
     display: flex;
     align-items: baseline;
@@ -1688,16 +1604,20 @@
     gap: 2px 8px;
     min-width: 0;
     padding: 14px 18px 14px 34px;
+    border: 1px solid var(--color-sand);
     border-left: 1px solid var(--line-soft);
     overflow: hidden;
+    white-space: nowrap;
+    color: var(--color-muted);
     transition: background-color 0.15s ease;
   }
 
-  .pill:first-child {
+  .pulse .pill:first-child {
     border-left: 0;
   }
 
-  a.pill:hover {
+  .pulse a.pill:hover {
+    border-color: var(--color-sand-hi);
     background: rgb(42 33 23 / 0.7);
     text-decoration: none;
   }
@@ -1798,11 +1718,11 @@
       margin-bottom: 32px;
     }
 
-    .pill:nth-child(odd) {
+    .pulse .pill:nth-child(odd) {
       border-left: 0;
     }
 
-    .pill:nth-child(n + 3) {
+    .pulse .pill:nth-child(n + 3) {
       border-top: 1px solid var(--line-soft);
     }
 
@@ -1815,6 +1735,262 @@
   @media (max-width: 639px) {
     .page-head-tight {
       padding-bottom: 20px;
+    }
+  }
+
+  /* --- project page (mobile redesign) ------------------------------------------------ */
+
+  /* The head: the checkout is a quiet mono line that may break after any slash. */
+  .proj-head .page-meta .proj-path {
+    font: 12px/1.5 var(--font-mono);
+    letter-spacing: 0;
+    color: var(--color-faint);
+    overflow-wrap: anywhere;
+  }
+
+  /* Every list sits in a panel: one frame, rows without a second box, the same 16 px inside. */
+  .proj .panel .rows {
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .proj .panel > .empty,
+  .proj .panel-empty {
+    padding: 14px 16px;
+  }
+
+  .proj .panel .rail-note {
+    margin: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .proj .panel .fold {
+    border: 0;
+    border-top: 1px solid var(--line-soft);
+    background: none;
+  }
+
+  .proj .panel .fold-body {
+    padding: 0;
+  }
+
+  .proj .panel .fold-body > .rows {
+    border-top: 1px solid var(--line-soft);
+  }
+
+  /* The button that shows the rows a phone hides. It is only there on a phone. */
+  .phone-toggle {
+    display: none;
+  }
+
+  /* A stacked page: the sections become one column in the order a phone reader wants. */
+  @media (max-width: 900px) {
+    .proj-body {
+      display: flex;
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    .proj-body .band,
+    .proj-body .band-tail,
+    .proj-body .board,
+    .proj-body .board-main,
+    .proj-body .board-rail {
+      display: contents;
+    }
+
+    .proj-body #now {
+      order: 1;
+    }
+
+    .proj-body #scheduled {
+      order: 2;
+    }
+
+    .proj-body #manual {
+      order: 3;
+    }
+
+    .proj-body #vigils {
+      order: 4;
+    }
+
+    .proj-body .proj-closed {
+      order: 5;
+    }
+
+    .proj-body #djinns {
+      order: 6;
+    }
+
+    .proj-body #recent {
+      order: 7;
+    }
+
+    .proj .pulse {
+      margin-bottom: 40px;
+    }
+  }
+
+  @media (max-width: 639px) {
+    /* The same rhythm as the home page: 24 px between the strip and the sections, 14 px under a section title. */
+    .proj-body {
+      gap: 24px;
+    }
+
+    .proj .pulse {
+      margin-bottom: 24px;
+    }
+
+    .proj-head {
+      padding-top: 24px;
+      padding-bottom: 20px;
+    }
+
+    /* The meta on one line where it fits; the path under it. */
+    .proj-head .page-meta {
+      gap: 4px 16px;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .proj-head .page-meta .proj-path {
+      order: 3;
+      flex: 1 0 100%;
+    }
+
+    .proj .sect {
+      margin-bottom: 14px;
+    }
+
+    /* The strip on a phone, home and project: a tighter box so "overdue by hand" stays on one line; the dot sits by the first line. */
+    .pulse .pill {
+      padding: 12px 12px 12px 30px;
+    }
+
+    .pulse .pill-dot {
+      left: 14px;
+    }
+
+    .proj .pulse .pill {
+      min-height: 48px;
+    }
+
+    .proj .pulse .pill-dot {
+      top: 22px;
+    }
+
+    .proj .sect-aside a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      padding-inline: 4px;
+    }
+
+    .proj .fold > summary,
+    .phone-toggle {
+      min-height: 44px;
+      padding-block: 0;
+    }
+
+    .phone-toggle {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding-inline: 16px;
+      border: 0;
+      border-top: 1px solid var(--line-soft);
+      background: none;
+      font-size: 14px;
+      text-align: left;
+      color: var(--color-muted);
+      cursor: pointer;
+    }
+
+    .phone-toggle::before {
+      content: "";
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-right: 1px solid var(--color-gold);
+      border-bottom: 1px solid var(--color-gold);
+      transform: rotate(-45deg);
+    }
+
+    .phone-more.is-open > .phone-toggle::before {
+      transform: rotate(45deg);
+    }
+
+    .phone-more:not(.is-open) .phone-extra {
+      display: none;
+    }
+
+    /* A djinn is a short card: the report is one press away, so its excerpt does not repeat here. */
+    .djinn-list .card {
+      padding: 14px 16px 6px;
+    }
+
+    .djinn-list .card-body {
+      display: none;
+    }
+
+    .djinn-list .card-side {
+      margin-bottom: 6px;
+    }
+
+    .djinn-list .card-acts {
+      gap: 0 20px;
+      margin-top: 4px;
+    }
+
+    .djinn-list .card-acts a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+    }
+  }
+
+  /* A phone row: the title, then the state and the time on one line under it, then the details. */
+  @media (max-width: 560px) {
+    .proj .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 1px 12px;
+      min-height: 44px;
+      padding: 10px 16px;
+    }
+
+    .proj .row-main {
+      display: contents;
+    }
+
+    .proj .row-main > * {
+      flex: 0 0 100%;
+      order: 2;
+      min-width: 0;
+    }
+
+    .proj .row-main > .row-title {
+      order: 0;
+    }
+
+    .proj .row > .status,
+    .proj .row-time {
+      flex: 0 1 auto;
+      order: 1;
+      min-width: 0;
+      font-size: 12px;
+      text-align: left;
+    }
+
+    /* Now and Scheduled: the first detail shares the state's line. */
+    .proj .row-tight .row-main > .row-title + .row-sub {
+      flex: 1 1 9em;
+      order: 2;
     }
   }
 
@@ -1917,6 +2093,321 @@
     }
   }
 
+  /* --- home (mobile redesign) --------------------------------------------------------- */
+
+  /* The verdict, then the status strip and the board. */
+  .verdict {
+    padding: 48px 0 24px;
+  }
+
+  @media (max-width: 900px) {
+    .verdict {
+      padding: 32px 0 20px;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .verdict {
+      padding: 20px 0 16px;
+    }
+
+    .verdict-h {
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .verdict-sub {
+      margin-top: 6px;
+      font-size: 14px;
+    }
+  }
+
+  /* The home strip is the project page's `Pill` strip: one row on a desktop, two columns on a phone. */
+  .pulse.pulse-home {
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
+  .pulse-home .pill {
+    align-items: center;
+    min-height: 48px;
+  }
+
+  @media (max-width: 900px) {
+    .pulse.pulse-home {
+      grid-auto-flow: row;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-columns: auto;
+      margin-bottom: 24px;
+    }
+
+    /* An odd last segment takes the whole row. */
+    .pulse-home .pill:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* The board: on a phone the two columns dissolve and the sections take the order of the day. */
+  .board.board-home .board-main,
+  .board.board-home .board-rail {
+    gap: 32px;
+  }
+
+  @media (max-width: 900px) {
+    .board.board-home {
+      gap: 28px;
+    }
+
+    .board.board-home .board-main,
+    .board.board-home .board-rail {
+      display: contents;
+    }
+
+    .sec-now {
+      order: 1;
+    }
+
+    .sec-needs {
+      order: 2;
+    }
+
+    .sec-last {
+      order: 3;
+    }
+
+    .sec-up {
+      order: 4;
+    }
+
+    .sec-health {
+      order: 5;
+    }
+
+    .sec-djinns {
+      order: 6;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .board.board-home {
+      gap: 24px;
+    }
+  }
+
+  .board-home .sect {
+    margin-bottom: 14px;
+  }
+
+  /* Nothing needs you: one calm line, no box. */
+  .quiet {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    font-size: 15px;
+    color: var(--color-ok);
+  }
+
+  .quiet::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--color-ok);
+  }
+
+  /* Now: one compact row per running run; the status sits at the right of the title. */
+  .now-rows .now-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 56px;
+    padding: 10px 16px;
+  }
+
+  .now-rows .now-row .row-main {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  /* Home cards: the head (status, age, title, meta) is one tap target to the run. */
+  .hcard {
+    transition: border-color 0.15s ease;
+  }
+
+  .hcard:hover {
+    border-color: var(--color-sand-hi);
+  }
+
+  .hc-head {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 32px;
+  }
+
+  .hc-main {
+    min-width: 0;
+  }
+
+  .hc-head .card-title a::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .hc-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    text-align: right;
+  }
+
+  .hc-body {
+    display: grid;
+    gap: 14px;
+    margin-top: 16px;
+  }
+
+  .hc-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 24px;
+    margin-top: 14px;
+    font-size: 14px;
+  }
+
+  .hc-acts:empty {
+    display: none;
+  }
+
+  .hcard .qs {
+    gap: 12px;
+  }
+
+  /* The commands wait in a quiet disclosure under the questions. */
+  .hcard .fold {
+    border-inline: 0;
+    background: none;
+  }
+
+  .hcard .fold > summary {
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .hcard .fold-body {
+    padding: 4px 0 14px;
+  }
+
+  .hc-cmd-label {
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  /* Break a command at its spaces first; a token breaks only when it alone is wider than the box. */
+  .hcard .cmd-text {
+    overflow-wrap: break-word;
+  }
+
+  .cmd-text .nowrap {
+    white-space: nowrap;
+  }
+
+  /* Up next and the djinns: rows are links over their whole width. */
+  .djinn-word {
+    font-size: 12px;
+  }
+
+  .more {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 20px;
+    padding: 0 20px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 14px;
+  }
+
+  .more a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+  }
+
+  /* Timer and sync: one quiet line. */
+  .health {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-muted);
+  }
+
+  @media (max-width: 639px) {
+    .hcard {
+      padding: 14px 16px 2px;
+    }
+
+    .hc-head {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hc-side {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      order: -1;
+      margin-bottom: 8px;
+      text-align: left;
+    }
+
+    .hc-head .card-title {
+      font-size: 17px;
+    }
+
+    .hc-body {
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .hc-acts {
+      gap: 0 24px;
+      margin-top: 4px;
+    }
+
+    .hc-acts a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+    }
+
+    .more {
+      padding: 0 16px;
+    }
+
+    .more a {
+      min-height: 44px;
+    }
+
+    /* The Copy button is a strip under the command, so the command keeps the width of the card. */
+    .hcard .cmd {
+      flex-direction: column;
+      gap: 0;
+      padding: 0;
+    }
+
+    .hcard .cmd-text {
+      padding: 10px 12px;
+    }
+
+    .hcard .copy {
+      align-self: stretch;
+      min-width: 0;
+      margin: 0;
+      border-top: 1px solid var(--color-sand);
+      border-left: 0;
+    }
+  }
+
   /* --- small pieces ------------------------------------------------------------------ */
 
   .chip {
@@ -1934,6 +2425,7 @@
     background: rgb(226 211 174 / 0.07);
     font-size: 0.87em;
     color: var(--color-parchment);
+    overflow-wrap: anywhere;
   }
 
   .code-block {
@@ -1990,6 +2482,310 @@
     width: 7px;
     height: 7px;
     background: var(--color-sand-hi);
+  }
+
+  /* --- pages (mobile redesign) -------------------------------------------------------- */
+
+  /* The runs filter: chips that wrap on a desktop and scroll sideways on a phone. */
+  .fchips {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .fchip {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px;
+    border: 1px solid var(--color-sand);
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .fchip:hover {
+    border-color: var(--color-sand-hi);
+    color: var(--color-parchment);
+    text-decoration: none;
+  }
+
+  .fchip-on {
+    border-color: var(--color-gold);
+    background: var(--color-raised);
+    color: var(--color-parchment);
+  }
+
+  /* The imported-runs switch reads as a switch: an empty square, a filled one when on. */
+  .fchip-toggle::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--color-faint);
+  }
+
+  .fchip-toggle.fchip-on::before {
+    border-color: var(--color-gold);
+    background: var(--color-gold);
+  }
+
+  .result-banner .rail-note {
+    margin-bottom: 0;
+  }
+
+  /* A short link that stands alone: 44 px on a phone. */
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+  }
+
+  .back:hover {
+    border-color: var(--color-sand-hi);
+    text-decoration: none;
+  }
+
+  @media (pointer: coarse) {
+    .fchip {
+      min-height: 44px;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .fchip {
+      min-height: 44px;
+      padding: 0 14px;
+      font-size: 14px;
+    }
+
+    .fchip-on {
+      font-weight: 600;
+    }
+
+    /* Titles: smaller Cinzel, so a long ritual or run title takes two or three lines. */
+    .page-title {
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+    }
+
+    .page-meta {
+      gap: 6px 14px;
+      margin-top: 10px;
+    }
+
+    .lede {
+      margin-top: 10px;
+    }
+
+    /* The crumb is one line: the last link ends in an ellipsis; each link is a 44 px target. */
+    .crumbs {
+      display: flex;
+      align-items: center;
+      margin: 0 0 -4px;
+      white-space: nowrap;
+    }
+
+    .crumbs > * {
+      flex: none;
+    }
+
+    .crumbs > span {
+      padding-inline: 6px;
+    }
+
+    .crumbs a {
+      display: block;
+      line-height: 44px;
+    }
+
+    .crumbs > a:last-child {
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* A title that links, and a link inside a fact: hit padding without a taller line. */
+    .title-link,
+    .facts a {
+      padding-block: 12px;
+    }
+
+    .page-head:has(.crumbs) {
+      padding-top: 4px;
+    }
+
+    /* A section link keeps the head as tall as it was and takes hits 13 px beyond it. */
+    .sect-aside a {
+      position: relative;
+    }
+
+    .sect-aside a::after {
+      content: "";
+      position: absolute;
+      inset: -13px -10px;
+    }
+
+    /* The runs filter: no panel, two rows, and the first run in view. */
+    .rail-filter .sect {
+      display: none;
+    }
+
+    .filters.panel {
+      padding: 0;
+      border: 0;
+      background: none;
+      box-shadow: none;
+    }
+
+    .filters > * + * {
+      margin-top: 8px;
+    }
+
+    .fchips {
+      flex-wrap: nowrap;
+      margin-inline: -16px;
+      padding-inline: 16px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+    }
+
+    .fchips::-webkit-scrollbar {
+      display: none;
+    }
+
+    .fchips::after {
+      content: "";
+      flex: none;
+      width: 4px;
+    }
+
+    .page-head:has(+ .board .rail-filter) {
+      padding-bottom: 16px;
+    }
+
+    .board:has(.rail-filter) {
+      gap: 20px;
+    }
+
+    /* Metric tiles: a compact two-column list of a label, a small value and the tone in words. */
+    .sect + .tiles {
+      margin-top: 0;
+    }
+
+    .tiles {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .tile {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: baseline;
+      gap: 2px 8px;
+      padding: 8px 12px;
+    }
+
+    .tile-l {
+      grid-column: 1 / -1;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .tile-v {
+      font-size: 16px;
+      line-height: 1.3;
+    }
+
+    .tile .tile-t {
+      justify-self: end;
+    }
+
+    .tile .status {
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    .tag {
+      font-size: 12px;
+    }
+
+    /* Result items: tighter rows; the "Detail" switch is a 44 px target that adds no height to the row. */
+    .ritem {
+      gap: 4px 12px;
+      padding: 10px 14px;
+    }
+
+    .ritem .fold {
+      margin-top: 2px;
+    }
+
+    .ritem .fold > summary {
+      min-height: 44px;
+      margin-block: -10px -12px;
+      padding: 0;
+    }
+
+    .ritem .fold[open] > summary {
+      margin-bottom: 0;
+    }
+
+    .ritem .fold-body {
+      padding: 2px 0 2px 12px;
+    }
+
+    .rgroups > * + * {
+      margin-top: 20px;
+    }
+
+    /* A command: the text, then a Copy button that fills the box edge to edge. */
+    .cmd {
+      align-items: stretch;
+      gap: 0;
+      padding: 0 0 0 12px;
+    }
+
+    .cmd-text {
+      padding-block: 10px;
+      padding-right: 12px;
+    }
+
+    .copy {
+      align-self: stretch;
+      min-width: 68px;
+      min-height: 44px;
+      margin: 0;
+      padding: 0 14px;
+      border-left: 1px solid var(--color-sand);
+    }
+
+    /* The notification switch: the note, then a full-height button, above the host line. */
+    .push {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .push-note {
+      max-width: none;
+    }
+
+    .push-btn {
+      min-height: 44px;
+      padding: 0 16px;
+    }
+
+    .stack > .back {
+      margin-top: 0;
+    }
   }
 
   /* --- rendered markdown ------------------------------------------------------------- */

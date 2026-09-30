@@ -4,7 +4,7 @@ import type { Route } from "./+types/run";
 import { Markdown } from "../components/markdown.tsx";
 import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
-import { Crumbs, Empty, Facts, Section, Status, Time } from "../components/ui.tsx";
+import { Crumbs, Empty, Facts, Section, Status, Time, TitleText } from "../components/ui.tsx";
 import { duration, itemPath, projectPath } from "../lib/format.ts";
 import { statusOf } from "../lib/status.ts";
 import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
@@ -50,10 +50,10 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
         <h1 className="page-title">
           {title === label ? (
             <Link to={itemPath(project, row.item)} className="title-link">
-              {label}
+              <TitleText text={label} />
             </Link>
           ) : (
-            title
+            <TitleText text={title} />
           )}
         </h1>
         <p className="page-meta">

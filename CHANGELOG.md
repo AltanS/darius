@@ -2,6 +2,26 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.33.0] - 2026-09-30
+
+### Changed
+
+- The home page is a phone-first dashboard for all projects. A status strip counts what needs you, what runs, what failed, what is flagged and what is overdue, and each part links to its section. "Now" lists the running runs with their live bar, and "Up next" lists the next djinns and the manual rituals that are overdue or due today.
+- Needs you cards are compact: the questions show as text, and the answer and ack commands wait in a closed "Answer from a terminal" fold.
+- The Home badge counts the things that need you, the same number as the home headline, not the open questions.
+- The Watch gauges are gone. Timer and sync health is one line, still coloured when stale or failing.
+- On a phone the project page is one column in reading order: Now, Scheduled, By hand, Vigils, Djinns, Recent runs. Rows put the state and time under the title, djinn cards drop their report excerpt, and long lists fold behind "Show more". Overdue manual rituals read "overdue 9 days".
+- The runs filter is two scrolling chip rows on a phone, so the first run shows without scrolling.
+- The project sheet on a phone has a backdrop, a header and a close button, and the project name in the top bar links to the project.
+- A run that asks you shows its questions and the ack command before its numbers, and the numbers are a compact list.
+- Page titles are smaller on a phone, and every link and button there is at least 44 px tall.
+
+### Fixed
+
+- The footer no longer hides behind the phone tab bar.
+- The runs filter chips no longer take the styles of the status strip.
+- Dates in page titles and project names in commands no longer break at their hyphens.
+
 ## [0.32.0] - 2026-09-30
 
 ### Added

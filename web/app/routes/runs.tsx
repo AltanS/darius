@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 import type { Route } from "./+types/runs";
@@ -63,8 +64,37 @@ function filterText(query: Query): string {
   return `${what}${where}${imported}, newest first.`;
 }
 
-function pillClass(isActive: boolean): string {
-  return isActive ? "pill pill-active" : "pill";
+function chipClass(isActive: boolean, isToggle = false): string {
+  const kind = isToggle ? "fchip fchip-toggle" : "fchip";
+  return isActive ? `${kind} fchip-on` : kind;
+}
+
+interface ChipRowProps {
+  label: string;
+  /** The chip that is on; the row scrolls it into view when this changes. */
+  current: string;
+  children: React.ReactNode;
+}
+
+/**
+ * One row of filter chips. On a phone the row scrolls sideways instead of
+ * wrapping, so the filter stays two lines tall; the chip that is on is
+ * scrolled into view, so the row never hides the current filter.
+ */
+function ChipRow({ label, current, children }: ChipRowProps): React.ReactNode {
+  const row = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = row.current;
+    if (element === null) return;
+    const on = element.querySelector<HTMLElement>(".fchip-on:not(.fchip-toggle)");
+    if (on === null) return;
+    element.scrollLeft = Math.max(0, on.offsetLeft - (element.clientWidth - on.offsetWidth) / 2);
+  }, [current]);
+  return (
+    <div ref={row} role="group" aria-label={label} className="fchips">
+      {children}
+    </div>
+  );
 }
 
 export default function Runs({ loaderData }: Route.ComponentProps): React.ReactNode {
@@ -82,31 +112,31 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
         <div className="board-main">
           <RunList runs={runs} showProject={project === ""} empty="No run matches this filter." />
         </div>
-        <aside className="board-rail rail-first">
+        <aside className="board-rail rail-first rail-filter">
           <Section title="Filter">
             <nav aria-label="Filter" className="filters panel panel-pad">
               {projects.length < 2 ? null : (
-                <p className="pills">
-                  <Link to={href({ ...query, project: "" })} className={pillClass(project === "")}>
+                <ChipRow label="Project" current={project}>
+                  <Link to={href({ ...query, project: "" })} className={chipClass(project === "")} aria-current={project === "" ? "true" : undefined}>
                     all projects
                   </Link>
                   {projects.map((name) => (
-                    <Link key={name} to={href({ ...query, project: name })} className={pillClass(project === name)}>
+                    <Link key={name} to={href({ ...query, project: name })} className={chipClass(project === name)} aria-current={project === name ? "true" : undefined}>
                       {name}
                     </Link>
                   ))}
-                </p>
+                </ChipRow>
               )}
-              <p className="pills">
+              <ChipRow label="State" current={state}>
                 {["", ...STATES].map((name) => (
-                  <Link key={name} to={href({ ...query, state: name })} className={pillClass(name === state)}>
+                  <Link key={name} to={href({ ...query, state: name })} className={chipClass(name === state)} aria-current={name === state ? "true" : undefined}>
                     {name === "" ? "any state" : name}
                   </Link>
                 ))}
-                <Link to={href({ ...query, withImported: !withImported })} className={pillClass(withImported)}>
+                <Link to={href({ ...query, withImported: !withImported })} className={chipClass(withImported, true)} aria-current={withImported ? "true" : undefined}>
                   {withImported ? "with imported runs" : "show imported runs"}
                 </Link>
-              </p>
+              </ChipRow>
             </nav>
           </Section>
         </aside>

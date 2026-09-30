@@ -21,6 +21,15 @@ export function Word({ text }: WordProps): React.ReactNode {
   return text.split(/(\d+)/u).map((part, index) => (/^\d+$/u.test(part) ? <span key={`${index}`} className="num">{part}</span> : part));
 }
 
+interface TitleTextProps {
+  text: string;
+}
+
+/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
+export function TitleText({ text }: TitleTextProps): React.ReactNode {
+  return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => (/^\d{4}-\d{2}-\d{2}$/u.test(part) ? <span key={`${index}`} className="whitespace-nowrap">{part}</span> : part));
+}
+
 /** A square in the state colour and the state in words: the state of a run or a ritual. */
 export function Status({ tone, label }: StatusProps): React.ReactNode {
   return (

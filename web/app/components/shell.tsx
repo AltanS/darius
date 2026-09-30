@@ -12,7 +12,7 @@ import { Link, NavLink, useLocation } from "react-router";
 import type { RootData } from "../root.tsx";
 import { PushSwitch } from "./push.tsx";
 import { clockTime, projectPath } from "../lib/format.ts";
-import { questionsText } from "../lib/view.ts";
+import { needsText } from "../lib/home.ts";
 
 function navClass({ isActive }: { isActive: boolean }): string {
   return isActive ? "nav-link on" : "nav-link";
@@ -23,15 +23,15 @@ function tabClass({ isActive }: { isActive: boolean }): string {
 }
 
 interface CountProps {
-  questions: number;
+  things: number;
 }
 
-/** The number of questions that wait, in the colour of waiting. */
-function Count({ questions }: CountProps): React.ReactNode {
-  if (questions === 0) return null;
+/** The number of things that need the operator (the number in the home verdict), in the colour of waiting. */
+function Count({ things }: CountProps): React.ReactNode {
+  if (things === 0) return null;
   return (
-    <span className="count tone-wait" title={questionsText(questions)}>
-      {questions}
+    <span className="count tone-wait" title={needsText(things)}>
+      {things}
     </span>
   );
 }
@@ -40,12 +40,12 @@ interface ProjectLinksProps {
   projects: RootData["projects"];
 }
 
-/** One link per project, with its open questions and a mark when darius could not read it. */
+/** One link per project, with what needs the operator and a mark when darius could not read it. */
 function ProjectLinks({ projects }: ProjectLinksProps): React.ReactNode {
   return projects.map((project) => (
     <NavLink key={project.name} to={projectPath(project.name)} className={({ isActive }) => (isActive ? "on" : undefined)}>
       <span className="menu-name">{project.name}</span>
-      {project.error ? <span className="count tone-bad">!</span> : <Count questions={project.questions} />}
+      {project.error ? <span className="count tone-bad">!</span> : <Count things={project.needs} />}
     </NavLink>
   ));
 }
@@ -71,13 +71,21 @@ function useMenuDismiss(): void {
   }, []);
 }
 
+/** The close button of the project sheet: it shuts the menu it sits in. */
+function closeMenu(event: React.MouseEvent<HTMLButtonElement>): void {
+  const menu = event.currentTarget.closest<HTMLDetailsElement>("details");
+  if (menu === null) return;
+  menu.open = false;
+  menu.querySelector("summary")?.focus();
+}
+
 interface ShellProps {
   data: RootData;
   children: React.ReactNode;
 }
 
 export function Shell({ data, children }: ShellProps): React.ReactNode {
-  const { questions } = data;
+  const { needs } = data;
   useMenuDismiss();
   const location = useLocation();
   const isHome = location.pathname === "/";
@@ -92,9 +100,9 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
             darius
           </Link>
           <nav aria-label="Main" className="nav">
-            <NavLink to="/" end className={navClass} title={questions > 0 ? questionsText(questions) : undefined}>
+            <NavLink to="/" end className={navClass} title={needs > 0 ? needsText(needs) : undefined}>
               Home
-              <Count questions={questions} />
+              <Count things={needs} />
             </NavLink>
             <NavLink to="/runs" end className={navClass}>
               Runs
@@ -114,7 +122,11 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
               </details>
             </div>
           )}
-          {inProject ? <span className="bar-ctx">{currentProject}</span> : null}
+          {inProject ? (
+            <Link to={projectPath(currentProject)} className="bar-ctx">
+              {currentProject}
+            </Link>
+          ) : null}
         </div>
       </header>
       <main className="wa page-main">{children}</main>
@@ -142,7 +154,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
           </svg>
           <span>
             Home
-            <Count questions={questions} />
+            <Count things={needs} />
           </span>
         </NavLink>
         <NavLink to="/runs" end className={tabClass}>
@@ -160,6 +172,14 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
               <span>Projects</span>
             </summary>
             <div className="tabmenu-list">
+              <div className="tabmenu-head">
+                <span className="label">Projects</span>
+                <button type="button" className="tabmenu-close" aria-label="Close the project list" onClick={closeMenu}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              </div>
               <ProjectLinks projects={data.projects} />
             </div>
           </details>

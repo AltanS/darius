@@ -1,5 +1,6 @@
 /** The dashboard head of a project page: the four tiles, and the panels for what is open and what is scheduled. */
 
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import type { RitualRow, VigilRow } from "../../../src/web/api.ts";
@@ -23,7 +24,7 @@ interface PillProps {
 }
 
 /** One count of the status strip. The whole segment is the link. */
-function Pill({ label, value, sub, tone, href, live = false }: PillProps): React.ReactNode {
+export function Pill({ label, value, sub, tone, href, live = false }: PillProps): React.ReactNode {
   const on = value > 0;
   const className = `pill tone-${on ? tone : "idle"}`;
   const body = (
@@ -62,6 +63,8 @@ export interface PulseData {
   scheduled: readonly ScheduledEntry[];
   openVigils: readonly VigilRow[];
   overdue: number;
+  /** How many rituals are done by hand; the last segment opens their list, so it needs one. */
+  manual: number;
 }
 
 interface PulseProps {
@@ -87,8 +90,38 @@ export function Pulse({ data }: PulseProps): React.ReactNode {
       <Pill label="running" value={running} tone="run" href={running === 0 ? runsHref("running") : "#now"} live />
       <Pill label="need you" value={waiting} tone="wait" href={waiting === 0 ? runsHref("held") : "#now"} />
       <Pill label="vigils armed" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : "#vigils"} />
-      <Pill label="overdue by hand" value={data.overdue} tone="late" href="?show=manual#manual" />
+      <Pill label="overdue by hand" value={data.overdue} tone="late" href={data.manual === 0 ? null : "?show=manual#manual"} />
     </nav>
+  );
+}
+
+interface PhoneMoreProps {
+  /** How many rows the phone hides until the button is pressed. */
+  hidden: number;
+  /** What the rows are, for the button: "Show 6 more runs". */
+  noun: string;
+  /** Start open, for a link that points at a hidden row. */
+  open?: boolean;
+  children: React.ReactNode;
+}
+
+/**
+ * A list that is short on a phone: rows marked `phone-extra` stay hidden until
+ * the button under them is pressed. On a wide screen every row shows and the button does not.
+ */
+export function PhoneMore({ hidden, noun, open = false, children }: PhoneMoreProps): React.ReactNode {
+  const [expanded, setExpanded] = useState(open);
+  useEffect(() => {
+    if (open) setExpanded(true);
+  }, [open]);
+  if (hidden <= 0) return children;
+  return (
+    <div className={`phone-more${expanded ? " is-open" : ""}`}>
+      {children}
+      <button type="button" className="phone-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        {expanded ? "Show fewer" : `Show ${hidden} more ${noun}`}
+      </button>
+    </div>
   );
 }
 
@@ -97,7 +130,7 @@ interface ElapsedProps {
 }
 
 /** How long a run has run, against the page clock (it ticks every 30 s). */
-function Elapsed({ since }: ElapsedProps): React.ReactNode {
+export function Elapsed({ since }: ElapsedProps): React.ReactNode {
   const { now } = useClock();
   return <span>{duration(since, new Date(now).toISOString()) || "just now"}</span>;
 }
@@ -121,7 +154,7 @@ export function LivePanel({ live }: LivePanelProps): React.ReactNode {
               const running = run.phase === "running";
               return (
                 <li key={run.run}>
-                  <Link to={runPath(run.project, run.run)} className={`row${running ? " row-live" : ""}`}>
+                  <Link to={runPath(run.project, run.run)} className={`row row-tight${running ? " row-live" : ""}`}>
                     {running ? <span className="live-bar" aria-hidden="true" /> : null}
                     <span className="row-main">
                       <span className="row-title">{run.label}</span>
@@ -173,7 +206,7 @@ export function ScheduledPanel({ project, entries }: ScheduledPanelProps): React
           <ul className="rows stagger">
             {entries.map(({ ritual, badge }) => (
               <li key={ritual.slug}>
-                <Link to={ritualPath(project, ritual.slug)} className="row">
+                <Link to={ritualPath(project, ritual.slug)} className="row row-tight">
                   <span className="row-main">
                     <span className="row-title">{ritual.title}</span>
                     <span className="row-sub">{[cadenceText(ritual.cadence), nextText(ritual, today)].filter((part) => part !== null).join(", ")}</span>
@@ -195,7 +228,7 @@ interface VigilPanelProps {
 }
 
 /** How many armed vigils show before the fold. */
-const VIGILS_SHOWN = 6;
+const VIGILS_SHOWN = 3;
 
 /** The state of an armed vigil: flagged, late, due today, or waiting. */
 function armedBadge(vigil: VigilRow, today: string): Badge {

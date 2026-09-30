@@ -6,7 +6,7 @@ import { Markdown } from "../components/markdown.tsx";
 import { Report } from "../components/board.tsx";
 import { ResultQuestions, ResultTags } from "../components/result.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
-import { Chips, Crumbs, Empty, Facts, Fold, Section } from "../components/ui.tsx";
+import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
 import { projectPath, runPath } from "../lib/format.ts";
 import { statusOf } from "../lib/status.ts";
@@ -69,7 +69,9 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         <Crumbs>
           <Link to={projectPath(project)}>{project}</Link>
         </Crumbs>
-        <h1 className="page-title">{row.title}</h1>
+        <h1 className="page-title">
+          <TitleText text={row.title} />
+        </h1>
         <p className="page-meta">
           <code className="text-faint">{row.slug}</code>
           {cadence === null ? null : <span>{cadence}</span>}

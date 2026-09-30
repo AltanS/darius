@@ -12,7 +12,9 @@ export function RouteError(): React.ReactNode {
           <h1 className="page-title">Nothing here</h1>
           <p className="lede">{text}</p>
         </header>
-        <Link to="/">Back home</Link>
+        <Link to="/" className="back">
+          Back home
+        </Link>
       </div>
     );
   }
@@ -23,7 +25,9 @@ export function RouteError(): React.ReactNode {
         <h1 className="page-title ink-bad">This page failed</h1>
       </header>
       <pre className="code-block">{message}</pre>
-      <Link to="/">Back home</Link>
+      <Link to="/" className="back">
+        Back home
+      </Link>
     </div>
   );
 }

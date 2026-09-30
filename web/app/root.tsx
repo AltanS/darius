@@ -7,11 +7,11 @@ import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
 import { NonceContext } from "./lib/nonce.ts";
 import { statusOf } from "./lib/status.ts";
-import { isSelftest, selftestLines } from "./lib/home.ts";
-import { isImported, questionCount } from "./lib/view.ts";
+import { needCounts, selftestLines } from "./lib/home.ts";
 
 export function loader({ context }: Route.LoaderArgs) {
   const status = statusOf(context);
+  const needs = needCounts(status);
   return {
     // Also on the client, so hydration renders the same nonce attributes.
     nonce: context.nonce,
@@ -21,21 +21,21 @@ export function loader({ context }: Route.LoaderArgs) {
     generatedAt: status.generatedAt,
     today: status.today,
     utcOffset: status.utcOffset,
-    // Questions, not held runs, over the projects the home page counts.
-    questions: questionCount(status.projects.filter((project) => !isSelftest(project.name)).flatMap((project) => project.runs.filter((run) => !isImported(run)))),
+    // The things that need the operator, the number in the home verdict.
+    needs: needs.total,
     selftest: selftestLines(status),
     projects: status.projects.map((project) => ({
       name: project.name,
       error: project.error !== null,
-      // Questions that wait in this project, for the count in the project menu.
-      questions: questionCount(project.runs.filter((run) => !isImported(run))),
+      // The things that need the operator in this project, for the count in the project menu.
+      needs: needs.byProject[project.name] ?? 0,
     })),
   };
 }
 
 export type RootData = Awaited<ReturnType<typeof loader>>;
 
-// The top bar counts open questions, so it reloads with every page.
+// The top bar counts what needs the operator, so it reloads with every page.
 export function shouldRevalidate(): boolean {
   return true;
 }

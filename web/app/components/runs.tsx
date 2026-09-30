@@ -19,19 +19,21 @@ interface RunListProps {
   /** Name the ritual on each row; off on a ritual's own page. */
   showLabel?: boolean;
   empty: string;
+  /** Rows from this one on carry `phone-extra`, so a phone can hide them behind a button. */
+  phoneShown?: number;
 }
 
 /** Runs as rows: what ran, how it ended, when. Each row opens the run. */
-export function RunList({ runs, showProject, showLabel = true, empty }: RunListProps): React.ReactNode {
+export function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length }: RunListProps): React.ReactNode {
   if (runs.length === 0) return <Empty>{empty}</Empty>;
   return (
     <ul className="rows">
-      {runs.map((run) => {
+      {runs.map((run, index) => {
         const state = runState(run);
         const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
         const sub = [showProject ? run.project : null, took === null ? null : `took ${took}`, run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null);
         return (
-          <li key={`${run.project}/${run.run}`}>
+          <li key={`${run.project}/${run.run}`} className={index >= phoneShown ? "phone-extra" : undefined}>
             <Link to={runPath(run.project, run.run)} className={state.tone === "run" ? "row row-live" : "row"}>
               {state.tone === "run" ? <span className="live-bar" aria-hidden="true" /> : null}
               <span className="row-main">

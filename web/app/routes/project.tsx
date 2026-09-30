@@ -1,7 +1,7 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/project";
-import { LivePanel, Pulse, ScheduledPanel, VigilPanel, type ScheduledEntry } from "../components/pulse.tsx";
+import { LivePanel, PhoneMore, Pulse, ScheduledPanel, VigilPanel, type ScheduledEntry } from "../components/pulse.tsx";
 import { DjinnCard, RunList } from "../components/runs.tsx";
 import { DateLabel, Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
 import { ritualPath, vigilAnchor } from "../lib/format.ts";
@@ -15,8 +15,14 @@ export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 const RECENT = 10;
 
-/** Manual rituals shown in the rail before the fold. */
-const MANUAL_SHOWN = 6;
+/** Manual rituals shown before the fold. */
+const MANUAL_SHOWN = 3;
+
+/** Djinn cards a phone shows before its own button; the rest repeat what Scheduled says. */
+const DJINNS_PHONE = 1;
+
+/** Recent runs a phone shows before its own button. */
+const RECENT_PHONE = 3;
 
 /** Closed vigils shown in their fold; a long-running project has dozens. */
 const CLOSED_SHOWN = 10;
@@ -90,7 +96,24 @@ interface ManualStateProps {
 function ManualState({ ritual }: ManualStateProps): React.ReactNode {
   const badge = ritualBadge(ritual);
   if (badge.label === "scheduled") return <DateLabel iso={ritual.nextDue} />;
+  // "overdue 9 days", not "overdue 9 d": a lone small-cap d after a number reads badly.
+  if (badge.tone === "late" && ritual.overdueDays > 0) return <Status tone={badge.tone} label={`overdue ${ritual.overdueDays} ${ritual.overdueDays === 1 ? "day" : "days"}`} />;
   return <Status tone={badge.tone} label={badge.label === "due" ? "due today" : badge.label} />;
+}
+
+interface PathTextProps {
+  path: string;
+}
+
+/** A path that may break after each slash, so a long checkout wraps at a folder. */
+function PathText({ path }: PathTextProps): React.ReactNode {
+  return path.split("/").map((part, index) => (
+    <span key={`${index}`}>
+      {index === 0 ? "" : "/"}
+      <wbr />
+      {part}
+    </span>
+  ));
 }
 
 /** "Manual rituals (7), 5 overdue. Done by hand, darius does not run them." */
@@ -134,11 +157,17 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
   const manualHead = manual.slice(0, MANUAL_SHOWN);
   const manualRest = manual.slice(MANUAL_SHOWN);
   return (
-    <div>
-      <header className="page-head page-head-tight">
+    <div className="proj">
+      <header className="page-head page-head-tight proj-head">
         <h1 className="page-title">{project.name}</h1>
         <p className="page-meta">
-          {project.checkout === null ? <span>not linked on this host</span> : <code className="break-all">{project.checkout}</code>}
+          {project.checkout === null ? (
+            <span>not linked on this host</span>
+          ) : (
+            <code className="proj-path">
+              <PathText path={project.checkout} />
+            </code>
+          )}
           {project.maxMode === null ? null : <span>at most {project.maxMode} mode</span>}
           <span>
             synced <Time iso={project.lastSync} />
@@ -153,76 +182,88 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
         </div>
       )}
 
-      <Pulse data={{ project: project.name, live, scheduled, openVigils, overdue }} />
+      <Pulse data={{ project: project.name, live, scheduled, openVigils, overdue, manual: manual.length }} />
 
-      <div className="band">
-        <LivePanel live={live} />
-        <ScheduledPanel project={project.name} entries={scheduled} />
-      </div>
-
-      {openVigils.length === 0 ? null : (
-        <div className="band-tail">
-          <VigilPanel vigils={openVigils} target={target} />
+      <div className="proj-body">
+        <div className="band">
+          <LivePanel live={live} />
+          <ScheduledPanel project={project.name} entries={scheduled} />
         </div>
-      )}
 
-      <div className="board">
-        <div className="board-main">
-          {djinns.length === 0 && scheduled.length > 0 ? null : (
-            <Section title="Djinns">
-              {djinns.length === 0 ? (
-                <Empty>darius runs no ritual of this project yet.</Empty>
-              ) : (
-                <div className="cards stagger">
-                  {djinns.map(({ ritual, last, report }) => (
-                    <DjinnCard key={ritual.slug} project={project.name} ritual={ritual} last={last} report={report} showProject={false} />
-                  ))}
+        {openVigils.length === 0 ? null : (
+          <div className="band-tail">
+            <VigilPanel vigils={openVigils} target={target} />
+          </div>
+        )}
+
+        <div className="board">
+          <div className="board-main">
+            {djinns.length === 0 && scheduled.length > 0 ? null : (
+              <Section title="Djinns" id="djinns">
+                {djinns.length === 0 ? (
+                  <Empty>darius runs no ritual of this project yet.</Empty>
+                ) : (
+                  <PhoneMore hidden={djinns.length - DJINNS_PHONE} noun="djinns">
+                    <div className="cards djinn-list stagger">
+                      {djinns.map(({ ritual, last, report }, index) => (
+                        <div key={ritual.slug} className={index >= DJINNS_PHONE ? "phone-extra" : undefined}>
+                          <DjinnCard project={project.name} ritual={ritual} last={last} report={report} showProject={false} />
+                        </div>
+                      ))}
+                    </div>
+                  </PhoneMore>
+                )}
+              </Section>
+            )}
+
+            <Section title="Recent runs" id="recent" aside={<Link to={`/runs?project=${encodeURIComponent(project.name)}`}>All runs</Link>}>
+              <div className="panel">
+                <PhoneMore hidden={recent.length - RECENT_PHONE} noun="runs">
+                  <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
+                </PhoneMore>
+              </div>
+            </Section>
+          </div>
+
+          <aside className="board-rail">
+            {manual.length === 0 ? null : (
+              <Section title="By hand" id="manual">
+                <div className="panel">
+                  <p className="rail-note">{manualSummary(manual)}</p>
+                  <ManualRows project={project.name} rituals={manualHead} />
+                  {manualRest.length === 0 ? null : (
+                    <Fold open={showManual} summary={`${manualRest.length} more`}>
+                      <ManualRows project={project.name} rituals={manualRest} />
+                    </Fold>
+                  )}
                 </div>
-              )}
-            </Section>
-          )}
+              </Section>
+            )}
 
-          <Section title="Recent runs" aside={<Link to={`/runs?project=${encodeURIComponent(project.name)}`}>All runs</Link>}>
-            <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." />
-          </Section>
-        </div>
-
-        <aside className="board-rail">
-          {manual.length === 0 ? null : (
-            <Section title="By hand" id="manual">
-              <p className="rail-note">{manualSummary(manual)}</p>
-              <ManualRows project={project.name} rituals={manualHead} />
-              {manualRest.length === 0 ? null : (
-                <Fold open={showManual} summary={`${manualRest.length} more`}>
-                  <ManualRows project={project.name} rituals={manualRest} />
+            {closedVigils.length === 0 ? null : (
+              <div className="folds proj-closed">
+                <Fold open={closedTarget} summary={`Closed vigils (${closedVigils.length})`}>
+                  <ul className="rows">
+                    {closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
+                      const badge = vigilBadge(vigil);
+                      const id = vigilAnchor(vigil.slug);
+                      return (
+                        <li key={vigil.slug} id={id} className={rowClass(target, id)}>
+                          <span className="row-main">
+                            <span className="row-title">{vigil.title}</span>
+                            {vigil.lastOutcome === null ? null : <span className="row-sub">last check {vigil.lastOutcome}</span>}
+                          </span>
+                          <Status tone={badge.tone} label={badge.label} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {closedVigils.length > CLOSED_SHOWN ? <p className="rail-note mt-3">{closedVigils.length - CLOSED_SHOWN} older ones are not shown.</p> : null}
                 </Fold>
-              )}
-            </Section>
-          )}
-
-          {closedVigils.length === 0 ? null : (
-            <div className="folds">
-              <Fold open={closedTarget} summary={`Closed vigils (${closedVigils.length})`}>
-                <ul className="rows">
-                  {closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
-                    const badge = vigilBadge(vigil);
-                    const id = vigilAnchor(vigil.slug);
-                    return (
-                      <li key={vigil.slug} id={id} className={rowClass(target, id)}>
-                        <span className="row-main">
-                          <span className="row-title">{vigil.title}</span>
-                          {vigil.lastOutcome === null ? null : <span className="row-sub">last check {vigil.lastOutcome}</span>}
-                        </span>
-                        <Status tone={badge.tone} label={badge.label} />
-                      </li>
-                    );
-                  })}
-                </ul>
-                {closedVigils.length > CLOSED_SHOWN ? <p className="rail-note mt-3">{closedVigils.length - CLOSED_SHOWN} older ones are not shown.</p> : null}
-              </Fold>
-            </div>
-          )}
-        </aside>
+              </div>
+            )}
+          </aside>
+        </div>
       </div>
     </div>
   );

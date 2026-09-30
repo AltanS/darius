@@ -1,15 +1,23 @@
 /**
- * The home page, "the command board": one read of the status that answers the
- * operator's three questions. Does anything need me (the verdict and the
- * Needs you cards)? Is anything broken (the Watch gauges and the djinn
- * list)? What happened last night (the Last night cards)? Every value here
- * comes from the status. Where the status has no such fact (the next start
- * time of a djinn, say) the page says what it knows instead.
+ * The home page, "the command board": one read of the status, across all
+ * projects, that answers the operator's questions in the order they matter.
+ * Does anything need me (the verdict, the status strip and the Needs you
+ * cards)? What runs now (the Now rows)? What is coming (the Up next rows: the
+ * next djinn starts, and the manual rituals that are overdue or due today)?
+ * What happened last night (the Last night cards)? Is darius itself healthy
+ * (one quiet Timer and Sync line)? Every value here comes from the status.
+ * Where the status has no such fact (the next start time of a djinn, say) the
+ * page says what it knows instead.
  *
  * Three filters keep noise off the page. Only djinns (rituals darius runs
  * that follow a repo skill) get a line. Imported and acceptance runs never
  * show. The projects that test darius itself shrink to one footer line, and
  * their flagged vigils never count as "needs you".
+ *
+ * The verdict counts things that need a person: held runs, runs whose result
+ * asks a question, unacknowledged failures, stuck runs, flagged vigils and
+ * unreadable projects. `needCounts` gives the same number per project and in
+ * total, so the Home badge and the verdict cannot drift apart.
  *
  * A failed run that a person acknowledged (`darius run ack`) needs nobody
  * any more: it leaves Needs you and shows as a plain Last night card with
@@ -100,21 +108,29 @@ export interface Card {
   actions: Action[];
 }
 
-export interface Tally {
-  count: number;
-  word: string;
-  tone: Tone;
-  href: string;
-}
-
-export interface Gauge {
+/** One segment of the status strip. Each one is a link to what it counts. */
+export interface Segment {
+  key: string;
   label: string;
-  value: Piece[];
-  /** Where the number leads: a page, or a `#card` on this one. */
-  href?: string;
+  count: number;
+  tone: Tone;
+  /** A `#card` on this page, or null when there is nowhere to go. */
+  href: string | null;
+  /** The segment shows the live animation while its count is above zero. */
+  live: boolean;
 }
 
-/** A djinn in the rail: its state in one word and one line. */
+/** A run that runs now, for the Now rows. */
+export interface NowRun {
+  id: string;
+  title: string;
+  project: string;
+  href: string;
+  startedAt: string;
+  who: string;
+}
+
+/** One row of a djinn or Up next list: a square in its state colour, a title, and its state in one line. */
 export interface DjinnLine {
   key: string;
   title: string;
@@ -124,17 +140,33 @@ export interface DjinnLine {
   detail: Piece[];
 }
 
+/** Rows of Up next past the sixth: how many are left, and where to read them. */
+export interface MoreLink {
+  project: string;
+  count: number;
+  href: string;
+}
+
+export interface UpNext {
+  lines: DjinnLine[];
+  more: MoreLink[];
+}
+
 export interface Home {
   verdict: string;
   tone: Tone;
   /** "Tue 29 Sep, 12:14. Next djinn: tomorrow." */
   sub: string;
-  tally: Tally[];
+  strip: Segment[];
+  /** The runs that run now and are not stuck (a stuck run has its card in Needs you). */
+  now: NowRun[];
   needs: Card[];
-  /** The line in the empty Needs you box. */
+  /** The calm line under Needs you when nothing needs the operator. */
   quiet: string;
   lastNight: Card[];
-  watch: Gauge[];
+  upNext: UpNext;
+  /** "Timer ok, last run 6 min ago. Synced 2 min ago." in parts, each in its own colour. */
+  health: Piece[];
   djinns: DjinnLine[];
 }
 
@@ -417,19 +449,15 @@ function unreadableCard(project: ProjectStatus): Card {
   };
 }
 
-// --- gauges --------------------------------------------------------------------------------
-
-function countPieces(value: number, tone: Ink): Piece[] {
-  return [{ text: String(value), ink: value === 0 ? "mute" : tone }];
-}
+// --- health --------------------------------------------------------------------------------
 
 /**
- * The hourly run-due timer. The status has no timer log, so the gauge reads
+ * The hourly run-due timer. The status has no timer log, so the line reads
  * the runs: the newest run the timer started anywhere (the self-test counts,
  * it proves the timer fires), and the djinns that are overdue but did not
  * start today.
  */
-function timerGauge(clock: Clock, status: HostStatus, states: readonly DjinnState[]): Gauge {
+function timerPiece(clock: Clock, status: HostStatus, states: readonly DjinnState[]): Piece {
   const timed = status.projects
     .flatMap((project) => project.runs)
     .filter((run) => run.who === "timer")
@@ -437,35 +465,156 @@ function timerGauge(clock: Clock, status: HostStatus, states: readonly DjinnStat
   const last = timed[0];
   const missed = states.filter((state) => state.missed).length;
   if (missed > 0) {
-    if (last === undefined) return { label: "Timer", value: [{ text: "never ran", ink: "late" }] };
-    if (hostDate(last.startedAt, clock.offset) !== clock.today) return { label: "Timer", value: [{ text: `silent since ${shortDate(hostDate(last.startedAt, clock.offset))}`, ink: "late" }] };
-    return { label: "Timer", value: [{ text: `${plural(missed, "djinn")} not started`, ink: "late" }] };
+    if (last === undefined) return { text: "Timer never ran.", ink: "late" };
+    if (hostDate(last.startedAt, clock.offset) !== clock.today) return { text: `Timer silent since ${shortDate(hostDate(last.startedAt, clock.offset))}.`, ink: "late" };
+    return { text: `Timer: ${plural(missed, "djinn")} not started.`, ink: "late" };
   }
-  if (last === undefined) return { label: "Timer", value: [{ text: "no run yet", ink: "mute" }] };
-  return { label: "Timer", value: [{ text: `ok, last run ${when(clock, last.startedAt)}`, ink: "plain" }] };
+  if (last === undefined) return { text: "Timer has no run yet.", ink: "mute" };
+  return { text: `Timer ok, last run ${when(clock, last.startedAt)}.`, ink: "plain" };
 }
 
-function syncGauge(clock: Clock, status: HostStatus): Gauge {
+function syncPiece(clock: Clock, status: HostStatus): Piece {
   const last = status.projects
     .map((project) => project.lastSync)
     .filter((sync) => sync !== null)
     .toSorted()
     .at(-1);
-  if (last === undefined) return { label: "Sync", value: [{ text: "never", ink: "mute" }] };
+  if (last === undefined) return { text: " Never synced.", ink: "mute" };
   const stale = clock.now - Date.parse(last) > SYNC_STALE_MS;
-  return { label: "Sync", value: [{ text: when(clock, last), ink: stale ? "late" : "plain" }] };
+  return { text: ` Synced ${when(clock, last)}.`, ink: stale ? "late" : "plain" };
+}
+
+// --- what needs the operator ---------------------------------------------------------------
+
+/** What waits for a person in one project, and the rows it came from. */
+interface ProjectNeeds {
+  project: ProjectStatus;
+  runs: ActivityRun[];
+  states: DjinnState[];
+  held: ActivityRun[];
+  asks: ActivityRun[];
+  failed: DjinnState[];
+  stuck: Array<{ run: ActivityRun; size: string }>;
+  flagged: VigilRow[];
+  unreadable: boolean;
+}
+
+function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus): ProjectNeeds {
+  const runs = activity([project], { withImported: false }).filter((run) => !isNoise(run));
+  const states = project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => djinnState(clock, project.name, ritual, runs));
+  const flagged = project.vigils.filter((vigil) => vigil.flagged);
+  // A stuck check of a flagged vigil shows on the vigil's card, so the run shows once.
+  const flaggedChecks = new Set(flagged.map((vigil) => `vigil/${vigil.slug}`));
+  const stuck = runs.flatMap((run) => {
+    const size = stuckFor(run, generatedAt);
+    return size === null || flaggedChecks.has(run.item) ? [] : [{ run, size }];
+  });
+  return {
+    project,
+    runs,
+    states,
+    held: runs.filter((run) => run.phase === "held"),
+    asks: runs.filter((run) => asksYou(run)),
+    failed: states.filter((state) => state.last !== null && isOpenFailure(state.last)),
+    stuck,
+    flagged,
+    unreadable: project.error !== null,
+  };
+}
+
+function needsSize(needs: ProjectNeeds): number {
+  return needs.held.length + needs.asks.length + needs.failed.length + needs.stuck.length + needs.flagged.length + (needs.unreadable ? 1 : 0);
+}
+
+export interface NeedCounts {
+  /** The things that need the operator over the projects home counts: the number in the verdict and on the Home badge. */
+  total: number;
+  /** The same count for each project by name, self-test projects included (they never add to the total). */
+  byProject: Record<string, number>;
+}
+
+/** The things that need the operator, per project and in total: what the verdict says and the badges show. */
+export function needCounts(status: HostStatus): NeedCounts {
+  const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
+  const byProject: Record<string, number> = {};
+  let total = 0;
+  for (const project of status.projects) {
+    const size = needsSize(projectNeeds(clock, status.generatedAt, project));
+    byProject[project.name] = size;
+    if (!isSelftest(project.name)) total += size;
+  }
+  return { total, byProject };
+}
+
+/** "3 things need you", for the badge title. */
+export function needsText(count: number): string {
+  return count === 1 ? "1 thing needs you" : `${count} things need you`;
+}
+
+// --- Up next -------------------------------------------------------------------------------
+
+/** Rows of Up next before the "more" links. */
+const UP_NEXT_SHOWN = 6;
+
+interface UpEntry {
+  /** 0 overdue, 1 manual due today, 2 djinn due now, 3 a later djinn start. */
+  rank: number;
+  /** Overdue days (largest first) or the start date (earliest first). */
+  order: string;
+  line: DjinnLine;
+  project: string;
+}
+
+function padDays(days: number): string {
+  return String(1_000_000 - days).padStart(7, "0");
+}
+
+function djinnEntry(clock: Clock, state: DjinnState): UpEntry | null {
+  const { project, ritual } = state;
+  const base = { key: `${project}/${ritual.slug}`, title: ritual.title, href: ritualPath(project, ritual.slug) };
+  const detail: Piece[] = [{ text: project, ink: "plain" }];
+  if (state.missed) return { rank: 0, order: padDays(ritual.overdueDays), project, line: { ...base, tone: "late", word: `Overdue ${plural(ritual.overdueDays, "day")}`, detail } };
+  if (state.next === null) return null;
+  if (state.next === "now") return { rank: 2, order: "", project, line: { ...base, tone: "gold", word: "Due now", detail } };
+  return { rank: 3, order: state.next, project, line: { ...base, tone: "idle", word: `Next ${aheadText(clock, state.next)}`, detail } };
+}
+
+/** A manual ritual (mode off, active) that is overdue or due today. */
+function manualEntry(project: string, ritual: RitualRow): UpEntry | null {
+  if (ritual.lifecycle !== "active" || ritual.mode !== "off") return null;
+  const base = { key: `${project}/${ritual.slug}`, title: ritual.title, href: ritualPath(project, ritual.slug) };
+  const detail: Piece[] = [{ text: project, ink: "plain" }];
+  if (ritual.overdueDays > 0) return { rank: 0, order: padDays(ritual.overdueDays), project, line: { ...base, tone: "late", word: `Overdue ${plural(ritual.overdueDays, "day")}`, detail } };
+  if (ritual.isDue) return { rank: 1, order: "", project, line: { ...base, tone: "gold", word: "Due today", detail } };
+  return null;
+}
+
+function byEntry(left: UpEntry, right: UpEntry): number {
+  return left.rank - right.rank || left.order.localeCompare(right.order) || left.line.title.localeCompare(right.line.title);
+}
+
+function upNext(clock: Clock, all: readonly ProjectNeeds[]): UpNext {
+  const entries = all
+    .flatMap((needs) => [...needs.states.map((state) => djinnEntry(clock, state)), ...needs.project.rituals.map((ritual) => manualEntry(needs.project.name, ritual))])
+    .filter((entry) => entry !== null)
+    .toSorted(byEntry);
+  const hidden = new Map<string, number>();
+  for (const entry of entries.slice(UP_NEXT_SHOWN)) hidden.set(entry.project, (hidden.get(entry.project) ?? 0) + 1);
+  return {
+    lines: entries.slice(0, UP_NEXT_SHOWN).map((entry) => entry.line),
+    more: [...hidden].map(([project, count]) => ({ project, count, href: projectPath(project) })),
+  };
+}
+
+/** Overdue djinns and overdue manual rituals: the "overdue" segment of the strip. */
+function overdueCount(all: readonly ProjectNeeds[]): number {
+  return all.reduce((sum, needs) => {
+    const manual = needs.project.rituals.filter((ritual) => ritual.lifecycle === "active" && ritual.mode === "off" && ritual.overdueDays > 0).length;
+    return sum + manual + needs.states.filter((state) => state.missed).length;
+  }, 0);
 }
 
 // --- the page ------------------------------------------------------------------------------
-
-const TALLY: ReadonlyArray<readonly [CardKind, string, Tone]> = [
-  ["held", "Held", "wait"],
-  ["asks", "Asks you", "wait"],
-  ["failed", "Failed", "bad"],
-  ["stuck", "Stuck", "late"],
-  ["flagged", "Flagged", "bad"],
-  ["unreadable", "Unreadable", "bad"],
-];
 
 function verdictTone(needs: readonly Card[]): Tone {
   const kinds = new Set(needs.map((card) => card.kind));
@@ -487,64 +636,72 @@ function quietText(clock: Clock, states: readonly DjinnState[]): string {
   return `Quiet. The last djinn ran ${whenPhrase(clock, last.startedAt)} and ended ${last.outcome ?? "without an outcome"}${seen}.`;
 }
 
-/** The Flagged gauge leads to the first flagged card; without one it has nowhere to go. */
-function flaggedLink(needs: readonly Card[]): { href: string } | Record<never, never> {
-  const first = needs.find((card) => card.kind === "flagged");
-  return first === undefined ? {} : { href: `#${first.id}` };
+/** The segment of one card kind: its count and a link to the first card. Nothing when there is no such card. */
+function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone: Tone): Segment[] {
+  const cards = needs.filter((card) => card.kind === kind);
+  const first = cards[0];
+  return first === undefined ? [] : [{ key: kind, label, count: cards.length, tone, href: `#${first.id}`, live: false }];
+}
+
+/**
+ * The status strip. "Need you" always shows (held runs and runs that ask);
+ * every other segment shows only above zero: running (not the stuck ones),
+ * stuck, failed, flagged, unreadable and overdue.
+ */
+function statusStrip(needs: readonly Card[], running: number, overdue: number): Segment[] {
+  const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
+  const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true }];
+  const overdueSegment: Segment[] = overdue === 0 ? [] : [{ key: "overdue", label: "overdue", count: overdue, tone: "late", href: "#upnext", live: false }];
+  return [
+    { key: "need", label: "need you", count: waiting, tone: "wait", href: waiting === 0 ? null : "#needs", live: false },
+    ...runningSegment,
+    ...cardSegment(needs, "stuck", "stuck", "late"),
+    ...cardSegment(needs, "failed", "failed", "bad"),
+    ...cardSegment(needs, "flagged", "flagged", "bad"),
+    ...cardSegment(needs, "unreadable", "unreadable", "bad"),
+    ...overdueSegment,
+  ];
+}
+
+function newest(left: ActivityRun, right: ActivityRun): number {
+  return right.startedAt.localeCompare(left.startedAt);
+}
+
+function nowRun(run: ActivityRun): NowRun {
+  return { id: run.run, title: run.label, project: run.project, href: runPath(run.project, run.run), startedAt: run.startedAt, who: run.who };
 }
 
 export function homeView(status: HostStatus, readRun: ReadRun): Home {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
-  const projects = status.projects.filter((project) => !isSelftest(project.name));
-  const runs = activity(projects, { withImported: false }).filter((run) => !isNoise(run));
-  const states = projects.flatMap((project) => project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => djinnState(clock, project.name, ritual, runs)));
+  const all = status.projects.filter((project) => !isSelftest(project.name)).map((project) => projectNeeds(clock, status.generatedAt, project));
+  const states = all.flatMap((needs) => needs.states);
+  const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 
-  const held = runs.filter((run) => run.phase === "held");
-  const asks = runs.filter((run) => asksYou(run));
-  const flagged = projects.flatMap((project) => project.vigils.filter((vigil) => vigil.flagged).map((vigil) => ({ project, vigil })));
-  const stuck = runs.flatMap((run) => {
-    const size = stuckFor(run, status.generatedAt);
-    return size === null ? [] : [{ run, size }];
-  });
-  // A stuck check of a flagged vigil shows on the vigil's card, so the run shows once.
-  const flaggedChecks = new Set(flagged.map(({ project, vigil }) => `${project.name}/vigil/${vigil.slug}`));
-  const stuckCards = stuck.filter(({ run }) => !flaggedChecks.has(`${run.project}/${run.item}`));
-  const failed = states.filter((state) => state.last !== null && isOpenFailure(state.last));
   const needs: Card[] = [
-    ...held.map((run) => heldCard(clock, run)),
-    ...asks.map((run) => asksCard(clock, readRun, run)),
-    ...failed.flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)])),
-    ...stuckCards.map(({ run, size }) => stuckCard(clock, run, size)),
-    ...flagged.map(({ project, vigil }) => flaggedCard(clock, project, vigil, runs, status.generatedAt)),
-    ...projects.filter((project) => project.error !== null).map((project) => unreadableCard(project)),
+    ...all.flatMap((entry) => entry.held).toSorted(newest).map((run) => heldCard(clock, run)),
+    ...all.flatMap((entry) => entry.asks).toSorted(newest).map((run) => asksCard(clock, readRun, run)),
+    ...all.flatMap((entry) => entry.failed).flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)])),
+    ...all.flatMap((entry) => entry.stuck).toSorted((left, right) => newest(left.run, right.run)).map(({ run, size }) => stuckCard(clock, run, size)),
+    ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
+    ...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project)),
   ];
   const lastNight = states
     .filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY)
     .toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? ""))
     .flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]));
-  const tally = TALLY.flatMap(([kind, word, tone]) => {
-    const cards = needs.filter((card) => card.kind === kind);
-    const first = cards[0];
-    return first === undefined ? [] : [{ count: cards.length, word, tone, href: `#${first.id}` }];
-  });
-  const running = runs.filter((run) => run.phase === "running").length;
-  const runningValue: Piece[] = stuck.length === 0 ? countPieces(running, "plain") : [{ text: `${running}, `, ink: "plain" }, { text: `${stuck.length} stuck`, ink: "late" }];
+  const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
 
   return {
     verdict: verdictText(needs.length),
     tone: verdictTone(needs),
     sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${nextSentence(clock, states)}`,
-    tally,
+    strip: statusStrip(needs, now.length, overdueCount(all)),
+    now,
     needs,
     quiet: quietText(clock, states),
     lastNight,
-    watch: [
-      timerGauge(clock, status, states),
-      { label: "Running", value: runningValue, href: "/runs?state=running" },
-      { label: "Held", value: countPieces(held.length, "wait"), href: "/runs?state=held" },
-      { label: "Flagged", value: countPieces(flagged.length, "bad"), ...flaggedLink(needs) },
-      syncGauge(clock, status),
-    ],
+    upNext: upNext(clock, all),
+    health: [timerPiece(clock, status, states), syncPiece(clock, status)],
     djinns: states.map((state) => djinnLine(clock, status.generatedAt, state)).toSorted((left, right) => LINE_ORDER[left.tone] - LINE_ORDER[right.tone]),
   };
 }

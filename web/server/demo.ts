@@ -2,8 +2,10 @@
  * Demo data for `bun run web:dev --demo`: one host whose project shows every
  * state the pages draw (running, held, asks you, failed, flagged vigil,
  * overdue, dormant), so a design change can be judged without waiting for
- * the real store to be in that state. Times are relative to the request, so
- * "3 min ago" stays true. Run and ritual detail pages are not part of it.
+ * the real store to be in that state. A second, quieter project (atlas-docs)
+ * gives the home page a cross-project view. Times are relative to the
+ * request, so "3 min ago" stays true. Run and ritual detail pages are not
+ * part of it.
  */
 
 import type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow, WebContext } from "../../src/web/api.ts";
@@ -90,7 +92,7 @@ function project(now: number): ProjectStatus {
       ritual("site-report", "Nightly site report (djinn)", { skill: "site-report", nextDue: day(now, 0, 1) }),
       ritual("link-check", "Link checker (djinn)", { skill: "link-check", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
       ritual("price-sync", "Price sync (djinn)", { skill: "price-sync", nextDue: day(now, 0, 0), heldRun: held.run }),
-      ritual("backup-check", "Backup check", { nextDue: day(now, 0, 1), failedToday: { run: failed.run, acknowledged: null } }),
+      ritual("backup-check", "Backup check (djinn)", { skill: "backup-check", nextDue: day(now, 0, 1), failedToday: { run: failed.run, acknowledged: null } }),
       ritual("uptime-review", "Uptime review", { mode: "off", cadence: "7d", nextDue: day(now, 0, -9), overdueDays: 9 }),
       ritual("search-ranking", "Search ranking and content review", { mode: "off", cadence: "1w", nextDue: day(now, 0, -3), overdueDays: 3 }),
       ritual("promo-freshness", "Promo page freshness", { mode: "off", cadence: "3d", nextDue: day(now, 0, 0), isDue: true }),
@@ -105,6 +107,29 @@ function project(now: number): ProjectStatus {
   };
 }
 
+/** A second project: a running djinn, one that did not start, a djinn that finished last night, and a late manual ritual. */
+function atlas(now: number): ProjectStatus {
+  const running = run(now, "link-audit", "running", null, 3 * MINUTE);
+  const done = run(now, "release-notes", "closed", "complete", 9 * 60 * MINUTE);
+  return {
+    name: "atlas-docs",
+    checkout: "/home/user/projects/atlas-docs",
+    maxMode: "report",
+    lastSync: ago(now, 14 * MINUTE),
+    error: null,
+    runs: [running, done],
+    rituals: [
+      ritual("link-audit", "Docs link audit (djinn)", { skill: "link-audit", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
+      ritual("release-notes", "Release notes draft (djinn)", { skill: "release-notes", nextDue: day(now, 0, 2) }),
+      ritual("sitemap-check", "Sitemap check (djinn)", { skill: "sitemap-check", nextDue: day(now, 0, -2), isDue: true, overdueDays: 2 }),
+      ritual("changelog-digest", "Changelog digest (djinn)", { skill: "changelog-digest", nextDue: day(now, 0, 0), isDue: true }),
+      ritual("dependency-review", "Dependency review", { mode: "off", cadence: "2w", nextDue: day(now, 0, -14), overdueDays: 14 }),
+      ritual("style-guide", "Style guide pass", { mode: "off", cadence: "1m", nextDue: day(now, 0, 12) }),
+    ],
+    vigils: [],
+  };
+}
+
 export function demoStatus(now: number = Date.now()): HostStatus {
   return {
     host: "demo",
@@ -113,7 +138,7 @@ export function demoStatus(now: number = Date.now()): HostStatus {
     today: new Date(now - new Date(now).getTimezoneOffset() * MINUTE).toISOString().slice(0, 10),
     utcOffset: -new Date(now).getTimezoneOffset(),
     profiles: [],
-    projects: [project(now)],
+    projects: [project(now), atlas(now)],
   };
 }
 
