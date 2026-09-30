@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.42.1] - 2026-09-30
+
+### Fixed
+
+- Markdown on the web pages joins a hard-wrapped paragraph into flowing text, as any markdown viewer does, so specs, worklogs and run findings no longer break at every source line on a phone. Two trailing spaces or a trailing backslash keep a break.
+
 ## [0.42.0] - 2026-09-30
 
 ### Added

@@ -8,7 +8,8 @@
  * item is marked nested, one level; an indented line that starts no item
  * carries on the item above), checklist boxes (`- [x]`, as the
  * tracker writes them), pipe tables with a `|---|` separator row, fenced
- * code, paragraphs. An HTML comment on lines of its own is left out, as a
+ * code, paragraphs (a source line break is a space, two trailing spaces or a
+ * backslash keep it). An HTML comment on lines of its own is left out, as a
  * markdown viewer leaves it out. Inline: `code`, **bold**, *italic*.
  */
 
@@ -96,13 +97,34 @@ function listBlock(ordered: boolean, start: number, texts: readonly string[], in
   return block;
 }
 
+/**
+ * A paragraph's source lines to its shown lines. A line break in the source is
+ * a space, as in any markdown viewer, so hard-wrapped text flows on a phone.
+ * Two trailing spaces or a trailing backslash keep the break.
+ */
+function softWrapped(source: readonly string[]): string[] {
+  const shown: string[] = [];
+  let current = "";
+  for (const line of source) {
+    const isHardBreak = line.endsWith("  ") || line.endsWith("\\");
+    const text = (isHardBreak && line.endsWith("\\") ? line.slice(0, -1) : line).trim();
+    current = current === "" ? text : `${current} ${text}`;
+    if (isHardBreak) {
+      shown.push(current);
+      current = "";
+    }
+  }
+  if (current !== "") shown.push(current);
+  return shown;
+}
+
 /** Markdown to blocks. */
 export function parseMarkdown(markdown: string): MdBlock[] {
   const lines = markdown.replace(/\r\n?/gu, "\n").split("\n");
   const out: MdBlock[] = [];
   let paragraph: string[] = [];
   const flush = (): void => {
-    if (paragraph.length > 0) out.push({ kind: "paragraph", lines: paragraph.map((line) => parseInline(line)) });
+    if (paragraph.length > 0) out.push({ kind: "paragraph", lines: softWrapped(paragraph).map((line) => parseInline(line)) });
     paragraph = [];
   };
   for (let i = 0; i < lines.length; i += 1) {

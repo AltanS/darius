@@ -305,6 +305,16 @@ test("findings markdown becomes blocks of spans; HTML and links stay plain text"
     [[true, 1], [false, 1], [true, 2]],
   );
   assert.deepEqual(parseMarkdown("2 * 3 * 4"), [{ kind: "paragraph", lines: [[span("text", "2 * 3 * 4")]] }], "a lone star is no italic");
+  assert.deepEqual(
+    parseMarkdown("Raise time on page, and\nrecover **the ranking\ngaps** today."),
+    [{ kind: "paragraph", lines: [[span("text", "Raise time on page, and recover "), span("bold", "the ranking gaps"), span("text", " today.")]] }],
+    "a hard-wrapped paragraph flows as one line, bold across the wrap included",
+  );
+  assert.deepEqual(
+    parseMarkdown("first  \nsecond\\\nthird"),
+    [{ kind: "paragraph", lines: [[span("text", "first")], [span("text", "second")], [span("text", "third")]] }],
+    "two trailing spaces or a backslash keep the break",
+  );
 });
 
 test("markdown: checklist boxes as the tracker writes them, indented items, HTML comments left out", () => {
@@ -320,7 +330,7 @@ test("markdown: checklist boxes as the tracker writes them, indented items, HTML
   assert.deepEqual(parseMarkdown("- a\n- b"), [{ kind: "list", ordered: false, start: 1, items: [[span("text", "a")], [span("text", "b")]] }], "a plain list has neither key");
   assert.deepEqual(
     parseMarkdown("<!-- opened: 2026-09-02 -->\ntext\n<!--\nmany\nlines\n-->\n<!-- not closed\nstays"),
-    [{ kind: "paragraph", lines: [[span("text", "text")]] }, { kind: "paragraph", lines: [[span("text", "<!-- not closed")], [span("text", "stays")]] }],
+    [{ kind: "paragraph", lines: [[span("text", "text")]] }, { kind: "paragraph", lines: [[span("text", "<!-- not closed stays")]] }],
     "a comment on its own lines is left out; one that never closes stays text",
   );
   assert.deepEqual(
