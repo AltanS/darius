@@ -7,7 +7,7 @@ import type { NextLine } from "../lib/agenda.ts";
 import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
 import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
-import { KindChips } from "./chip.tsx";
+import { KindWord } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
@@ -85,11 +85,12 @@ export function NowList({ runs }: NowListProps): React.ReactNode {
         <Row
           key={run.id}
           kind={run.kind}
+          manual={run.manual}
           href={run.href}
           title={run.title}
           rail="run"
           live
-          chips={<KindChips kind={run.kind} manual={run.manual} />}
+          chips={<KindWord kind={run.kind} manual={run.manual} />}
           state={RUNNING}
           meta={[run.project, run.who === "timer" ? "by timer" : `by ${run.who}`]}
           time={
@@ -132,9 +133,10 @@ export function DoneRows({ cards }: DoneRowsProps): React.ReactNode {
           key={card.id}
           id={card.id}
           kind={card.item ?? "ritual"}
+          manual={card.manual}
           href={card.href}
           title={card.title}
-          chips={card.item === null ? undefined : <KindChips kind={card.item} manual={card.manual} />}
+          chips={card.item === null ? undefined : <KindWord kind={card.item} manual={card.manual} />}
           state={card.word.ink === "plain" || card.word.ink === "mute" ? null : { tone: card.word.ink, label: card.word.text }}
           meta={card.meta}
           time={card.side === null ? undefined : card.side.text}
@@ -198,7 +200,7 @@ export function CardView({ card }: CardViewProps): React.ReactNode {
           <p className="card-meta rw-line">
             {card.item === null ? null : (
               <span className="rw-seg rw-chips">
-                <KindChips kind={card.item} manual={card.manual} />
+                <KindWord kind={card.item} manual={card.manual} />
               </span>
             )}
             <span className="rw-seg rw-meta">{card.meta.join(", ")}</span>

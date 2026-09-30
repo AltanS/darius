@@ -2,7 +2,7 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/project";
 import { ComingUp, Waiting } from "../components/agenda.tsx";
-import { KindChips } from "../components/chip.tsx";
+import { KindWord } from "../components/chip.tsx";
 import { LivePanel, PhoneMore, Pulse } from "../components/pulse.tsx";
 import { Row, RowList } from "../components/row.tsx";
 import { ReportRow, RunList } from "../components/runs.tsx";
@@ -154,7 +154,7 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
                     {closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
                       const state = vigilWord(vigil);
                       const id = vigilAnchor(vigil.slug);
-                      return <Row key={vigil.slug} id={id} kind="vigil" title={vigil.title} chips={<KindChips kind="vigil" />} state={state} meta={vigil.lastOutcome === null ? [] : [`last check ${vigil.lastOutcome}`]} className={`target-row${target === id ? " is-target" : ""}`} />;
+                      return <Row key={vigil.slug} id={id} kind="vigil" title={vigil.title} chips={<KindWord kind="vigil" />} state={state} meta={vigil.lastOutcome === null ? [] : [`last check ${vigil.lastOutcome}`]} className={`target-row${target === id ? " is-target" : ""}`} />;
                     })}
                   </RowList>
                   {closedVigils.length > CLOSED_SHOWN ? <p className="rail-note mt-3">{closedVigils.length - CLOSED_SHOWN} older ones are not shown.</p> : null}

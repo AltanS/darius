@@ -2,7 +2,7 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/ritual";
 import type { RitualHandoff } from "../../../src/web/api.ts";
-import { KindChips } from "../components/chip.tsx";
+import { KindWord } from "../components/chip.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Report } from "../components/board.tsx";
 import { ResultChips, ResultQuestions } from "../components/result.tsx";
@@ -79,7 +79,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         </h1>
         <p className="page-meta meta-flow">
           <span className="rw-chips">
-            <KindChips kind="ritual" manual={manual} />
+            <KindWord kind="ritual" manual={manual} icon />
           </span>
           <StateWord state={ritualWord(row, today)} />
           {cadence === null ? null : <span>{cadence}</span>}

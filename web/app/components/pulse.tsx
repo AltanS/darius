@@ -10,7 +10,7 @@ import type { Kind } from "../lib/kind.ts";
 import { railOf } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
 import { runState, stuckText, type ActivityRun } from "../lib/view.ts";
-import { KindChips } from "./chip.tsx";
+import { KindWord } from "./chip.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Row, RowList } from "./row.tsx";
 import { SectHead, Time } from "./ui.tsx";
@@ -164,11 +164,12 @@ export function LivePanel({ live }: LivePanelProps): React.ReactNode {
               <Row
                 key={run.run}
                 kind={run.kind}
+                manual={run.manual}
                 href={runPath(run.project, run.run)}
                 title={run.label}
                 rail={stuck === null ? railOf(state) : "late"}
                 live={running}
-                chips={<KindChips kind={run.kind} manual={run.manual} />}
+                chips={<KindWord kind={run.kind} manual={run.manual} />}
                 state={state}
                 meta={[questions, run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null)}
                 time={

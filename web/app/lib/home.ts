@@ -95,7 +95,7 @@ export interface Card {
   kind: CardKind;
   /** What the card is about: a ritual or a vigil. Null for a project that cannot be read. */
   item: Kind | null;
-  /** The ritual is done by hand (mode off): it shows a manual chip too. */
+  /** The ritual is done by hand (mode off): it reads "manual ritual" with the hand icon. */
   manual: boolean;
   /** The colour of the left border; null for a plain card. */
   edge: Tone | null;

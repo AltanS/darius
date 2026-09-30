@@ -10,7 +10,7 @@ import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, decisionText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
 import { Command } from "./command.tsx";
-import { Chip, KindChips } from "./chip.tsx";
+import { Chip, KindWord } from "./chip.tsx";
 import { Report } from "./board.tsx";
 import { ResultChips } from "./result.tsx";
 import { Row, RowList } from "./row.tsx";
@@ -43,7 +43,7 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
         const hasChips = showLabel || counts.length > 0 || isImport;
         const chips = hasChips ? (
           <>
-            {showLabel ? <KindChips kind={run.kind} manual={run.manual} /> : null}
+            {showLabel ? <KindWord kind={run.kind} manual={run.manual} /> : null}
             {run.result === null || counts.length === 0 ? null : <ResultChips summary={run.result} isAnswered={run.acknowledged !== null} />}
             {isImport ? <Chip color="idle">imported</Chip> : null}
           </>
@@ -52,6 +52,7 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
           <Row
             key={`${run.project}/${run.run}`}
             kind={run.kind}
+            manual={run.manual}
             href={runPath(run.project, run.run)}
             title={showLabel ? run.label : shortDate(hostDate(run.startedAt, offset))}
             rail={railOf(state)}

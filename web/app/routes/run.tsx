@@ -1,7 +1,7 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/run";
-import { KindChips } from "../components/chip.tsx";
+import { KindWord } from "../components/chip.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
@@ -62,7 +62,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
         </h1>
         <p className="page-meta meta-flow">
           <span className="rw-chips">
-            <KindChips kind={kind} manual={manual} />
+            <KindWord kind={kind} manual={manual} icon />
           </span>
           <StateWord state={state} />
           <span>

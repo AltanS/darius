@@ -10940,10 +10940,10 @@ function KindIcon({ kind, size = 16, titled = false, className }) {
 //#region app/components/chip.tsx
 /**
 * The one chip: a small square-cornered box with a tinted border and ground,
-* a sentence-case word and an optional icon. It is used for kinds (ritual,
-* vigil), the manual modifier, result counts and "imported". The colour is
-* either a kind colour (what the item is) or a state tone (how it is doing),
-* never a mix.
+* a sentence-case word and an optional icon. It is used for result counts and
+* "imported", in a state tone. A kind is not a chip: it is a coloured word
+* (`KindWord`), because the row's icon already carries the kind colour and a
+* second box would say the same thing twice.
 */
 /** A chip. `color` picks the tint; `glyph` adds a 12 px icon with a 4 px gap. */
 function Chip({ color, glyph, children }) {
@@ -10955,17 +10955,16 @@ function Chip({ color, glyph, children }) {
 		}), children]
 	});
 }
-/** The chips of an item: its kind, and for a manual ritual the manual chip after it. */
-function KindChips({ kind, manual = false }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
-		color: kind,
-		glyph: kind,
-		children: kindWord(kind)
-	}), manual ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
-		color: "manual",
-		glyph: "manual",
-		children: "manual"
-	}) : null] });
+/** What an item is, as one coloured word: "ritual", "manual ritual" or "vigil". */
+function KindWord({ kind, manual = false, icon = false }) {
+	const glyph = kind === "ritual" && manual ? "manual" : kind;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: `kind-word c-${glyph}`,
+		children: [icon ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+			kind: glyph,
+			size: 14
+		}) : null, glyph === "manual" ? "manual ritual" : kindWord(kind)]
+	});
 }
 //#endregion
 //#region app/components/row.tsx
@@ -10991,7 +10990,7 @@ function StateWord({ state }) {
 	});
 }
 /** One row of a list; put it in a `RowList`. */
-function Row({ id, kind, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }) {
+function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }) {
 	const classes = [
 		"rw",
 		rail === null ? "" : `rw-rail tone-${rail}`,
@@ -11024,7 +11023,7 @@ function Row({ id, kind, title, href, rail = null, live = false, chips, state = 
 				"aria-hidden": "true"
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
-				kind,
+				kind: kind === "ritual" && manual ? "manual" : kind,
 				className: "rw-icon"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -11205,10 +11204,11 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 		id,
 		kind: row.kind,
+		manual: row.manual,
 		href: row.href,
 		title: row.title,
 		rail: row.rail,
-		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 			kind: row.kind,
 			manual: row.manual
 		}),
@@ -11293,7 +11293,7 @@ function WaitingItem({ row, showProject, anchors, target }) {
 		href: row.href,
 		title: row.title,
 		rail: railOf(state),
-		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, { kind: "vigil" }),
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, { kind: "vigil" }),
 		state,
 		meta: showProject ? [row.project] : [],
 		detail: row.until,
@@ -11954,11 +11954,12 @@ function LivePanel({ live }) {
 					const questions = run.phase === "held" && run.questions.length > 0 ? `${run.questions.length} question${run.questions.length === 1 ? "" : "s"}` : null;
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 						kind: run.kind,
+						manual: run.manual,
 						href: runPath(run.project, run.run),
 						title: run.label,
 						rail: stuck === null ? railOf(state) : "late",
 						live: running,
-						chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+						chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 							kind: run.kind,
 							manual: run.manual
 						}),
@@ -12029,11 +12030,12 @@ function StatusStrip({ segments }) {
 function NowList({ runs }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, { children: runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 		kind: run.kind,
+		manual: run.manual,
 		href: run.href,
 		title: run.title,
 		rail: "run",
 		live: true,
-		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 			kind: run.kind,
 			manual: run.manual
 		}),
@@ -12072,9 +12074,10 @@ function DoneRows({ cards }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, { children: cards.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 		id: card.id,
 		kind: card.item ?? "ritual",
+		manual: card.manual,
 		href: card.href,
 		title: card.title,
-		chips: card.item === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+		chips: card.item === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 			kind: card.item,
 			manual: card.manual
 		}),
@@ -12149,7 +12152,7 @@ function CardView({ card }) {
 							className: "card-meta rw-line",
 							children: [card.item === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "rw-seg rw-chips",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 									kind: card.item,
 									manual: card.manual
 								})
@@ -12368,7 +12371,7 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 			].filter((part) => part !== null);
 			const counts = run.result === null ? [] : summaryTags(run.result, run.acknowledged !== null);
 			const chips = showLabel || counts.length > 0 || isImport ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+				showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 					kind: run.kind,
 					manual: run.manual
 				}) : null,
@@ -12383,6 +12386,7 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 			] }) : void 0;
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 				kind: run.kind,
+				manual: run.manual,
 				href: runPath(run.project, run.run),
 				title: showLabel ? run.label : shortDate(hostDate(run.startedAt, offset)),
 				rail: railOf(state),
@@ -12936,7 +12940,7 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 											id,
 											kind: "vigil",
 											title: vigil.title,
-											chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, { kind: "vigil" }),
+											chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, { kind: "vigil" }),
 											state,
 											meta: vigil.lastOutcome === null ? [] : [`last check ${vigil.lastOutcome}`],
 											className: `target-row${target === id ? " is-target" : ""}`
@@ -13040,9 +13044,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "rw-chips",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 							kind: "ritual",
-							manual
+							manual,
+							icon: true
 						})
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: ritualWord(row, today) }),
@@ -13290,9 +13295,10 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "rw-chips",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindChips, {
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 							kind,
-							manual
+							manual,
+							icon: true
 						})
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state }),
@@ -13428,14 +13434,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-B3EP1m7G.js",
+			"module": "/assets/root-D5lh6_Ba.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DLeNVCph.js",
 				"/assets/view-Pm4WYeeg.js",
 				"/assets/agenda-DUht0bzD.js"
 			],
-			"css": ["/assets/root-DMLOhm8G.css"],
+			"css": ["/assets/root-DWhhJtbV.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -13454,12 +13460,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BzWYJgCc.js",
+			"module": "/assets/overview-BRDqpYtq.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/board-Bg3z-a6x.js",
+				"/assets/board-B2SXSuDm.js",
 				"/assets/ui-CchpVlDE.js",
-				"/assets/agenda-BY-MauJp.js",
+				"/assets/agenda-D9TqkAVJ.js",
 				"/assets/route-error-DI3wO4-Y.js",
 				"/assets/clock-DLeNVCph.js",
 				"/assets/view-Pm4WYeeg.js",
@@ -13484,14 +13490,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-CjFK3u9Y.js",
+			"module": "/assets/runs-BnlFjDEK.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/ui-CchpVlDE.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-5Y154AJr.js",
+				"/assets/runs-D4hrKuV7.js",
 				"/assets/clock-DLeNVCph.js",
-				"/assets/board-Bg3z-a6x.js",
+				"/assets/board-B2SXSuDm.js",
 				"/assets/view-Pm4WYeeg.js"
 			],
 			"css": [],
@@ -13560,16 +13566,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/project-BTBB-2jy.js",
+			"module": "/assets/project-Dkt8gAb6.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DLeNVCph.js",
-				"/assets/board-Bg3z-a6x.js",
+				"/assets/board-B2SXSuDm.js",
 				"/assets/view-Pm4WYeeg.js",
 				"/assets/ui-CchpVlDE.js",
-				"/assets/agenda-BY-MauJp.js",
+				"/assets/agenda-D9TqkAVJ.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-5Y154AJr.js",
+				"/assets/runs-D4hrKuV7.js",
 				"/assets/agenda-DUht0bzD.js"
 			],
 			"css": [],
@@ -13591,15 +13597,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-HNCnSvbb.js",
+			"module": "/assets/ritual-D4R3Jw-F.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DLeNVCph.js",
-				"/assets/board-Bg3z-a6x.js",
+				"/assets/board-B2SXSuDm.js",
 				"/assets/view-Pm4WYeeg.js",
 				"/assets/ui-CchpVlDE.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-5Y154AJr.js"
+				"/assets/runs-D4hrKuV7.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13620,15 +13626,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DcOYrrcl.js",
+			"module": "/assets/run-C6IFKJg-.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DLeNVCph.js",
-				"/assets/board-Bg3z-a6x.js",
+				"/assets/board-B2SXSuDm.js",
 				"/assets/view-Pm4WYeeg.js",
 				"/assets/ui-CchpVlDE.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-5Y154AJr.js"
+				"/assets/runs-D4hrKuV7.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13658,8 +13664,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-0a77db2f.js",
-	"version": "0a77db2f",
+	"url": "/assets/manifest-fb3d4964.js",
+	"version": "fb3d4964",
 	"sri": void 0
 };
 //#endregion

@@ -1,9 +1,9 @@
 /**
  * The one chip: a small square-cornered box with a tinted border and ground,
- * a sentence-case word and an optional icon. It is used for kinds (ritual,
- * vigil), the manual modifier, result counts and "imported". The colour is
- * either a kind colour (what the item is) or a state tone (how it is doing),
- * never a mix.
+ * a sentence-case word and an optional icon. It is used for result counts and
+ * "imported", in a state tone. A kind is not a chip: it is a coloured word
+ * (`KindWord`), because the row's icon already carries the kind colour and a
+ * second box would say the same thing twice.
  */
 
 import { kindWord, type Kind } from "../lib/kind.ts";
@@ -29,24 +29,21 @@ export function Chip({ color, glyph, children }: ChipProps): React.ReactNode {
   );
 }
 
-interface KindChipsProps {
+interface KindWordProps {
   kind: Kind;
-  /** A ritual done by hand (mode off): a manual chip follows the ritual chip. */
+  /** A ritual done by hand (mode off): the word is "manual ritual", in the manual colour. */
   manual?: boolean;
+  /** Draw the kind's icon in front: for a page head, which has no row icon. */
+  icon?: boolean;
 }
 
-/** The chips of an item: its kind, and for a manual ritual the manual chip after it. */
-export function KindChips({ kind, manual = false }: KindChipsProps): React.ReactNode {
+/** What an item is, as one coloured word: "ritual", "manual ritual" or "vigil". */
+export function KindWord({ kind, manual = false, icon = false }: KindWordProps): React.ReactNode {
+  const glyph: Glyph = kind === "ritual" && manual ? "manual" : kind;
   return (
-    <>
-      <Chip color={kind} glyph={kind}>
-        {kindWord(kind)}
-      </Chip>
-      {manual ? (
-        <Chip color="manual" glyph="manual">
-          manual
-        </Chip>
-      ) : null}
-    </>
+    <span className={`kind-word c-${glyph}`}>
+      {icon ? <KindIcon kind={glyph} size={14} /> : null}
+      {glyph === "manual" ? "manual ritual" : kindWord(kind)}
+    </span>
   );
 }

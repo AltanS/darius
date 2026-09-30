@@ -189,7 +189,7 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
   const coming = comingOf(body).replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, "");
-  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, with a manual chip");
+  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, marked manual");
   assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
   assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">late<\/span>/su, "and the late segment of the strip counts it");
   const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();
@@ -422,12 +422,13 @@ test("the ritual page says where a pinned ritual runs", async () => {
   assert.equal((await get("/p/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
 });
 
-test("a manual ritual shows both chips, a note box with the way to automate it, and its instructions open", async () => {
+test("a manual ritual reads \"manual ritual\" with the hand, has a note box with the way to automate it, and its instructions open", async () => {
   const project = STATUS.projects[0]!;
   const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 13, nextDue: "2026-09-15" };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "by-hand" ? { ...RITUAL, row: manual, policy: { ...RITUAL.policy, mode: "off" } } : null) };
   const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/by-hand"), ctx)).text()).replaceAll("<!-- -->", "");
-  assert.match(page, /<span class="rw-chips"><span class="chip-x c-ritual">.*?ritual<\/span><span class="chip-x c-manual">.*?manual<\/span><\/span>/su, "both chips: ritual, then manual");
+  assert.match(page, /<span class="kind-word c-manual"><svg class="kind-icon kind-manual"[^>]*>.*?<\/svg>manual ritual<\/span>/su, "one coloured word with the hand: manual ritual");
+  assert.equal(page.includes("chip-x c-ritual"), false, "no kind chip boxes");
   assert.ok(page.includes('<span class="rw-state tone-late">13 days late</span>'), "the state word in the vocabulary");
   assert.ok(page.includes('<h1 class="page-title page-title-sans">'), "the title is sans");
   assert.ok(page.includes("darius does not start this ritual (mode off). You run it by hand; darius tracks the schedule."), "the note box");
@@ -435,7 +436,8 @@ test("a manual ritual shows both chips, a note box with the way to automate it, 
   assert.match(page, /<details class="fold scroll-mt-20" open=""><summary>Instructions<\/summary>/u, "Instructions are open for a ritual done by hand");
   assert.match(page, /<details class="fold scroll-mt-20"><summary>Rules/u, "Rules stay closed");
   const auto = (await get("/p/demo/rituals/daily-report")).body;
-  assert.equal(auto.includes("chip-x c-manual"), false, "an automatic ritual has no manual chip");
+  assert.ok(auto.includes('<span class="kind-word c-ritual">'), "an automatic ritual reads ritual");
+  assert.equal(auto.includes("c-manual"), false, "and has no manual mark");
   assert.match(auto, /<details class="fold scroll-mt-20"><summary>Instructions/u, "its instructions stay closed");
 });
 

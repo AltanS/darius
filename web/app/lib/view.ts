@@ -38,7 +38,7 @@ export interface ActivityRun extends RunRow {
   slug: string;
   /** What the item is: a ritual or a vigil. */
   kind: Kind;
-  /** A ritual darius never starts (mode off): it shows a manual chip next to the ritual chip. */
+  /** A ritual darius never starts (mode off): it reads "manual ritual" with the hand icon. */
   manual: boolean;
 }
 

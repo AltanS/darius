@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.37.0] - 2026-09-30
+
+### Changed
+
+- A row says what it is once, in colour: the icon at its start (circling arrows for a ritual, a hand for a manual ritual, an eye for a vigil) and one coloured word under the title ("ritual", "manual ritual", "vigil"), with no boxes. Ritual and run pages show the same icon and word next to the state.
+
 ## [0.36.0] - 2026-09-30
 
 ### Added

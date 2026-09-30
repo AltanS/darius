@@ -36,7 +36,7 @@ export type AgendaState = Badge;
 export interface AgendaRow {
   key: string;
   kind: Kind;
-  /** A ritual darius never starts: it shows a manual chip next to the ritual chip. */
+  /** A ritual darius never starts: it reads "manual ritual" with the hand icon. */
   manual: boolean;
   project: string;
   slug: string;

@@ -33,6 +33,8 @@ export function StateWord({ state }: StateWordProps): React.ReactNode {
 interface RowProps {
   id?: string;
   kind: Kind;
+  /** A ritual done by hand: the row icon is the hand, in the manual colour. */
+  manual?: boolean;
   title: React.ReactNode;
   /** Where the row goes; without it the row is not a link. */
   href?: string;
@@ -58,7 +60,7 @@ interface RowProps {
 }
 
 /** One row of a list; put it in a `RowList`. */
-export function Row({ id, kind, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }: RowProps): React.ReactNode {
+export function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }: RowProps): React.ReactNode {
   const classes = ["rw", rail === null ? "" : `rw-rail tone-${rail}`, live ? "rw-live" : "", className ?? ""].filter((part) => part !== "");
   const segments: React.ReactNode[] = [];
   if (chips !== undefined && chips !== null) segments.push(<span key="chips" className="rw-seg rw-chips">{chips}</span>);
@@ -82,7 +84,7 @@ export function Row({ id, kind, title, href, rail = null, live = false, chips, s
   return (
     <li id={id} className={classes.join(" ")}>
       {live ? <span className="live-bar" aria-hidden="true" /> : null}
-      <KindIcon kind={kind} className="rw-icon" />
+      <KindIcon kind={kind === "ritual" && manual ? "manual" : kind} className="rw-icon" />
       <div className="rw-main">
         {href === undefined ? <span className="rw-title">{title}</span> : <Link to={href} className="rw-title">{title}</Link>}
         {segments.length === 0 && acts === undefined ? null : (
