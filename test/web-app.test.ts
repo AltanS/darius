@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -586,4 +586,20 @@ test("an answered result: the decision replaces the command, home is quiet, the 
 
   const runs = await readPage("/runs", ctx);
   assert.ok(runs.includes('<span class="tag">1 question, answered</span>'), "answered, in words and without the waiting tone");
+});
+
+test("the app can be installed and get push notices: manifest, icons, service worker, and the links to them", async () => {
+  const client = join(import.meta.dirname, "..", "web", "build", "client");
+  const manifest: { start_url: string; display: string; icons: { src: string; sizes: string; purpose: string }[] } = JSON.parse(readFileSync(join(client, "manifest.webmanifest"), "utf8"));
+  assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.display, "standalone");
+  assert.deepEqual(manifest.icons.map((icon) => `${icon.sizes} ${icon.purpose}`), ["192x192 any", "512x512 any", "512x512 maskable"]);
+  for (const icon of manifest.icons) assert.ok(existsSync(join(client, icon.src)), icon.src);
+  for (const file of ["apple-touch-icon.png", "badge-72.png"]) assert.ok(existsSync(join(client, file)), file);
+  const worker = readFileSync(join(client, "sw.js"), "utf8");
+  for (const event of ["push", "notificationclick"]) assert.match(worker, new RegExp(`addEventListener\\("${event}"`, "u"), event);
+  assert.doesNotMatch(worker, /addEventListener\("fetch"/u, "no fetch handler: the page is never served from a cache");
+  const home = await readPage("/", context);
+  assert.match(home, /<link [^>]*rel="manifest" href="\/manifest.webmanifest"/u);
+  assert.match(home, /<link [^>]*rel="apple-touch-icon" href="\/apple-touch-icon.png"/u);
 });

@@ -42,7 +42,11 @@ export function shouldRevalidate(): boolean {
 
 export const meta: Route.MetaFunction = () => [{ title: "darius" }];
 
-export const links: Route.LinksFunction = () => [{ rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }];
+export const links: Route.LinksFunction = () => [
+  { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+  { rel: "manifest", href: "/manifest.webmanifest" },
+  { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+];
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -59,6 +63,9 @@ export function Layout({ children }: LayoutProps): React.ReactNode {
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="color-scheme" content="dark" />
         <meta name="theme-color" content="#15100b" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="darius" />
         <Meta />
         <Links nonce={nonce} />
       </head>

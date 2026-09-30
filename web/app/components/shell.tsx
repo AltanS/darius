@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 
 import type { RootData } from "../root.tsx";
+import { PushSwitch } from "./push.tsx";
 import { clockTime, projectPath } from "../lib/format.ts";
 import { questionsText } from "../lib/view.ts";
 
@@ -127,6 +128,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
                   </Link>
                 ))
               : null}
+            <PushSwitch />
           </div>
           <p className="foot-host">
             {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}. <Link to="/profiles">Profiles</Link>

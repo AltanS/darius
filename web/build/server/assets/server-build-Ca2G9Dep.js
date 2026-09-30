@@ -8946,6 +8946,176 @@ async function handleRequest(request, responseStatusCode, responseHeaders, route
 	});
 }
 //#endregion
+//#region app/components/push.tsx
+/**
+* The notification switch in the footer (0.32.0). It registers the service
+* worker (web/public/sw.js), asks the host for its VAPID key, and subscribes
+* this browser with `darius serve`'s push endpoints (src/web/push-api.ts):
+* GET /api/push/key, POST /api/push/subscribe, POST /api/push/unsubscribe.
+*
+* Push needs a secure context (HTTPS, or localhost), a browser with a push
+* service, and on an iPhone a darius icon on the Home Screen. When one is
+* missing, the switch says what to do instead of showing a dead button.
+* Everything happens in the browser: the server render shows nothing.
+*/
+var WORKER = "/sw.js";
+/** The VAPID key arrives as base64url; the push manager wants its bytes. */
+function keyBytes(key) {
+	const base64 = key.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(key.length / 4) * 4, "=");
+	const text = atob(base64);
+	const bytes = new Uint8Array(new ArrayBuffer(text.length));
+	for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index);
+	return bytes;
+}
+/** One field of a JSON reply, as text; null when it is missing or null. */
+async function field(response, name) {
+	const value = new Map(Object.entries(Object(await response.json()))).get(name);
+	return value === null || value === void 0 ? null : String(value);
+}
+/** Why push cannot work in this browser, or null when it can. */
+function blocker() {
+	const iPhone = /iPhone|iPad|iPod/u.test(navigator.userAgent);
+	const installed = window.matchMedia("(display-mode: standalone)").matches;
+	if (iPhone && !installed) return "On an iPhone, add darius to the Home Screen first (Share, then Add to Home Screen), and turn notifications on there.";
+	if (!window.isSecureContext) return "Notifications need HTTPS. Open darius by its https address.";
+	if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "This browser cannot show push notifications.";
+	if (Notification.permission === "denied") return "Notifications are blocked for this site. Allow them in the browser's site settings.";
+	return null;
+}
+/** Where this browser stands: a reason it cannot, or whether it is subscribed. */
+async function check() {
+	const reason = blocker();
+	if (reason !== null) return {
+		kind: "unavailable",
+		text: reason
+	};
+	const registration = await navigator.serviceWorker.register(WORKER, { scope: "/" });
+	const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
+	if (response.status === 404) return {
+		kind: "unavailable",
+		text: "This server has no notification endpoints. The dev server has none: use make next serve=1."
+	};
+	if (!response.ok) return {
+		kind: "failed",
+		text: `The host answered ${response.status} for its push key.`
+	};
+	const key = await field(response, "key");
+	if (key === null) return {
+		kind: "unavailable",
+		text: "No push keys on this host yet (darius push keys)."
+	};
+	return await registration.pushManager.getSubscription() === null ? {
+		kind: "off",
+		key
+	} : { kind: "on" };
+}
+async function post(path, body) {
+	const response = await fetch(path, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			accept: "application/json"
+		},
+		body: JSON.stringify(body)
+	});
+	if (response.ok) return null;
+	return await field(response, "error").catch(() => null) ?? `The host answered ${response.status}.`;
+}
+async function turnOn(key) {
+	if (await Notification.requestPermission() !== "granted") return {
+		kind: "unavailable",
+		text: "Notifications were not allowed. Allow them in the browser's site settings."
+	};
+	const subscription = await (await navigator.serviceWorker.ready).pushManager.subscribe({
+		userVisibleOnly: true,
+		applicationServerKey: keyBytes(key)
+	});
+	const error = await post("/api/push/subscribe", subscription.toJSON());
+	if (error === null) return { kind: "on" };
+	await subscription.unsubscribe();
+	return {
+		kind: "failed",
+		text: error
+	};
+}
+async function turnOff() {
+	const subscription = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+	if (subscription === null) return check();
+	const error = await post("/api/push/unsubscribe", { endpoint: subscription.endpoint });
+	await subscription.unsubscribe();
+	return error === null ? check() : {
+		kind: "failed",
+		text: error
+	};
+}
+function failure(cause) {
+	return {
+		kind: "failed",
+		text: `Notifications failed: ${cause.message}`
+	};
+}
+function PushSwitch() {
+	const [state, setState] = (0, import_react.useState)({ kind: "checking" });
+	(0, import_react.useEffect)(() => {
+		check().then(setState, (cause) => setState(failure(cause)));
+	}, []);
+	const run = (0, import_react.useCallback)((text, action) => {
+		setState({
+			kind: "busy",
+			text
+		});
+		action().then(setState, (cause) => setState(failure(cause)));
+	}, []);
+	switch (state.kind) {
+		case "checking": return null;
+		case "unavailable": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "push push-note",
+			children: state.text
+		});
+		case "busy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "push push-note",
+			children: state.text
+		});
+		case "failed": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "push push-note ink-bad",
+			children: [
+				state.text,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "push-btn",
+					onClick: () => run("Checking…", check),
+					children: "Try again"
+				})
+			]
+		});
+		case "off": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "push",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "push-btn",
+				onClick: () => run("Turning notifications on…", () => turnOn(state.key)),
+				children: "Turn on notifications"
+			})
+		});
+		case "on": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "push",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "push-on",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "status-dot",
+					"aria-hidden": "true"
+				}), "Notifications on for this device"]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "push-btn",
+				onClick: () => run("Turning notifications off…", turnOff),
+				children: "Turn off"
+			})]
+		});
+	}
+}
+//#endregion
 //#region app/lib/format.ts
 /** Text helpers for times, ids and commands. Pure, so server and client agree. */
 var MINUTE = 6e4;
@@ -9508,13 +9678,13 @@ function Shell({ data, children }) {
 				className: "wa",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "foot",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "foot-left",
-						children: isHome ? data.selftest.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						children: [isHome ? data.selftest.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: line.href,
 							className: "foot-selftest",
 							children: line.text
-						}, line.href)) : null
+						}, line.href)) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushSwitch, {})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "foot-host",
 						children: [
@@ -10364,11 +10534,21 @@ function shouldRevalidate() {
 	return true;
 }
 var meta$7 = () => [{ title: "darius" }];
-var links = () => [{
-	rel: "icon",
-	href: "/favicon.svg",
-	type: "image/svg+xml"
-}];
+var links = () => [
+	{
+		rel: "icon",
+		href: "/favicon.svg",
+		type: "image/svg+xml"
+	},
+	{
+		rel: "manifest",
+		href: "/manifest.webmanifest"
+	},
+	{
+		rel: "apple-touch-icon",
+		href: "/apple-touch-icon.png"
+	}
+];
 function Layout({ children }) {
 	const data = useRouteLoaderData("root");
 	const [nonce] = (0, import_react.useState)((0, import_react.useContext)(NonceContext) ?? data?.nonce);
@@ -10387,6 +10567,18 @@ function Layout({ children }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("meta", {
 				name: "theme-color",
 				content: "#15100b"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("meta", {
+				name: "apple-mobile-web-app-capable",
+				content: "yes"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("meta", {
+				name: "apple-mobile-web-app-status-bar-style",
+				content: "black-translucent"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("meta", {
+				name: "apple-mobile-web-app-title",
+				content: "darius"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Meta, {}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Links, { nonce })
@@ -12702,13 +12894,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-C8P627hz.js",
+			"module": "/assets/root-DiBl_hhX.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DOuU4B9z.js",
 				"/assets/view-Czd_Xog6.js"
 			],
-			"css": ["/assets/root-D7LTC5SC.css"],
+			"css": ["/assets/root-Ts1qulB3.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -12927,8 +13119,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-103ec9eb.js",
-	"version": "103ec9eb",
+	"url": "/assets/manifest-87c35d34.js",
+	"version": "87c35d34",
 	"sri": void 0
 };
 //#endregion

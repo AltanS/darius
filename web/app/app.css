@@ -1623,6 +1623,47 @@
     }
   }
 
+  /* The notification switch in the footer: one line of text and one plain button. */
+  .push {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .push-note {
+    max-width: 60ch;
+  }
+
+  .push-on {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-ok);
+  }
+
+  .push-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+    font: inherit;
+    color: var(--color-parchment);
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+
+  .push-btn:hover {
+    border-color: var(--color-sand-hi);
+  }
+
+  @media (pointer: coarse) {
+    .push-btn {
+      min-height: 44px;
+    }
+  }
+
   /* --- dashboard head ---------------------------------------------------------------- */
 
   .page-head-tight {

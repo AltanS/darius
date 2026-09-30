@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.32.0] - 2026-09-30
+
+### Added
+
+- The web app can go on a phone's home screen and show push notices. It has a manifest, a new icon (a cut gem) in every size a phone asks for, and a service worker that shows a notice and opens its page on a tap. The worker has no fetch handler, so a page is never served from a cache.
+- A switch in the footer turns notices on and off for each device. It registers the service worker, subscribes with the host's key and posts the subscription to `darius serve`. When push cannot work, it says why: not HTTPS, an iPhone without the Home Screen icon, notices blocked, a server without the push endpoints, or no push keys on the host (`darius push keys`).
+
 ## [0.31.0] - 2026-09-30
 
 ### Added
