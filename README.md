@@ -225,8 +225,7 @@ the full reference.
 bun install          # dev tools only: oxlint, TypeScript
 (cd web && bun install)
 ./bin/darius --version
-make check           # lint, typecheck, tests under Node and Bun
-make                 # every task
+bun run check       # lint, typecheck, tests under Node and Bun
 ```
 
 ### Two lanes on one machine
@@ -239,17 +238,8 @@ the same store without modifying it.
 | stable | `~/.local/opt/darius/current` | 4747 | `darius-web.service` | `~/.config/darius/web.env` |
 | next | this checkout | 4748 | `darius-next` (transient) | `~/.config/darius/next.env` |
 
-```bash
-make next            # the web dev server with hot reload
-make next demo=1     # the same over demo data that shows every state
-make next serve=1    # bin/darius serve over the committed web/build, as a host runs it
-make status          # both lanes: state, version, URL, health
-make logs lane=stable
-make down            # stops next; stable is never touched
-```
-
-Promote changes to stable with releases: `make release` tags and pushes the code, and `make update`
-updates this host (`hosts=a,b` updates remote hosts).
+The make targets that start and stop the lanes live in the private workspace repo, not in this
+one. `bun run web:dev` runs the web dev server in the foreground (port 5747).
 
 ### Behind a reverse proxy
 

@@ -8993,7 +8993,7 @@ async function check() {
 	const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
 	if (response.status === 404) return {
 		kind: "unavailable",
-		text: "This server has no notification endpoints. The dev server has none: use make next serve=1."
+		text: "This server has no notification endpoints. The dev server has none: run darius serve."
 	};
 	if (!response.ok) return {
 		kind: "failed",
@@ -13434,7 +13434,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-D5lh6_Ba.js",
+			"module": "/assets/root-9IecAjAD.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-DLeNVCph.js",
@@ -13664,8 +13664,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-fb3d4964.js",
-	"version": "fb3d4964",
+	"url": "/assets/manifest-f937987a.js",
+	"version": "f937987a",
 	"sri": void 0
 };
 //#endregion

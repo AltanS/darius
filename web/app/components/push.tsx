@@ -55,7 +55,7 @@ async function check(): Promise<PushState> {
   if (reason !== null) return { kind: "unavailable", text: reason };
   const registration = await navigator.serviceWorker.register(WORKER, { scope: "/" });
   const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
-  if (response.status === 404) return { kind: "unavailable", text: "This server has no notification endpoints. The dev server has none: use make next serve=1." };
+  if (response.status === 404) return { kind: "unavailable", text: "This server has no notification endpoints. The dev server has none: run darius serve." };
   if (!response.ok) return { kind: "failed", text: `The host answered ${response.status} for its push key.` };
   const key = await field(response, "key");
   if (key === null) return { kind: "unavailable", text: "No push keys on this host yet (darius push keys)." };

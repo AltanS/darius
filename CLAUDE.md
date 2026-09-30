@@ -53,15 +53,13 @@ real use; see `docs/concept.md`, "Migration plan".
   build input (`web/app`, `web/server`, `web/public`, the web configs, `src/web/api.ts`; the list is
   `WEB_INPUTS` in `web/source-hash.ts`), run `bun run web:build` and commit `web/build/` with the
   source. The build typechecks the app first. `test/web-build.test.ts` fails on a stale build.
-  `make next` runs this checkout as the next lane on port 4748 (hot reload, the real store,
-  read-only; `demo=1` for demo data with every state, `serve=1` for `bin/darius serve`), next to
-  the installed stable lane on 4747. `make status` shows both, `make down` stops next only.
-  Host-specific values (public URL, proxy, devices) live in `~/.config/darius/{web,next}.env`,
-  never in the repo: the repo is public. `bun run web:dev` still runs the dev server in the
-  foreground (port 5747).
+  The two web lanes (stable on port 4747, next on 4748) and their make targets live in the private
+  workspace repo, not here. Host-specific values (public URL, proxy, devices) live in
+  `~/.config/darius/{web,next}.env`, never in the repo: the repo is public. `bun run web:dev` runs
+  the dev server in the foreground (port 5747).
   The app reads darius only through the `WebContext`, imports `src/` with `import type` only, and
   never renders store text as HTML (`dangerouslySetInnerHTML` is banned).
-- **Three gates, all must pass:** `bun run lint && bun x tsc --noEmit && bun run test` (`make check`).
+- **Three gates, all must pass:** `bun run lint && bun x tsc --noEmit && bun run test` (`bun run check`).
   Lint is oxlint 1.78 plus the vendored anti-slop rules in `tools/oxlint/` at `--max-warnings 0`.
   Typecheck is TypeScript 7 strict with `noUncheckedIndexedAccess` and `noUnused*`.
 - **The suite is Node's built-in runner** (`node:test`). `scripts/test.sh` points

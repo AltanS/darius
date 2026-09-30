@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.38.1] - 2026-09-30
+
+### Changed
+
+- The Makefile and `scripts/lane.sh` moved to the private workspace repo; `bun run check` runs the three gates.
+
 ## [0.38.0] - 2026-09-30
 
 ### Added

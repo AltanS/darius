@@ -1,12 +1,13 @@
 {
   "name": "darius",
-  "version": "0.38.0",
+  "version": "0.38.1",
   "license": "MIT",
   "private": true,
   "description": "Rituals, vigils and milestones for agent-driven projects, synced to your own object storage",
   "type": "module",
   "bin": { "darius": "./bin/darius" },
   "scripts": {
+    "check": "bun run lint && bun x tsc --noEmit && bun run test",
     "test": "bash scripts/test.sh",
     "typecheck": "bun x tsc --noEmit",
     "lint": "oxlint --max-warnings 0",

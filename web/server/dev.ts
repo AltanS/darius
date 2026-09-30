@@ -13,8 +13,8 @@
  *
  * Behind a reverse proxy it reads the same variables as `darius serve`:
  * `DARIUS_WEB_PROXY` (with `_HEADER` and `_DEVICES`) for who may call, and
- * `DARIUS_WEB_URL`, whose host name Vite then accepts. `make next` starts it
- * this way as the next lane (see the Makefile).
+ * `DARIUS_WEB_URL`, whose host name Vite then accepts. The next lane
+ * starts it this way (its tooling lives in the private workspace repo).
  */
 
 import { createServer } from "node:http";
