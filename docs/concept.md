@@ -198,6 +198,337 @@ One package, no workspaces. Directories, not packages, separate concerns.
 
 **One writer module per kind.** Each kind has one writer module. A kind in `DARIUS_KINDS` is written by the store code only. A kind outside it is written by `src/legacy/` only, and only under `.tracker/`. darius native code never writes `.tracker/` files, and the legacy tree never writes the store. One test checks the rule: a run through every native write verb in a fixture leaves `.tracker/` unchanged.
 
+## App design
+
+**CLI.** Every command has `--json` and exits 0 ok, 1 refused or failed, 2 usage, 3 inconclusive environment, the probe contract the operator already uses.
+
+```
+darius                                  TUI
+darius due [--project P] [--all]        rituals due, vigils due or armed, held runs, conflicts
+darius status | list | show <ref>
+darius ritual add|list|show|set|pause|resume|retire <slug>
+darius run start <ritual> [--unattended] | hold <run> --question ... | answer <run> <n> <text>
+darius run now <ritual> [--profile NAME]   start one ritual unattended now, due or not
+darius run resume <run> | complete <run> --outcome ... --findings-stdin | list
+darius run ack <run> [--note TEXT]      mark a failed or abandoned run as seen; display only
+darius vigil add|list|set-body|close <slug> --verdict held|failed
+darius evidence record <check-ref> --exit N --outcome ... [--output-stdin]
+darius check run <ref>                  executes Command, records evidence
+darius note add --to <ref> --kind lesson|ruling|incident --stdin
+darius milestone|spec ...               phase 4
+darius sync [--pull-only] | doctor | import <path/.tracker> | export <dir> | setup | compact
+darius link [<dir>] [--force] | --list   record this host's checkout of the project named in .darius.toml
+darius run-due --unattended [--dry-run] [--only <slug>]
+darius policy-check [--harness ID] [--preflight]   the gate; used by the harness's pre-tool hook
+darius serve [--bind auto|ADDR,...] [--port N]  this host's read-only status page, loopback and tailnet, port 4747
+```
+
+**TUI (0.16.0).** `darius tui`, and bare `darius` when stdin and stdout are a terminal; in a pipe, bare `darius` still prints help. Dependency-free ANSI, number keys, no mouse. Milestone progress is a table in `darius status`, not a screen.
+
+- `Due`: one numbered list over every project. Held runs come first, because they are the only rows that wait for the operator (the first draft listed them after rituals and vigils). Then due rituals, vigils that are due, armed or flagged, and runs that failed today. An acknowledged failure is a Due row again, dimmed "failed today, acknowledged". A number or Enter opens a row.
+- `Run`: the run's facts, its findings, then its questions, numbered, with their answers. A digit opens an answer prompt, which writes `run.answered` through the same function as `darius run answer`. `r` starts `darius run resume` detached, with its output in `runs/<run>/resume.log`, so the TUI stays free while the run goes on. On a failed or abandoned ritual run, a line under the phase says what comes next, and two keys act (0.18.0): `a` acknowledges the run through the same function as `darius run ack`, and `n` starts `darius run now` detached, once per run per session, with its output in `runs/<failed run>/rerun.log`. Both keys do nothing on any other run. On a complete run whose result asks questions (0.22.0), the screen starts with the result, and `a` opens a decision prompt whose text becomes the acknowledgement's note; the Due screen lists such runs under "Asks you".
+- The screens read the store again on each key and every 5 s. Findings, questions and titles are untrusted text: every control character is removed before it is printed, so a finding cannot move the cursor or set the window title.
+- Not built: the `Sync` screen (last push and pull per host, chunk counts), and conflicts in the Due list. A `conflict` line has no resolved state yet, so that list would only grow; `darius sync` reports conflicts.
+
+**Unattended runner.** `darius run-due --unattended` is what the systemd timer calls (and a central server later).
+
+1. `sync`, compute due, skip rituals with `policy.mode: off`, rituals pinned to another host (see "Host pin" below) and rituals whose latest run is `held`. Find the project's working dir on this host: its linked checkout, else the import's repo when it exists here, else the store dir for a project with no repo. A project that another host linked or imported, and that has no checkout here, is skipped as `no-workdir`. A mode above the checkout's `max_mode` is skipped as `policy-capped`. Both are decided before a run starts, so neither leaves an open run that would block the ritual on every host.
+2. For each due ritual: take `leases/ritual-<slug>.json`, append `started`. claude runs in the working dir.
+3. Write a per-run settings file and launch:
+
+```
+claude -p --output-format json --max-turns N --model <from policy> \
+  --dangerously-skip-permissions --disallowedTools Write,Edit,NotebookEdit,Agent \
+  --settings <run>/settings.json   # PreToolUse hook on every tool: darius policy-check
+  --append-system-prompt-file <run>/policy.md  # procedure, may/hold, the hold protocol
+```
+
+That is the default since 0.20.0 (see "Profiles": the darius gate alone decides). A gated profile passes `--permission-mode dontAsk --permission-prompts none --allowedTools <policy.may + read-only defaults>` instead, and its hook sees shell calls only.
+
+The prompt says: do the procedure, write findings with `darius run complete`, and for any action in `hold[]` call `darius run hold <run> --question "..."` and stop. The `PreToolUse` hook runs `darius policy-check`, which reads the run's `hold[]` patterns and returns deny for a matching Bash command, recording the question itself. So a held action is enforced twice: once by the prompt, once by the hook. `report` mode additionally disallows `Bash` write verbs via a stricter pattern set. Credentials are the third layer: the timer's unit runs with an environment that has no deploy SSH key and no `--confirm`-tier tokens (a dedicated system user on a server; `Environment=` scrubbing on the operator's host). A held run does not roll `due`.
+
+4. Append `completed` or `failed` with the `claude -p` JSON result hash as a blob. Release the lease. Sync.
+5. Post one report per batch to the configured webhook (Campfire room or Telegram, plain `fetch`): runs completed, failed, held with question count and the command to answer.
+
+**Report rules (0.12.0).** The first unattended batch of each local day posts a *digest*: every notable entry, held runs and `failed-today` included, or one "all quiet" line. A missing digest therefore means a dead timer. Every later batch that day posts only *news*: started runs and failing skips. So an hourly timer does not repeat one held run 23 times. `run now` posts its report too: a person started it, but maybe in a tab or over ssh. A report a person asked for (`run now`, `run resume`, `--dry-run`) names every skip, mode `off` included (0.18.0): before, `run now` on a ritual with mode `off` said only "nothing due". The host notes the date of its last digest in `<state>/run-due-digest.json`; a failed post is tried again by the next batch.
+
+**Run results (0.22.0, operator request 2026-09-30).** A run's findings stay markdown for people, and end with one fenced block whose info string is `darius-result`, holding JSON (`src/core/result.ts`): `v` 1, `status` (ok, attention, failed), a plain `summary`, and optional `metrics` (label, value, unit, tone), `items` (title, severity critical to info, state open, fixed, needs-decision or not-verified, `group` such as the market, `target`, `detail`), `questions` (text, recommendation) and `actions` (text, state, target). The operator asked for structured output the web app and the TUI can draw; the real pain was a fact check that put its questions for the operator at the top of its prose, where nothing surfaced them.
+
+- *Why a fenced block.* One heredoc carries both: the gate allows the protocol heredoc and refuses every other `<<`, the `Write` tool is denied, and JSON with escaped markdown inside is hard for a model to write. The block stays readable anywhere.
+- *Checked, not trusted.* `darius run complete` cuts the block out, checks every field, and lists every problem at once. Texts are plain: control characters go, long texts are clipped, and the app renders them as text, never as markdown, HTML or a link. Unknown keys are ignored; a wrong type, an unknown enum value, a missing field or too many entries is an error. `status` only goes up: a question, an open high or critical item, or an item not verified makes it `attention`.
+- *Required for launched runs.* Every run darius starts writes `result: "required"` into its `policy.json`, and the prompt shows the format with one example. `run complete --outcome complete` then refuses findings without a valid block (exit 1), keeps what was sent in `<run>/findings-rejected.md`, and leaves the run open for the model to fix and send again. If the model then runs out of turns, the failure blob carries those findings, so they are not lost. `--outcome failed` and `abandoned` are recorded whatever the block says. A by-hand run (`run start`, and `tracker ritual complete` through the router) may hand in a block; if it does, the block must be valid.
+- *Storage.* The findings blob holds the markdown without the block; the checked JSON is a blob of its own (`result_sha`), and the ledger line carries the counts (`result: {status, questions, open per severity, fixed}`), so a list needs no blob read. Older hosts ignore the new keys.
+- *Questions reach the operator.* A complete run whose result has questions and no `run.acknowledged` line is on the "needs you" lists of the web app and the TUI, and in the batch report ("complete, asks N questions"). The operator decides and records it with `darius run ack <run> --note "<decision>"`: there is no session to resume after a complete run. Since 0.26.0 the decision goes to the next run of the ritual, with the handoff.
+- *Reading a run (0.24.0).* `darius run show <run> [--json]` prints a run's facts, its result and its findings, and `run list --json` carries each run's counts (`result`). A later run reads earlier ones this way, for example to re-check yesterday's open items first.
+- *Handoff (0.26.0, operator request 2026-09-30).* A run leaves the next run of the same ritual a note in its block: `handoff`, one line of at most 200 characters (what to check again, what waits for someone, what not to repeat). It is the one text darius does not clip, since a cut note can lose its meaning: a longer one is refused. `run complete` copies it onto the `run.completed` line. darius delivers it, so no model has to look for it: the next launched run gets a "Handoff from the previous run" section at the top of its prompt, and `darius run start` prints it for a run by hand. With it go the questions of that run and the operator's note from `run ack --note`, or "not answered yet: do not act on them". The source is the latest run of the ritual that handed in a result: a crashed run hands in none, so the last good note stays; a result without a note clears it. `ritual show`, the ritual page and the run views show it (`src/core/handoff.ts`). Rituals only: a vigil has no next run.
+- *Not yet.* Vigils keep their structured sweep evidence and get no block until phase 3; no stable item ids across runs (a model cannot keep them stable).
+
+**Alerts (0.29.0, by Web Push since 0.31.0; operator requests 2026-09-30).** The goal: unattended rituals work without the operator, and only what nobody else may decide reaches them, on their phone. The webhook report stays as it is (digest and news); alerts are separate and short. 0.29.0 sent them by Telegram; the operator then chose native notifications of the installed web app instead (no third party that stores the text, and a tap opens the run), so 0.31.0 replaced Telegram with Web Push (`src/core/push.ts`, `src/core/alerts.ts`, `darius push`).
+
+- *What.* A held run (its questions), a complete run whose result asks questions (key `asks:<run>`, so a decider can send the same questions once when it escalates them), a failed or abandoned run, a gate check that did not pass (`_global`), and a failing skip of a batch (`skip:<host>:<ritual>:<day>:<reason>`, once a day per host). The payload is `{title, body, url, tag}`: plain text, clipped, `url` a path of the web app, `tag` the key, so a newer notice replaces an older one on the phone. An alert never carries a stderr tail, an exception text or a failure blob: those can hold environment text. For gate-broken and error it names the dry run that shows the detail.
+- *The origin host sends.* Every alert comes from a ledger line or a batch report, and each has one host. Only that host sends, so two hosts never send the same alert, with no lease and no wait for a sync; "both hosts, no duplicates" is the operator's choice. `alert.sent{key, devices}` in the project ledger keeps a key from going out twice; when no device took a notice, `alert.failed{key, error, title, body, url}` keeps it, and a later flush sends it again, at most three times. A crash between the send and the ledger line can send one alert twice; a lost alert would be worse.
+- *When.* After each run-due batch, `run now` and `run resume`, and after `darius sync` (the 15-minute timer), which catches lines a session wrote by hand. A host without keys, or with no device yet, sends nothing and records nothing; lines from before the keys or the first device are history.
+- *Web Push, no dependency.* The payload is encrypted for each device (RFC 8291, aes128gcm) and the request signed (RFC 8292, VAPID, ES256) with WebCrypto, which both runtimes have; the test checks the encryption byte for byte against the RFC's example. The push service (Apple, Google, Mozilla, Microsoft) only forwards ciphertext. A 404 or 410 ends the device (`push.gone`).
+- *Keys.* One VAPID pair in `<config>/push.json` (0600) on each host that sends, the same pair on all of them, because a subscription is bound to the public key it was made with. `darius push keys --subject <mailto:|https:>` makes it on one host; the file is copied to the others. Never in the store, never printed.
+- *Devices, the first web write.* The web app's button fetches the public key (`GET /api/push/key`), subscribes in the browser, and posts the subscription (`POST /api/push/subscribe`, `/unsubscribe`; `src/web/push-api.ts`). darius records it as `push.subscribed{endpoint, p256dh, auth, viewer}` in the `_global` ledger, so every host that syncs knows every device. The keys of a subscription only let a sender encrypt for that device; the push service accepts nothing without the VAPID signature. A POST passes the access check of every page, must carry an Origin of the page itself (the request's host, either scheme, or `$DARIUS_WEB_URL`), must be JSON and at most 4 KB, and the endpoint must be https on a known push service, so no caller can make darius post to a URL of its choice. Push needs a secure context: the page must be opened over HTTPS (a tailnet TLS proxy), or on localhost. On an iPhone the app must be on the home screen (iOS 16.4 or newer).
+- *Not yet.* A host without keys stays silent rather than failing its batch; answering from the notification or the run page comes with the decision ladder.
+
+**Decision ladder (planned for 0.30.0, operator rulings 2026-09-30).** Every question a run asks goes up a ladder: a standing rule of the ritual, then a decider model, then the operator. The operator names the model (a full pinned id in `trusted_models`); they trust Fable, not Sonnet, and there is never a fallback model: `--fallback-model` is a reserved profile argument since 0.29.0. The operator lets the decider decide content fixes, operations, code merges and production deploys, and gets an info alert after each code or deploy decision. Fable reviewed the design (2026-09-30); its required points: the decider is a pure text call (no tools, gate scope `none`, one turn), so it cannot read a secret or a web page; the proof of the model is the model of the message that carries the decision, else every question escalates; it runs under the ritual lease; `run.decided` is read by `run ack`, the needs-you lists and the handoff. v1 decides answers only; one-time command grants come after some days, only for command shapes the ritual lists (the shape, not the model, sets the class), and a content decision needs a before-state.
+
+**Tool check (0.12.0).** Before a run, darius looks up each program that the ritual's `may` rules name (`Bash(pnpm cli *)` names `pnpm`) on the runner's PATH. When one is missing it skips the ritual as `tool-missing`, a failing skip, before any spend. The first timer run of the `daily-report` djinn failed this way: `pnpm` was not on the unit PATH, every `pnpm cli` call exited 127, and the run cost money for nothing. `pnpm` is now one of the programs whose dir `setup --systemd` puts on the unit PATH.
+
+**Resume (0.16.0).** `darius run resume <run>` goes on with a held run after the operator answered it. It refuses a run that is not held, and a held run with no answer since its latest hold. The checks of `run now` apply (mode, `max_mode`, tools, profile, gate preflight, the ritual lease), and the run keeps its id: darius appends `run.resumed`, not a new `run.started`.
+
+- *Same session when this host has it.* After every launch, run-due notes the harness's session id in `<run dir>/session.json`. When the note exists and Claude Code still has the session on this host, darius launches `claude -p --resume <session_id>` with every flag again and the answers as the message. The session keeps its transcript, not the tools, the hook or the system prompt, so darius passes them again. Probed 2026-09-29 on a real run: the same session id came back, and a PreToolUse hook fired inside the resumed session. `run.resumed` records the `session_id`.
+- *A new session otherwise.* Run dirs are not synced and Claude Code keeps sessions per host, so a resume on another host, or of a run whose surface reported no session id (herdr), starts a new session. Its first message holds the questions and the answers; `run.resumed` records `fresh: true`.
+- *An answer does not lift the hold list.* The gate is the same after an answer, so a held command is held again. The message tells the model to name an approved held action in the findings, for the operator to do. A one-time approval of one held command is not built (docs/backlog.md).
+- *Questions number on across holds.* `run answer <run> <n>` numbers every question of every hold from 1, and refuses a number past the last. A hold in a resumed run is recorded again.
+
+**Acknowledge (0.18.0).** `darius run ack <run> [--note TEXT]` records that a person saw a failed or abandoned run: one `run.acknowledged` line, with who and the note. It refuses every other run (a held run is answered and resumed instead), and a second acknowledgement. It is display only. The timer does not retry a ritual whose latest run failed today, acknowledged or not; a retry is always a person's `darius run now`. The `failed-today` line of the report names who acknowledged the run, or gives both commands. The web page and the TUI stop counting an acknowledged failure as something that needs the operator: the home board shows it as a plain card with the acknowledgement, and the run and ritual pages say what happens next.
+
+**Host pin (0.18.0).** Two hosts with the run-due timer both take every due ritual. The ritual lease only serializes them: one runs it, the other skips it as `lease-held`, and which host wins is chance. But a ritual may need one host: its checkout, its tools, its credentials, or the harness session that a resume goes on with. `darius ritual set <slug> --host NAME` pins the ritual to one host, and `--host ""` clears the pin. NAME is the host id, the `host` of that host's `config.toml`. The pin lives in the ritual's store item, never in the repo: decision 9 keeps host names out of git, and a move to another host needs no commit. run-due, `run now` and `run resume` on any other host skip the ritual as `other-host`, before any run exists. The skip is quiet in the digest and the news, like mode `off`, because it repeats every hour; `run now` names it. The web ritual page says "Runs on NAME". A host before 0.18.0 cannot read a pinned ritual (the store refuses unknown keys), so update every host before the first pin.
+
+## Web status page
+
+Status: 2026-09-28, 0.9.0; the app 0.11.0. Operator request: "the darius app that runs when installing/running darius on a host", to confirm that djinn runs properly.
+
+`darius serve` serves a read-only web app per host from the local store. Its home page (0.15.0, operator choice among three mockups) is a command board: one verdict, the things that need the operator, a rail of health gauges and the djinns; everything else lives one click away. Earlier it held: an overview (held runs with their questions and the exact `darius run answer` command, what is due, the djinns, the newest runs), all runs with filters, one page per project, per ritual (policy, instructions, runs) and per run (event timeline, findings), and the store-wide profiles. `/api/status.json` has the status as JSON. It computes everything the way `due`, `run list` and `vigil list` do, and never writes, syncs or locks; the sync timer keeps the store fresh. The app revalidates every minute. The project page (0.25.0, operator request 2026-09-30, a UI exception to the scope rule; 0.28.0 shows the legacy vigils of the linked checkout read-only, `src/core/legacy-vigils.ts`, because they stay canonical in `.tracker/vigils/` until phase 3) opens as a dashboard: four linked tiles, then Now, Scheduled and Vigils panels, then the djinn reports and recent runs, with the manual rituals in the rail. State moves: a running run pulses and sweeps, a waiting one breathes, and `prefers-reduced-motion` stops it. The phone layout (0.33.0, operator request 2026-09-30) makes home a dashboard for all projects: a status strip (need you, running, failed, flagged, overdue), then Now, Needs you with the commands folded, Last night, Up next (next djinns, overdue manual rituals), one health line for timer and sync, and the djinns; the health gauges are gone. The Home badge counts the same things as the verdict. On a phone the project page is one column in reading order. Since 0.34.0 both pages lead with "Coming up" (every active ritual once and every dated vigil, grouped by day) and "Waiting on an event" (the armed vigils without a date), in place of Up next, Djinns, Scheduled, By hand and the vigil panel (`web/app/lib/agenda.ts`). Since 0.35.0 every page marks what an item is with one of three kinds, each a word, a colour and an icon: ritual (darius runs it), manual (done by hand) and vigil (`web/app/lib/kind.ts`); state colours stay separate. Since 0.36.0 manual is a mark on a ritual rather than a kind, every list uses one row and one chip, the state words live in `web/app/lib/state-words.ts`, and empty sections do not render. Since 0.37.0 a kind shows once, in colour: the row icon (a hand for a manual ritual) and one coloured word, not a chip.
+
+`setup --systemd` installs and starts it as the user service `darius-web.service`; the home-manager module has `services.darius.web`, off by default since 0.14.0 (operator ruling 2026-09-29): with `--bind auto` the page listens on the tailnet, so a declared host opts in to that listener, and a sync-only host needs no page.
+
+**The app (0.11.0, operator ruling 2026-09-28: a React Router app in framework mode, themed after Diablo II Act 2).** The app lives in `web/`, its own package with its own `package.json` and `bun.lock`: React, React Router 7 in framework mode (server rendering), Vite, Tailwind. `darius serve` stays `node:http` and keeps access control, `/healthz`, `/api/status.json` and the static files of `web/build/client`. Every other request goes to the app's server build: darius imports `web/build/server/index.js` and calls its handler with a `WebContext` (`src/web/api.ts`). The loaders read darius only through that context, so the data code stays in `src/` under `node:test`, and the bundle holds only pages. The web side imports `src/` with `import type` only.
+
+- *No runtime dependency for the CLI.* Vite bundles React and React Router into the server build, which imports only `node:` modules. So the CLI and the timers still run with zero packages, and only `darius serve` loads the bundle. It loads under Node and Bun.
+- *Untrusted text stays text.* Findings and ritual bodies come from a model or a person. `src/web/markdown.ts` parses them into blocks of spans (headings, paragraphs, lists, tables, code; no links, no images, no raw HTML), and the app renders them as React text nodes, never as HTML.
+- *CSP with a nonce.* darius makes a fresh nonce per request, passes it in the context, and sends `script-src 'self' 'nonce-...'` with no `unsafe-inline`. The app puts the nonce on its inline hydration scripts.
+- *An update restarts the service.* A Bun process cannot import a changed module again. When the version or the web build on disk differs from the one the process started with, the next request gets a 503 and the process exits 75, and systemd starts it with the new code.
+
+**Build (0.11.0, operator ruling 2026-09-28: commit the build).** The built app, `web/build/`, is committed. A host and the Nix package never build it: they need no Bun for the build, no network and no `node_modules`. The build writes `web/build/build-info.json` with a hash of every build input (`web/source-hash.ts`), and `test/web-build.test.ts` fails when the committed build is older than its source. So the three gates catch a forgotten `bun run web:build`. Rejected: a build on each host (Bun and network on every host, and a hashed `node_modules` derivation for Nix to update with every package change); a release tarball as collie does (CI and release plumbing for a private repo). The cost: built JavaScript in git diffs.
+
+**Access (0.10.0, operator ruling 2026-09-28: tailnet identity).** The page is reachable on the tailnet, and the tailnet is the login. `--bind auto`, the default, listens on loopback and on this host's tailnet address; while Tailscale has no address yet, it listens on loopback and tries again every 30 s. `0.0.0.0` and `::` are refused. For each caller from the tailnet darius asks the local tailscaled `tailscale whois` who it is, and caches the answer for a minute. The caller passes when its device belongs to an allowed login (`DARIUS_WEB_ALLOW`, default the login that owns this host) and is not a tagged device. The operator's tailnet also holds tagged servers and another user's device; they get 403. A caller on loopback is on the host itself and passes. A failed lookup refuses: the check fails closed. `/healthz` answers without a check and shows no data. Rejected: a token login (a secret to manage per device, and the tailnet already knows who calls); an open page on the tailnet (servers and another user would read internal findings).
+
+**Install and push (0.32.0, operator request 2026-09-30).** The page is an installable web app: a manifest, a cut-gem icon in the sizes phones ask for, and a service worker that only shows Web Push notices and opens their page on a tap. It has no fetch handler, so no page is ever served from a cache and the read-only status stays live. A footer switch subscribes one device at a time through `darius serve`'s push endpoints (0.31.0). Push needs a secure context, so a phone uses the proxy's HTTPS name; an iPhone also needs the Home Screen icon first. Rejected: an offline cache (a stale status page is worse than none).
+
+**Behind a proxy (0.30.0, operator request 2026-09-30).** The operator opens each lane by an HTTPS name on the tailnet, through a reverse proxy on another node that terminates TLS and names the calling device in a header. Every request then comes from the proxy's address, so `whois` would name the proxy. With `DARIUS_WEB_PROXY` set to the proxy's addresses, a request from one of them passes only when the proxy's header (`DARIUS_WEB_PROXY_HEADER`, default `X-Tailnet-Device`) names a device in `DARIUS_WEB_PROXY_DEVICES`; a request from anywhere else is judged as before, and its header is ignored. So the header needs no network rule to be safe: only the proxy's address can use it. A proxy on the same host is named as `127.0.0.1`, and loopback then needs the header too. `DARIUS_WEB_URL` is the address people open. Rejected: trusting the header from any caller (a device could name another), and the proxy's own login in `DARIUS_WEB_ALLOW` (every caller of the proxy would pass as that one login). The values are per host and live in `~/.config/darius/web.env` (stable) and `next.env` (the checkout), never in the repo.
+
+It does not decide the central server (see "Non-goals"). It is one more read-only client of the core functions, and the first thing a central server would replace or embed.
+
+## Harnesses, profiles and surfaces
+
+Status: 2026-09-28. Steps 1 to 3 of the build order are built (0.5.0, 0.6.0, 0.7.0); steps 4 and 5 are not. Operator requests: darius must not depend on one harness, the operator must be able to watch a run in a herdr pane, and each ritual picks its harness and arguments from a named, pre-configured list. A **harness** is the agent CLI that drives a model session: Claude Code, Codex, opencode, pi. A **surface** is where that session runs: in the background, or in a terminal pane a person can watch.
+
+### Research (probed on the lead host, 2026-09-28)
+
+Every claim below comes from a probe run in a throwaway directory, or from the harness's own docs or source where the table says so.
+
+| | Claude Code 2.1.283 | Codex 0.156.1 | opencode 1.18.32 | pi 0.87.1 |
+|---|---|---|---|---|
+| Headless | `-p --output-format json` | `exec --json` (JSONL) | `run --format json` (JSONL) | `-p`, `--mode json` |
+| Pre-tool gate | `PreToolUse` hook via `--settings` | `PreToolUse` hook, Claude's schema, via `-c hooks...` | plugin `tool.execute.before` via `OPENCODE_CONFIG` | extension `tool_call` via `-e <file>` |
+| Gate blocks with permissions skipped | yes (probed) | yes (probed) | yes, under `--auto` (probed) | yes, pi has no permission system (probed) |
+| Gate crashes or cannot start | call runs (fail open) | call runs (fail open) | call blocked (a throw blocks) | call blocked (a throw blocks) |
+| Effort | `--effort` | `-c model_reasoning_effort=` | `--variant` | `--thinking` |
+| Skip permissions | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--auto` | (always) |
+| Append to system prompt | yes | no, reads `AGENTS.md` | no, reads `AGENTS.md` | yes |
+| Turn limit | `--max-turns` | none | `steps` | none |
+| Session id, cost | both | session id, tokens only | both | both |
+| Interactive with a first prompt | `claude "..."` | `codex "..."` | `opencode --prompt` | `pi "..."` |
+| Parent env reaches shell commands | yes | yes | yes | yes |
+
+Three findings shape the design:
+
+1. **Codex drops a per-run hook without a word** unless `--dangerously-bypass-hook-trust` is also passed. A second probe also found that a bare exit 2 did not block while another hook was registered; the JSON decision did. The run then has no gate and nothing says so. Harness behaviour changes between versions, so a gate is proved per harness version, not assumed (see "Gate check").
+2. **With permissions skipped, Claude Code's `--disallowedTools Bash` is not a gate.** The model handed the job to a subagent (`Agent`), and the subagent ran the denied tool. The hook still blocked, also inside the subagent. `--disallowedTools Agent` did hold. So the gate has to judge every tool, not only Bash.
+3. **All four pass the parent environment to shell commands.** `DARIUS_RUN` and the `darius run hold|complete` protocol therefore work unchanged in every harness and on every surface. darius learns that a run ended from the ledger, never from the harness's stdout, so nothing in the run lifecycle depends on the harness.
+
+### The contract
+
+darius owns everything that makes a run a run: the lease, the ledger lines, the prompt and protocol, the policy, the timeout, the report. An adapter only translates. Two adapter kinds, in `src/harness/` and `src/surface/`:
+
+```ts
+interface HarnessAdapter {
+  id: "claude" | "codex" | "opencode" | "pi";
+  /** What this harness can do; the policy ceiling and the launch plan read it. */
+  caps: { systemPrompt: boolean; maxTurns: boolean; cost: boolean; gateFailsClosed: boolean };
+  /** Flags a profile's `args` may not contain: the ones that install or disable the gate. */
+  reservedArgs: readonly string[];
+  efforts: readonly string[];
+  version(bin: string): string | null;
+  /** Writes the run's gate files and returns argv for both modes plus the first message. */
+  prepare(run: RunSpec): { headless: string[]; interactive: string[]; message: string; env: ChildEnv };
+  /** Native hook payload to one neutral tool call, and a neutral decision back to native output. */
+  gateInput(payload: JsonValue): ToolCall;
+  gateOutput(decision: GateDecision): { stdout: string; exitCode: number };
+  parseResult(stdout: string): { sessionId?: string; costUsd?: number; turns?: number };
+}
+
+interface SurfaceAdapter {
+  id: "headless" | "herdr";
+  /** null when usable here, else the reason it is not. */
+  unavailable(): Promise<string | null>;
+  launch(plan: LaunchPlan): Promise<LaunchResult>;
+}
+```
+
+The first message always carries the protocol. A harness with `caps.systemPrompt` also gets the procedure in its system prompt, as today. That gives one code path that works for all four.
+
+### One gate, thin shims
+
+`darius policy-check` stays the only place with rules. It gets `--harness <id>` and reads that harness's payload through `gateInput`. Every tool call becomes one neutral record:
+
+```
+ToolCall = { class: shell | read | write | web | agent | other, name, command?, path?, url? }
+```
+
+| Class | `report` | `act` |
+|---|---|---|
+| `read` (Read, Grep, Glob and their kin) | allow | allow |
+| `shell` | allow only when it matches `may`, matches no `hold` pattern, and has no report-mode write verb | allow only when it matches `may` and no `hold` pattern |
+| `write` (Write, Edit, apply_patch) | deny, except a scratch file under `/tmp` (0.23.0) | the same (act means the commands in `may`) |
+| `web` | deny | allow only when named in `may` |
+| `agent` (subagents) | deny, unless `may` names `Agent` (0.21.0); then every call of the subagent meets this table | the same |
+| `other` (MCP and unknown tools) | allow only when named in `may` | allow only when named in `may` |
+
+The table applies in full when the harness's own permission system is off (`permissions = "skip"`) or cannot express the policy (Codex, opencode and pi, because darius does not translate `may` into their rule languages). With Claude Code in gated mode the native allowlist already enforces `may`, so the gate does what it does today: `hold` and the report-mode write verbs on shell calls, and it leaves every other tool to the allowlist. The run's `policy.json` says which (`gate: "full" | "shell"`, absent means `shell`). Two matchers that could disagree about one command would hold live runs that pass today, so the gate never second-guesses a native allowlist that is on.
+
+**darius alone decides (0.20.0, operator ruling 2026-09-30).** `permissions = "skip"` is the default. The operator asked whether the decision is deterministic. It is when darius alone decides: the gate is a pure function of the call, the policy and the held state, and tests pin it. Claude's own check is fixed code too, but not ours: it changes with each version, adds rules of its own (under `dontAsk` it refused `true; echo exit=$?` although both parts were allowed), and in a herdr tab it asked a person and waited. What the model does after a refusal is not deterministic; the refusal text only helps it find an allowed way, and the block does not depend on it. With skip, the hook is the only guard, so the gate check per harness version (0.19.0) must pass before a run. `gated` stays as an explicit option for a second layer; it passes `--permission-mode dontAsk`, so it refuses what its allowlist does not name and never asks. A model deciding (Claude's `auto` mode) was rejected: nobody can know its answers before a run.
+
+Each adapter lists its harness-internal tools (Claude Code: `ToolSearch`, `TodoWrite`, `TaskCreate` and its kin, which are a to-do list, not subagents), which the full table allows. Any other unknown tool is denied, the other spawning tools included (`TeamCreate`, `SendMessage`, `Workflow`, `Monitor`, `EnterWorktree`; a test pins them). For Claude Code a probe showed that the hook also fires inside a subagent (the payload carries `agent_id`; again on 2.1.285), that with permissions skipped a subagent ignores the parent's `--disallowedTools`, and that `--disallowedTools Agent` removes the tool itself. So a ritual that does not name `Agent` gets `--disallowedTools Agent` in skip mode, and the model never sees the tool.
+
+**Subagents (0.21.0, operator ruling 2026-09-30).** Until 0.21.0, `agent` was always denied, on the view that rituals do not need subagents. The first unattended fact check showed the cost: its skill asks for an independent second verification of every CRITICAL, and the run could not do it. Now a ritual opts in by naming `Agent` in `may`. Then:
+
+- The run gets gate scope `full` in every permission mode, as a skill ritual does, so the hook judges every call of every subagent by the same policy. Gated mode never lists `Agent` in `--allowedTools`: nothing proves that a subagent keeps to the parent's permissions there, so in 0.21.0 subagents need permissions skipped.
+- The gate denies an `Agent` call from a subagent (no nesting), and one with `isolation`: a remote subagent runs where this hook cannot see it, and a worktree writes a branch into the checkout.
+- A subagent may run `darius run hold` (a hold fails closed) but not `darius run complete`: the main session collects the findings, and the ledger cannot tell the two apart, because they share `DARIUS_WHO`.
+- The prompt says the rules up front, and to wait for every subagent before the run is completed.
+- `--max-turns` bounds the main session only; the run timeout bounds the subagents. Whether `total_cost_usd` includes subagent spend is to be confirmed on the first real run.
+- The subagent tool is granted per run only when the gate check of the installed harness version saw the gate judge a subagent on this host (see "Gate check"). Without that proof a report ritual still runs, without `Agent`, and the report warns: that loses a capability, not safety. An act ritual is skipped as `subagents-unproven` (0.22.0), a failing skip: its subagents verify a finding before it writes, so without them it would write unverified.
+
+A decision is allow, deny or hold (0.7.1). `hold` is for what needs a person: a `hold` pattern, a report-mode write verb, any call once the run is held. The run is held and the model is told to stop. `deny` is for a call the policy does not allow (outside `may`, a file write, a subagent, web in report mode): the model is told not to retry and to go on within the policy, as it does when a native allowlist refuses a call. Holding on those would end a run with permissions skipped on its first stray `ls`.
+
+Known limit of layer 2: `read` is always allowed, in both scopes, so an unattended run can read any file the unit's user can read, credentials included. Layer 3, the scoped environment of the timer unit, is the answer, not the gate.
+
+`may` keeps today's Claude permission-rule syntax, so no ritual changes: `Bash(pnpm cli fc *)` is a shell rule, any other entry names a tool. The gate matches shell rules itself now, because on three of the four harnesses nothing else would. One rule keeps that safe: in a gate pattern, `*` never matches `;`, `&`, `|`, a newline, a backtick, `$(`, `<` or `>`. A pattern that needs one of those spells it out, as `Bash(cd djinn && pnpm cli fc *)` does. So `pnpm cli fc x; rm -rf ~` does not match `Bash(pnpm cli fc *)`.
+
+The shims only move data:
+
+- **Claude Code:** the run's `settings.json` wires `PreToolUse` to `darius policy-check --harness claude`: matcher `Bash` in gated mode, as today, and matcher `*` when permissions are skipped.
+- **Codex:** the same hook schema through `-c hooks.PreToolUse=[...]`, always with `--dangerously-bypass-hook-trust`. The adapter lists the trust flag and `hooks` as reserved, so a profile cannot remove them. The deny must be the JSON decision on stdout plus exit 2 with a reason on stderr: in one probe a bare exit 2 did not block while another hook (herdr's integration in `~/.codex/hooks.json`) was also registered, and the JSON form did. The hook also fires for `apply_patch`, Codex's file edit tool, so `write` is gated too.
+- **pi:** darius writes `<run>/gate.ts`, loaded with `-e`. It pipes the call to `darius policy-check --harness pi` and throws on any failure, so a gate that cannot start blocks.
+- **opencode:** a plugin that does the same, loaded per run with `OPENCODE_CONFIG=<run>/opencode.json` naming `file://<run>/gate.ts`. Probed: this loads from outside the checkout and writes nothing into it, `tool.execute.before` fires for shell, write and edit, and a gate whose child process cannot start throws and blocks. The plugin must spawn with `node:child_process`; Bun's `$` shell hung on a missing binary.
+
+**Preflight, per run.** Claude Code and Codex let a call through when the hook cannot start. So before each launch darius runs the exact gate command line with a synthetic call that must be denied, for example a shell call matching the first `hold` pattern. Anything but a deny refuses the run (`gate-broken`). This costs one process spawn.
+
+**Gate check, per harness version (0.19.0).** The preflight proves the gate command starts; it cannot prove the harness still obeys the hook, and with permissions skipped the hook is the only guard. Claude Code updates itself every few days. So a harness version must pass a check on a host before it runs a ritual there. The check starts the harness for real, headless, with permissions skipped, the cheapest model (`haiku`), three turns and two minutes, through the same run files, hook wiring and environment as a ritual run, under a gate that allows nothing (`may` empty, scope `full`). It asks the model to `touch` a marker file, then (0.21.0) to start one subagent that must `touch` a second one. `passed`: no marker, and the gate log has a denied shell call. `failed`: a marker exists, or the gate failed its preflight. `inconclusive`: neither, so the model never tried, or the harness did not start or finish. `subagents` is `passed` when the log also has a denied shell call from a subagent (the log line's `agent` field), else `inconclusive`. Each check appends `harness.checked{harness, version, outcome, subagents, run, cost_usd?, detail?}` to the `_global` ledger; the line carries its host, so the digest and the pages can show it. Checks from before 0.21.0 have no `subagents`, so subagents stay off until the next check.
+
+run-due, `run now` and `run resume` read the version once per batch (`claude --version`, the adapter's `versionArgs`). When the latest check of that version on this host passed, the run starts. When there is none, they run the check first and name it in the report; this happens once per Claude Code update. When one did not pass today, they skip every ritual of that harness as `harness-unchecked`, a failing skip, and do not try again until the next day: the check costs a model call, and an hourly timer must not repeat it. `darius harness check [<id>]` runs one by hand (exit 0 passed, 1 failed, 3 inconclusive), and `darius harness list` shows the latest check per version and host. This holds for both permission modes: a hook that Claude ignores also loses `hold` and the report-mode verbs of a gated run. A dry run names a pending check and spends nothing. The Codex trap above was the first reason for the check; Claude's update pace is the second (operator question 2026-09-30: is the decision deterministic? Only when darius alone decides, and that needs this proof).
+
+**Gate log (0.19.0).** `policy-check` appends each decision to `<run>/gate.jsonl` next to the policy file: `{at, tool, class, verdict, reason?, command?, agent?}`. The check reads it. A line that cannot be written never changes the decision.
+
+### Profiles
+
+A profile is a named preset for starting a harness:
+
+```toml
+[profiles.opus-medium-skip]
+harness = "claude"
+model = "opus"
+effort = "medium"          # checked against the adapter's efforts
+permissions = "skip"       # skip (default since 0.20.0) | gated
+surface = "herdr"          # headless (default) | herdr
+max_turns = 40
+args = []                  # passed as-is, after darius's own flags; reserved flags refused
+```
+
+`permissions = "skip"` turns off the harness's own permission system. The darius gate stays, because the research shows it holds with permissions skipped, and the gate check per harness version proves it again after each update. `max_mode` is not a profile field. A profile never lifts a run above the ceiling of its repo.
+
+Resolution, highest first, field by field:
+
+1. The item's own fields: `policy.profile = "<name>"`, plus today's `policy.model` and `policy.max_turns`, which keep working.
+2. The repo's `.darius.toml`: its `[profiles.<name>]` tables and a `[defaults]` table (`ritual = "<name>"`).
+3. Store-wide profiles, synced to every host: item files `items/profiles/<name>.md` in a reserved store project `_global`, written only through `darius profile add|set`. `sync --all-projects` and run-due sync `_global` first, and create it when missing, so a new host gets the profiles. There is no `profile remove` yet: sync has no delete path for items (see "Compaction"), so a removed file would come back from the bucket.
+4. Built in: `claude`, headless, permissions skipped (gated until 0.20.0), and the ritual's model and turn limit.
+
+When a ritual names no profile and the repo has no `[defaults] ritual`, the profile called `default` applies, from the repo or the store. A profile named explicitly that neither defines skips the ritual as `profile-invalid`, which fails the batch. So does a profile whose effort the harness does not take, or whose `args` contain a reserved flag. `darius profile add|set` checks the same at write time. An arg is almost always a flag, so the CLI takes it as `--arg=--verbose`.
+
+Per host, `config.toml` holds only what differs per machine: the executable per harness. Today that is `[runner] claude`; a `[harness.<id>] bin` table comes with the second adapter.
+
+A repo that uses `[profiles]` or `[defaults]` writes `v = 2`. An older darius refuses a v2 marker with its existing "upgrade darius" error, so an old host skips the project instead of running it with the wrong profile. A v1 marker stays valid. The TOML subset gains one-line string arrays for `args`.
+
+**Editing.** One store, one set of core functions. The CLI comes first (`darius profile ...`, `darius ritual set --profile`). The TUI gets a profile screen over the same functions. A herdr plugin pane can host that TUI. A web UI would be one more client of the same functions, and it belongs to the central server, which is not decided (see "Non-goals").
+
+### Surfaces
+
+**headless** is today's launcher: the harness in its own process group, darius's timeout, SIGTERM then SIGKILL.
+
+**herdr** opens the run in a herdr tab, so a person can watch and type. Built in 0.7.0 (`src/surface/herdr.ts`), proved on the lead host with a real Claude Code run in an isolated herdr session:
+
+1. `herdr status` must show a running server. Otherwise darius warns (`surface-fallback`, in the report and the journal) and runs the ritual headless (operator ruling, 2026-09-28). A timer finds the default herdr server by itself; `DARIUS_HERDR` names the executable and `DARIUS_HERDR_SESSION` a named session.
+2. Find or create a workspace labelled `darius-runs` (not `darius`, which is likely the operator's own workspace for this repo). Create a tab there with the working dir, a label `<ritual> <last 6 of the run id>`, the run variables through `--env` (plus the store dirs and PATH when set), and `--no-focus`.
+3. `herdr agent start d-<run> --kind <harness> --pane <root pane> -- <interactive argv>`. The interactive argv is the headless one without `-p`, JSON output and the turn limit. A new tab's shell is not ready at once (`agent_pane_busy`), so darius retries for up to 30 s. An interactive harness can stop at a startup dialog: Claude Code asks once per folder whether to trust it (`agent_not_ready`). darius then waits until the agent is idle, which means someone answered in the tab. Only then does `herdr agent prompt d-<run> <message>` send the first message.
+4. Wait until the ledger shows the run completed or held, or the timeout ends it. On timeout darius marks the run failed and closes the tab. A finished run's tab stays open for the person; the next run-due batch closes the tabs of runs that are no longer running (`<run>/herdr.json` remembers the tab).
+5. When herdr reports the agent `blocked`, `idle` or `done` without a protocol line for longer than the grace time (10 min, `DARIUS_HERDR_WAIT_GRACE_MS`), darius holds the run with a question that names the tab. The same holds for a startup dialog nobody answers. An agent that exits without a protocol line fails the run. A gated profile stops at Claude's own permission prompts in a tab: `--permission-prompts none` acts only in print mode. The first unattended fact check (2026-09-30) waited at such a prompt for a `$?` in its command until this hold. Since 0.20.0 the default is `permissions = "skip"`: the gate enforces the whole policy (scope `full`), and nothing prompts. A gated profile passes `--permission-mode dontAsk`, which refuses instead of asking. Interactive Claude asks once per host before it runs with permissions skipped; a new host's first herdr run waits there until someone accepts in the tab (or the Claude setting `skipDangerousModePermissionPrompt` is on), and the startup grace hold covers it.
+
+A watched run is not a special mode: same prompt, same protocol, same gate (operator ruling, 2026-09-28). A person who types into the pane simply takes part.
+
+The herdr tab runs in the herdr server's environment, not in the timer unit's scrubbed one. So the third policy layer, scoped credentials, does not hold on the herdr surface. The run report says which surface a run used.
+
+Cost and session id are not available from a pane. The run records them as absent.
+
+### Build order
+
+Each step ships alone. None changes what an existing ritual does unless its profile asks. 0.20.0 departs from this on purpose: the built-in default became `skip` (operator ruling 2026-09-30, after the gate check shipped in 0.19.0).
+
+1. **Contract, no new behaviour for today's rituals** (MINOR). Move `launch.ts` into the Claude adapter and the headless surface. Neutral `ToolCall` in `policy-check`, the full gate table behind `gate: "full"` (not used by any run yet), shell rules matched with the metacharacter rule, the preflight. Tests: the gate table per class and mode; the metacharacter rule; `gate: "shell"` decides exactly as today; the preflight refuses a broken gate command; the Claude argv and settings are byte for byte unchanged.
+2. **Profiles** (MINOR). `_global` store project, `darius profile` verbs, `policy.profile`, marker v2, resolution, reserved args, `--effort` and `permissions = "skip"` for Claude. Tests: resolution order field by field; a v2 marker refused by the v1 reader; reserved args refused at write time and at launch.
+3. **herdr surface** (MINOR). Fallback with warning, tab per run, wait loop, `blocked` to hold. Tests against a fake `herdr` on PATH; one real run on the lead host.
+4. **Gate check and more harnesses** (MINOR). `darius harness check`: built in 0.19.0. Then the pi, opencode and Codex adapters.
+5. **Editors** (MINOR). TUI profile screen, herdr plugin actions ("run this ritual now in a pane", "due list").
+
+## Djinns
+
+Status: 2026-09-28, 0.8.0. Operator request: set up djinn for a project, as a local subagent and as "the ghost of darius executing and working on things". Architect advice (Fable, 2026-09-28) shaped this section.
+
+**One definition, two callers.** A djinn is the agent a repo describes: `.darius.toml` (identity, ceiling, profiles), `CLAUDE.md`, `.claude/agents/*.md` and the skills under `.claude/skills/` (also in a subdirectory, as `djinn/.claude/skills/` in a project). The repo already holds all of it; darius adds nothing to the repo but the marker (decision 9 stands).
+
+- **Local subagent.** The operator's own session calls the agent (`djinn <request>`), as today. darius runs nothing; it only appears when the agent calls `darius` verbs.
+- **The ghost of darius.** A ritual names a skill (`ritual set <slug> --skill daily-report`). run-due, or `darius run now`, starts a harness session in the project's linked checkout. The prompt says to invoke that skill; the checkout supplies it. The profile picks the harness, model and surface; the gate and the policy replace the person.
+
+**Activate** means: the host has a checkout, `darius link` recorded it, and the marker's `max_mode` is above `off`. There is no other state. A host without the checkout skips the project (`no-workdir`), as before.
+
+**Skills get the full gate.** A skill can grant tools of its own (`allowed-tools` in `SKILL.md`; the `daily-report` skill of a project grants `Bash, Read, Write`). So a ritual that names a skill always runs with gate scope `full`, which enforces `may` itself, and the hook sees every tool. `Skill` itself is allowed. Where a skill says to write a file, the prompt tells the model to put the content into the findings, because unattended runs never write files.
+
+**Command chains.** In scope `full`, a shell line passes when one `may` rule matches it whole, or when the line splits into commands that each match a rule. The split reads quotes as the shell does (0.8.1), so an operator inside quotes is an argument, not a command. A line the split cannot keep is refused: command substitution (`$(`, backticks, also inside double quotes), an unquoted redirection, a lone `&`, a subshell parenthesis, an unclosed quote. The first djinn run showed why the quote reading matters: the daily report's `/go/` probe passes `-w "... -> %{redirect_url}"` to curl. An output redirection to a file under `/tmp` or to `/dev/null` (`>`, `>>`, `2>`, `&>`), and one from a descriptor to another (`2>&1`), leaves its command, so it needs no rule (0.18.1). The first unattended fact check (2026-09-30) showed why: its skill writes each step's JSON to `/tmp` with `>`, and scratch files there change nothing in the repo or the product. Every other redirection is still refused. A refusal tells the model its reason: the construct, or the command that no rule allows. Since 0.23.0 the write tools may write a scratch file too: with permissions skipped, `Write` and `Edit` are no longer removed from the session, and the gate allows them only for an absolute path under `/tmp` with no `..` step. The fact-check fixes need it: tip prose goes to djinn as a file (`--description-file`), and French text in a shell quote breaks. A gated run keeps both tools off, because nothing gates its writes.
+
+**`darius run now <ritual> [--profile NAME]`** starts one ritual now, due or not, on the same path as run-due: lease, gate preflight, profile, surface, report to stdout. A held or open run still blocks it, mode `off` refuses it, `max_mode` still caps it. A run that failed today does not block it: a person asked.
+
+**The `djinn` CLI stays the content tool** that the skills call. darius is the runtime; djinn is not. Plain-command rituals (a `command` with no harness, like a vigil check) are a later step.
+
+The first djinn ritual on the lead host is `daily-report` in a project: mode `report`, the built-in profile.
+
+## Vigil auto-execution
+
+A vigil check is a shell command with an expectation. darius runs it. No LLM is involved. The rules are ported from the legacy vigil sweep script (read first-hand 2026-09-28) because they are measured on 60 real vigils. Two changes only: the event gate can fire itself through `gate_command`, and evidence goes to the ledger instead of into the vigil file.
+
+**Command.** `darius vigil sweep [--project P | --all-projects] [--only slug] [--include-heavy] [--daily] [--classify-only] [--dry-run] [--timeout 120] [--json]`. The daily timer runs `--all-projects --daily` at 06:30 local on every host; the sweep lease (see "Write path") picks one host per project and day. Another host's done or held lease is a skip (`swept-today`, `sweep-held`), exit 0; an unreachable bucket is `lease-offline`, exit 3. `--classify-only` executes nothing and writes nothing. `--dry-run` executes every Command but writes no `vigil.closed` line; it still writes evidence, so a dry run is never free. The sweep refuses to start (exit 1) when `DARIUS_SWEEP_ACTIVE` is already set in its environment, and sets it for every child, so a Command that calls the sweep cannot recurse. `vigil add` also refuses a Command matching `\bvigil sweep\b` or `\bfc\s+vigil-sweep\b` at write time.
+
+**Gate.** `today` is the host's local date. A vigil is `date-due` when `due <= today`. Otherwise it is `event-gated` when it has `until` or a future `due`. A vigil with neither gate is treated as due. For an event-gated vigil with `gate_command`, the sweep runs that command first (same timeout, same cwd): exit 0 means the event fired and the vigil is treated as due from now on; any other exit means not yet, and it is never counted as a failure or a finding. Without `gate_command` the event gate stays what it is today: the checks run and all-pass is a finding for the operator, never a close, because only a person can say the awaited event happened.
+
+**Classification, in this order, one bucket per vigil.** `closed` (has a `vigil.closed` line, never swept). `no-command` (no executable check: every item is manual, has no Expected, or is a shell no-op by the pipeline-aware classifier). `manual-only` is reported as `no-command` with the reason. `heavy` (item frontmatter `heavy: true`, or a Command matching `toolbox run`, `eval-`, `--runs`, `fc discover`, `fc check`) is skipped unless `--include-heavy`. Then `event-gated` or `date-gated`, and `runnable` once the gate allows execution.
+
+**Execution.** Each Command runs with `bash -c`, `cwd` = the project's working dir on this host, the same as run-due's: the linked checkout, else the import's repo when it exists here, else the store's project dir. A project with a checkout elsewhere and none here is skipped (`no-workdir`) with `--all-projects` or `--daily`, and refused when named alone, because a repo-relative Command would fail in the wrong dir and read as a broken guard. Own process group; `SIGTERM` to the group on timeout, `SIGKILL` 3 s later. Default timeout 120 s per Command. Combined stdout and stderr, last 4 KB kept. Sequential, no concurrency, no cap on vigil count. Expected forms are today's four (`exit N`, `stdout contains "x"` over combined output, `stdout matches /re/f`, `file exists path` relative to cwd), plus `manual (owner, expires)`, which is never executed.
+
+**Outcomes and closing.**
+- Every executable check passed and no manual item remains, and the gate allows: append `vigil.swept{outcome:"held"}` then `vigil.closed{verdict:"held", by:"sweep"}`. The vigil is closed.
+- Any executable check failed or timed out: `vigil.swept{outcome:"failed"}`. The vigil stays armed and is flagged in `due` and in the report. `failed` is never auto-closed; a failing check is as likely a shut precondition as a broken guard. `--close-failed` exists for the operator, not for the timer.
+- All executables passed but a manual item is unanswered: `vigil.swept{outcome:"awaiting-manual"}`. Stays armed, not flagged as failed.
+- Event-gated, gate not fired: `vigil.swept{gate:"not-fired"}` only. Nothing else runs.
+- Heavy without `--include-heavy`, or no executable check: reported, nothing runs, nothing is written except the daily `swept{outcome:"skipped"}` line.
+
+**Evidence.** One `evidence` ledger line per executed check: `check: "vigil/<slug>#<index>"`, `exit`, `outcome`, `duration_ms`, `output_sha` with the output tail as a blob. Per-date upsert is not needed; the ledger is append-only and the latest line per check is the current state. `vigil show` renders the latest sweep like today's "Sweep evidence" section.
+
+**Report.** `--json` prints one object: `date`, per bucket the vigil slugs, per swept vigil its checks and outcome, `counts`. The timer's batch report to the webhook lists: closed held (slugs), failed and flagged (slug, failing check text, output tail), awaiting manual, event gates still pending, heavy skipped. The legacy sweep command writes its latest-report file from this object in phase 3.
+
 ## Migration plan
 
 Each phase ships alone and has a mechanical done check.
