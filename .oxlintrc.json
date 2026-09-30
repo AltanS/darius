@@ -1,0 +1,88 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "plugins": [
+    "typescript",
+    "import",
+    "promise",
+    "node",
+    "unicorn",
+    "oxc"
+  ],
+  "ignorePatterns": [
+    "node_modules/**",
+    "web/node_modules/**",
+    "web/build/**",
+    "web/.react-router/**",
+    "tools/oxlint/anti-slop/**",
+    "bin/**"
+  ],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
+  ],
+  "rules": {
+    // Every `await` in a loop here is ordered-by-contract, never throughput-bound.
+    // Two independent reasons, and both make `Promise.all` a CORRECTNESS regression:
+    // (1) `setTabMark`/`setStrip`/`rememberWorkspace` in src/store.ts each do an
+    //     unlocked read-modify-write on their own JSON file (tabmarks.json,
+    //     strips.json, workspaces.json) — running them concurrently for a batch
+    //     of panes turns "a lost update costs one repaint" into a guaranteed race;
+    // (2) `shrinkTo()` in src/ops.ts is a converging retry: each attempt reads the
+    //     pane size the PREVIOUS resize produced, so the iterations are not
+    //     independent tasks and cannot be parallelized at all.
+    "eslint/no-await-in-loop": "off",
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-runtime-typeof": ["error", { "allowInTypeGuards": true }],
+    "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "error"
+  },
+  "overrides": [
+    {
+      // src/cli.ts holds the ONE parse of Herdr's plugin-event envelope
+      // (`HERDR_PLUGIN_EVENT_JSON`). Its `data` shape depends on which event
+      // fired, so there is no single interface to assert once — `isString` and
+      // `isWorkspaceRenamedData` ARE the boundary the rule tells you to parse at.
+      // They take `unknown` on purpose; typing them `any` would silently permit
+      // property reads on unchecked values everywhere downstream, which is the
+      // worse failure. Nothing else in this repo may take an `unknown` parameter.
+      "files": ["**/src/cli.ts"],
+      "rules": {
+        "anti-slop/no-unknown-parameters": "off"
+      }
+    },
+    {
+      // The web app's root route imports its stylesheet for the side effect
+      // (`import "./app.css"`). That is the React Router idiom: the build then
+      // links the ONE client CSS file from the manifest on the server and in
+      // the browser. The `?url` form the rule would accept builds the CSS
+      // twice (client and server scan different files), so the server page
+      // and a client navigation link two different stylesheets.
+      "files": ["**/web/app/root.tsx"],
+      "rules": {
+        "import/no-unassigned-import": "off"
+      }
+    }
+  ]
+}

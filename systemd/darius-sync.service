@@ -1,0 +1,21 @@
+# systemd/darius-sync.service: pulls and pushes every project's store against
+# darius's own bucket. Triggered by darius-sync.timer, never run standing.
+#
+# A template: `darius setup --systemd` renders it into ~/.config/systemd/user/.
+# The PATH placeholder below becomes this host's PATH. A static FHS PATH has no
+# bash on NixOS, and a timer's environment is minimal. The DARIUS placeholder
+# becomes darius's full path, because systemd never searches Environment=PATH
+# for ExecStart (systemd.service(5), "Command lines"). PATH still matters for
+# bash, bun, node and claude.
+#
+# Type=oneshot: this is a single CLI invocation, not a long-running server (that
+# is darius-seaweedfs.service). No secrets here: credentials are read by the CLI
+# from ~/.config/darius/credentials at its documented, restrictive path.
+[Unit]
+Description=darius sync --all-projects
+Documentation=https://github.com/AltanS/darius
+
+[Service]
+Type=oneshot
+Environment="PATH=@PATH@"
+ExecStart=@DARIUS@ sync --all-projects --json

@@ -1,0 +1,14 @@
+# systemd/darius-vigil-sweep.service: the daily vigil sweep. Triggered by
+# darius-vigil-sweep.timer. Type=oneshot for the same reason as darius-sync.service:
+# one CLI invocation, not a server. A template like darius-sync.service:
+# `darius setup --systemd` fills in its PATH and DARIUS placeholders.
+# `--daily` takes a per-project, per-day lease in the bucket, so every host may
+# run this timer: the first host sweeps a project, the others skip it that day.
+[Unit]
+Description=darius vigil sweep --all-projects --daily
+Documentation=https://github.com/AltanS/darius
+
+[Service]
+Type=oneshot
+Environment="PATH=@PATH@"
+ExecStart=@DARIUS@ vigil sweep --all-projects --daily --json

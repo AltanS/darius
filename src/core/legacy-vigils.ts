@@ -1,0 +1,67 @@
+/**
+ * Read-only view of the legacy tracker's vigils (`<checkout>/.tracker/vigils/*.md`).
+ * Until migration phase 3 they stay canonical there (docs/concept.md), so the
+ * darius store holds none, and the web page would show a project with no
+ * vigils. This reads only the header of each file and never writes to `.tracker/`.
+ */
+
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/** What the page needs of one legacy vigil. */
+export interface LegacyVigil {
+  slug: string;
+  title: string;
+  due: string | null;
+  until: string | null;
+  /** The date it was resolved; null while it is armed. */
+  resolved: string | null;
+  verdict: string | null;
+}
+
+/** The `key: value` lines of the `---` block at the top of a file; anything else is skipped. */
+function headerOf(text: string): Map<string, string> {
+  const header = new Map<string, string>();
+  const lines = text.split("\n");
+  if (lines[0]?.trim() !== "---") return header;
+  for (const line of lines.slice(1)) {
+    if (line.trim() === "---") break;
+    const match = /^([A-Za-z_][\w-]*):\s*(.*)$/u.exec(line);
+    if (match === null) continue;
+    header.set(match[1] ?? "", (match[2] ?? "").trim().replace(/^"(.*)"$/u, "$1"));
+  }
+  return header;
+}
+
+function valueOf(header: Map<string, string>, key: string): string | null {
+  const value = header.get(key);
+  return value === undefined || value === "" ? null : value;
+}
+
+/** Legacy vigils of a checkout, the newest resolved first and the armed ones before them. */
+export function readLegacyVigils(checkout: string): LegacyVigil[] {
+  const dir = join(checkout, ".tracker", "vigils");
+  if (!existsSync(dir)) return [];
+  const vigils = readdirSync(dir)
+    .filter((name) => name.endsWith(".md"))
+    .flatMap((name): LegacyVigil[] => {
+      try {
+        const header = headerOf(readFileSync(join(dir, name), "utf8"));
+        if (header.size === 0) return [];
+        const slug = valueOf(header, "slug") ?? name.slice(0, -".md".length);
+        return [
+          {
+            slug,
+            title: valueOf(header, "name") ?? slug,
+            due: valueOf(header, "due"),
+            until: valueOf(header, "until"),
+            resolved: valueOf(header, "resolved"),
+            verdict: valueOf(header, "verdict"),
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+  return vigils.toSorted((left, right) => (right.resolved ?? "9999").localeCompare(left.resolved ?? "9999") || left.slug.localeCompare(right.slug));
+}

@@ -1,0 +1,13 @@
+# systemd/darius-sync.timer — every 15 minutes, per docs/plan-tonight.md
+# ("Sweep, runner, timers"). Installed (and enabled --now) by
+# `darius setup --systemd`, never by the seaweedfs install script.
+[Unit]
+Description=Run darius sync every 15 minutes
+Documentation=https://github.com/AltanS/darius
+
+[Timer]
+OnCalendar=*:0/15
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

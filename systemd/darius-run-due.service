@@ -1,0 +1,14 @@
+# systemd/darius-run-due.service: the unattended ritual runner. Triggered
+# hourly by darius-run-due.timer. Type=oneshot: one CLI invocation per hour,
+# which itself may launch `claude -p` per ritual (docs/concept.md, "Unattended
+# runner") and exits when that batch is done. A template like
+# darius-sync.service: `darius setup --systemd` fills in its PATH and DARIUS
+# placeholders.
+[Unit]
+Description=darius run-due --unattended
+Documentation=https://github.com/AltanS/darius
+
+[Service]
+Type=oneshot
+Environment="PATH=@PATH@"
+ExecStart=@DARIUS@ run-due --unattended --json

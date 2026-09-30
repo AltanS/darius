@@ -1,0 +1,16 @@
+# systemd/darius-vigil-sweep.timer — 06:30 local time daily, per
+# docs/plan-tonight.md. Persistent=true: if the host is asleep or powered off at
+# 06:30, run once at the next boot instead of silently skipping a day, the same
+# reason the daily fact-check ritual needs its run recorded even after a missed
+# window.
+[Unit]
+Description=Run darius vigil sweep once a day
+Documentation=https://github.com/AltanS/darius
+
+[Timer]
+OnCalendar=06:30
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

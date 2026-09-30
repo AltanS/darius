@@ -1,0 +1,28 @@
+# systemd/darius-web.service: the read-only status page (docs/concept.md,
+# "Web status page"), `darius serve`. Unlike the other units this is a
+# standing service, not a timer: it listens until stopped.
+#
+# A template like darius-sync.service: `darius setup --systemd` renders it
+# into ~/.config/systemd/user/, filling in the PATH and DARIUS placeholders
+# the same way (src/core/unit-path.ts). Bind and port come from
+# DARIUS_WEB_BIND / DARIUS_WEB_PORT, read from an EnvironmentFile so a host
+# can set its tailnet address without editing this unit; darius serve itself
+# refuses 0.0.0.0 and ::, so this file grants no extra privilege.
+#
+# Restart=on-failure: a crash restarts the page; a clean `stop` (or SIGTERM at
+# logout, since this is a user unit with no lingering requirement beyond what
+# the other units already need) does not loop.
+[Unit]
+Description=darius serve (read-only status page)
+Documentation=https://github.com/AltanS/darius
+
+[Service]
+Type=simple
+Environment="PATH=@PATH@"
+EnvironmentFile=-%h/.config/darius/web.env
+ExecStart=@DARIUS@ serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

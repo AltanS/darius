@@ -1,0 +1,24 @@
+{
+  "name": "darius",
+  "version": "0.30.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Rituals, vigils and milestones for agent-driven projects, synced to your own object storage",
+  "type": "module",
+  "bin": { "darius": "./bin/darius" },
+  "scripts": {
+    "test": "bash scripts/test.sh",
+    "typecheck": "bun x tsc --noEmit",
+    "lint": "oxlint --max-warnings 0",
+    "lint:fix": "oxlint --fix --max-warnings 0",
+    "darius": "bun src/cli.ts",
+    "web:dev": "cd web && bun server/dev.ts",
+    "web:build": "cd web && bun run build"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
+    "@types/bun": "latest",
+    "oxlint": "1.78.0",
+    "typescript": "^7.0.2"
+  }
+}

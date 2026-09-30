@@ -1,0 +1,1 @@
+placeholder: a ritual directory with no ritual.md

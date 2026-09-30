@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# `darius` CLI shim. Safe to symlink from anywhere: it resolves its own symlink
+# chain so it can find the repo root (macOS has no `readlink -f`). The root is
+# a physical path (`pwd -P`): on an app install `~/.local/bin/darius` goes
+# through `<app>/current`, and a process must keep the version dir it started
+# in when `darius update` flips `current` under it.
+set -euo pipefail
+
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(cd "$(dirname "$self")" && pwd)/$link" ;;
+  esac
+done
+root="$(cd -P "$(dirname "$self")/.." && pwd -P)"
+
+exec bash "$root/scripts/run.sh" cli "$@"

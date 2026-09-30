@@ -1,0 +1,73 @@
+# systemd/darius-seaweedfs.service — darius's OWN persistent S3 endpoint.
+#
+# Rootless podman, systemd USER unit (this host runs its user manager at boot,
+# Linger=yes). Shape copied from a proven SeaweedFS unit on the same host
+# (read-only prior art): digest-pinned image, Type=notify + cidfile + conmon
+# sdnotify pattern, readiness gate on /status. Only names, paths and ports differ.
+#
+# HARD SAFETY RULES this unit must never violate (docs/plan-tonight.md, T11):
+#   - Never bind 0.0.0.0. Only 127.0.0.1:9910 and the tailnet address below.
+#   - Never reuse the port (9900), state dir or container/unit name of another
+#     SeaweedFS on this host. darius owns its own container name, state root and
+#     containers-override.conf so the two services can never collide.
+#   - Installed by scripts/seaweedfs-install.sh, which also generates
+#     identity.json (one admin identity per host) and
+#     security.toml (SSE KEK) exactly once. This unit never generates or prints
+#     secrets — it only mounts the config dir the install script wrote.
+#
+# Config dir is mounted read-only; data dir read-write. Rootless podman's
+# bind-mount UID needs 0755 on the config dir to traverse it (a proven rule,
+# restated in docs/plan-tonight.md), so the install script
+# sets that, not this unit.
+[Unit]
+Description=darius's own SeaweedFS S3 endpoint (rootless podman) — never another host service's seaweedfs.service
+Documentation=https://github.com/seaweedfs/seaweedfs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Environment=DARIUS_SEAWEEDFS_IMAGE=docker.io/chrislusf/seaweedfs@sha256:f898c91e42d7da5f4bb13f1efd424ff03ba85b420312eb929708a384e8a8b03d
+Environment=DARIUS_SEAWEEDFS_PORT=9910
+# The tailnet address of this host (the bucket host) comes from this file,
+# written by scripts/seaweedfs-install.sh (from DARIUS_SEAWEEDFS_TAILNET_ADDR or
+# `tailscale ip -4`). darius binds its two addresses explicitly, never a
+# wildcard. If tailscale renumbers this host, re-run the install script. The
+# file is required: without it the unit does not start.
+EnvironmentFile=%h/.config/darius/seaweedfs.env
+Environment=PODMAN_SYSTEMD_UNIT=%n
+# Service-scoped podman keyring override: this host's kernel.keys.maxkeys is
+# small and rootless `podman run` dies with "join keyctl ...: Disk quota
+# exceeded" once leaked session keyrings exhaust it. darius gets its OWN
+# override file so it never depends on (or edits) another service's.
+Environment=CONTAINERS_CONF_OVERRIDE=%h/.local/share/darius-seaweedfs/containers-override.conf
+
+Type=notify
+NotifyAccess=all
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=70
+ExecStartPre=-/usr/bin/rm -f %t/%n.ctr-id
+ExecStart=/usr/bin/podman run \
+    --cidfile=%t/%n.ctr-id \
+    --cgroups=no-conmon \
+    --sdnotify=conmon \
+    --replace \
+    --rm \
+    -d \
+    --name darius-seaweedfs \
+    -p 127.0.0.1:${DARIUS_SEAWEEDFS_PORT}:8333 \
+    -p ${DARIUS_SEAWEEDFS_TAILNET_ADDR}:${DARIUS_SEAWEEDFS_PORT}:8333 \
+    -v %h/.local/share/darius-seaweedfs/config:/etc/sw:ro,Z \
+    -v %h/.local/share/darius-seaweedfs/data:/data:Z \
+    ${DARIUS_SEAWEEDFS_IMAGE} \
+    -config_dir=/etc/sw server -s3 -s3.config=/etc/sw/identity.json -dir=/data -ip=0.0.0.0 -volume.max=64
+# Readiness gate: hold "activating" until the S3 gateway actually answers
+# /status, so anything with After=darius-seaweedfs.service waits for genuine
+# HTTP readiness, not merely conmon's "process started" (a proven pattern).
+ExecStartPost=/usr/bin/curl -fsS --retry 60 --retry-delay 1 --retry-all-errors --retry-connrefused -o /dev/null http://127.0.0.1:${DARIUS_SEAWEEDFS_PORT}/status
+ExecStop=/usr/bin/podman stop --ignore --cidfile=%t/%n.ctr-id -t 15
+ExecStopPost=/usr/bin/podman rm -f --ignore --cidfile=%t/%n.ctr-id
+
+[Install]
+WantedBy=default.target

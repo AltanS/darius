@@ -1,0 +1,5 @@
+{"spec":".tracker/M1-probe/01-p.md","index":0,"label":"real check","command":"true","expected":"exit 0","exitCode":0,"outcome":"pass","pluginVersion":"10.6.0","at":"2026-08-03T21:15:11.488Z"}
+{"spec":".tracker/M1-probe/01-p.md","index":1,"label":"manual check","command":null,"expected":null,"exitCode":null,"outcome":"manual","evidence":"checked by hand on the live page","pluginVersion":"10.6.0","at":"2026-08-04T09:00:00.000Z"}
+{"spec":".tracker/M2-other/02-q.md","index":3,"label":"a failing check","command":"false","expected":"exit 0","exitCode":1,"outcome":"fail","pluginVersion":"10.7.0","at":"2026-09-01T10:30:00.000Z"}
+{"spec":".tracker/M2-other/02-q.md","index":
+{"index":4,"outcome":"pass","at":"2026-09-01T10:31:00.000Z"}

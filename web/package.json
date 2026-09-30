@@ -1,0 +1,29 @@
+{
+  "name": "darius-web",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "The darius status page: a React Router framework-mode app, bundled into build/ and served by darius serve",
+  "scripts": {
+    "dev": "bun server/dev.ts",
+    "typegen": "react-router typegen",
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "build": "react-router typegen && tsc --noEmit && react-router build && bun scripts/write-build-info.ts"
+  },
+  "dependencies": {
+    "@fontsource/cinzel": "5.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "7.18.4"
+  },
+  "devDependencies": {
+    "@react-router/dev": "7.18.4",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.1"
+  }
+}

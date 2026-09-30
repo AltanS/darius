@@ -1,0 +1,319 @@
+/**
+ * The status the web page shows (docs/concept.md, "App design" > "Web
+ * status page"): one read of the local store, computed the same way `darius
+ * due`, `run list` and `vigil list` compute theirs. Read-only: nothing here
+ * writes, syncs or locks. The sync timer keeps the store fresh.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { ritualState } from "../core/due.ts";
+import { latestHandoff } from "../core/handoff.ts";
+import { hostId, linesFor, readLedger } from "../core/ledger.ts";
+import { readLegacyVigils } from "../core/legacy-vigils.ts";
+import { linkedDir } from "../core/links.ts";
+import { readMarker } from "../core/marker.ts";
+import type { JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
+import { projectDir } from "../core/paths.ts";
+import { parseResult, readSummary } from "../core/result.ts";
+import { GLOBAL_PROJECT, getBlobText, listProjects, openProject, type Project } from "../core/store.ts";
+import { localToday, vigilStatus } from "../core/sweep.ts";
+import { failedToday, viewRun } from "../runner/run-due.ts";
+import { errorMessage } from "../runtime.ts";
+import { VERSION } from "../version.ts";
+import type {
+  Acknowledgement,
+  HostStatus,
+  ProfileRow,
+  ProjectStatus,
+  RitualDetail,
+  RitualRow,
+  RunDetail,
+  RunEvent,
+  RunResult,
+  RunRow,
+  VigilRow,
+} from "./api.ts";
+import { parseMarkdown } from "./markdown.ts";
+
+export type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow } from "./api.ts";
+
+/** How many runs per project `collectStatus()` lists, newest first. */
+export const RECENT_RUNS = 20;
+const RITUAL_RUNS = 100;
+
+function isRecord(value: JsonValue): value is { readonly [key: string]: JsonValue } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isText(value: JsonValue | undefined): value is string {
+  return typeof value === "string";
+}
+
+function text(value: JsonValue | undefined): string | null {
+  return isText(value) ? value : null;
+}
+
+function textList(value: JsonValue | undefined): string[] {
+  return Array.isArray(value) ? value.filter((entry) => isText(entry)) : [];
+}
+
+/** Every run in the ledger, newest first, from its `run.*` lines. */
+export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
+  const byRun = new Map<string, RunRow>();
+  for (const line of ledger) {
+    const run = text(line.run);
+    if (run === null || !line.type.startsWith("run.")) continue;
+    let row = byRun.get(run);
+    if (row === undefined) {
+      row = {
+        run,
+        item: line.item ?? "?",
+        phase: "running",
+        outcome: null,
+        startedAt: line.at,
+        endedAt: null,
+        who: line.who,
+        questions: [],
+        findingsSha: null,
+        result: null,
+        acknowledged: null,
+      };
+      byRun.set(run, row);
+    }
+    if (line.type === "run.acknowledged") {
+      row.acknowledged ??= { at: line.at, who: line.who, note: text(line.note) };
+    } else if (line.type === "run.held") {
+      row.phase = "held";
+      row.questions.push(...textList(line.questions));
+    } else if (line.type === "run.resumed") {
+      row.phase = "running";
+    } else if (line.type === "run.completed") {
+      row.phase = "closed";
+      row.outcome = text(line.outcome);
+      row.endedAt = line.at;
+      row.findingsSha = text(line.findings_sha);
+      row.result = readSummary(line.result);
+    }
+  }
+  return [...byRun.values()].toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+/** The ritual's run that failed today, with who saw it; null when its latest run did not fail today. */
+function failedTodayOf(ledger: readonly LedgerLine[], slug: string, today: string): RitualRow["failedToday"] {
+  const run = failedToday(ledger, { slug, today });
+  if (run === undefined) return null;
+  const seen = viewRun(ledger, run).acknowledged;
+  const acknowledged: Acknowledgement | null = seen === undefined ? null : { at: seen.at, who: seen.who, note: seen.note ?? null };
+  return { run, acknowledged };
+}
+
+function ritualRows(project: Project, ledger: LedgerLine[], today: string): RitualRow[] {
+  return project.listItems("ritual").flatMap((slug) => {
+    const doc = project.readItem<Ritual>("ritual", slug);
+    if (doc === null) return [];
+    const state = ritualState(doc, ledger, today);
+    const { header } = doc;
+    return [
+      {
+        slug,
+        title: header.title,
+        lifecycle: state.lifecycle,
+        mode: header.policy.mode,
+        cadence: header.cadence ?? null,
+        nextDue: state.nextDue ?? null,
+        isDue: state.isDue,
+        overdueDays: state.overdueDays,
+        skill: header.skill ?? null,
+        profile: header.policy.profile ?? null,
+        host: header.host ?? null,
+        lastCompleted: state.lastCompleted ?? null,
+        heldRun: state.heldRun ?? null,
+        openRun: state.openRun ?? null,
+        failedToday: failedTodayOf(ledger, slug, today),
+      },
+    ];
+  });
+}
+
+function vigilRows(project: Project, ledger: LedgerLine[]): VigilRow[] {
+  return project.listItems("vigil").flatMap((slug) => {
+    const doc = project.readItem<Vigil>("vigil", slug);
+    if (doc === null) return [];
+    const status = vigilStatus(slug, linesFor(ledger, `vigil/${slug}`));
+    return [
+      {
+        slug,
+        title: doc.header.title,
+        state: status.state,
+        verdict: status.verdict ?? null,
+        flagged: status.flagged,
+        lastOutcome: status.lastOutcome ?? null,
+        due: doc.header.due ?? null,
+        until: doc.header.until ?? null,
+      },
+    ];
+  });
+}
+
+/**
+ * Vigils that only the legacy tracker holds (phase 3 has not moved them):
+ * read from the linked checkout, read-only, and never over a vigil the store has.
+ */
+function legacyVigilRows(checkout: string | null, known: readonly VigilRow[]): VigilRow[] {
+  if (checkout === null) return [];
+  const have = new Set(known.map((vigil) => vigil.slug));
+  return readLegacyVigils(checkout)
+    .filter((vigil) => !have.has(vigil.slug))
+    .map((vigil) => {
+      const closed = vigil.resolved !== null || vigil.verdict !== null;
+      return {
+        slug: vigil.slug,
+        title: vigil.title,
+        state: closed ? "closed" : "armed",
+        verdict: vigil.verdict,
+        flagged: false,
+        lastOutcome: null,
+        due: vigil.due,
+        until: vigil.until,
+      };
+    });
+}
+
+function lastSync(name: string): string | null {
+  const file = join(projectDir(name), "sync.json");
+  if (!existsSync(file)) return null;
+  try {
+    const parsed: JsonValue = JSON.parse(readFileSync(file, "utf8"));
+    return isRecord(parsed) ? text(parsed.last_sync) : null;
+  } catch {
+    return null;
+  }
+}
+
+function projectStatus(name: string, today: string): ProjectStatus {
+  const checkout = linkedDir(name) ?? null;
+  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], error: null };
+  try {
+    const project = openProject(name);
+    const ledger = readLedger(project);
+    status.rituals = ritualRows(project, ledger, today);
+    status.runs = runRows(ledger).slice(0, RECENT_RUNS);
+    const stored = vigilRows(project, ledger);
+    status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
+    if (checkout !== null) status.maxMode = readMarker(checkout)?.maxMode ?? null;
+  } catch (cause) {
+    status.error = errorMessage(cause);
+  }
+  return status;
+}
+
+function profiles(): ProfileRow[] {
+  if (!existsSync(projectDir(GLOBAL_PROJECT))) return [];
+  const project = openProject(GLOBAL_PROJECT);
+  return project.listItems("profile").flatMap((name) => {
+    const header = project.readItem<Profile>("profile", name)?.header;
+    if (header === undefined) return [];
+    return [
+      {
+        name,
+        harness: header.harness ?? "claude",
+        model: header.model ?? null,
+        effort: header.effort ?? null,
+        permissions: header.permissions ?? "skip",
+        surface: header.surface ?? "headless",
+      },
+    ];
+  });
+}
+
+export function collectStatus(now: Date = new Date()): HostStatus {
+  const today = localToday(now);
+  return {
+    host: hostId(),
+    version: VERSION,
+    generatedAt: now.toISOString(),
+    today,
+    // `|| 0`: in UTC the negation is -0, and a strict comparison sees -0 as another number.
+    utcOffset: -now.getTimezoneOffset() || 0,
+    profiles: profiles(),
+    projects: listProjects().map((name) => projectStatus(name, today)),
+  };
+}
+
+/** A run's findings text, or null when the run, its findings or the project is unknown. */
+export function runFindings(projectName: string, run: string): { row: RunRow; findings: string | null } | null {
+  if (!listProjects().includes(projectName)) return null;
+  const project = openProject(projectName);
+  const row = runRows(readLedger(project)).find((candidate) => candidate.run === run);
+  if (row === undefined) return null;
+  return { row, findings: row.findingsSha === null ? null : getBlobText(project, row.findingsSha) };
+}
+
+function eventDetail(line: LedgerLine): string | null {
+  if (line.type === "run.held") return textList(line.questions).join(" / ") || null;
+  if (line.type === "run.answered") return text(line.text);
+  if (line.type === "run.resumed") return line.fresh === true ? "in a new session" : "in the same session";
+  if (line.type === "run.completed") return text(line.outcome);
+  if (line.type === "run.acknowledged") return text(line.note);
+  return text(line.reason) ?? text(line.note);
+}
+
+/** One run with its ledger events and parsed findings; null when the project or the run is unknown. */
+export function runDetail(projectName: string, run: string): RunDetail | null {
+  if (!listProjects().includes(projectName)) return null;
+  const project = openProject(projectName);
+  const ledger = readLedger(project);
+  const row = runRows(ledger).find((candidate) => candidate.run === run);
+  if (row === undefined) return null;
+  const events: RunEvent[] = ledger
+    .filter((line) => line.run === run && line.type.startsWith("run."))
+    .map((line) => ({ at: line.at, who: line.who, type: line.type, detail: eventDetail(line) }));
+  const findings = row.findingsSha === null ? null : getBlobText(project, row.findingsSha);
+  const [itemKind = "", itemSlug = ""] = row.item.split("/");
+  const result = runResult(project, ledger, run);
+  return { project: projectName, row, itemKind, itemSlug, events, findings: findings === null ? null : parseMarkdown(findings), result };
+}
+
+/** The run's result block, checked again on the way out: a blob from another host is as untrusted as the model. */
+function runResult(project: Project, ledger: readonly LedgerLine[], run: string): RunResult | null {
+  const completed = ledger.findLast((line) => line.run === run && line.type === "run.completed");
+  const sha = text(completed?.result_sha);
+  if (sha === null) return null;
+  const blob = getBlobText(project, sha);
+  if (blob === null) return null;
+  const parsed = parseResult(blob);
+  return "result" in parsed ? parsed.result : null;
+}
+
+/** One ritual with its policy, instructions and runs; null when the project or the ritual is unknown. */
+export function ritualDetail(projectName: string, slug: string, now: Date = new Date()): RitualDetail | null {
+  if (!listProjects().includes(projectName)) return null;
+  const project = openProject(projectName);
+  if (!project.listItems("ritual").includes(slug)) return null;
+  const doc = project.readItem<Ritual>("ritual", slug);
+  if (doc === null) return null;
+  const ledger = readLedger(project);
+  const row = ritualRows(project, ledger, localToday(now)).find((candidate) => candidate.slug === slug);
+  if (row === undefined) return null;
+  const { policy } = doc.header;
+  const item = `ritual/${slug}`;
+  return {
+    project: projectName,
+    row,
+    anchor: doc.header.anchor,
+    policy: {
+      mode: policy.mode,
+      may: [...policy.may],
+      hold: [...policy.hold],
+      notes: policy.notes ?? null,
+      model: policy.model ?? null,
+      maxTurns: policy.max_turns ?? null,
+      profile: policy.profile ?? null,
+    },
+    body: parseMarkdown(doc.body),
+    runs: runRows(ledger).filter((candidate) => candidate.item === item).slice(0, RITUAL_RUNS),
+    handoff: latestHandoff(project, ledger, slug),
+  };
+}
