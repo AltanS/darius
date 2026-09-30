@@ -68,10 +68,20 @@ export interface Config {
    * survives updates.
    */
   setup: { units: readonly SetupUnit[] };
+  /**
+   * `[backup]`: where `darius export` mirrors the store (src/core/export.ts).
+   * Absent when config.toml has no `[backup]` table. `repo` is the git URL of
+   * a private backup repo; `dir` is its local clone.
+   */
+  backup?: { repo: string; dir: string };
 }
 
-/** The units `[setup] units` may name, in the order setup lists them. */
-export const SETUP_UNITS = ["sync", "vigil-sweep", "run-due", "web"] as const;
+/**
+ * The units `[setup] units` may name, in the order setup lists them. All of
+ * them when the key is absent. `export` installs only when `[backup] repo`
+ * is set (src/cli/setup.ts).
+ */
+export const SETUP_UNITS = ["sync", "vigil-sweep", "run-due", "web", "export"] as const;
 
 export type SetupUnit = (typeof SETUP_UNITS)[number];
 
@@ -148,6 +158,23 @@ function setupUnits(table: Record<string, TomlValue>, file: string): readonly Se
     if (!units.includes(name)) units.push(name);
   }
   return SETUP_UNITS.filter((unit) => units.includes(unit));
+}
+
+const BACKUP_KEYS = new Set(["repo", "dir"]);
+
+/** The default local clone for `[backup]`, before `~` expansion. */
+export const DEFAULT_BACKUP_DIR = "~/.local/share/darius-backup";
+
+/** `[backup]`: `repo` is required and non-empty, `dir` is optional. Any other key is refused. */
+function buildBackup(table: Record<string, TomlValue>, file: string): NonNullable<Config["backup"]> {
+  for (const key of Object.keys(table)) {
+    if (!BACKUP_KEYS.has(key)) throw new Error(`${file}: [backup] has an unknown key "${key}" (valid: "repo", "dir")`);
+  }
+  const repo = requireString(table, "repo", "backup", file).trim();
+  if (repo === "") throw new Error(`${file}: [backup] "repo" is empty`);
+  const dir = optionalString(table, "dir", DEFAULT_BACKUP_DIR, "backup", file).trim();
+  if (dir === "") throw new Error(`${file}: [backup] "dir" is empty`);
+  return { repo, dir: expandHome(dir) };
 }
 
 // --- allow_http rule ----------------------------------------------------------
@@ -244,7 +271,10 @@ export function loadConfig(): Config {
 
   const units = setupUnits(document.sections.setup ?? {}, file);
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units } };
+  const backupTable = document.sections.backup;
+  const backup = backupTable === undefined ? undefined : buildBackup(backupTable, file);
+
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, backup };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

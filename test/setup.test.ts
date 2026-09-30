@@ -24,7 +24,9 @@ import {
   defaultDeps,
   formatSteps,
   runSetup,
+  selectUnits,
   timerPlan,
+  timerStates,
   setupCommand,
   type BucketFactory,
   type RemoteBucket,
@@ -905,4 +907,82 @@ test("setupCommand without --json prints one ✓/·/! line per step", async () =
       });
     });
   });
+});
+
+// --- the export timer and [backup] ----------------------------------------------------
+
+test("selectUnits: export only with a [backup] repo, held back when listed without one", () => {
+  const base = { host: "host-b", notify: { webhook: "" }, runner: { claude: "" } };
+  const backup = { repo: "file:///srv/backup.git", dir: "/tmp/clone" };
+  assert.deepEqual(selectUnits(null), { install: ["sync", "vigil-sweep", "run-due", "web"], held: ["export"] });
+  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "vigil-sweep", "run-due", "web", "export"] } }), {
+    install: ["sync", "vigil-sweep", "run-due", "web"],
+    held: ["export"],
+  });
+  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "vigil-sweep", "run-due", "web", "export"] }, backup }), {
+    install: ["sync", "vigil-sweep", "run-due", "web", "export"],
+    held: [],
+  });
+  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync"] }, backup }), { install: ["sync"], held: [] });
+});
+
+test("--systemd installs darius-export.timer with a [backup] repo, and removes it when [backup] goes away", async () => {
+  const root = tempDir("darius-setup-root-");
+  const home = tempDir("darius-setup-home-");
+  writeFakeBin(root);
+  copyRealUnits(join(root, "systemd"));
+  for (const name of ["darius-export.service", "darius-export.timer"]) copyFileSync(join(REPO_SYSTEMD, name), join(root, "systemd", name));
+  const unitDir = join(home, ".config", "systemd", "user");
+  const first = recordingSystemctl();
+
+  await withUnits('[setup]\nunits = ["sync", "export"]\n\n[backup]\nrepo = "file:///srv/backup.git"\n', async () => {
+    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, first.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
+    assert.equal(steps.length, 1);
+    assert.equal(steps[0]?.ok, true, steps[0]?.detail);
+  });
+  assert.deepEqual(readdirSync(unitDir).toSorted(), ["darius-export.service", "darius-export.timer", "darius-sync.service", "darius-sync.timer"]);
+  assert.deepEqual(first.calls, [["daemon-reload"], ["enable", "--now", "darius-sync.timer", "darius-export.timer"]]);
+  assert.match(readFileSync(join(unitDir, "darius-export.service"), "utf8"), /^ExecStart=\S+ export --json$/mu);
+  const timer = readFileSync(join(unitDir, "darius-export.timer"), "utf8");
+  assert.match(timer, /^OnCalendar=03:30$/mu);
+  assert.match(timer, /^RandomizedDelaySec=10min$/mu);
+  assert.match(timer, /^Persistent=true$/mu);
+
+  const second = recordingSystemctl();
+  await withUnits('[setup]\nunits = ["sync", "export"]\n', async () => {
+    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, second.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
+    assert.equal(steps.every((step) => step.ok), true);
+    assert.match(steps.at(-1)?.detail ?? "", /removed darius-export\.service, darius-export\.timer \(not in \[setup\] units, or export without a \[backup\] repo\)/);
+  });
+  assert.deepEqual(readdirSync(unitDir).toSorted(), ["darius-sync.service", "darius-sync.timer"]);
+  assert.deepEqual(second.calls.at(-2), ["disable", "--now", "darius-export.timer"]);
+});
+
+test("--systemd --keep-stopped enables the new export timer once [backup] repo is set, and keeps a stopped timer stopped", async () => {
+  const root = tempDir("darius-setup-root-");
+  const home = tempDir("darius-setup-home-");
+  writeFakeBin(root);
+  copyRealUnits(join(root, "systemd"));
+  for (const name of ["darius-export.service", "darius-export.timer"]) copyFileSync(join(REPO_SYSTEMD, name), join(root, "systemd", name));
+  const unitDir = join(home, ".config", "systemd", "user");
+
+  await withUnits('[setup]\nunits = ["sync"]\n', async () => {
+    await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, recordingSystemctl().runner, fakeBucketFactory("exists")));
+  });
+  assert.deepEqual(timerPlan(timerStates(() => undefined, unitDir, ["darius-sync.timer", "darius-export.timer"])), { keepStopped: [], restart: ["darius-sync.timer"] });
+
+  const calls: string[][] = [];
+  const syncStopped: SystemctlRunner = (args) => {
+    calls.push(args);
+    if (args[0] === "is-active" && args[2] === "darius-sync.timer") throw new Error("inactive");
+  };
+  await withUnits('[setup]\nunits = ["sync", "export"]\n\n[backup]\nrepo = "file:///srv/backup.git"\n', async () => {
+    const step = stepFor(await runSetup({ systemd: true, remote: false, keepStopped: true }, fakeDeps(root, home, syncStopped, fakeBucketFactory("exists"))), "systemd");
+    assert.equal(step.ok, true, step.detail);
+    assert.match(step.detail, /enabled darius-export\.timer/u);
+    assert.match(step.detail, /left stopped darius-sync\.timer/u);
+  });
+  assert.ok(existsSyncQuiet(join(unitDir, "darius-export.timer")));
+  assert.ok(calls.some((call) => call[0] === "enable" && call.includes("darius-export.timer")), "the new export timer is enabled");
+  assert.equal(calls.some((call) => call.includes("darius-sync.timer") && call[0] !== "is-active"), false, "the stopped sync timer is never enabled or started");
 });

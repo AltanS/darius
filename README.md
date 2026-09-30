@@ -80,16 +80,32 @@ darius update --hosts host-b   # installs host-a's version on host-b, over your 
 
 ### Units per host
 
-`[setup] units` in `config.toml` selects the units a host runs. Without this key it runs all four.
-A sync-only host sets one:
+`[setup] units` in `config.toml` selects the units a host runs. Without this key it runs all of
+them. A sync-only host sets one:
 
 ```toml
 [setup]
-units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web"
+units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "export"
 ```
 
 `darius setup --systemd` enables the listed units. It disables and removes the others, but
 touches only the unit files it wrote. `darius update` reruns it, preserving your choices.
+
+### Nightly backup
+
+`darius export` copies this host's store into `<host>/` of a private backup git repo, commits
+when something changed, and pushes. It never copies the config dir, and it refuses when the store
+holds a file name that looks like a secret. The export timer runs daily at 03:30. Setup installs
+it only when `[backup] repo` is set:
+
+```toml
+[backup]
+repo = "git@github.com:<owner>/<name>.git"   # a private repo; the host needs a key that can push
+dir = "~/.local/share/darius-backup"          # optional: the local clone, this is the default
+```
+
+`darius export --dry-run` prints the counts and changes nothing. Offline, the commit stays in the
+local clone, the verb exits 3, and the next run pushes it.
 
 ## Update
 
@@ -229,6 +245,7 @@ the full reference.
 - `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
+- `darius export [--dry-run]`: copy this host's store into the `[backup]` git repo, commit and push.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.

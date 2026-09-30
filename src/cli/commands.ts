@@ -13,6 +13,7 @@
 
 import { register, type Command } from "./registry.ts";
 import { dueCommand } from "./due.ts";
+import { exportCommand } from "./export.ts";
 import { harnessCommand } from "./harness.ts";
 import { importCommand } from "./import.ts";
 import { initCommand } from "./init.ts";
@@ -34,6 +35,7 @@ import { vigilCommand } from "./vigil.ts";
 
 const COMMANDS: readonly Command[] = [
   dueCommand,
+  exportCommand,
   harnessCommand,
   importCommand,
   initCommand,

@@ -127,7 +127,7 @@ Tracker state leaves git. `.darius.toml` is the only committed file. It holds id
 
 A checkout's path is per host. `darius link`, run inside a checkout, finds the marker and writes `<project> = "<dir>"` to `~/.config/darius/links.toml`, not to `config.toml`, because home-manager writes `config.toml` read-only. It refuses to move a project to a second checkout that still exists unless `--force`. It also appends one `project.linked{path}` ledger line per host and path, so every host learns that the project lives in a checkout. `import` takes the project from the source repo's marker and refuses a different one.
 
-`darius export <dir>` writes a read-only markdown snapshot for people who want it in a repo or a docs site. Nothing reads that export back.
+`darius export` is the backup (see "Backup"): it copies the store as is into a backup git repo. Nothing reads that copy back. A read-only markdown snapshot for a docs site is not built.
 
 ### Security
 
@@ -139,7 +139,19 @@ Private bucket on the tailnet, never public. Per-host access keys in `~/.config/
 
 ### Backup
 
-Once state leaves git, the bucket is the only shared copy, on one host. Two layers cover it. First, every host that syncs holds a full local copy of every project it uses, so losing the bucket host loses nothing that any client has pulled. Second, `darius export` runs nightly from the timer into a private backup git repo (`AltanS/darius-state`, one directory per project) and pushes. That gives history and an off-host copy with tools the operator already uses. Phase 4 does not start until the nightly export has run clean for 7 days.
+Once state leaves git, the bucket is the only shared copy, on one host. Two layers cover it.
+
+First, every host that syncs holds a full local copy of every project it uses, so losing the bucket host loses nothing that any client has pulled.
+
+Second, since 0.43.0 `darius export` copies the store into a private backup git repo and pushes it. That gives history and an off-host copy with tools the operator already uses. `config.toml` names the repo in `[backup] repo`, and optionally the local clone in `[backup] dir` (default `~/.local/share/darius-backup`). Without `[backup]` the verb exits 2, and setup does not install its timer.
+
+- *One directory per host, not per project.* The export mirrors the whole state dir (`_global`, every project dir, the digests) into `<clone>/<host>/`. Each host holds its own local copy, and each host's copy can differ until the next sync. Two hosts must never write the same paths, so their commits never conflict.
+- *Mirror.* Files that changed are copied, and files that left the store are deleted. `<host>/EXPORT.json` records `v`, `host`, `at` (the last export that changed something), the darius version, and the file and byte counts. A commit, `export <host> <ISO time>`, happens only when something changed.
+- *Never the config dir.* It holds credentials, keys and push secrets. Before it copies, the export scans the store for names that look like secrets (`credentials`, `keys`, `*.pem`, `*.key`, `*.credentials`) and refuses when it finds one. It also refuses when the store and the config dir overlap, and when `[backup] dir` is a clone of a different repo.
+- *Offline.* A failed fetch prints a warning and the export continues with the local clone. A failed push leaves the commit local and exits 3, as sync does; the next run pushes it. The clone rebases onto the remote branch rather than `pull --ff-only`, so a commit left local by an offline night still lands on top of another host's push.
+- *Timer.* `darius-export.timer` runs daily at 03:30 local time, with up to 10 minutes of random delay, and `Persistent=true` catches up a missed night. `darius setup --systemd` installs it only when `[backup] repo` is set.
+
+Phase 4 does not start until the nightly export has run clean for 7 days.
 
 ### Compaction
 
@@ -188,7 +200,7 @@ One package, no workspaces. Directories, not packages, separate concerns.
 - *First install:* `scripts/install.sh` clones the newest tag (or `--tag`), flips `current` and runs `setup --systemd`. It moves an old full clone at the app root to `darius.legacy-<time>` and deletes nothing. `darius update --hosts <host>` pipes it to a host that has no install yet.
 - *Update:* `darius update [vX.Y.Z]` finds the newest tag over git (`--check` only reports), stages and checks it (the `package.json` version, `bin/darius --version`), flips `current`, runs the new version's `setup --systemd --keep-stopped`, restarts the web page and checks `/healthz`. A timer the operator stopped stays stopped, and update prints one line for each; an active timer is restarted (0.42.3). When a check or the setup fails, it flips back once and exits 1. It records `update.json`, holds `update.lock`, and keeps the previous version plus one more. A newer major version needs `--major`, because a major release needs the operator to change something. An older version is allowed, as a rollback by hand.
 - *Push:* `darius update --hosts host-a,host-b` brings each host to the lead's version over the operator's SSH, one host after the other. A host with the app runs its own `darius update`; a host without it gets `install.sh`; a host that runs darius from the Nix store is refused with the remedy. An unreachable host is reported (exit 3) and does not stop the others.
-- *Units per host:* `config.toml` `[setup] units` names the units `setup --systemd` turns on (`sync`, `vigil-sweep`, `run-due`, `web`; all four without the key), so a sync-only host stays sync-only across updates. setup turns off and removes the unit files it wrote for a unit that is not listed, and never touches `darius-seaweedfs.service`.
+- *Units per host:* `config.toml` `[setup] units` names the units `setup --systemd` turns on (`sync`, `vigil-sweep`, `run-due`, `web`, `export`; all of them without the key, and `export` only with a `[backup] repo`), so a sync-only host stays sync-only across updates. setup turns off and removes the unit files it wrote for a unit that is not listed, and never touches `darius-seaweedfs.service`.
 - *NixOS:* the host's configuration gives darius only what darius cannot make itself: the S3 key from sops, and a read-only `config.toml`. `setup --systemd` renders each unit's PATH from the login PATH plus the NixOS profile dirs, never a Nix store path (since 0.3.0). The Nix package and the home-manager module `services.darius` (0.3.0 to 0.16.x) go in 1.0.0; `flake.nix` keeps the dev shell, for work on darius on a NixOS host.
 - *Rejected:* a flake input per NixOS host (a flake bump, a commit and a `sudo nixos-rebuild switch` per host and release); release archives, CI and checksums as collie has them (collie compiles a binary and its repo is public; darius has no build step, commits its web build, and a git tag fetched over SSH already is the release); an update timer on each host (the operator chose to push).
 

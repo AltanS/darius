@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.43.0] - 2026-10-01
+
+### Added
+
+- `darius export [--dry-run]` mirrors this host's store into `<host>/` of a private backup git repo, writes `<host>/EXPORT.json`, commits when something changed, and pushes. Offline, the commit stays local and the verb exits 3.
+- `[backup]` in `config.toml`: `repo` (required to export) and `dir` (the local clone, default `~/.local/share/darius-backup`). Without it, `darius export` exits 2.
+- The export refuses when the store holds a name that looks like a secret, when the store and the config dir overlap, and when `[backup] dir` is a clone of another repo. It never copies the config dir.
+- `darius-export.timer` runs `darius export` daily at 03:30 with up to 10 minutes of random delay. `setup --systemd` installs it only when `[backup] repo` is set; `export` is a new name for `[setup] units`.
 ## [0.42.3] - 2026-10-01
 
 ### Fixed

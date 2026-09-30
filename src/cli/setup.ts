@@ -22,7 +22,8 @@
  *      stamped darius skill: then the plugin teaches and nothing is needed.
  *
  * `--systemd`: renders the units that config.toml's `[setup] units` lists
- * (sync, vigil-sweep, run-due and web; all four when the key is absent) from
+ * (sync, vigil-sweep, run-due, web and export; all of them when the key is
+ * absent; export only when `[backup] repo` is set) from
  * the templates in `systemd/` into `~/.config/systemd/user/`, then runs
  * `daemon-reload` and `enable --now` on their timers, or on the standing
  * `darius-web.service`. A unit that is not listed gets `disable --now` and
@@ -201,7 +202,7 @@ interface UnitSet {
 }
 
 /**
- * The seven unit files `--systemd` may install: the three timer/service
+ * The nine unit files `--systemd` may install: the four timer/service
  * pairs, plus the standing web service, which has no timer.
  * `darius-seaweedfs.service` is deliberately absent: only
  * `scripts/seaweedfs-install.sh` installs it.
@@ -211,11 +212,29 @@ const UNIT_SETS = {
   "vigil-sweep": { files: ["darius-vigil-sweep.service", "darius-vigil-sweep.timer"], enable: "darius-vigil-sweep.timer" },
   "run-due": { files: ["darius-run-due.service", "darius-run-due.timer"], enable: "darius-run-due.timer" },
   web: { files: ["darius-web.service"], enable: "darius-web.service" },
+  export: { files: ["darius-export.service", "darius-export.timer"], enable: "darius-export.timer" },
 } as const satisfies Readonly<Record<SetupUnit, UnitSet>>;
 
-/** The units `--systemd` installs on this host: config.toml's `[setup] units`, all four without one. */
-function configuredUnits(): readonly SetupUnit[] {
-  return loadConfigIfPresent()?.setup.units ?? SETUP_UNITS;
+/** What `--systemd` does with each unit on this host. */
+export interface UnitSelection {
+  /** Listed in `[setup] units` (all without the key) and ready to run. */
+  install: readonly SetupUnit[];
+  /** Listed, but held back: `export` without a `[backup] repo`. Not installed, and removed if darius wrote it. */
+  held: readonly SetupUnit[];
+}
+
+/**
+ * The units `--systemd` installs: config.toml's `[setup] units`, all of them
+ * without one (or without a config.toml). The export timer needs
+ * `[backup] repo`: without it, `export` is held back even when listed.
+ */
+export function selectUnits(config: Config | null): UnitSelection {
+  const listed = config?.setup.units ?? SETUP_UNITS;
+  const hasBackup = config?.backup !== undefined;
+  return {
+    install: listed.filter((unit) => unit !== "export" || hasBackup),
+    held: listed.filter((unit) => unit === "export" && !hasBackup),
+  };
 }
 
 const NO_DARIUS_OUTSIDE_STORE =
@@ -426,7 +445,7 @@ function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly Uni
  * wrote their files. A file darius did not write (a link into the Nix store
  * is home-manager's) stays, and the step says so with `!`.
  */
-function removeUnlistedUnits(deps: SetupDeps, unitDir: string, unlisted: readonly SetupUnit[]): Step[] {
+function removeUnlistedUnits(deps: SetupDeps, unitDir: string, unlisted: readonly SetupUnit[], held: readonly SetupUnit[] = []): Step[] {
   const steps: Step[] = [];
   const files: string[] = [];
   const toDisable: string[] = [];
@@ -459,17 +478,19 @@ function removeUnlistedUnits(deps: SetupDeps, unitDir: string, unlisted: readonl
     steps.push({ ok: false, what: "systemd", detail: `could not remove ${toDisable.join(", ")}: ${errorMessage(cause)}` });
     return steps;
   }
-  steps.push({ ok: true, what: "systemd", detail: `disabled ${toDisable.join(", ")} and removed ${files.join(", ")} (not in [setup] units)` });
+  const why = held.length > 0 ? "not in [setup] units, or export without a [backup] repo" : "not in [setup] units";
+  steps.push({ ok: true, what: "systemd", detail: `disabled ${toDisable.join(", ")} and removed ${files.join(", ")} (${why})` });
   return steps;
 }
 
 function installSystemdUnits(deps: SetupDeps, keepStopped: boolean): Step[] {
-  let units: readonly SetupUnit[];
+  let selection: UnitSelection;
   try {
-    units = configuredUnits();
+    selection = selectUnits(loadConfigIfPresent());
   } catch (cause) {
     return [{ ok: false, what: "systemd", detail: errorMessage(cause) }];
   }
+  const units = selection.install;
   const unitDir = userUnitDir(deps.home);
   const listed = installListedUnits(
     deps,
@@ -478,7 +499,7 @@ function installSystemdUnits(deps: SetupDeps, keepStopped: boolean): Step[] {
     keepStopped,
   );
   const unlisted = SETUP_UNITS.filter((unit) => !units.includes(unit));
-  return [listed, ...removeUnlistedUnits(deps, unitDir, unlisted)];
+  return [listed, ...removeUnlistedUnits(deps, unitDir, unlisted, selection.held)];
 }
 
 // --- step: --remote -------------------------------------------------------------------
@@ -592,7 +613,7 @@ export async function runSetup(flags: SetupFlags, deps: SetupDeps = defaultDeps(
       ok: true,
       skipped: true,
       what: "systemd",
-      detail: "skipped (pass --systemd to install and enable the sync / vigil-sweep / run-due timers)",
+      detail: "skipped (pass --systemd to install and enable the sync / vigil-sweep / run-due / export timers)",
     });
   }
 
