@@ -1,0 +1,377 @@
+/**
+ * Session claims — advisory, expiring locks on specs in a SHARED checkout.
+ *
+ * Sessions here share one checkout per repo and one branch (branching during
+ * parallel work is banned). M242 is what that costs without a claim mechanism:
+ * four specs were dispatched, discovered mid-flight to collide with a concurrent
+ * session, and parked — yet their artifacts landed anyway; two more were written
+ * by sessions the operator killed, leaving a fresh session to adopt and re-read
+ * the diff line-by-line before it could trust anything.
+ *
+ * A claim is ADVISORY and EXPIRING, not a distributed lock:
+ *
+ * - Advisory — nothing is prevented. `--force` / `--takeover` always wins. The
+ *   goal is that the second session *sees* the collision before doing the work,
+ *   not that concurrency is impossible.
+ * - Expiring — a killed session must not hold a spec forever. Past `expiresAt` a
+ *   claim is STALE: reported as such and takeable without ceremony. Never
+ *   silently honoured (that is a deadlock), never silently ignored (that is the
+ *   collision this module exists to surface).
+ *
+ * State lives in `<trackerRoot>/.session-claims.json`. Unlike the verification
+ * ledger next door, this file is EPHEMERAL MACHINE-LOCAL state and is gitignored:
+ * session ids are meaningless on another machine, and a committed claim would
+ * arrive at a teammate's checkout already stale and always wrong.
+ *
+ * Everything below the I/O helpers is pure so the interesting rules (staleness,
+ * ownership, TTL parsing, ref normalization) are unit-testable without a repo.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { atomicWriteFileSync } from "./atomic.ts";
+import { withLock } from "./worklog.ts";
+
+export const CLAIMS_FILENAME = ".session-claims.json";
+
+/** 8 hours — long enough for a working session, short enough that a killed one clears by the next. */
+export const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000;
+
+/** Env var carrying the Claude Code session id. */
+export const SESSION_ENV_VAR = "CLAUDE_SESSION_ID";
+
+export type SessionClaim = {
+  /** Opaque session identifier — whatever `--session` / $CLAUDE_SESSION_ID says. */
+  session: string;
+  /** ISO-8601 instant the claim was taken. */
+  at: string;
+  /** ISO-8601 instant after which the claim is STALE. */
+  expiresAt: string;
+};
+
+export type ClaimsDoc = {
+  version: 1;
+  /** Keyed by normalized spec ref (repo-relative path where resolvable). */
+  claims: Record<string, SessionClaim>;
+};
+
+export function emptyClaimsDoc(): ClaimsDoc {
+  return { version: 1, claims: {} };
+}
+
+// ---------------------------------------------------------------------------
+// Paths and I/O
+// ---------------------------------------------------------------------------
+
+export function claimsPath(trackerRoot: string): string {
+  return join(trackerRoot, CLAIMS_FILENAME);
+}
+
+/**
+ * Read the claims file.
+ *
+ * Tolerant by design: missing, empty, corrupt, or wrong-shaped content all read
+ * as "no claims". This is advisory ephemeral state — a half-written file left by
+ * a killed session must degrade to "nothing is claimed", never crash `next`,
+ * `doctor` or `list`.
+ */
+export function readClaims(trackerRoot: string): ClaimsDoc {
+  const path = claimsPath(trackerRoot);
+  if (!existsSync(path)) return emptyClaimsDoc();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return emptyClaimsDoc();
+  }
+
+  if (typeof parsed !== "object" || parsed === null) return emptyClaimsDoc();
+  const rawClaims = (parsed as { claims?: unknown }).claims;
+  if (typeof rawClaims !== "object" || rawClaims === null) return emptyClaimsDoc();
+
+  const doc = emptyClaimsDoc();
+  for (const [ref, value] of Object.entries(rawClaims as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) continue;
+    const { session, at, expiresAt } = value as Partial<SessionClaim>;
+    if (typeof session !== "string" || session.trim() === "") continue;
+    if (typeof at !== "string" || typeof expiresAt !== "string") continue;
+    doc.claims[ref] = { session, at, expiresAt };
+  }
+  return doc;
+}
+
+export function writeClaims(trackerRoot: string, doc: ClaimsDoc): void {
+  atomicWriteFileSync(claimsPath(trackerRoot), `${JSON.stringify(doc, null, 2)}\n`);
+}
+
+/**
+ * Read-modify-write under an O_EXCL lock.
+ *
+ * The read and the write must not straddle another session's write, or two
+ * sessions claiming *different* specs at the same moment would clobber each
+ * other's entry — the exact failure mode this module is supposed to prevent.
+ * `withLock` is the same helper the worklog uses for its own RMW cycles.
+ *
+ * `mutate` returns the value the caller wants back out (the decision it made
+ * while holding the lock), so refusals never write.
+ */
+export function mutateClaims<T>(
+  trackerRoot: string,
+  mutate: (doc: ClaimsDoc) => { doc: ClaimsDoc; write: boolean; result: T },
+): T {
+  let out!: T;
+  withLock(claimsPath(trackerRoot), () => {
+    const current = readClaims(trackerRoot);
+    const { doc, write, result } = mutate(current);
+    if (write) writeClaims(trackerRoot, doc);
+    out = result;
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Session identity
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the acting session id: `--session` flag, else $CLAUDE_SESSION_ID.
+ *
+ * Returns null when neither is present. Callers that WRITE a claim must refuse
+ * on null — an anonymous claim names nobody, so the refusal message it produces
+ * later ("claimed by session ''") would be useless. Callers that only READ
+ * (`next`, `worklog dispatch`) treat null as "not me", which is the safe
+ * direction: an unattributable session sees other sessions' claims rather than
+ * silently inheriting them.
+ */
+export function resolveSessionId(
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const fromFlag = flag?.trim();
+  if (fromFlag) return fromFlag;
+  const fromEnv = env[SESSION_ENV_VAR]?.trim();
+  if (fromEnv) return fromEnv;
+  return null;
+}
+
+export const NO_SESSION_MESSAGE =
+  `no session id — pass --session <id> or set $${SESSION_ENV_VAR}. ` +
+  `A claim that names no session cannot tell the next session who to go ask.`;
+
+// ---------------------------------------------------------------------------
+// TTL
+// ---------------------------------------------------------------------------
+
+export class TtlParseError extends Error {}
+
+/**
+ * Parse a TTL: `8h`, `90m`, `2d`, or a bare number (hours).
+ *
+ * Bare numbers mean HOURS because the default TTL is expressed in hours — a
+ * bare `4` meaning 4 minutes would be a silent 120x error in the direction that
+ * drops claims early.
+ */
+export function parseTtl(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_TTL_MS;
+
+  const trimmed = raw.trim().toLowerCase();
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
+  if (match === null) {
+    throw new TtlParseError(
+      `invalid --ttl ${JSON.stringify(raw)} — use <n>[ms|s|m|h|d], e.g. 8h, 90m, 2d (a bare number means hours)`,
+    );
+  }
+
+  const value = Number.parseFloat(match[1]!);
+  const unit = match[2] ?? "h";
+  const multiplier =
+    unit === "ms" ? 1
+    : unit === "s" ? 1000
+    : unit === "m" ? 60 * 1000
+    : unit === "d" ? 24 * 60 * 60 * 1000
+    : 60 * 60 * 1000;
+
+  const ms = Math.round(value * multiplier);
+  if (ms <= 0) {
+    throw new TtlParseError(`invalid --ttl ${JSON.stringify(raw)} — must be greater than zero`);
+  }
+  return ms;
+}
+
+/** Render a TTL back as the shortest exact unit, for echoing in messages. */
+export function formatTtl(ms: number): string {
+  if (ms % (24 * 60 * 60 * 1000) === 0) return `${ms / (24 * 60 * 60 * 1000)}d`;
+  if (ms % (60 * 60 * 1000) === 0) return `${ms / (60 * 60 * 1000)}h`;
+  if (ms % (60 * 1000) === 0) return `${ms / (60 * 1000)}m`;
+  if (ms % 1000 === 0) return `${ms / 1000}s`;
+  return `${ms}ms`;
+}
+
+// ---------------------------------------------------------------------------
+// Durations
+// ---------------------------------------------------------------------------
+
+/** Compact human duration: `45s`, `12m`, `3h12m`, `2d3h`. Negative clamps to 0s. */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total}s`;
+
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes === 0 ? `${hours}h` : `${hours}h${restMinutes}m`;
+
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours === 0 ? `${days}d` : `${days}d${restHours}h`;
+}
+
+// ---------------------------------------------------------------------------
+// Inspection
+// ---------------------------------------------------------------------------
+
+export type ClaimState =
+  /** Nobody holds this ref. */
+  | "unclaimed"
+  /** Held by the acting session. */
+  | "own"
+  /** Held by ANOTHER session and not yet expired — the collision case. */
+  | "held"
+  /** Held by another session but past `expiresAt` — takeable, with a notice. */
+  | "stale";
+
+export type ClaimStatus = {
+  ref: string;
+  state: ClaimState;
+  claim: SessionClaim | null;
+  /** How long ago the claim was taken (ms). 0 when unclaimed. */
+  ageMs: number;
+  /** ms until expiry; negative once expired. 0 when unclaimed. */
+  expiresInMs: number;
+  /** `12m` — age, pre-formatted for messages. */
+  ageLabel: string;
+  /** `expires in 7h48m` / `expired 2h ago` / `` when unclaimed. */
+  expiryLabel: string;
+};
+
+function parseInstant(iso: string): number | null {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Classify one ref against the acting session.
+ *
+ * An UNPARSEABLE `expiresAt` is treated as already expired (STALE) rather than
+ * as live: a corrupt timestamp must not be able to hold a spec hostage forever,
+ * and STALE is the state that still names the holder out loud.
+ */
+export function inspectClaim(
+  doc: ClaimsDoc,
+  ref: string,
+  session: string | null,
+  now: Date = new Date(),
+): ClaimStatus {
+  const claim = doc.claims[ref];
+  if (claim === undefined) {
+    return {
+      ref,
+      state: "unclaimed",
+      claim: null,
+      ageMs: 0,
+      expiresInMs: 0,
+      ageLabel: "0s",
+      expiryLabel: "",
+    };
+  }
+
+  const nowMs = now.getTime();
+  const atMs = parseInstant(claim.at);
+  const expMs = parseInstant(claim.expiresAt);
+  const ageMs = atMs === null ? 0 : nowMs - atMs;
+  const expiresInMs = expMs === null ? -1 : expMs - nowMs;
+  const expired = expiresInMs <= 0;
+
+  const state: ClaimState =
+    session !== null && claim.session === session ? "own" : expired ? "stale" : "held";
+
+  return {
+    ref,
+    state,
+    claim,
+    ageMs,
+    expiresInMs,
+    ageLabel: formatDuration(ageMs),
+    expiryLabel: expired
+      ? `expired ${formatDuration(-expiresInMs)} ago`
+      : `expires in ${formatDuration(expiresInMs)}`,
+  };
+}
+
+/** Every outstanding claim, oldest-claimed first, classified against `session`. */
+export function listClaims(
+  doc: ClaimsDoc,
+  session: string | null = null,
+  now: Date = new Date(),
+): ClaimStatus[] {
+  return Object.keys(doc.claims)
+    .map((ref) => inspectClaim(doc, ref, session, now))
+    .sort((a, b) => b.ageMs - a.ageMs || a.ref.localeCompare(b.ref));
+}
+
+/** One line per claim, for doctor / `claim --list`. */
+export function formatClaimLine(status: ClaimStatus): string {
+  const claim = status.claim;
+  if (claim === null) return `${status.ref} — unclaimed`;
+  const stale = status.state === "stale" ? "STALE " : "";
+  const mine = status.state === "own" ? " (this session)" : "";
+  return `${status.ref} — ${stale}session ${claim.session}, claimed ${status.ageLabel} ago, ${status.expiryLabel}${mine}`;
+}
+
+// ---------------------------------------------------------------------------
+// Ref normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a spec reference to the key used in the claims file.
+ *
+ * Resolution order — first form that exists on disk wins, as a repo-relative
+ * path (the same shape the ledger stores, so a claim and its evidence name the
+ * same spec):
+ *   1. relative to `cwd` (what a human types)
+ *   2. relative to the repo root (what a worklog thread's `specPath:` stores)
+ *   3. relative to `.tracker/` (`M247-foo/03-bar.md`)
+ *
+ * A ref that resolves to nothing is kept verbatim (minus `./`). That is
+ * deliberate: claims are advisory coordination, and refusing to coordinate on a
+ * spec that has not been written yet — the "I am about to author this" case, and
+ * every scratch ref in a test — would be a gratuitous restriction.
+ */
+export function normalizeClaimRef(opts: {
+  trackerRoot: string;
+  ref: string;
+  cwd?: string;
+}): string {
+  const { trackerRoot, ref } = opts;
+  const cwd = opts.cwd ?? process.cwd();
+  const repoRoot = dirname(resolve(trackerRoot));
+  const trimmed = ref.trim().replace(/^\.\//, "");
+
+  const candidates = isAbsolute(trimmed)
+    ? [trimmed]
+    : [resolve(cwd, trimmed), resolve(repoRoot, trimmed), resolve(trackerRoot, trimmed)];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      const rel = relative(repoRoot, candidate);
+      // Outside the repo entirely — keep the absolute path rather than emitting
+      // a `../../..` key nobody can read.
+      return rel.startsWith("..") ? candidate : rel;
+    }
+  }
+
+  return trimmed;
+}

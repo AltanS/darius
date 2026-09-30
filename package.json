@@ -7,7 +7,8 @@
   "type": "module",
   "bin": { "darius": "./bin/darius" },
   "scripts": {
-    "check": "bun run lint && bun x tsc --noEmit && bun run test",
+    "check": "bun run lint && bun x tsc --noEmit && bun x tsc -p src/legacy && bun run test",
+    "test:legacy": "cd src/legacy && node ../../node_modules/vitest/vitest.mjs run",
     "test": "bash scripts/test.sh",
     "typecheck": "bun x tsc --noEmit",
     "lint": "oxlint --max-warnings 0",
@@ -19,7 +20,10 @@
   "devDependencies": {
     "@oxlint/plugins": "1.78.0",
     "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "fast-check": "^3.22.0",
     "oxlint": "1.78.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^2.1.0"
   }
 }
