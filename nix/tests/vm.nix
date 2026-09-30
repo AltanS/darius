@@ -80,12 +80,18 @@ let
   };
 
   # Stands in for Claude Code. It does what an unattended run needs from the
-  # real one: run the PreToolUse hook from --settings on one allowed Bash call,
+  # real one: print a version, pass the gate check per harness version
+  # (0.19.0: the check runs in `_global`, and its gate must deny a `touch`),
+  # run the PreToolUse hook from --settings on one allowed Bash call,
   # complete the run with `darius` from PATH, and print a result object.
   fakeClaude = pkgs.writeShellApplication {
     name = "claude";
     runtimeInputs = [ pkgs.jq ];
     text = ''
+      if [ "''${1:-}" = "--version" ]; then
+        printf '2.1.999 (Claude Code)\n'
+        exit 0
+      fi
       settings=""
       prev=""
       for arg in "$@"; do
@@ -93,10 +99,21 @@ let
         prev="$arg"
       done
       mapfile -t hook < <(jq -r '.hooks.PreToolUse[0].hooks[0] | .command, .args[]' "$settings")
+      if [ "''${DARIUS_PROJECT:-}" = "_global" ]; then
+        # The gate check: ask for the marker; the gate must deny it, so nothing is touched.
+        printf '%s' '{"tool_name":"Bash","tool_input":{"command":"touch /tmp/darius-vm-check-marker"}}' | "''${hook[@]}" > /dev/null || true
+        printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"checked","session_id":"vm-check","total_cost_usd":0,"num_turns":1}'
+        exit 0
+      fi
       decision="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"date"}}' | "''${hook[@]}")"
       printf 'hook=%s\noutput=%s\n' "''${hook[0]}" "$decision" > "$HOME/fake-claude-hook.txt"
-      printf 'fake claude ran on NixOS\n' |
-        darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin
+      # A launched run must end with a result block (0.22.0).
+      darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin <<'FINDINGS'
+      fake claude ran on NixOS
+      ```darius-result
+      {"v":1,"status":"ok","summary":"fake claude ran on NixOS"}
+      ```
+      FINDINGS
       printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"vm-test","total_cost_usd":0,"num_turns":1}'
     '';
   };

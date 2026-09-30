@@ -132,14 +132,10 @@ export function skipAlerts(entry: ProjectEntry, batch: { date: string; host: str
     if (ritual.action !== "skipped" || !FAILING_SKIPS.has(reason)) return [];
     const detail =
       ritual.detail !== undefined && OWN_DETAILS.has(reason)
-        ? ` ${ritual.detail}`
-        : ` Details: darius run now ${ritual.slug} --dry-run --project ${entry.project}, on ${batch.host}.`;
-    return [
-      {
-        key: `skip:${batch.host}:${ritual.slug}:${batch.date}:${reason}`,
-        text: [`darius · ${entry.project} · ${batch.host}`, `${ritual.slug} did not start: ${reason}.${detail}`].join("\n"),
-      },
-    ];
+        ? ritual.detail
+        : `Details: darius run now ${ritual.slug} --dry-run --project ${entry.project}, on ${batch.host}.`;
+    const key = `skip:${batch.host}:${ritual.slug}:${batch.date}:${reason}`;
+    return [{ key, tag: key, title: `${ritual.slug} did not start: ${reason}`, body: `${entry.project} on ${batch.host}. ${detail}`, url: "/" }];
   });
 }
 

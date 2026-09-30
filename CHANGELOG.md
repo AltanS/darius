@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.31.0] - 2026-09-30
+
+### Added
+
+- Phone notifications by Web Push. `darius push keys --subject <mailto:|https:>` makes the VAPID key pair in `push.json` (0600; copy it to every host that sends), and `push status`, `push devices`, `push forget <n>`, `push test` and `push flush [--dry-run]` manage the rest. The encryption (RFC 8291) and the signature (RFC 8292) use WebCrypto; no dependency.
+- `darius serve` takes the web app's subscriptions: `GET /api/push/key`, `POST /api/push/subscribe` and `/unsubscribe`. A POST must come from the page itself, as JSON, and name an https endpoint of a known push service. Devices are kept in the store, so every host can send to them.
+
+### Changed
+
+- Alerts (held runs, questions, failed runs, failed gate checks, failing skips) go to the subscribed devices instead of Telegram. A tap opens the run. A host without push keys or without a device sends nothing and keeps no backlog.
+
+### Removed
+
+- `darius alert` and the Telegram channel.
+
+### Fixed
+
+- The NixOS VM test runs again: its fake Claude Code prints a version, passes the gate check per harness version, and ends its run with a result block.
+
 ## [0.30.0] - 2026-09-30
 
 ### Added

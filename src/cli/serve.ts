@@ -7,6 +7,8 @@
  *
  *   GET /healthz             "ok", without an access check
  *   GET /api/status.json     the status as JSON
+ *   /api/push/...            the notification button's endpoints, the only
+ *                            writes (src/web/push-api.ts)
  *   GET <file>               a file of the built app (web/build/client)
  *   GET anything else        the web app (web/, React Router framework
  *                            mode): darius imports its committed server
@@ -41,6 +43,7 @@ import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddres
 import type { WebHandler } from "../web/api.ts";
 import { webContext } from "../web/context.ts";
 import { plainPage, renderForbidden } from "../web/html.ts";
+import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { collectStatus } from "../web/status.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -259,6 +262,19 @@ function headersOf(request: IncomingMessage): Headers {
   return headers;
 }
 
+/** The request body as text, cut off after MAX_BODY + 1 bytes: more is refused anyway. */
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    chunks.push(part);
+    size += part.length;
+    if (size > MAX_BODY) break;
+  }
+  return Buffer.concat(chunks).toString("utf8").slice(0, MAX_BODY + 1);
+}
+
 async function handle(request: IncomingMessage, response: ServerResponse, gate: Gate, app: WebApp): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "darius.invalid"}`);
   const isHead = request.method === "HEAD";
@@ -278,6 +294,12 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
       console.error("darius serve: another version or web build is on disk; exiting so the service restarts with it");
       app.restart = true;
       process.emit("SIGTERM");
+      return;
+    }
+    if (url.pathname.startsWith(PUSH_API_PREFIX)) {
+      const body = await readBody(request);
+      const answer = pushApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
+      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }
     send(response, await respond(request.method ?? "GET", url, headersOf(request), access.who, app), isHead);

@@ -35,8 +35,9 @@ export DARIUS_TAILSCALE="$SANDBOX/no-tailscale"
 export DARIUS_APP_DIR="$SANDBOX/app"
 export DARIUS_SOURCE="$SANDBOX/no-source"
 export DARIUS_SSH="$SANDBOX/no-ssh"
-# Alerts: no test reaches Telegram; a test that needs the Bot API points this at its own fake.
-export DARIUS_TELEGRAM_API="http://127.0.0.1:9"
+# Push: no test reaches a real push service; a test that needs one adds its own
+# fake's origin, and nothing else may add one.
+unset DARIUS_PUSH_ORIGINS
 
 NODE="${DARIUS_NODE:-node}"
 "$NODE" --no-warnings --test "test/*.test.ts"

@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { flushAlerts, readAlertConfig, sendAlerts } from "../core/alerts.ts";
+import { flushAlerts, sendAlerts } from "../core/alerts.ts";
 import { defaultWho, readLedger } from "../core/ledger.ts";
 import { resolveProject, stateDir } from "../core/paths.ts";
 import { openProject } from "../core/store.ts";
@@ -110,7 +110,7 @@ function noteDigest(report: BatchReport, scope: ReportScope): void {
 }
 
 /**
- * After a batch, this host tells the operator by Telegram (src/core/alerts.ts,
+ * After a batch, this host tells the operator by push (src/core/alerts.ts,
  * 0.29.0): the failing skips of the report, then every alert its ledgers hold.
  * Best effort: a failed send never changes the exit code, and the next batch
  * or sync tries it again.
@@ -119,11 +119,9 @@ async function alertBatch(report: BatchReport, command: string): Promise<void> {
   if (report.dryRun) return;
   const failures: string[] = [];
   try {
-    const config = readAlertConfig();
-    if (config?.telegram === undefined) return;
     for (const entry of report.projects) {
       const alerts = skipAlerts(entry, report);
-      if (alerts.length > 0) failures.push(...(await sendAlerts(openProject(entry.project), alerts, config)).failed);
+      if (alerts.length > 0) failures.push(...((await sendAlerts(openProject(entry.project), alerts))?.failed ?? []));
     }
     failures.push(...((await flushAlerts())?.failed ?? []));
   } catch (cause) {

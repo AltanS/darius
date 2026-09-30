@@ -12,13 +12,13 @@
  */
 
 import { register, type Command } from "./registry.ts";
-import { alertCommand } from "./alert.ts";
 import { dueCommand } from "./due.ts";
 import { harnessCommand } from "./harness.ts";
 import { importCommand } from "./import.ts";
 import { linkCommand } from "./link.ts";
 import { policyCheckCommand } from "./policy-check.ts";
 import { profileCommand } from "./profile.ts";
+import { pushCommand } from "./push.ts";
 import { ritualCommand } from "./ritual.ts";
 import { runCommand } from "./run.ts";
 import { runDueCommand } from "./run-due.ts";
@@ -31,13 +31,13 @@ import { updateCommand } from "./update.ts";
 import { vigilCommand } from "./vigil.ts";
 
 const COMMANDS: readonly Command[] = [
-  alertCommand,
   dueCommand,
   harnessCommand,
   importCommand,
   linkCommand,
   policyCheckCommand,
   profileCommand,
+  pushCommand,
   ritualCommand,
   runCommand,
   runDueCommand,
