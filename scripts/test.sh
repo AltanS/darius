@@ -20,6 +20,11 @@ cd "$ROOT"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
+# Every mkdtemp in the suite (node's os.tmpdir() and mktemp both read TMPDIR)
+# lands inside the sandbox, so the trap above removes all of it on exit.
+mkdir -p "$SANDBOX/tmp"
+export TMPDIR="$SANDBOX/tmp"
+
 export DARIUS_STATE_DIR="$SANDBOX/state"
 export DARIUS_CONFIG_DIR="$SANDBOX/config"
 mkdir -p "$DARIUS_STATE_DIR" "$DARIUS_CONFIG_DIR"
