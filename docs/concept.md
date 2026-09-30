@@ -49,7 +49,7 @@ policy:
   mode: report          # off | report | act
   may:                  # Claude Code permission rules, passed to --allowedTools as-is
     - "Bash(app/scripts/db-query.sh *)"
-    - "Bash(cd djinn && pnpm cli fc *)"
+    - "Bash(cd tools && pnpm cli fc *)"
   hold:                 # regexes over the Bash command line, enforced by policy-check
     - 'git push'
     - 'deploy'
@@ -408,7 +408,7 @@ A decision is allow, deny or hold (0.7.1). `hold` is for what needs a person: a 
 
 Known limit of layer 2: `read` is always allowed, in both scopes, so an unattended run can read any file the unit's user can read, credentials included. Layer 3, the scoped environment of the timer unit, is the answer, not the gate.
 
-`may` keeps today's Claude permission-rule syntax, so no ritual changes: `Bash(pnpm cli fc *)` is a shell rule, any other entry names a tool. The gate matches shell rules itself now, because on three of the four harnesses nothing else would. One rule keeps that safe: in a gate pattern, `*` never matches `;`, `&`, `|`, a newline, a backtick, `$(`, `<` or `>`. A pattern that needs one of those spells it out, as `Bash(cd djinn && pnpm cli fc *)` does. So `pnpm cli fc x; rm -rf ~` does not match `Bash(pnpm cli fc *)`.
+`may` keeps today's Claude permission-rule syntax, so no ritual changes: `Bash(pnpm cli fc *)` is a shell rule, any other entry names a tool. The gate matches shell rules itself now, because on three of the four harnesses nothing else would. One rule keeps that safe: in a gate pattern, `*` never matches `;`, `&`, `|`, a newline, a backtick, `$(`, `<` or `>`. A pattern that needs one of those spells it out, as `Bash(cd tools && pnpm cli fc *)` does. So `pnpm cli fc x; rm -rf ~` does not match `Bash(pnpm cli fc *)`.
 
 The shims only move data:
 
@@ -487,12 +487,16 @@ Each step ships alone. None changes what an existing ritual does unless its prof
 
 ## Djinns
 
-Status: 2026-09-28, 0.8.0. Operator request: set up djinn for a project, as a local subagent and as "the ghost of darius executing and working on things". Architect advice (Fable, 2026-09-28) shaped this section.
+Status: 2026-09-28, 0.8.0. Operator request: set up djinn for a project, as a local subagent and as "the ghost of darius executing and working on things". Architect advice (Fable, 2026-09-28) shaped this section. Revised 2026-10-01 (0.42.2): a djinn is the unattended session darius starts, a runtime role, not a thing in the repo.
 
-**One definition, two callers.** A djinn is the agent a repo describes: `.darius.toml` (identity, ceiling, profiles), `CLAUDE.md`, `.claude/agents/*.md` and the skills under `.claude/skills/` (also in a subdirectory, as `djinn/.claude/skills/` in a project). The repo already holds all of it; darius adds nothing to the repo but the marker (decision 9 stands).
+**A djinn is a run, not a file.** A person can run any ritual or vigil by hand, in their own session. darius can also run a ritual unattended. That unattended session is the djinn. It exists only while it runs, and nothing in the repo defines it. darius never gates a person; it only records the runs a person makes.
 
-- **Local subagent.** The operator's own session calls the agent (`djinn <request>`), as today. darius runs nothing; it only appears when the agent calls `darius` verbs.
-- **The ghost of darius.** A ritual names a skill (`ritual set <slug> --skill daily-report`). run-due, or `darius run now`, starts a harness session in the project's linked checkout. The prompt says to invoke that skill; the checkout supplies it. The profile picks the harness, model and surface; the gate and the policy replace the person.
+The repo holds what both callers need. The skills live in `.claude/skills/` at the repo root, and they are the only skills a ritual may name. The tooling the skills call lives in the repo too; a `tools/` folder at the root is the convention. One `.darius.toml` at the root holds identity, ceiling and profiles. darius adds nothing else to the repo (decision 9 stands).
+
+- **By hand.** A person's own session invokes the skill. darius runs nothing; it only appears when the session calls `darius` verbs.
+- **Unattended.** A ritual names a skill (`ritual set <slug> --skill daily-report`). run-due, or `darius run now`, starts a harness session in the project's linked checkout, at its root. The prompt says to invoke that skill; the checkout supplies it. The profile picks the harness, model and surface; the gate and the policy replace the person.
+
+**Git and the store.** Git holds what people write and review: the marker, the skills, the tooling, `CLAUDE.md` and agents. The store holds what machines write: runs, held questions, answers, reports, evidence, vigils and their verdicts, pause state and host pins. Only committed configuration runs unattended: the store may ask for work, but git decides what is allowed. Rituals move into git later, with marker v3. Vigils never do.
 
 **Activate** means: the host has a checkout, `darius link` recorded it, and the marker's `max_mode` is above `off`. There is no other state. A host without the checkout skips the project (`no-workdir`), as before.
 
@@ -502,9 +506,9 @@ Status: 2026-09-28, 0.8.0. Operator request: set up djinn for a project, as a lo
 
 **`darius run now <ritual> [--profile NAME]`** starts one ritual now, due or not, on the same path as run-due: lease, gate preflight, profile, surface, report to stdout. A held or open run still blocks it, mode `off` refuses it, `max_mode` still caps it. A run that failed today does not block it: a person asked.
 
-**The `djinn` CLI stays the content tool** that the skills call. darius is the runtime; djinn is not. Plain-command rituals (a `command` with no harness, like a vigil check) are a later step.
+**The repo's tooling does the content work** that the skills call. darius is the runtime and records the runs. Plain-command rituals (a `command` with no harness, like a vigil check) are a later step.
 
-The first djinn ritual on the lead host is `daily-report` in a project: mode `report`, the built-in profile.
+The first unattended ritual on the lead host is `daily-report` in a project: mode `report`, the built-in profile.
 
 ## Vigil auto-execution
 

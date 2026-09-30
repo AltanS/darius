@@ -70,7 +70,7 @@ function skillSection(ritual: Ritual): string[] {
   return [
     "## Skill",
     "",
-    `Invoke the skill \`${ritual.skill}\` of this repository with the Skill tool, and do what it says. If the Skill tool does not list it, find \`.claude/skills/${ritual.skill}/SKILL.md\` in this checkout (also under a subdirectory such as \`djinn/.claude/skills/\`), read it, and follow it.`,
+    `Invoke the skill \`${ritual.skill}\` of this repository with the Skill tool, and do what it says. If the Skill tool does not list it, find \`.claude/skills/${ritual.skill}/SKILL.md\` in this checkout, read it, and follow it.`,
     "Where the skill says to write a file, do not: put that content into the findings of `darius run complete` instead.",
     "",
   ];

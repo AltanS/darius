@@ -96,7 +96,7 @@ function protocolVerb(command: string, run: string): string | undefined {
 /**
  * What `*` matches in a shell rule: anything but a shell operator. So
  * `Bash(pnpm cli fc *)` never matches `pnpm cli fc x; rm -rf ~`. A rule that
- * needs an operator spells it out: `Bash(cd djinn && pnpm cli fc *)`.
+ * needs an operator spells it out: `Bash(cd tools && pnpm cli fc *)`.
  */
 const STAR = "(?:[^;&|\\n`<>$]|\\$(?!\\())*";
 

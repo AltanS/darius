@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.42.2] - 2026-10-01
+
+### Fixed
+
+- The run prompt points at the skills in `.claude/skills/` at the repo root only, with no hint of a subdirectory.
+- The concept doc defines a djinn as the unattended session darius starts, a runtime role, not a thing in the repo.
+
 ## [0.42.1] - 2026-09-30
 
 ### Fixed
