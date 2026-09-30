@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.41.1] - 2026-09-30
+
+### Fixed
+
+- `darius sync` exits 0 when another host holds a project's lease, as `vigil sweep` does. The skip is still in the report. Both hosts' sync timers fire on the same quarter hour, so the old exit 3 marked the sync unit failed several times a day. An unreachable bucket still exits 3.
+
 ## [0.41.0] - 2026-09-30
 
 ### Added

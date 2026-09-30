@@ -263,7 +263,7 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     assert.equal(getBlobText(bAfter, sha256Hex(bOlderText)), bOlderText);
   });
 
-  test("a fresh lease held by another host skips with lease-held and exit 3", async () => {
+  test("a fresh lease held by another host skips with lease-held and exit 0", async () => {
     const name = uniqueProject("lease");
     projectOf(hostA, name).writeItem(ritual({}), { who: "test" });
     const lease = { holder: "elsewhere:4242", host: "elsewhere", pid: 4242, expires: new Date(Date.now() + 60_000).toISOString() };
@@ -275,7 +275,8 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     assert.equal(await server.s3.head(`${name}/manifest.json`), null, "items wait for the lease");
 
     const cli = await runSyncCli(hostA, { project: name });
-    assert.equal(cli.code, 3);
+    assert.equal(cli.code, 0, "another host's lease is a normal skip, not a unit failure");
+    assert.equal(JSON.parse(cli.output).ok, true);
     assert.equal(JSON.parse(cli.output).projects[0].skipped, "lease-held");
 
     // An expired lease is taken over.

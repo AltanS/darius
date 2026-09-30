@@ -98,9 +98,15 @@ function describe(report: SyncReport): string {
   );
 }
 
+/**
+ * A lease held by another host is a normal skip, exit 0, as in `vigil sweep`:
+ * that host is syncing now, and the next timer run catches up. Both hosts'
+ * timers fire on the same quarter hour, so exit 3 failed the unit several
+ * times a day (0.41.1). An unreachable bucket stays exit 3.
+ */
 function exitCode(run: SyncRun): number {
   if (run.errors.length > 0) return EXIT_FAILED;
-  if (run.reports.some((report) => report.skipped !== undefined)) return EXIT_INCONCLUSIVE;
+  if (run.reports.some((report) => report.skipped === "offline")) return EXIT_INCONCLUSIVE;
   return EXIT_OK;
 }
 
