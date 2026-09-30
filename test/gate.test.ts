@@ -237,6 +237,24 @@ test("a may refusal names the construct or the command that failed", () => {
   assert.match(decision.verdict === "deny" ? decision.reason : "", /not allowed by the policy's may rules \(no may rule allows "echo exit=\$\?"\)/u);
 });
 
+test("a bare assignment runs nothing and needs no rule; an assignment prefix leaves the rules to its command (0.42.3)", () => {
+  const may = ["Bash(curl *)"];
+  const full = policy({ may, hold: [], gate: "full" });
+  const ua = 'UA="Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0"; curl -A "$UA" -s https://example.com/';
+  assert.equal(decide(shell(ua), full), undefined, "the user agent line passes with Bash(curl *)");
+  assert.equal(decide(shell("X=1"), full), undefined, "a bare assignment alone");
+  assert.equal(decide(shell("A='x y' B=$HOME/c C=; curl x"), full), undefined, "quoted, $VAR and empty values");
+  assert.equal(decide(shell("LANG=C curl -s https://example.com/"), full), undefined, "a prefix on an allowed command");
+  assert.match(decide(shell("X=$(id); curl https://example.com/"), full) ?? "", /command substitution/u);
+  assert.match(decide(shell('X="`id`"; curl x'), full) ?? "", /command substitution/u);
+  assert.match(decide(shell("X=1 rm -rf /"), full) ?? "", /no may rule allows "X=1 rm -rf \/"/u);
+  assert.match(decide(shell("PATH=/tmp/bin:$PATH; curl x"), full) ?? "", /assignment to PATH/u);
+  assert.match(decide(shell("LD_PRELOAD=/tmp/x.so curl x"), full) ?? "", /assignment to LD_PRELOAD/u);
+  assert.match(decide(shell("1X=a; curl x"), full) ?? "", /no may rule allows "1X=a"/u, "not a POSIX name");
+  const report = policy({ may, hold: [], gate: "full", mode: "report" });
+  assert.match(decide(shell("X=1 rm -rf /tmp/a"), { ...report, may: ["Bash(rm *)"] }) ?? "", /report mode denies write verbs/u);
+});
+
 test("shell rules: spelled-out operators, the legacy prefix form, exact rules, bare Bash, other tools", () => {
   assert.equal(mayAllowsShell("cd djinn && pnpm cli fc sweep", ["Bash(cd djinn && pnpm cli fc *)"]), true);
   assert.equal(mayAllowsShell("cd djinn && pnpm cli fc sweep; rm x", ["Bash(cd djinn && pnpm cli fc *)"]), false);

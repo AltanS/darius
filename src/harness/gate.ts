@@ -259,20 +259,75 @@ function ruleAllowsCommand(command: string, may: readonly string[]): boolean {
 }
 
 /**
+ * One leading shell assignment: a POSIX name, `=`, then a value made of
+ * single-quoted text, double-quoted text, escaped characters and plain word
+ * characters. Command substitution never reaches here: scanShell refuses it
+ * on the whole line first. A `$VAR` in the value is the shell's business.
+ */
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*'|"(?:[^"\\]|\\[\s\S])*"|\\[\s\S]|[^\s'"\\])*)(?:\s+|$)/u;
+
+/**
+ * Names whose value changes which program a later command runs or which
+ * config it reads (a search path, a preload, a shell hook, a home or config
+ * directory, a tool's own settings). An assignment to one of them never
+ * passes on its own; the part then needs a rule that matches it whole, as
+ * before 0.42.3.
+ */
+const STEERING_NAME =
+  /^(?:PATH|IFS|ENV|BASH_ENV|CDPATH|FPATH|PROMPT_COMMAND|PS4|SHELLOPTS|BASHOPTS|GLOBIGNORE|HOME|TMPDIR|EDITOR|VISUAL|PAGER|LESSOPEN|LESSCLOSE|CURL_HOME|WGETRC|NODE_OPTIONS|NODE_PATH|LD_\w*|DYLD_\w*|XDG_\w*|GIT_\w*|SSH_\w*|PYTHON\w*|PERL\w*|RUBY\w*|BUN_\w*|NPM_\w*|npm_\w*|DARIUS_\w*)$/u;
+
+/** The names a command's leading assignments set, and the command after them. */
+export interface Assignments {
+  names: string[];
+  rest: string;
+}
+
+/** The leading assignments of one split command, and the command after them ("" for a bare assignment). */
+export function stripAssignments(command: string): Assignments {
+  const names: string[] = [];
+  let rest = command;
+  for (let match = ASSIGNMENT.exec(rest); match !== null && match[0] !== ""; match = ASSIGNMENT.exec(rest)) {
+    names.push(match[1] ?? "");
+    rest = rest.slice(match[0].length);
+  }
+  return { names, rest };
+}
+
+/**
+ * Why `may` refuses one split command, or undefined. A bare assignment
+ * (`UA="..."`) runs nothing and needs no rule; an assignment prefix
+ * (`X=1 cmd`) leaves the rules to the command after it (0.42.3). An
+ * assignment to a STEERING_NAME is not stripped.
+ */
+function partRefusal(part: string, may: readonly string[]): string | undefined {
+  if (ruleAllowsCommand(part, may)) return undefined;
+  const { names, rest } = stripAssignments(part);
+  const steering = names.find((name) => STEERING_NAME.test(name));
+  if (steering !== undefined) return `no may rule allows "${clip(part)}" (an assignment to ${steering} changes what commands run)`;
+  if (rest === "" || (names.length > 0 && ruleAllowsCommand(rest, may))) return undefined;
+  return `no may rule allows "${clip(part)}"`;
+}
+
+/**
  * Why `may` refuses the line, or undefined when it allows it: one rule
  * matches it whole (`*` never crossing an operator), or the shell split of
  * the line (scanShell) gives commands that each match a rule. Inside one
  * split command `*` may match quoted text with operators in it, because the
- * shell passes that as an argument and never runs it. The reason goes to the
- * model, so it names the construct or the command that failed.
+ * shell passes that as an argument and never runs it. A bare assignment
+ * passes and an assignment prefix leaves its command (partRefusal). The
+ * reason goes to the model, so it names the construct or the command that
+ * failed.
  */
 export function mayRefusal(command: string, may: readonly string[]): string | undefined {
   const trimmed = command.trim();
   if (ruleAllows(trimmed, may)) return undefined;
   const scan = scanShell(trimmed);
   if ("refused" in scan) return `the line has ${scan.refused}`;
-  const refused = scan.parts.find((part) => !ruleAllowsCommand(part, may));
-  return refused === undefined ? undefined : `no may rule allows "${clip(refused)}"`;
+  for (const part of scan.parts) {
+    const refused = partRefusal(part, may);
+    if (refused !== undefined) return refused;
+  }
+  return undefined;
 }
 
 /** True when `may` allows the line (mayRefusal). */

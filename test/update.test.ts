@@ -290,13 +290,44 @@ test("update takes the newest release: stage, preflight, flip, the new setup, a 
   assert.equal(readlinkSync(join(h.app, "current")), join("versions", "v0.2.0"));
   assert.equal(readlinkSync(join(h.home, ".local", "bin", "darius")), join(h.app, "current", "bin", "darius"));
   // preflight of the staged dir, then its setup, then the health check through ~/.local/bin/darius.
-  assert.deepEqual(logLines(h), ["0.2.0 --version", "0.2.0 setup --systemd", "0.2.0 --version"]);
+  assert.deepEqual(logLines(h), ["0.2.0 --version", "0.2.0 setup --systemd --keep-stopped", "0.2.0 --version"]);
   assert.deepEqual(h.systemctl.calls, [["is-enabled", "--quiet", "darius-web.service"], ["restart", "darius-web.service"]]);
   assert.deepEqual(h.health, ["http://127.0.0.1:4747/healthz"]);
   assert.deepEqual(updateRecord(h.app), { from: "0.1.0", to: "0.2.0", at: "2026-09-29T12:00:00.000Z", outcome: "updated", detail: "" });
   assert.equal(existsSync(join(h.app, "update.lock")), false, "the lock is released");
   // The clone's origin is the source: a later update needs no --source.
   assert.equal(git(versionDir(h.app, "v0.2.0"), ["remote", "get-url", "origin"]).trim(), h.source.url);
+});
+
+test("update keeps a stopped timer stopped and restarts an active one, one line per timer it left stopped (0.42.3)", async () => {
+  const h = host(MINORS, "v0.1.0");
+  const unitDir = join(h.home, ".config", "systemd", "user");
+  mkdirSync(unitDir, { recursive: true });
+  for (const unit of ["darius-sync.timer", "darius-vigil-sweep.timer", "darius-run-due.timer"]) writeFileSync(join(unitDir, unit), "# fake\n");
+  const stopped = new Set(["darius-vigil-sweep.timer", "darius-run-due.timer"]);
+  const calls: string[][] = [];
+  const systemctl = (args: string[]): void => {
+    calls.push(args);
+    if (args[0] === "is-active" && stopped.has(args[2] ?? "")) throw new Error("inactive");
+  };
+  const done = await runUpdate(request(), deps(h, true, { systemctl }));
+  assert.equal(done.code, 0, done.report.detail);
+  assert.deepEqual(done.report.leftStopped, ["darius-vigil-sweep.timer", "darius-run-due.timer"]);
+  assert.deepEqual(updateLines(done.report), [
+    "✓ updated 0.1.0 -> 0.2.0",
+    "· left stopped: darius-vigil-sweep.timer",
+    "· left stopped: darius-run-due.timer",
+  ]);
+  assert.deepEqual(
+    calls.filter((call) => call[0] === "stop" || call[0] === "restart"),
+    [
+      ["stop", "darius-vigil-sweep.timer"],
+      ["stop", "darius-run-due.timer"],
+      ["restart", "darius-sync.timer"],
+      ["restart", "darius-web.service"],
+    ],
+  );
+  assert.equal(calls.some((call) => call[0] === "enable" || call[0] === "start"), false);
 });
 
 test("update without the web unit checks only the version, and restarts nothing", async () => {
@@ -375,7 +406,7 @@ test("a failed health check rolls back once: the old version, its setup and a we
   assert.match(failed.report.detail, /darius-web\.service did not answer http:\/\/127\.0\.0\.1:4747\/healthz/);
   assert.match(failed.report.detail, /0\.1\.0 failed its checks too/, "the rollback is checked once, and not rolled again");
   assert.equal(currentTag(h.app), "v0.1.0");
-  assert.deepEqual(logLines(h), ["0.2.0 --version", "0.2.0 setup --systemd", "0.2.0 --version", "0.1.0 setup --systemd", "0.1.0 --version"]);
+  assert.deepEqual(logLines(h), ["0.2.0 --version", "0.2.0 setup --systemd --keep-stopped", "0.2.0 --version", "0.1.0 setup --systemd --keep-stopped", "0.1.0 --version"]);
   assert.deepEqual(
     h.systemctl.calls.filter((call) => call[0] === "restart"),
     [

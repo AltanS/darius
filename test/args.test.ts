@@ -100,3 +100,28 @@ test("an empty argv parses to empty positional and flags", () => {
   assert.deepEqual(args.repeated, {});
   assert.equal(args.json, false);
 });
+
+test("a valued flag takes the next token even when it starts with -- (0.42.3)", () => {
+  const args = parseArgs(["add", "x", "--hold", String.raw`--confirm\b`, "--json"]);
+  assert.equal(args.flags.hold, String.raw`--confirm\b`);
+  assert.deepEqual(args.repeated.hold, [String.raw`--confirm\b`]);
+  assert.equal(args.flags.json, true);
+  assert.deepEqual(args.positional, ["add", "x"]);
+  assert.equal(parseArgs(["--arg", "-v"]).flags.arg, "-v");
+});
+
+test("a valued flag at the end of argv is a UsageError that names it", () => {
+  assert.throws(() => parseArgs(["ritual", "add", "x", "--hold"]), { name: "UsageError", message: /--hold needs a value/u });
+});
+
+test("--flag=value still works for a value that starts with --", () => {
+  assert.equal(parseArgs(["--hold=--confirm"]).flags.hold, "--confirm");
+});
+
+test("boolean flags that commands read as true never take a value", () => {
+  const args = parseArgs(["--force", "--list", "--daily", "--json", "name"]);
+  assert.equal(args.flags.force, true);
+  assert.equal(args.flags.list, true);
+  assert.equal(args.flags.daily, true);
+  assert.deepEqual(args.positional, ["name"]);
+});

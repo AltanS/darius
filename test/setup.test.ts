@@ -24,6 +24,7 @@ import {
   defaultDeps,
   formatSteps,
   runSetup,
+  timerPlan,
   setupCommand,
   type BucketFactory,
   type RemoteBucket,
@@ -317,6 +318,43 @@ test("--systemd reports skipped on a re-run when the units are unchanged and the
   // A timer that is not enabled makes the re-run install and enable again.
   const again = stepFor(await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, disabledTimers, fakeBucketFactory("exists"))), "systemd");
   assert.equal(again.skipped, undefined);
+});
+
+test("timerPlan keeps an installed, inactive timer stopped, restarts an active one, and leaves a new one to setup (0.42.3)", () => {
+  assert.deepEqual(
+    timerPlan([
+      { unit: "darius-sync.timer", installed: true, active: true },
+      { unit: "darius-run-due.timer", installed: true, active: false },
+      { unit: "darius-vigil-sweep.timer", installed: false, active: false },
+    ]),
+    { keepStopped: ["darius-run-due.timer"], restart: ["darius-sync.timer"] },
+  );
+  assert.deepEqual(timerPlan([]), { keepStopped: [], restart: [] });
+});
+
+test("--systemd --keep-stopped rewrites the units but does not enable a timer that was stopped; plain --systemd still enables all", async () => {
+  const root = tempDir("darius-setup-root-");
+  const home = tempDir("darius-setup-home-");
+  writeFakeBin(root);
+  writeFakeUnits(root);
+  await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, recordingSystemctl().runner, fakeBucketFactory("exists")));
+
+  const calls: string[][] = [];
+  const runDueStopped: SystemctlRunner = (args) => {
+    calls.push(args);
+    if (args[0] === "is-active" && args[2] === "darius-run-due.timer") throw new Error("inactive");
+  };
+  const kept = stepFor(await runSetup({ systemd: true, remote: false, keepStopped: true }, fakeDeps(root, home, runDueStopped, fakeBucketFactory("exists"))), "systemd");
+  assert.equal(kept.ok, true, kept.detail);
+  assert.match(kept.detail, /left stopped darius-run-due\.timer/u);
+  assert.equal(calls.some((call) => call.includes("darius-run-due.timer") && call[0] !== "is-active"), false, "run-due is never enabled or started");
+
+  const fresh = recordingSystemctl();
+  await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, (args) => {
+    fresh.runner(args);
+    if (args[0] === "is-active" && args[2] === "darius-run-due.timer") throw new Error("inactive");
+  }, fakeBucketFactory("exists")));
+  assert.ok(fresh.calls.some((call) => call[0] === "enable" && call.includes("darius-run-due.timer")), "a setup without the flag enables every unit");
 });
 
 function existsSyncQuiet(path: string): boolean {

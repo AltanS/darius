@@ -36,6 +36,12 @@
  * It never touches `darius-seaweedfs.service`: only
  * `scripts/seaweedfs-install.sh` installs that unit.
  *
+ * `--keep-stopped` (with `--systemd`, 0.42.3): a timer whose unit file is
+ * installed but that is not active stays stopped; setup rewrites its files
+ * and does not enable it. `darius update` passes it, so an update never
+ * starts a timer the operator stopped. A setup without it enables every
+ * listed unit, as before.
+ *
  * `--remote`: calls `ensureBucket()` against the configured `[remote]`,
  * through the injectable `BucketFactory`, so a test never needs a live
  * endpoint.
@@ -219,6 +225,60 @@ const NO_DARIUS_OUTSIDE_STORE =
 /** Runs `systemctl --user <args>`. Injected so a test never touches the real user manager. */
 export type SystemctlRunner = (args: string[]) => void;
 
+/** The timers `--systemd` may install, in UNIT_SETS order. */
+export const TIMER_UNITS: readonly string[] = Object.values(UNIT_SETS)
+  .map((set) => set.enable)
+  .filter((unit) => unit.endsWith(".timer"));
+
+/** One timer before an update or a `--keep-stopped` setup: is its unit file in the user unit dir, and is it active. */
+export interface TimerState {
+  unit: string;
+  installed: boolean;
+  active: boolean;
+}
+
+/** The timers a state-keeping run leaves stopped, and the ones it restarts. */
+export interface TimerPlan {
+  keepStopped: string[];
+  restart: string[];
+}
+
+/**
+ * What a state-keeping run does with each timer (0.42.3). An installed timer
+ * that is not active was stopped on purpose: it stays stopped. An active one
+ * is restarted, so it picks up the new binary. A timer with no unit file yet
+ * is new here: setup installs and enables it, so it is in neither list.
+ */
+export function timerPlan(states: readonly TimerState[]): TimerPlan {
+  const keepStopped: string[] = [];
+  const restart: string[] = [];
+  for (const state of states) {
+    if (!state.installed) continue;
+    if (state.active) restart.push(state.unit);
+    else keepStopped.push(state.unit);
+  }
+  return { keepStopped, restart };
+}
+
+/** The user unit dir under `home`. */
+export function userUnitDir(home: string): string {
+  return join(home, ".config", "systemd", "user");
+}
+
+/** The state of each timer in `units`. `is-active` is asked only for an installed one. */
+export function timerStates(systemctl: SystemctlRunner, unitDir: string, units: readonly string[] = TIMER_UNITS): TimerState[] {
+  return units.map((unit) => {
+    const installed = lstatSync(join(unitDir, unit), { throwIfNoEntry: false }) !== undefined;
+    if (!installed) return { unit, installed, active: false };
+    try {
+      systemctl(["is-active", "--quiet", unit]);
+      return { unit, installed, active: true };
+    } catch {
+      return { unit, installed, active: false };
+    }
+  });
+}
+
 /** The real `systemctl --user`. `defaultDeps()` wires this in; a test injects a recorder instead. */
 export function realSystemctl(args: string[]): void {
   execFileSync("systemctl", ["--user", ...args], { stdio: ["ignore", "pipe", "pipe"] });
@@ -295,9 +355,11 @@ function isOwnUnitFile(path: string, name: string): boolean {
  * the Nix store would hit the read-only store, and replacing it would fight
  * the next switch, so any such link among them leaves the step alone.
  */
-function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly UnitSet[]): Step {
+function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly UnitSet[], keepStopped: boolean): Step {
   const files = sets.flatMap((set) => set.files);
-  const toEnable = sets.map((set) => set.enable);
+  const listed = sets.map((set) => set.enable);
+  const stopped = keepStopped ? timerPlan(timerStates(deps.systemctl, unitDir, listed.filter((unit) => TIMER_UNITS.includes(unit)))).keepStopped : [];
+  const toEnable = listed.filter((unit) => !stopped.includes(unit));
   if (files.length === 0) return { ok: true, skipped: true, what: "systemd", detail: "[setup] units lists no unit, so none is installed" };
   const managed = files.filter((name) => isNixLink(join(unitDir, name)));
   if (managed.length > 0) {
@@ -308,7 +370,10 @@ function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly Uni
       detail: `${managed.join(", ")} in ${unitDir} link into the Nix store: home-manager (services.darius) manages them. Left alone.`,
     };
   }
-  const enabled = `enabled ${toEnable.join(", ")}`;
+  const enabled = [
+    ...(toEnable.length > 0 ? [`enabled ${toEnable.join(", ")}`] : []),
+    ...(stopped.length > 0 ? [`left stopped ${stopped.join(", ")}`] : []),
+  ].join("; ");
   const darius = unitDarius({ root: deps.root, ...deps.unitHost });
   if (darius === undefined) return { ok: false, what: "systemd", detail: NO_DARIUS_OUTSIDE_STORE };
   const path = unitPath({ home: deps.home, ...deps.unitHost });
@@ -330,7 +395,7 @@ function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly Uni
         ok: true,
         skipped: true,
         what: "systemd",
-        detail: `unit files unchanged in ${unitDir}; ${toEnable.join(", ")} already enabled and active`,
+        detail: `unit files unchanged in ${unitDir}; ${toEnable.length > 0 ? `${toEnable.join(", ")} already enabled and active` : "nothing to enable"}${stopped.length > 0 ? `; left stopped ${stopped.join(", ")}` : ""}`,
       };
     }
     mkdirSync(unitDir, { recursive: true });
@@ -341,7 +406,7 @@ function installListedUnits(deps: SetupDeps, unitDir: string, sets: readonly Uni
       chmodSync(dest, 0o644);
     }
     deps.systemctl(["daemon-reload"]);
-    deps.systemctl(["enable", "--now", ...toEnable]);
+    if (toEnable.length > 0) deps.systemctl(["enable", "--now", ...toEnable]);
     // `enable --now` leaves a running service alone: a changed web unit
     // only takes effect after a restart. Timers re-read their units anyway.
     if (stale.includes("darius-web.service")) deps.systemctl(["restart", "darius-web.service"]);
@@ -398,18 +463,19 @@ function removeUnlistedUnits(deps: SetupDeps, unitDir: string, unlisted: readonl
   return steps;
 }
 
-function installSystemdUnits(deps: SetupDeps): Step[] {
+function installSystemdUnits(deps: SetupDeps, keepStopped: boolean): Step[] {
   let units: readonly SetupUnit[];
   try {
     units = configuredUnits();
   } catch (cause) {
     return [{ ok: false, what: "systemd", detail: errorMessage(cause) }];
   }
-  const unitDir = join(deps.home, ".config", "systemd", "user");
+  const unitDir = userUnitDir(deps.home);
   const listed = installListedUnits(
     deps,
     unitDir,
     units.map((unit) => UNIT_SETS[unit]),
+    keepStopped,
   );
   const unlisted = SETUP_UNITS.filter((unit) => !units.includes(unit));
   return [listed, ...removeUnlistedUnits(deps, unitDir, unlisted)];
@@ -466,6 +532,8 @@ async function ensureRemoteBucket(cfg: Config, factory: BucketFactory): Promise<
 export interface SetupFlags {
   systemd: boolean;
   remote: boolean;
+  /** `--keep-stopped`: an installed timer that is not active stays stopped (0.42.3). */
+  keepStopped?: boolean;
 }
 
 /** Every side effect `runSetup` can have, injectable so a test never touches a real host. */
@@ -518,7 +586,7 @@ export async function runSetup(flags: SetupFlags, deps: SetupDeps = defaultDeps(
   const steps: Step[] = [installCliSymlink(deps.root, deps.app, deps.home), installConfigSkeleton(), ensureStateDir(), refreshSkillStep(deps.home)];
 
   if (flags.systemd) {
-    steps.push(...installSystemdUnits(deps));
+    steps.push(...installSystemdUnits(deps, flags.keepStopped === true));
   } else {
     steps.push({
       ok: true,
@@ -554,9 +622,9 @@ function flagOn(args: ParsedArgs, name: string): boolean {
 
 export const setupCommand: Command = {
   name: "setup",
-  summary: "link the CLI, write a config skeleton, create the state dir (--systemd, --remote)",
+  summary: "link the CLI, write a config skeleton, create the state dir (--systemd [--keep-stopped], --remote)",
   async run(args: ParsedArgs): Promise<number> {
-    const steps = await runSetup({ systemd: flagOn(args, "systemd"), remote: flagOn(args, "remote") });
+    const steps = await runSetup({ systemd: flagOn(args, "systemd"), remote: flagOn(args, "remote"), keepStopped: flagOn(args, "keep-stopped") });
     const ok = steps.every((step) => step.ok);
     if (args.json) {
       console.log(JSON.stringify({ ok, steps }));

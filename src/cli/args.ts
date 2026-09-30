@@ -2,13 +2,14 @@
  * Turns `argv` (already stripped of the top-level command name) into a
  * `ParsedArgs`. Supported syntax:
  *
- *   --flag value      value is the next token, UNLESS the flag is in
- *                      BOOLEAN_FLAGS, or the next token starts with "--" or
- *                      is the "--" terminator -- write --flag=value instead
- *                      when a valued flag must be followed by a flag-looking
- *                      positional argument.
+ *   --flag value      value is the next token, whatever it looks like
+ *                      (`--hold '--confirm\b'` holds `--confirm\b`),
+ *                      UNLESS the flag is in BOOLEAN_FLAGS. A valued flag
+ *                      with no token after it is a UsageError (0.42.3:
+ *                      before, a value starting with "--" was dropped
+ *                      silently and the flag read as true).
  *   --flag=value      always a value, whatever it looks like.
- *   --flag            a boolean flag: true, when no value form matched.
+ *   --flag            a flag in BOOLEAN_FLAGS: true.
  *   --question a --question b
  *                      both values are kept, in order, in `repeated.question`;
  *                      `flags.question` holds only the last one ("b").
@@ -23,13 +24,14 @@
 
 import { readFileSync } from "node:fs";
 
+import { UsageError } from "../core/model.ts";
 import type { ParsedArgs } from "./registry.ts";
 
 /**
  * Flags that never take a value. Without this list `darius import --json
- * /path/.tracker` would bind the path to `json` and drop the positional, and
- * the heuristic above cannot tell the two apart. A new boolean flag joins
- * this list in the same change that introduces it.
+ * /path/.tracker` would bind the path to `json` and drop the positional.
+ * Every flag not listed here takes the next token as its value. A new
+ * boolean flag joins this list in the same change that introduces it.
  */
 const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "json",
@@ -45,6 +47,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "heavy",
   "remote",
   "systemd",
+  "keep-stopped",
   "pull-only",
   "preflight",
   "check",
@@ -52,6 +55,9 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "help",
   "brief",
   "no-import",
+  "force",
+  "list",
+  "daily",
 ]);
 
 function looksLikeFlag(token: string): boolean {
@@ -94,15 +100,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
-    const next = argv[index + 1];
-    if (!BOOLEAN_FLAGS.has(body) && next !== undefined && next !== "--" && !looksLikeFlag(next)) {
-      setValue(body, next);
-      index += 2;
+    if (BOOLEAN_FLAGS.has(body)) {
+      flags[body] = true;
+      index += 1;
       continue;
     }
 
-    flags[body] = true;
-    index += 1;
+    const next = argv[index + 1];
+    if (next === undefined) throw new UsageError(`--${body} needs a value`);
+    setValue(body, next);
+    index += 2;
   }
 
   return { positional, flags, json: flags.json === true, repeated };

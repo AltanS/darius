@@ -12,9 +12,8 @@
  *   profile list
  *   profile show <name>
  *
- * An arg is almost always a flag itself, so it takes the `--arg=--verbose`
- * form: `--arg --verbose` would read `--verbose` as a darius flag, and is
- * refused.
+ * An arg is almost always a flag itself. Both `--arg --verbose` and
+ * `--arg=--verbose` pass `--verbose` (0.42.3: a value may start with --).
  *
  * A ritual uses one with `ritual set <slug> --profile <name>`. A profile
  * called `default` applies to every ritual that names none. The harness,
@@ -90,7 +89,6 @@ function fieldsFromArgs(args: ParsedArgs, base: ProfileFields): ProfileFields {
   const maxTurns = stringFlag(args, "max-turns");
   if (maxTurns === "") delete fields.max_turns;
   else if (maxTurns !== undefined) fields.max_turns = maxTurnsFlag(maxTurns);
-  if (args.flags.arg === true) throw new UsageError("--arg needs a value: write --arg=<value>, for example --arg=--verbose");
   const argValues = args.repeated.arg;
   if (argValues !== undefined) {
     const nonEmpty = argValues.filter((value) => value !== "");

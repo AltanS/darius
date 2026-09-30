@@ -15,7 +15,7 @@
 
 import { parseArgs, readStdin } from "./cli/args.ts";
 import { registerCommands } from "./cli/commands.ts";
-import { getCommand, listCommands, register, UsageError, type Command } from "./cli/registry.ts";
+import { getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
 import { DARIUS_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { runLegacy } from "./core/legacy-entry.ts";
@@ -91,7 +91,14 @@ async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const args = parseArgs(argv.slice(1));
+  let args: ParsedArgs;
+  try {
+    args = parseArgs(argv.slice(1));
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    console.error(`darius: ${error.message}`);
+    return 2;
+  }
   const kind = kindOfVerb(name);
   const project = args.flags.project;
   const named = project !== undefined && project !== false && project !== true ? project : undefined;

@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.42.3] - 2026-10-01
+
+### Fixed
+
+- In gate scope `full`, a bare shell assignment such as `NAME="value"` passes without a `may` rule, and an assignment prefix on a command is matched by the rules on that command; command substitution and assignments to names like `PATH` are still refused.
+- An option that takes a value takes the next token even when it starts with `--`, and a missing value is a usage error that names the option, instead of a silent drop.
+- `darius update` leaves a timer that was stopped before the update stopped, prints one line for each, and restarts the active ones; `setup --systemd --keep-stopped` does the same for setup.
+
 ## [0.42.2] - 2026-10-01
 
 ### Fixed

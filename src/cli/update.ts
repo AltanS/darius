@@ -16,9 +16,13 @@
  *      An older version is allowed: a rollback by hand.
  *   3. Stage `versions/<tag>` (a shallow clone whose package.json must carry
  *      the tag's version), and preflight it: its `bin/darius --version`.
- *   4. Flip `current`, run the NEW version's `setup --systemd` (units may
- *      change between versions, and `[setup] units` survives), restart
- *      `darius-web.service` when it is enabled.
+ *   4. Flip `current`, run the NEW version's `setup --systemd
+ *      --keep-stopped` (units may change between versions, and `[setup]
+ *      units` survives), restart `darius-web.service` when it is enabled.
+ *      A timer the operator stopped stays stopped, one line each ("left
+ *      stopped: ..."); an active one is restarted (0.42.3). The states are
+ *      read before setup, and update stops a kept timer itself too, because
+ *      an older version's setup (a rollback) ignores `--keep-stopped`.
  *   5. Health: `~/.local/bin/darius --version` names the new version, and
  *      with the web unit enabled, `/healthz` answers 200 within 30 s. On a
  *      failure flip back once, rerun the old version's setup, restart the
@@ -75,7 +79,7 @@ import { appDir } from "../core/paths.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
-import { realSystemctl, type SystemctlRunner } from "./setup.ts";
+import { realSystemctl, timerPlan, timerStates, userUnitDir, type SystemctlRunner, type TimerPlan } from "./setup.ts";
 
 const USAGE =
   "usage: darius update [vX.Y.Z] [--check] [--major] [--source URL] [--json]\n" +
@@ -154,6 +158,8 @@ export interface UpdateReport {
   detail: string;
   /** Version dirs the prune removed. */
   pruned: string[];
+  /** Timers that were stopped before the update and stay stopped (0.42.3). */
+  leftStopped: string[];
 }
 
 export interface UpdateResult {
@@ -166,7 +172,7 @@ function versionOf(tag: string | undefined): string | null {
 }
 
 function result(code: number, outcome: ReportOutcome, from: string | undefined, to: string | undefined, detail: string): UpdateResult {
-  return { code, report: { ok: code === 0, outcome, from: versionOf(from), to: versionOf(to), detail, pruned: [] } };
+  return { code, report: { ok: code === 0, outcome, from: versionOf(from), to: versionOf(to), detail, pruned: [], leftStopped: [] } };
 }
 
 /** The lines a person reads for one report. */
@@ -178,6 +184,7 @@ export function updateLines(report: UpdateReport): string[] {
       const lines = [`✓ updated ${from} -> ${to}`];
       if (report.detail !== "") lines.push(`· ${report.detail}`);
       if (report.pruned.length > 0) lines.push(`· removed old versions: ${report.pruned.join(", ")}`);
+      for (const unit of report.leftStopped) lines.push(`· left stopped: ${unit}`);
       return lines;
     }
     case "up-to-date":
@@ -307,12 +314,41 @@ export function webHealthUrl(home: string): string {
 }
 
 /**
- * Makes `tag` (already behind `current`) the live version: its setup, a web
- * restart, the health checks. Returns why it failed, or undefined.
+ * Keeps each timer as the operator left it (timerPlan): a stopped one is
+ * stopped again (a no-op unless an older setup started it), an active one
+ * is restarted. Returns the timers left stopped, or why it failed.
  */
-async function activate(tag: string, deps: UpdateDeps): Promise<string | undefined> {
-  const setup = runDarius(join(versionDir(deps.app, tag), "bin", "darius"), ["setup", "--systemd"], deps);
-  if (setup.status !== 0) return `setup --systemd of ${tagVersion(tag)} failed: ${said(setup)}`;
+function keepTimerStates(plan: TimerPlan, deps: UpdateDeps): { leftStopped: string[] } | { failure: string } {
+  try {
+    for (const unit of plan.keepStopped) deps.systemctl(["stop", unit]);
+    for (const unit of plan.restart) deps.systemctl(["restart", unit]);
+  } catch (cause) {
+    return { failure: `could not keep the timer states: ${errorMessage(cause)}` };
+  }
+  return { leftStopped: plan.keepStopped };
+}
+
+/** What `activate` found: why it failed (undefined when it did not), and the timers it left stopped. */
+interface Activation {
+  failure: string | undefined;
+  leftStopped: string[];
+}
+
+/**
+ * Makes `tag` (already behind `current`) the live version: its setup, the
+ * timer states, a web restart, the health checks.
+ */
+async function activate(tag: string, deps: UpdateDeps): Promise<Activation> {
+  const plan = timerPlan(timerStates(deps.systemctl, userUnitDir(deps.home)));
+  const setup = runDarius(join(versionDir(deps.app, tag), "bin", "darius"), ["setup", "--systemd", "--keep-stopped"], deps);
+  if (setup.status !== 0) return { failure: `setup --systemd of ${tagVersion(tag)} failed: ${said(setup)}`, leftStopped: [] };
+  const kept = keepTimerStates(plan, deps);
+  if ("failure" in kept) return { failure: kept.failure, leftStopped: [] };
+  return { failure: await checkLive(tag, deps), leftStopped: kept.leftStopped };
+}
+
+/** The web restart and the health checks of `activate`. Returns why it failed, or undefined. */
+async function checkLive(tag: string, deps: UpdateDeps): Promise<string | undefined> {
   const web = webEnabled(deps.systemctl);
   if (web) {
     try {
@@ -370,17 +406,18 @@ async function updateLocked(request: UpdateRequest, from: string, source: string
   }
 
   flipCurrent(deps.app, to);
-  const failure = await activate(to, deps);
+  const { failure, leftStopped } = await activate(to, deps);
   if (failure === undefined) {
     record(deps, from, to, "updated", older);
     const outcome = result(0, "updated", from, to, older);
     outcome.report.pruned = pruneVersions(deps.app, to, from);
+    outcome.report.leftStopped = leftStopped;
     return outcome;
   }
 
   // One rollback, never two: the previous version goes back behind `current`.
   flipCurrent(deps.app, from);
-  const again = await activate(from, deps);
+  const { failure: again } = await activate(from, deps);
   const detail =
     `${tagVersion(to)} failed its checks (${failure}), so ${tagVersion(from)} is back` +
     (again === undefined ? "" : `, but ${tagVersion(from)} failed its checks too (${again}). Look at the host by hand.`);

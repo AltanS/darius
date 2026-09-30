@@ -102,7 +102,8 @@ darius update --hosts host-b,host-c  # bring other hosts to this host's version,
 ```
 
 `darius update` clones the release alongside the live one and verifies that it starts. Then it
-switches `current`, runs `darius setup --systemd` from the new version, and restarts the web page.
+switches `current`, runs `darius setup --systemd --keep-stopped` from the new version, and restarts
+the web page. A timer that you stopped stays stopped, and update prints a line for it.
 Finally, it checks that `darius --version` reports the new version and that
 `http://127.0.0.1:4747/healthz` responds. If a check fails, it rolls back once and exits with 1.
 `~/.local/opt/darius/update.json` records the last update. The live version and two backups stay

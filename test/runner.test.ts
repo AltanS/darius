@@ -829,7 +829,7 @@ test("a profile that asks for the herdr surface runs headless and says so", asyn
 
 test("profile add refuses a reserved arg and a bad effort; set replaces and clears fields", async () => {
   await assert.rejects(runCli(profileCommand, ["add", "rd-bad", "--arg=--settings=/tmp/x.json"]), /args may not contain --settings=/u);
-  await assert.rejects(runCli(profileCommand, ["add", "rd-bad", "--arg", "--verbose"]), /write --arg=<value>/u);
+  await assert.rejects(runCli(profileCommand, ["add", "rd-bad", "--arg"]), /--arg needs a value/u);
   await assert.rejects(runCli(profileCommand, ["add", "rd-bad", "--effort", "extreme"]), /claude takes effort/u);
   await addProfile("rd-edit", ["--model", "opus", "--arg=--verbose"]);
   const set = await runCli(profileCommand, ["set", "rd-edit", "--model", "", "--arg", "", "--effort", "high", "--json"]);
