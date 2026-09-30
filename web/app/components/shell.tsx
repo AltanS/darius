@@ -193,6 +193,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
         <nav aria-label="Sections" className="dtabs wa">
           {SECTIONS.map(({ section, label, badge }) => (
             <Link key={section} to={sectionPath(workspace, section)} className={selectedTab(section) ? "dt on" : "dt"} aria-current={selectedTab(section) ? "page" : undefined}>
+              <SectionIcon section={section} size={20} />
               {label}
               <TabBadge {...badge(tabs)} />
             </Link>

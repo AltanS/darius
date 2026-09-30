@@ -3061,7 +3061,7 @@
 
     .dtabs {
       display: flex;
-      height: 44px;
+      height: 52px;
       border-top: 1px solid var(--color-sand);
     }
 
@@ -3069,9 +3069,9 @@
       position: relative;
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 0 16px;
-      font-size: 14px;
+      gap: 10px;
+      padding: 0 20px;
+      font-size: 17px;
       font-weight: 500;
       color: var(--color-muted);
     }
@@ -3081,6 +3081,14 @@
       text-decoration: none;
     }
 
+    .dt:hover::after {
+      content: "";
+      position: absolute;
+      inset: auto 12px 0;
+      height: 3px;
+      background: var(--color-sand-hi);
+    }
+
     .dt.on {
       color: var(--color-gold);
     }
@@ -3088,13 +3096,20 @@
     .dt.on::after {
       content: "";
       position: absolute;
-      inset: auto 8px 0;
-      height: 2px;
+      inset: auto 12px 0;
+      height: 3px;
       background: var(--gold-bar, var(--color-gold));
     }
 
     .dt:first-child {
-      margin-left: -16px;
+      margin-left: -20px;
+    }
+
+    .dt .tab-bdg {
+      min-width: 20px;
+      height: 20px;
+      padding: 0 5px;
+      font-size: 12.5px;
     }
 
     /* A link from the address bar lands below the two bars. */
@@ -3988,7 +4003,7 @@
 
     @media (min-width: 640px) {
       .dtabs {
-        height: 40px;
+        height: 44px;
       }
     }
 

@@ -10945,7 +10945,14 @@ function Shell({ data, children }) {
 						to: sectionPath(workspace, section),
 						className: selectedTab(section) ? "dt on" : "dt",
 						"aria-current": selectedTab(section) ? "page" : void 0,
-						children: [label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabBadge, { ...badge(tabs) })]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectionIcon, {
+								section,
+								size: 20
+							}),
+							label,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabBadge, { ...badge(tabs) })
+						]
 					}, section))
 				})]
 			}),
@@ -14510,7 +14517,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CidODz_5.js",
+			"module": "/assets/root-DYO3AHgM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
@@ -14520,7 +14527,7 @@ var server_manifest_default = {
 				"/assets/agenda-DsBhSY-d.js",
 				"/assets/settings-YoGy02pU.js"
 			],
-			"css": ["/assets/root-Bi8g8y0p.css"],
+			"css": ["/assets/root-B1BrSRWm.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -15033,8 +15040,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-0789a2da.js",
-	"version": "0789a2da",
+	"url": "/assets/manifest-acc86571.js",
+	"version": "acc86571",
 	"sri": void 0
 };
 //#endregion

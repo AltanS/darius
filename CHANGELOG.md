@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.41.2] - 2026-09-30
+
+### Fixed
+
+- The desktop tabs show their icons, bigger text and a gold underline on the active tab, so the nav is easy to see.
+
 ## [0.41.1] - 2026-09-30
 
 ### Fixed
