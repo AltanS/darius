@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.42.0] - 2026-09-30
+
+### Added
+
+- Each milestone has its own page, `/w/<workspace>/milestones/<id>`, read-only: its state, dates, bar and check count, a status strip of spec counts, the README, every spec with its full text, its worklogs, and every other file in its folder.
+- On that page a short spec starts open; a long spec, each worklog and each file start folded, with a status line.
+- A worklog belongs to a milestone when its name starts with the milestone id (`M12-...md`, the rule of the tracker's worklog index), or when one of its threads names a spec of the milestone (`<!-- spec: ... -->`).
+- The open row of a milestone in the list links to its page.
+- Markdown in the app shows checklist boxes (`[x]`, `[ ]`, `[~]`, `[!]`, `[-]`) and indented items.
+
+### Changed
+
+- Markdown in the app leaves out HTML comments on lines of their own, and an indented line that starts no item continues the list item above it.
 ## [0.41.2] - 2026-09-30
 
 ### Fixed

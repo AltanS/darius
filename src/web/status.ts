@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { ritualState } from "../core/due.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
-import { readLegacyMilestones } from "../core/legacy-milestones.ts";
+import { readLegacyMilestoneDetail, type LegacyFile } from "../core/legacy-milestone-detail.ts";
+import { readLegacyMilestones, type LegacyMilestone } from "../core/legacy-milestones.ts";
 import { readLegacyVigils } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
 import { readMarker } from "../core/marker.ts";
@@ -26,6 +27,8 @@ import { VERSION } from "../version.ts";
 import type {
   Acknowledgement,
   HostStatus,
+  MilestoneDetail,
+  MilestoneFile,
   MilestoneRow,
   ProfileRow,
   ProjectStatus,
@@ -183,26 +186,53 @@ function legacyVigilRows(checkout: string | null, known: readonly VigilRow[]): V
     });
 }
 
+function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
+  return {
+    source: "legacy",
+    id: milestone.id,
+    label: milestone.id,
+    slug: milestone.slug,
+    title: milestone.title,
+    started: milestone.started,
+    target: milestone.target,
+    status: milestone.status,
+    done: milestone.done,
+    total: milestone.total,
+    specs: milestone.specs.map((spec) => ({ source: "legacy", ...spec })),
+  };
+}
+
 /** Milestones that only the legacy tracker holds: read from the linked checkout, read-only. */
 function legacyMilestones(checkout: string | null): Pick<ProjectStatus, "milestones" | "milestonesArchived"> {
   if (checkout === null) return { milestones: [], milestonesArchived: 0 };
   const { milestones, archived } = readLegacyMilestones(checkout);
-  const rows = milestones.map(
-    (milestone): MilestoneRow => ({
-      source: "legacy",
-      id: milestone.id,
-      label: milestone.id,
-      slug: milestone.slug,
-      title: milestone.title,
-      started: milestone.started,
-      target: milestone.target,
-      status: milestone.status,
-      done: milestone.done,
-      total: milestone.total,
-      specs: milestone.specs.map((spec) => ({ source: "legacy", ...spec })),
-    }),
-  );
-  return { milestones: rows, milestonesArchived: archived };
+  return { milestones: milestones.map(milestoneRow), milestonesArchived: archived };
+}
+
+/** A file's text for the page: markdown as blocks, any other text as one code block. */
+function milestoneFile(file: LegacyFile): MilestoneFile {
+  const content = file.text;
+  const body = content === null ? null : file.markdown ? parseMarkdown(content) : [{ kind: "code" as const, text: content }];
+  return { path: file.path, size: file.size, modifiedAt: file.modifiedAt, lines: content === null ? 0 : content.split("\n").length, body, omitted: file.omitted };
+}
+
+/** One milestone of a project's linked checkout, in full; null when the project, its checkout or the milestone is unknown. */
+export function milestoneDetail(projectName: string, ref: string): MilestoneDetail | null {
+  if (!listProjects().includes(projectName)) return null;
+  const checkout = linkedDir(projectName);
+  if (checkout === undefined) return null;
+  const detail = readLegacyMilestoneDetail(checkout, ref);
+  if (detail === null) return null;
+  const row = milestoneRow(detail.milestone);
+  return {
+    project: projectName,
+    row,
+    dir: detail.dir,
+    readme: detail.readme === null ? null : milestoneFile(detail.readme),
+    specs: detail.specs.map(({ spec, file }) => ({ row: { source: "legacy", ...spec }, file: milestoneFile(file) })),
+    others: detail.others.map(milestoneFile),
+    worklogs: detail.worklogs.map((worklog) => Object.assign(milestoneFile(worklog), { link: worklog.link, distilledAt: worklog.distilledAt })),
+  };
 }
 
 function lastSync(name: string): string | null {

@@ -5,10 +5,11 @@
  * the real store to be in that state. A second, quieter project (atlas-docs)
  * gives the home page a cross-project view. Times are relative to the
  * request, so "3 min ago" stays true. Run and ritual detail pages are not
- * part of it.
+ * part of it; the milestone detail page is, for M12 of demo-shop.
  */
 
-import type { HostStatus, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, VigilRow, WebContext } from "../../src/web/api.ts";
+import { parseMarkdown } from "../../src/web/markdown.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -199,7 +200,116 @@ export function demoStatus(now: number = Date.now()): HostStatus {
   };
 }
 
-/** The real context with the demo status; run and ritual detail pages answer 404. */
+function demoFile(now: number, path: string, text: string, changedAgo: number): MilestoneFile {
+  const markdown = path.endsWith(".md");
+  return {
+    path,
+    size: new TextEncoder().encode(text).length,
+    modifiedAt: ago(now, changedAgo),
+    lines: text.split("\n").length,
+    body: markdown ? parseMarkdown(text) : [{ kind: "code", text }],
+    omitted: null,
+  };
+}
+
+const M12_README = `# Cart survives a page reload
+
+## Goal
+
+A shopper who reloads the page, or comes back the next day, finds the same cart.
+
+## Scope
+
+- Keep the cart in the browser and on the server
+- Totals follow the shop tax rules
+- The free shipping bar shows how much is left
+
+## Out of scope
+
+- Saved carts across devices without a login
+`;
+
+const M12_SPECS: readonly string[] = [
+  `# Cart keeps items between visits
+
+## Tasks
+
+- [x] Store the cart id in a first-party cookie
+- [x] Load the cart on the server for every page
+  - Command: \`npm test -- cart-load\`
+- [x] Merge a guest cart into the account cart at login
+- [x] Drop items that went out of stock, and say so
+- [x] Keep quantities within the stock
+- [x] Write the reload test
+
+## Verification
+
+\`\`\`
+npm test -- cart
+npx playwright test cart-reload.spec.ts
+\`\`\`
+`,
+  `# Cart totals use the shop tax rules
+
+Depends on the cart load from M12/01.
+
+- [ ] Read the tax rate per country from the shop settings
+- [ ] Round per line, then sum, as the tax office asks
+- [~] Show net and gross on the cart page
+- [ ] Test a mixed cart with two tax rates
+
+| Country | Rate |
+|---|---|
+| DE | 19 % |
+| AT | 20 % |
+`,
+  `# Cart shows the free shipping bar
+
+- [x] Read the threshold from the shop settings
+- [ ] Draw the bar under the cart total
+- [!] The designer has not sent the final colours
+- [ ] Hide the bar once the threshold is met
+- [-] Animate the bar (dropped: too distracting)
+`,
+];
+
+/** M12 of demo-shop in full: README, three specs, two worklogs (one distilled), a note and an image. */
+function demoMilestone(now: number): MilestoneDetail {
+  const row = milestones().find((candidate) => candidate.id === "M12");
+  if (row === undefined) throw new Error("demo: M12 is missing");
+  const files = ["01-cart-keeps-items-between-visits.md", "02-cart-totals-use-the-shop-tax-rules.md", "03-cart-shows-the-free-shipping-bar.md"];
+  return {
+    project: "demo-shop",
+    row,
+    dir: "M12-cart-survives-a-page-reload",
+    readme: demoFile(now, "00-README.md", M12_README, 9 * DAY),
+    specs: row.specs.map((specRow, index) => ({ row: specRow, file: demoFile(now, files[index] ?? "spec.md", M12_SPECS[index] ?? "", (index + 1) * DAY) })),
+    others: [
+      demoFile(now, "_notes/tax-questions.md", "# Open tax questions\n\n- Does a gift card carry tax?\n- Which rate applies to a bundle?\n", 3 * DAY),
+      { path: "_notes/cart-sketch.png", size: 48_213, modifiedAt: ago(now, 6 * DAY), lines: 0, body: null, omitted: "binary" },
+    ],
+    worklogs: [
+      {
+        ...demoFile(now, "M12-cart-survives-a-page-reload.md", "## Tax rounding\n\n<!-- opened: 2026-09-20T10:00:00Z -->\n\n- 2026-09-20: the shop rounds per line; the old code rounded the sum.\n- 2026-09-21: **decided** to round per line, as the tax office asks.\n", 2 * 60 * MINUTE),
+        link: "name",
+        distilledAt: null,
+      },
+      {
+        ...demoFile(now, "2026-09-02-cart-cookie-spike.md", "<!-- distilled: 2026-09-15T08:00:00Z source-sha256: 0000000000000000000000000000000000000000000000000000000000000000 raw: archive/worklog-raw/2026-09-02-cart-cookie-spike.md -->\n\n# Cart cookie spike (distilled)\n\nA first-party cookie with the cart id is enough; no local storage.\n", 15 * DAY),
+        link: "spec",
+        distilledAt: "2026-09-15T08:00:00Z",
+      },
+    ],
+  };
+}
+
+/** The real context with the demo status; run and ritual detail pages answer 404, and only M12 of demo-shop has a detail page. */
 export function demoContext(base: WebContext): WebContext {
-  return { ...base, status: () => demoStatus(), ritual: () => null, run: () => null };
+  return {
+    ...base,
+    status: () => demoStatus(),
+    ritual: () => null,
+    run: () => null,
+    milestone: (name, milestone) => (name === "demo-shop" && milestone.toUpperCase() === "M12" ? demoMilestone(Date.now()) : null),
+  };
 }

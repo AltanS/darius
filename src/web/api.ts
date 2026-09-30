@@ -40,12 +40,22 @@ export interface MdParagraph {
   lines: MdLine[];
 }
 
+/**
+ * A checklist box, as the tracker writes it: `[x]` done, `[ ]` open, `[~]`
+ * in progress, `[!]` blocked, `[-]` skipped.
+ */
+export type MdCheck = "done" | "open" | "doing" | "blocked" | "skipped";
+
 export interface MdList {
   kind: "list";
   ordered: boolean;
   /** The number of the first item; 1 for a bullet list. */
   start: number;
   items: MdLine[];
+  /** Per item, its checklist box, or null for a plain item. Absent when no item has one (0.42.0). */
+  checks?: Array<MdCheck | null>;
+  /** Per item, true when it is indented under the item before it. Absent when none is (0.42.0). */
+  nested?: boolean[];
 }
 
 export interface MdTable {
@@ -340,6 +350,53 @@ export interface RunDetail {
   result: RunResult | null;
 }
 
+/**
+ * One file of a milestone, or one worklog. Read-only from the linked
+ * checkout's `.tracker/`; the text is untrusted, so it comes parsed.
+ */
+export interface MilestoneFile {
+  /** The path below the milestone directory or `worklog/`: `01-cart.md`, `_counsel/notes.md`. */
+  path: string;
+  /** Bytes. */
+  size: number;
+  /** Last change, an ISO time. */
+  modifiedAt: string;
+  /** Lines of text, for the page to fold a long one; 0 when the text is left out. */
+  lines: number;
+  /** A markdown file as blocks, any other text file as one code block; null when the text is left out. */
+  body: MdBlock[] | null;
+  /** Why the text is left out: not text, larger than 256 KiB, or unreadable. */
+  omitted: "binary" | "too-large" | "unreadable" | null;
+}
+
+export interface MilestoneSpecDetail {
+  row: SpecRow;
+  file: MilestoneFile;
+}
+
+export interface MilestoneWorklog extends MilestoneFile {
+  /** How the tracker ties it to the milestone: its name (`M7-...md`), or a thread's `spec:` marker. */
+  link: "name" | "spec";
+  /** When `worklog distill` made it a stub; null otherwise. */
+  distilledAt: string | null;
+}
+
+/** One milestone with everything its directory holds and its worklogs (0.42.0). */
+export interface MilestoneDetail {
+  project: string;
+  row: MilestoneRow;
+  /** The directory below `.tracker/`: `M12-cart`. */
+  dir: string;
+  /** The `00-README.md`, header cut off; null when there is none. */
+  readme: MilestoneFile | null;
+  /** The specs in order, each with its full text. */
+  specs: MilestoneSpecDetail[];
+  /** Every other file of the directory, by path. */
+  others: MilestoneFile[];
+  /** The worklogs that belong to it, the latest change first. */
+  worklogs: MilestoneWorklog[];
+}
+
 // --- the handler ---------------------------------------------------------------------------
 
 /**
@@ -356,6 +413,8 @@ export interface WebContext {
   ritual(project: string, slug: string): RitualDetail | null;
   /** Null when the project or the run is unknown. */
   run(project: string, run: string): RunDetail | null;
+  /** A milestone by id (`M12`) or directory name (`M12-cart`); null when the project or the milestone is unknown. */
+  milestone(project: string, milestone: string): MilestoneDetail | null;
 }
 
 /**

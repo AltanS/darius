@@ -307,6 +307,33 @@ test("findings markdown becomes blocks of spans; HTML and links stay plain text"
   assert.deepEqual(parseMarkdown("2 * 3 * 4"), [{ kind: "paragraph", lines: [[span("text", "2 * 3 * 4")]] }], "a lone star is no italic");
 });
 
+test("markdown: checklist boxes as the tracker writes them, indented items, HTML comments left out", () => {
+  const [list] = parseMarkdown(["- [x] done", "  - Command: `true`", "- [ ] open", "- [~] doing", "- [!] blocked", "- [-] skipped", "- [X] done too", "- plain"].join("\n"));
+  assert.deepEqual(list, {
+    kind: "list",
+    ordered: false,
+    start: 1,
+    items: [[span("text", "done")], [span("text", "Command: "), span("code", "true")], [span("text", "open")], [span("text", "doing")], [span("text", "blocked")], [span("text", "skipped")], [span("text", "done too")], [span("text", "plain")]],
+    checks: ["done", null, "open", "doing", "blocked", "skipped", "done", null],
+    nested: [false, true, false, false, false, false, false, false],
+  });
+  assert.deepEqual(parseMarkdown("- a\n- b"), [{ kind: "list", ordered: false, start: 1, items: [[span("text", "a")], [span("text", "b")]] }], "a plain list has neither key");
+  assert.deepEqual(
+    parseMarkdown("<!-- opened: 2026-09-02 -->\ntext\n<!--\nmany\nlines\n-->\n<!-- not closed\nstays"),
+    [{ kind: "paragraph", lines: [[span("text", "text")]] }, { kind: "paragraph", lines: [[span("text", "<!-- not closed")], [span("text", "stays")]] }],
+    "a comment on its own lines is left out; one that never closes stays text",
+  );
+  assert.deepEqual(
+    parseMarkdown("- first line\n  wraps here\n- [ ] box\n    wraps too\nnot indented"),
+    [
+      { kind: "list", ordered: false, start: 1, items: [[span("text", "first line wraps here")], [span("text", "box wraps too")]], checks: [null, "open"] },
+      { kind: "paragraph", lines: [[span("text", "not indented")]] },
+    ],
+    "an indented line carries on the item above",
+  );
+  assert.deepEqual(parseMarkdown("a <!-- x --> b"), [{ kind: "paragraph", lines: [[span("text", "a <!-- x --> b")]] }], "a comment inside a line stays text");
+});
+
 // --- access -----------------------------------------------------------------------------
 
 const OWNER_ON_LAPTOP = JSON.stringify({ UserProfile: { LoginName: "owner" }, Node: { ComputedName: "laptop", Tags: null } });
@@ -413,4 +440,36 @@ test("status: a linked checkout's legacy milestones reach the project, an unlink
   assert.deepEqual(tracked?.milestones[0]?.specs.map((row) => [row.source, row.slug, row.label, row.done, row.total]), [["legacy", "m7-01-cart", "M7/01", 1, 2]]);
   const untracked = projects.find((entry) => entry.name === "web-untracked");
   assert.deepEqual([untracked?.milestones, untracked?.milestonesArchived], [[], 0]);
+});
+
+test("milestone detail through the WebContext: README, spec texts and worklogs as blocks, unknown ones null", () => {
+  const checkout = mkdtempSync(join(tmpdir(), "darius-web-tracker-"));
+  const dir = join(checkout, ".tracker", "M8-mail");
+  mkdirSync(join(dir, "_notes"), { recursive: true });
+  mkdirSync(join(checkout, ".tracker", "worklog"), { recursive: true });
+  writeFileSync(join(dir, "00-README.md"), "---\nname: Mail\ntarget: 2026-10-01\n---\n\n# Mail\n\nSend <script>alert(1)</script> once.\n");
+  writeFileSync(join(dir, "01-sender.md"), "---\nupdated: 2026-09-02\n---\n\n# Sender\n\n- [x] one\n- [ ] two\n");
+  writeFileSync(join(dir, "_notes", "run.sh"), "echo hi\n");
+  writeFileSync(join(checkout, ".tracker", "worklog", "M8-mail.md"), "## Thread\n\n<!-- opened: 2026-09-02T10:00:00Z -->\n\n- note\n");
+  openProject("web-detail", { create: true });
+  writeLink("web-detail", checkout);
+  const context = webContext("tester");
+  const detail = context.milestone("web-detail", "M8");
+  assert.ok(detail !== null);
+  assert.deepEqual([detail.project, detail.dir, detail.row.id, detail.row.title, detail.row.target, detail.row.done, detail.row.total], ["web-detail", "M8-mail", "M8", "Mail", "2026-10-01", 1, 2]);
+  assert.deepEqual(detail.readme?.body?.[1], { kind: "paragraph", lines: [[span("text", "Send <script>alert(1)</script> once.")]] }, "untrusted text stays text");
+  assert.equal(detail.readme?.path, "00-README.md");
+  const [sender] = detail.specs;
+  assert.deepEqual([sender?.row.label, sender?.row.source, sender?.file.path, sender?.file.lines], ["M8/01", "legacy", "01-sender.md", 6]);
+  assert.deepEqual(sender?.file.body?.[1], { kind: "list", ordered: false, start: 1, items: [[span("text", "one")], [span("text", "two")]], checks: ["done", "open"] });
+  assert.deepEqual(detail.others.map((file) => [file.path, file.body, file.omitted]), [["_notes/run.sh", [{ kind: "code", text: "echo hi\n" }], null]], "another text file is one code block");
+  const [worklog] = detail.worklogs;
+  assert.deepEqual([worklog?.path, worklog?.link, worklog?.distilledAt, worklog?.omitted], ["M8-mail.md", "name", null, null]);
+  assert.deepEqual(worklog?.body?.map((block) => block.kind), ["heading", "list"], "the thread marker comment is not shown");
+  assert.ok(Number.isInteger(worklog?.size) && (worklog?.size ?? 0) > 0, "its size in bytes");
+  assert.equal(context.milestone("web-detail", "M9"), null);
+  assert.equal(context.milestone("web-detail", "../M8-mail"), null);
+  assert.equal(context.milestone("no-such-project", "M8"), null);
+  openProject("web-detail-unlinked", { create: true });
+  assert.equal(context.milestone("web-detail-unlinked", "M8"), null, "a project without a checkout on this host");
 });

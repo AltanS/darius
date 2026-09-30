@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, HostStatus, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, WebContext, WebHandler } from "../src/web/api.ts";
+import type { Acknowledgement, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, WebContext, WebHandler } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -118,6 +118,55 @@ const RITUAL: RitualDetail = {
   handoff: null,
 };
 
+const MILESTONE_ROW = STATUS.projects[0]!.milestones[0]!;
+
+const MILESTONE: MilestoneDetail = {
+  project: "demo",
+  row: MILESTONE_ROW,
+  dir: "M7-cart",
+  readme: {
+    path: "00-README.md",
+    size: 120,
+    modifiedAt: "2026-09-20T08:00:00.000Z",
+    lines: 5,
+    body: [
+      { kind: "heading", level: 1, content: [{ kind: "text", text: "The cart" }] },
+      { kind: "paragraph", lines: [[{ kind: "text", text: `Readme ${EVIL} goal` }]] },
+    ],
+    omitted: null,
+  },
+  specs: [
+    {
+      row: MILESTONE_ROW.specs[0]!,
+      file: {
+        path: "01-keep.md",
+        size: 80,
+        modifiedAt: "2026-09-21T08:00:00.000Z",
+        lines: 6,
+        body: [{ kind: "list", ordered: false, start: 1, items: [[{ kind: "text", text: "Keep the cart id" }], [{ kind: "text", text: "Reload test" }]], checks: ["done", "open"] }],
+        omitted: null,
+      },
+    },
+    {
+      row: MILESTONE_ROW.specs[1]!,
+      file: { path: "02-tax.md", size: 9000, modifiedAt: "2026-09-22T08:00:00.000Z", lines: 300, body: [{ kind: "paragraph", lines: [[{ kind: "text", text: "Tax spec text" }]] }], omitted: null },
+    },
+  ],
+  others: [{ path: "art/sketch.png", size: 48213, modifiedAt: "2026-09-19T08:00:00.000Z", lines: 0, body: null, omitted: "binary" }],
+  worklogs: [
+    {
+      path: "M7-cart.md",
+      size: 2048,
+      modifiedAt: "2026-09-27T08:00:00.000Z",
+      lines: 4,
+      body: [{ kind: "paragraph", lines: [[{ kind: "text", text: "Worklog stub text" }]] }],
+      omitted: null,
+      link: "name",
+      distilledAt: "2026-09-25T08:00:00Z",
+    },
+  ],
+};
+
 function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
   return {
     project: "demo",
@@ -151,6 +200,7 @@ const context: WebContext = {
     const row = project === "demo" ? RUNS.find((candidate) => candidate.run === run) : undefined;
     return row === undefined ? null : runDetail(row);
   },
+  milestone: (project, milestone) => (project === "demo" && milestone.toUpperCase() === "M7" ? MILESTONE : null),
 };
 
 async function get(path: string): Promise<{ status: number; body: string; headers: Headers }> {
@@ -170,7 +220,35 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
-  ["/w/demo/milestones", ["Milestones", "In progress", "M7", "7 of 10 checks done", "<details", "M7/01", "6 of 6 checks", "M7/02", "Waiting", "depends on M7/01", "target 10 Sep, past", "3 archived", "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives"]],
+  ["/w/demo/milestones", ["Milestones", "In progress", "M7", "7 of 10 checks done", "<details", "M7/01", "6 of 6 checks", "M7/02", "Waiting", "depends on M7/01", "target 10 Sep, past", "3 archived", "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives", 'href="/w/demo/milestones/M7"']],
+  [
+    "/w/demo/milestones/M7",
+    [
+      "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives",
+      "In progress",
+      "target 10 Sep, past",
+      "7 of 10 checks done",
+      ".tracker/M7-cart/",
+      "README",
+      "Readme &lt;script&gt;alert(1)&lt;/script&gt; goal",
+      "Specs (2)",
+      "M7/01",
+      "Keep the cart id",
+      "md-box-done",
+      'aria-label="Open"',
+      "depends on M7/01",
+      "Tax spec text",
+      "Worklogs (1)",
+      "M7-cart.md",
+      "2.0 KB",
+      "distilled 2026-09-25",
+      "Worklog stub text",
+      "Other files (1)",
+      "art/sketch.png",
+      "not text, not shown",
+      'href="#worklogs"',
+    ],
+  ],
   ["/milestones", ["demo", "/w/demo/milestones", "M7/02", "3 archived"]],
   ["/profiles", ["careful", "opus", "headless"]],
   ["/all", ["Two things need you.", "Needs you", "Guard soak"]],
@@ -202,6 +280,13 @@ test("every page renders with the nonce on each script and store text as text", 
   assert.ok(overview.body.includes("may I push &lt;script&gt;alert(1)&lt;/script&gt;?"), "escaped question");
 });
 
+test("milestone detail: a short spec starts open, a long one folded; worklogs start folded; the Milestones tab is lit", async () => {
+  const body = (await get("/w/demo/milestones/m7")).body;
+  const folds = [...body.matchAll(/<details class="msd-fold"( id="[^"]*")?( open="")?/gu)].map((match) => [match[1] ?? "", match[2] !== undefined]);
+  assert.deepEqual(folds, [[' id="m7-01-keep"', true], [' id="m7-02-tax"', false], ["", false]], "01 (6 lines) open, 02 (300 lines) folded, the worklog folded");
+  assert.match(body, /<a [^>]*aria-current="page"[^>]*href="\/w\/demo\/milestones"|<a [^>]*href="\/w\/demo\/milestones"[^>]*aria-current="page"/u, "the Milestones tab of the workspace");
+});
+
 test("the run filter keeps only matching runs", async () => {
   const page = await get("/runs?state=held");
   assert.ok(page.body.includes(`/p/demo/runs/${HELD}`));
@@ -229,7 +314,7 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
 });
 
 test("unknown projects, rituals, runs and paths answer a themed 404", async () => {
-  for (const path of ["/w/ghost", "/w/ghost/vigils", "/w/ghost/rituals", "/w/ghost/milestones", "/p/demo/rituals/nope", "/p/ghost/rituals/daily-report", "/p/demo/runs/NOPE", "/nowhere", "/p/demo/runs"]) {
+  for (const path of ["/w/ghost", "/w/ghost/vigils", "/w/ghost/rituals", "/w/ghost/milestones", "/w/ghost/milestones/M7", "/w/demo/milestones/M99", "/w/demo/milestones/..%2FM7", "/p/demo/rituals/nope", "/p/ghost/rituals/daily-report", "/p/demo/runs/NOPE", "/nowhere", "/p/demo/runs"]) {
     const page = await get(path);
     assert.equal(page.status, 404, path);
     assert.ok(page.body.includes("Nothing here"), path);

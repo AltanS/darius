@@ -10,8 +10,8 @@
  * complete.
  */
 
-import type { MilestoneRow, ProjectStatus, SpecRow } from "../../../src/web/api.ts";
-import { shortDate } from "./format.ts";
+import type { MilestoneDetail, MilestoneFile, MilestoneRow, MilestoneWorklog, ProjectStatus, SpecRow } from "../../../src/web/api.ts";
+import { sectionPath, shortDate } from "./format.ts";
 import type { Badge, Tone } from "./tone.ts";
 
 export type GroupKey = "progress" | "notstarted" | "complete" | "closed";
@@ -92,6 +92,8 @@ export interface SpecView {
 export interface MilestoneView {
   slug: string;
   id: string;
+  /** What the detail page URL names it by: the id, or `M12-cart` when two open milestones share the id. */
+  ref: string;
   title: string;
   done: number;
   total: number;
@@ -144,7 +146,7 @@ function labelOf(slug: string, labels: ReadonlyMap<string, string>): string {
   return match === null ? slug : `M${match[1] ?? ""}/${match[2] ?? ""}`;
 }
 
-function specView(spec: SpecRow, labels: ReadonlyMap<string, string>): SpecView {
+export function specView(spec: SpecRow, labels: ReadonlyMap<string, string>): SpecView {
   return {
     slug: spec.slug,
     label: spec.label,
@@ -156,11 +158,32 @@ function specView(spec: SpecRow, labels: ReadonlyMap<string, string>): SpecView 
   };
 }
 
-function milestoneView(row: MilestoneRow, today: string, labels: ReadonlyMap<string, string>): MilestoneView {
+/**
+ * The name of a milestone in its detail page URL: its id, or its directory
+ * name (`M12-cart`) when another open milestone of the workspace has the same
+ * id. src/core/legacy-milestone-detail.ts reads it back the same way.
+ */
+export function milestoneRef(rows: readonly MilestoneRow[], row: MilestoneRow): string {
+  const shared = rows.filter((candidate) => candidate.id === row.id).length > 1;
+  return shared ? `${row.id}-${row.slug}` : row.id;
+}
+
+/** The detail page of a milestone: `/w/<ws>/milestones/<ref>`. */
+export function milestonePath(workspace: string, ref: string): string {
+  return `${sectionPath(workspace, "milestones")}/${encodeURIComponent(ref)}`;
+}
+
+/** The labels of every spec of the workspace, for "depends on M12/01". */
+export function specLabels(rows: readonly MilestoneRow[]): Map<string, string> {
+  return new Map(rows.flatMap((row) => row.specs.map((spec): [string, string] => [spec.slug, spec.label])));
+}
+
+export function milestoneView(row: MilestoneRow, today: string, labels: ReadonlyMap<string, string>, ref: string = row.id): MilestoneView {
   const complete = row.status === "Complete";
   return {
     slug: row.slug,
     id: row.id,
+    ref,
     title: row.title,
     done: row.done,
     total: row.total,
@@ -175,12 +198,12 @@ function milestoneView(row: MilestoneRow, today: string, labels: ReadonlyMap<str
 
 /** The milestones in their groups, in order; a group with no milestone is left out. */
 export function groupMilestones(rows: readonly MilestoneRow[], today: string): MilestoneGroup[] {
-  const labels = new Map(rows.flatMap((row) => row.specs.map((spec): [string, string] => [spec.slug, spec.label])));
+  const labels = specLabels(rows);
   return GROUPS.map((group) => {
     const members = rows.filter((row) => groupOf(row.status) === group.key);
     // Work not begun reads in the order to do it; the rest, newest first.
     const ordered = group.key === "notstarted" ? members.toSorted((left, right) => idNumber(left.id) - idNumber(right.id)) : members.toSorted(byStartedThenId);
-    return { key: group.key, title: group.title, tone: group.tone, rows: ordered.map((row) => milestoneView(row, today, labels)) };
+    return { key: group.key, title: group.title, tone: group.tone, rows: ordered.map((row) => milestoneView(row, today, labels, milestoneRef(rows, row))) };
   }).filter((group) => group.rows.length > 0);
 }
 
@@ -192,4 +215,89 @@ export function workspaceMilestones(project: ProjectStatus, today: string): Work
 /** A workspace has something to show: open milestones or archived ones. */
 export function hasMilestones(workspace: WorkspaceMilestones): boolean {
   return workspace.groups.length > 0 || workspace.archived > 0;
+}
+
+// --- the detail page (0.42.0) ----------------------------------------------------------------
+
+/** The state of a milestone in words, in its group's tone: "In progress", "Deferred". */
+export function milestoneStatusWord(status: string): Badge {
+  const key = groupOf(status);
+  const group = GROUPS.find((candidate) => candidate.key === key);
+  return { tone: group?.tone ?? "idle", label: key === "closed" ? status : (group?.title ?? status) };
+}
+
+/** A file size: "812 B", "4.2 KB", "1.3 MB" (1 KB is 1024 bytes). */
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A spec with this many lines of text or fewer starts open on the detail page; a longer one starts folded. */
+export const OPEN_SPEC_LINES = 40;
+
+/** Why a file's text is not on the page. */
+export function omittedText(omitted: MilestoneFile["omitted"]): string | null {
+  if (omitted === "binary") return "not text, not shown";
+  if (omitted === "too-large") return "larger than 256 KB, not shown";
+  if (omitted === "unreadable") return "could not be read";
+  return null;
+}
+
+export interface SpecDetailView {
+  view: SpecView;
+  file: MilestoneFile;
+  verifiedAt: string | null;
+  /** Start open: the text is short. */
+  open: boolean;
+}
+
+/** The counts of the status strip. */
+export interface DetailCounts {
+  done: number;
+  open: number;
+  waiting: number;
+  blocked: number;
+  worklogs: number;
+}
+
+export interface MilestoneDetailView {
+  project: string;
+  dir: string;
+  head: MilestoneView;
+  status: Badge;
+  readme: MilestoneFile | null;
+  specs: SpecDetailView[];
+  counts: DetailCounts;
+  worklogs: MilestoneWorklog[];
+  others: MilestoneFile[];
+}
+
+/** The detail page as data. `rows` are the workspace's milestones, for the labels of specs in other milestones. */
+export function milestoneDetailView(detail: MilestoneDetail, rows: readonly MilestoneRow[], today: string): MilestoneDetailView {
+  const labels = specLabels([detail.row, ...rows]);
+  const specs = detail.specs.map(({ row, file }) => ({
+    view: specView(row, labels),
+    file,
+    verifiedAt: row.verifiedAt === null ? null : dateText(row.verifiedAt.slice(0, 10), today),
+    open: file.lines <= OPEN_SPEC_LINES,
+  }));
+  const counts: DetailCounts = { done: 0, open: 0, waiting: 0, blocked: 0, worklogs: detail.worklogs.length };
+  for (const { row } of detail.specs) {
+    if (isTicked(row.done, row.total)) counts.done += 1;
+    else if (row.status === "Blocked") counts.blocked += 1;
+    else if (row.status === "Waiting") counts.waiting += 1;
+    else if (row.status !== "Skipped") counts.open += 1;
+  }
+  return {
+    project: detail.project,
+    dir: detail.dir,
+    head: milestoneView(detail.row, today, labels),
+    status: milestoneStatusWord(detail.row.status),
+    readme: detail.readme,
+    specs,
+    counts,
+    worklogs: detail.worklogs,
+    others: detail.others,
+  };
 }

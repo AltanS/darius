@@ -4,7 +4,7 @@
  * so store text can never become markup.
  */
 
-import type { MdBlock, MdLine } from "../../../src/web/api.ts";
+import type { MdBlock, MdCheck, MdLine, MdList } from "../../../src/web/api.ts";
 
 interface LineProps {
   line: MdLine;
@@ -34,6 +34,65 @@ function Heading({ level, content }: HeadingProps): React.ReactNode {
   return <h6 className="md-h4">{body}</h6>;
 }
 
+const CHECK_WORDS = {
+  done: "Done",
+  open: "Open",
+  doing: "In progress",
+  blocked: "Blocked",
+  skipped: "Skipped",
+} as const satisfies Record<MdCheck, string>;
+
+interface BoxProps {
+  check: MdCheck;
+}
+
+/** A checklist box: a tick when done, a dash when skipped, a bar when blocked, a dot when in progress, empty when open. */
+function Box({ check }: BoxProps): React.ReactNode {
+  return (
+    <svg className={`md-box md-box-${check}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label={CHECK_WORDS[check]}>
+      <rect x="1.25" y="1.25" width="11.5" height="11.5" />
+      {check === "done" ? <path d="M3.8 7.2L6 9.4L10.2 4.8" /> : null}
+      {check === "skipped" ? <path d="M4.2 7H9.8" /> : null}
+      {check === "blocked" ? <path d="M7 3.8V7.6M7 9.9V10" /> : null}
+      {check === "doing" ? <circle cx="7" cy="7" r="1.6" fill="currentColor" stroke="none" /> : null}
+    </svg>
+  );
+}
+
+interface ListProps {
+  block: MdList;
+}
+
+function List({ block }: ListProps): React.ReactNode {
+  const { checks, nested } = block;
+  const items = block.items.map((item, index) => {
+    const check = checks?.[index] ?? null;
+    const classes = [check === null ? null : "md-check", nested?.[index] === true ? "md-nested" : null].filter((name) => name !== null);
+    return (
+      <li key={`${index}`} className={classes.length === 0 ? undefined : classes.join(" ")}>
+        {check === null ? (
+          <Line line={item} />
+        ) : (
+          <>
+            <Box check={check} />
+            <span>
+              <Line line={item} />
+            </span>
+          </>
+        )}
+      </li>
+    );
+  });
+  const className = checks === undefined ? undefined : "md-checks";
+  return block.ordered ? (
+    <ol start={block.start} className={className}>
+      {items}
+    </ol>
+  ) : (
+    <ul className={className}>{items}</ul>
+  );
+}
+
 interface BlockProps {
   block: MdBlock;
 }
@@ -53,14 +112,8 @@ function Block({ block }: BlockProps): React.ReactNode {
           ))}
         </p>
       );
-    case "list": {
-      const items = block.items.map((item, index) => (
-        <li key={`${index}`}>
-          <Line line={item} />
-        </li>
-      ));
-      return block.ordered ? <ol start={block.start}>{items}</ol> : <ul>{items}</ul>;
-    }
+    case "list":
+      return <List block={block} />;
     case "table":
       return (
         <div className="table-scroll">

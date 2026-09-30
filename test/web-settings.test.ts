@@ -36,6 +36,7 @@ const context: WebContext = {
   status: () => STATUS,
   ritual: () => null,
   run: () => null,
+  milestone: () => null,
 };
 
 async function page(path: string, settings: Settings | null): Promise<string> {

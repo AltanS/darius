@@ -12,6 +12,8 @@ export default [
   route("w/:ws/rituals", "routes/rituals.tsx", { id: "rituals-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
+  // One milestone in full: README, spec texts, worklogs (0.42.0).
+  route("w/:ws/milestones/:milestone", "routes/milestone.tsx"),
   route("settings", "routes/settings.tsx"),
   route("runs", "routes/runs.tsx"),
   // The URL of the first status page (0.9.0), kept so old links still work.

@@ -11061,11 +11061,11 @@ var root_exports = /* @__PURE__ */ __exportAll({
 	Layout: () => Layout,
 	default: () => root_default,
 	links: () => links,
-	loader: () => loader$12,
-	meta: () => meta$10,
+	loader: () => loader$13,
+	meta: () => meta$11,
 	shouldRevalidate: () => shouldRevalidate
 });
-function loader$12({ context, request }) {
+function loader$13({ context, request }) {
 	const settings = readSettings(request.headers.get("cookie"));
 	const status = statusOf(context);
 	return {
@@ -11083,7 +11083,7 @@ function loader$12({ context, request }) {
 function shouldRevalidate() {
 	return true;
 }
-var meta$10 = () => [{ title: "darius" }];
+var meta$11 = () => [{ title: "darius" }];
 var links = () => [
 	{
 		rel: "icon",
@@ -11350,6 +11350,67 @@ function Heading({ level, content }) {
 		children: body
 	});
 }
+var CHECK_WORDS = {
+	done: "Done",
+	open: "Open",
+	doing: "In progress",
+	blocked: "Blocked",
+	skipped: "Skipped"
+};
+/** A checklist box: a tick when done, a dash when skipped, a bar when blocked, a dot when in progress, empty when open. */
+function Box({ check }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: `md-box md-box-${check}`,
+		width: "14",
+		height: "14",
+		viewBox: "0 0 14 14",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.5",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		role: "img",
+		"aria-label": CHECK_WORDS[check],
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				x: "1.25",
+				y: "1.25",
+				width: "11.5",
+				height: "11.5"
+			}),
+			check === "done" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.8 7.2L6 9.4L10.2 4.8" }) : null,
+			check === "skipped" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4.2 7H9.8" }) : null,
+			check === "blocked" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M7 3.8V7.6M7 9.9V10" }) : null,
+			check === "doing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				cx: "7",
+				cy: "7",
+				r: "1.6",
+				fill: "currentColor",
+				stroke: "none"
+			}) : null
+		]
+	});
+}
+function List({ block }) {
+	const { checks, nested } = block;
+	const items = block.items.map((item, index) => {
+		const check = checks?.[index] ?? null;
+		const classes = [check === null ? null : "md-check", nested?.[index] === true ? "md-nested" : null].filter((name) => name !== null);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+			className: classes.length === 0 ? void 0 : classes.join(" "),
+			children: check === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, { line: item }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, { check }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, { line: item }) })] })
+		}, `${index}`);
+	});
+	const className = checks === void 0 ? void 0 : "md-checks";
+	return block.ordered ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		start: block.start,
+		className,
+		children: items
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className,
+		children: items
+	});
+}
 function Block({ block }) {
 	switch (block.kind) {
 		case "heading": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, {
@@ -11357,13 +11418,7 @@ function Block({ block }) {
 			content: block.content
 		});
 		case "paragraph": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: block.lines.map((line, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [index > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, { line })] }, `${index}`)) });
-		case "list": {
-			const items = block.items.map((item, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, { line: item }) }, `${index}`));
-			return block.ordered ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-				start: block.start,
-				children: items
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: items });
-		}
+		case "list": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(List, { block });
 		case "table": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "table-scroll",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
@@ -12468,8 +12523,8 @@ function RouteError() {
 var overview_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => overview_default,
-	loader: () => loader$11,
-	meta: () => meta$9
+	loader: () => loader$12,
+	meta: () => meta$10
 });
 /** Latest-report rows a phone shows before its own button. */
 var REPORTS_PHONE = 3;
@@ -12479,7 +12534,7 @@ var RECENT_PHONE$1 = 3;
 * One loader for three addresses: `/` (the default workspace, else all),
 * `/all` (all workspaces) and `/w/:ws` (one workspace).
 */
-function loader$11({ context, request, params }) {
+function loader$12({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const read = (project, run) => context.run(project, run);
@@ -12490,7 +12545,7 @@ function loader$11({ context, request, params }) {
 		extras: only === void 0 ? null : workspaceExtras(only, read)
 	};
 }
-var meta$9 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
+var meta$10 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
 /** A path that may break after each slash, so a long checkout wraps at a folder. */
 function PathText({ path }) {
 	return path.split("/").map((part, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
@@ -12859,15 +12914,15 @@ function useHashTarget() {
 var vigils_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => vigils_default,
-	loader: () => loader$10,
-	meta: () => meta$8
+	loader: () => loader$11,
+	meta: () => meta$9
 });
 /** Rows of Waiting on an event before its fold. */
 var WAITING_SHOWN = 3;
 /** Closed vigils shown in their fold; a long-running workspace has dozens. */
 var CLOSED_SHOWN = 10;
 /** The Vigils section, for `/vigils` (all workspaces) and `/w/:ws/vigils`. */
-function loader$10({ context, request, params }) {
+function loader$11({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const closed = closedVigils(projects);
@@ -12883,7 +12938,7 @@ function loader$10({ context, request, params }) {
 		showProject: projects.length > 1
 	};
 }
-var meta$8 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
+var meta$9 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 	const { workspace, agenda, closed, closedCount, showProject } = loaderData;
@@ -12949,13 +13004,13 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 var rituals_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => rituals_default,
-	loader: () => loader$9,
-	meta: () => meta$7
+	loader: () => loader$10,
+	meta: () => meta$8
 });
 /** Recent runs a phone shows before its own button. */
 var RECENT_PHONE = 3;
 /** The Rituals section, for `/rituals` (all workspaces) and `/w/:ws/rituals`. */
-function loader$9({ context, request, params }) {
+function loader$10({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const agenda = buildAgenda({
@@ -12970,7 +13025,7 @@ function loader$9({ context, request, params }) {
 		recent: activity(projects, { withImported: false }).filter((run) => run.kind === "ritual").slice(0, 10)
 	};
 }
-var meta$7 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Rituals | darius" : `Rituals · ${data.workspace} | darius` }];
+var meta$8 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Rituals | darius" : `Rituals · ${data.workspace} | darius` }];
 /** Rituals by day, the late ones first, then the recent runs and the way to all of them. */
 var rituals_default = withComponentProps(function Rituals({ loaderData }) {
 	const { workspace, agenda, active, recent } = loaderData;
@@ -13019,176 +13074,6 @@ var rituals_default = withComponentProps(function Rituals({ loaderData }) {
 		})]
 	});
 });
-//#endregion
-//#region app/components/milestones.tsx
-/**
-* The Milestones page, read-only. A milestone is one compact row: its number
-* in mono, its title, a thin bar and "103 of 143 checks done". It opens in
-* place (a details element) and lists its specs: a tick or an open circle, the
-* label, the title, the checks, what it waits for, and Blocked, Waiting or
-* Skipped in words. The data is in `lib/milestones.ts`.
-*/
-/** A tick in a circle when every check is done, an open circle otherwise. */
-function Mark({ ticked }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-		className: `ms-mark ${ticked ? "ms-mark-done" : "ms-mark-open"}`,
-		width: "18",
-		height: "18",
-		viewBox: "0 0 18 18",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "1.5",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		role: "img",
-		"aria-label": ticked ? "All checks done" : "Checks open",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "9",
-			cy: "9",
-			r: "7.25"
-		}), ticked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M5.6 9.3L8 11.6L12.4 6.6" }) : null]
-	});
-}
-function SpecItem({ spec }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "ms-spec",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, { ticked: spec.ticked }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ms-spec-main",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ms-spec-title",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ms-id",
-					children: spec.label
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: spec.title })]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ms-spec-meta",
-				children: [
-					spec.word === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: spec.word }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: spec.checks }),
-					spec.dependsOn.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `depends on ${spec.dependsOn.join(", ")}` })
-				]
-			})]
-		})]
-	});
-}
-function MilestoneItem({ milestone }) {
-	const { target } = milestone;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-		className: "ms-item",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			className: "ms-row",
-			id: milestone.id,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
-				className: "ms-sum",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "ms-top",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ms-id",
-								children: milestone.id
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ms-title",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: milestone.title })
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ms-chev",
-								"aria-hidden": "true"
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "ms-prog",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
-							className: `ms-bar${milestone.ticked ? " ms-bar-done" : ""}`,
-							value: milestone.done,
-							max: Math.max(milestone.total, 1),
-							"aria-hidden": "true"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ms-count",
-							children: milestone.checks
-						})]
-					}),
-					target === null || !target.past ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ms-late ms-late-sum",
-						children: `target ${target.text}, past`
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ms-body",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "ms-meta",
-					children: [
-						milestone.word === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: milestone.word }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: milestone.started === null ? "not started" : `started ${milestone.started}` }),
-						target === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "no target" }) : target.past ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ms-late",
-							children: `target ${target.text}, past`
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `target ${target.text}` })
-					]
-				}), milestone.specs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "ms-none",
-					children: "No specs yet."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-					className: "ms-specs",
-					children: milestone.specs.map((spec) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SpecItem, { spec }, spec.slug))
-				})]
-			})]
-		})
-	});
-}
-function Group({ group }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "ms-group-item",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-			className: `ms-group tone-${group.tone}`,
-			children: [
-				group.title,
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ms-group-n",
-					children: group.rows.length
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-			className: "ms-rows",
-			children: group.rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MilestoneItem, { milestone: row }, row.slug))
-		})]
-	});
-}
-/** The milestones of one workspace: its groups in one frame, then "N archived". */
-function Workspace({ workspace, named }) {
-	const empty = workspace.groups.length === 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "ms-ws",
-		"aria-label": named ? void 0 : `Milestones of ${workspace.name}`,
-		children: [
-			named ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-				className: "ms-ws-name",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-					to: `/w/${encodeURIComponent(workspace.name)}/milestones`,
-					children: workspace.name
-				})
-			}) : null,
-			workspace.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ms-error",
-				children: ["darius could not read this workspace: ", workspace.error]
-			}),
-			empty ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ms-empty",
-				children: "No milestones in this workspace."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "ms-groups",
-				children: workspace.groups.map((group) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, { group }, group.key))
-			}),
-			workspace.archived === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ms-archived",
-				children: `${workspace.archived} archived`
-			})
-		]
-	});
-}
 //#endregion
 //#region app/lib/milestones.ts
 /** A date that can be compared: the tracker writes YYYY-MM-DD. */
@@ -13302,11 +13187,28 @@ function specView(spec, labels) {
 		word: specWord(spec.status)
 	};
 }
-function milestoneView(row, today, labels) {
+/**
+* The name of a milestone in its detail page URL: its id, or its directory
+* name (`M12-cart`) when another open milestone of the workspace has the same
+* id. src/core/legacy-milestone-detail.ts reads it back the same way.
+*/
+function milestoneRef(rows, row) {
+	return rows.filter((candidate) => candidate.id === row.id).length > 1 ? `${row.id}-${row.slug}` : row.id;
+}
+/** The detail page of a milestone: `/w/<ws>/milestones/<ref>`. */
+function milestonePath(workspace, ref) {
+	return `${sectionPath(workspace, "milestones")}/${encodeURIComponent(ref)}`;
+}
+/** The labels of every spec of the workspace, for "depends on M12/01". */
+function specLabels(rows) {
+	return new Map(rows.flatMap((row) => row.specs.map((spec) => [spec.slug, spec.label])));
+}
+function milestoneView(row, today, labels, ref = row.id) {
 	const complete = row.status === "Complete";
 	return {
 		slug: row.slug,
 		id: row.id,
+		ref,
 		title: row.title,
 		done: row.done,
 		total: row.total,
@@ -13323,7 +13225,7 @@ function milestoneView(row, today, labels) {
 }
 /** The milestones in their groups, in order; a group with no milestone is left out. */
 function groupMilestones(rows, today) {
-	const labels = new Map(rows.flatMap((row) => row.specs.map((spec) => [spec.slug, spec.label])));
+	const labels = specLabels(rows);
 	return GROUPS.map((group) => {
 		const members = rows.filter((row) => groupOf(row.status) === group.key);
 		const ordered = group.key === "notstarted" ? members.toSorted((left, right) => idNumber(left.id) - idNumber(right.id)) : members.toSorted(byStartedThenId);
@@ -13331,7 +13233,7 @@ function groupMilestones(rows, today) {
 			key: group.key,
 			title: group.title,
 			tone: group.tone,
-			rows: ordered.map((row) => milestoneView(row, today, labels))
+			rows: ordered.map((row) => milestoneView(row, today, labels, milestoneRef(rows, row)))
 		};
 	}).filter((group) => group.rows.length > 0);
 }
@@ -13348,13 +13250,258 @@ function workspaceMilestones(project, today) {
 function hasMilestones(workspace) {
 	return workspace.groups.length > 0 || workspace.archived > 0;
 }
+/** The state of a milestone in words, in its group's tone: "In progress", "Deferred". */
+function milestoneStatusWord(status) {
+	const key = groupOf(status);
+	const group = GROUPS.find((candidate) => candidate.key === key);
+	return {
+		tone: group?.tone ?? "idle",
+		label: key === "closed" ? status : group?.title ?? status
+	};
+}
+/** A file size: "812 B", "4.2 KB", "1.3 MB" (1 KB is 1024 bytes). */
+function sizeText(bytes) {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+/** Why a file's text is not on the page. */
+function omittedText(omitted) {
+	if (omitted === "binary") return "not text, not shown";
+	if (omitted === "too-large") return "larger than 256 KB, not shown";
+	if (omitted === "unreadable") return "could not be read";
+	return null;
+}
+/** The detail page as data. `rows` are the workspace's milestones, for the labels of specs in other milestones. */
+function milestoneDetailView(detail, rows, today) {
+	const labels = specLabels([detail.row, ...rows]);
+	const specs = detail.specs.map(({ row, file }) => ({
+		view: specView(row, labels),
+		file,
+		verifiedAt: row.verifiedAt === null ? null : dateText(row.verifiedAt.slice(0, 10), today),
+		open: file.lines <= 40
+	}));
+	const counts = {
+		done: 0,
+		open: 0,
+		waiting: 0,
+		blocked: 0,
+		worklogs: detail.worklogs.length
+	};
+	for (const { row } of detail.specs) if (isTicked(row.done, row.total)) counts.done += 1;
+	else if (row.status === "Blocked") counts.blocked += 1;
+	else if (row.status === "Waiting") counts.waiting += 1;
+	else if (row.status !== "Skipped") counts.open += 1;
+	return {
+		project: detail.project,
+		dir: detail.dir,
+		head: milestoneView(detail.row, today, labels),
+		status: milestoneStatusWord(detail.row.status),
+		readme: detail.readme,
+		specs,
+		counts,
+		worklogs: detail.worklogs,
+		others: detail.others
+	};
+}
+//#endregion
+//#region app/components/milestones.tsx
+/**
+* The Milestones page, read-only. A milestone is one compact row: its number
+* in mono, its title, a thin bar and "103 of 143 checks done". It opens in
+* place (a details element) and lists its specs: a tick or an open circle, the
+* label, the title, the checks, what it waits for, and Blocked, Waiting or
+* Skipped in words, and a link to the milestone's own page (README, spec
+* texts, worklogs). The data is in `lib/milestones.ts`.
+*/
+/** A tick in a circle when every check is done, an open circle otherwise. */
+function Mark({ ticked }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: `ms-mark ${ticked ? "ms-mark-done" : "ms-mark-open"}`,
+		width: "18",
+		height: "18",
+		viewBox: "0 0 18 18",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.5",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		role: "img",
+		"aria-label": ticked ? "All checks done" : "Checks open",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "9",
+			cy: "9",
+			r: "7.25"
+		}), ticked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M5.6 9.3L8 11.6L12.4 6.6" }) : null]
+	});
+}
+/** The line under a spec title: Blocked, Waiting or Skipped, the checks, what it waits for. */
+function SpecMeta({ spec }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		spec.word === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: spec.word }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: spec.checks }),
+		spec.dependsOn.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `depends on ${spec.dependsOn.join(", ")}` })
+	] });
+}
+function SpecItem({ spec }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "ms-spec",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, { ticked: spec.ticked }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ms-spec-main",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ms-spec-title",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ms-id",
+					children: spec.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: spec.title })]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ms-spec-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SpecMeta, { spec })
+			})]
+		})]
+	});
+}
+function MilestoneItem({ milestone, workspace }) {
+	const { target } = milestone;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "ms-item",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "ms-row",
+			id: milestone.id,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+				className: "ms-sum",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ms-top",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-id",
+								children: milestone.id
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-title",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: milestone.title })
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-chev",
+								"aria-hidden": "true"
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ms-prog",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
+							className: `ms-bar${milestone.ticked ? " ms-bar-done" : ""}`,
+							value: milestone.done,
+							max: Math.max(milestone.total, 1),
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ms-count",
+							children: milestone.checks
+						})]
+					}),
+					target === null || !target.past ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ms-late ms-late-sum",
+						children: `target ${target.text}, past`
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ms-body",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "ms-meta",
+						children: [
+							milestone.word === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: milestone.word }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: milestone.started === null ? "not started" : `started ${milestone.started}` }),
+							target === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "no target" }) : target.past ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-late",
+								children: `target ${target.text}, past`
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `target ${target.text}` })
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ms-open",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: milestonePath(workspace, milestone.ref),
+							children: `Open ${milestone.id}: README, spec texts, worklogs`
+						})
+					}),
+					milestone.specs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ms-none",
+						children: "No specs yet."
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "ms-specs",
+						children: milestone.specs.map((spec) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SpecItem, { spec }, spec.slug))
+					})
+				]
+			})]
+		})
+	});
+}
+function Group({ group, workspace }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "ms-group-item",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+			className: `ms-group tone-${group.tone}`,
+			children: [
+				group.title,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ms-group-n",
+					children: group.rows.length
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "ms-rows",
+			children: group.rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MilestoneItem, {
+				milestone: row,
+				workspace
+			}, row.slug))
+		})]
+	});
+}
+/** The milestones of one workspace: its groups in one frame, then "N archived". */
+function Workspace({ workspace, named }) {
+	const empty = workspace.groups.length === 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ms-ws",
+		"aria-label": named ? void 0 : `Milestones of ${workspace.name}`,
+		children: [
+			named ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+				className: "ms-ws-name",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: `/w/${encodeURIComponent(workspace.name)}/milestones`,
+					children: workspace.name
+				})
+			}) : null,
+			workspace.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ms-error",
+				children: ["darius could not read this workspace: ", workspace.error]
+			}),
+			empty ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ms-empty",
+				children: "No milestones in this workspace."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ms-groups",
+				children: workspace.groups.map((group) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
+					group,
+					workspace: workspace.name
+				}, group.key))
+			}),
+			workspace.archived === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ms-archived",
+				children: `${workspace.archived} archived`
+			})
+		]
+	});
+}
 //#endregion
 //#region app/routes/milestones.tsx
 var milestones_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => milestones_default,
-	loader: () => loader$8,
-	meta: () => meta$6
+	loader: () => loader$9,
+	meta: () => meta$7
 });
 /**
 * Serves `/w/:ws/milestones` (one workspace) and `/milestones` (all of them,
@@ -13362,7 +13509,7 @@ var milestones_exports = /* @__PURE__ */ __exportAll({
 * scope, not the status. The all-workspaces page leaves out a workspace with
 * nothing to show, and the self-test workspace unless the settings ask for it.
 */
-function loader$8({ context, params, request }) {
+function loader$9({ context, params, request }) {
 	const status = statusOf(context);
 	const wanted = params.ws;
 	if (wanted !== void 0) {
@@ -13379,7 +13526,7 @@ function loader$8({ context, params, request }) {
 		workspaces: status.projects.filter((project) => showSelftest || !isSelftest(project.name)).map((project) => workspaceMilestones(project, status.today)).filter((workspace) => hasMilestones(workspace) || workspace.error !== null)
 	};
 }
-var meta$6 = ({ data: loaded }) => [{ title: `Milestones${loaded === void 0 || loaded.scope === null ? "" : ` · ${loaded.scope}`} | darius` }];
+var meta$7 = ({ data: loaded }) => [{ title: `Milestones${loaded === void 0 || loaded.scope === null ? "" : ` · ${loaded.scope}`} | darius` }];
 /** Read-only: the legacy tracker's milestones, one row each, opening in place to their specs. */
 var milestones_default = withComponentProps(function Milestones({ loaderData }) {
 	const { scope, workspaces } = loaderData;
@@ -13401,6 +13548,282 @@ var milestones_default = withComponentProps(function Milestones({ loaderData }) 
 			workspace,
 			named: scope === null
 		}, workspace.name))]
+	});
+});
+//#endregion
+//#region app/components/milestone-detail.tsx
+/** The status strip: specs done and open, waiting and blocked when there are any, and the worklogs. */
+function DetailStrip({ counts }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		className: "pulse pulse-home msd-strip",
+		"aria-label": "Summary",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: counts.done === 1 ? "spec done" : "specs done",
+				value: counts.done,
+				tone: "ok",
+				href: "#specs"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "open",
+				value: counts.open,
+				tone: "gold",
+				href: "#specs"
+			}),
+			counts.waiting === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "waiting",
+				value: counts.waiting,
+				tone: "wait",
+				href: "#specs"
+			}),
+			counts.blocked === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: "blocked",
+				value: counts.blocked,
+				tone: "bad",
+				href: "#specs"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
+				label: counts.worklogs === 1 ? "worklog" : "worklogs",
+				value: counts.worklogs,
+				tone: "gold",
+				href: counts.worklogs === 0 ? null : "#worklogs"
+			})
+		]
+	});
+}
+/** A file's text, or why it is not shown. */
+function FileBody({ file }) {
+	const why = omittedText(file.omitted);
+	if (file.body === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "msd-none",
+		children: why ?? "No text."
+	});
+	if (file.body.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "msd-none",
+		children: "The file is empty."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks: file.body });
+}
+/** A spec: the summary is its list row, and the fold holds its full text. */
+function SpecFold({ spec }) {
+	const { view } = spec;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "msd-item",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "msd-fold",
+			id: view.slug,
+			open: spec.open,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+				className: "msd-sum msd-sum-spec",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, { ticked: view.ticked }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ms-spec-main",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ms-spec-title",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-id",
+								children: view.label
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: view.title })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ms-spec-meta",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SpecMeta, { spec: view }), spec.verifiedAt === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `verified ${spec.verifiedAt}` })]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ms-chev",
+						"aria-hidden": "true"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "msd-body",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "msd-path",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: spec.file.path })
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileBody, { file: spec.file })]
+			})]
+		})
+	});
+}
+/** A worklog or another file: name, size and last change; the text folded below. */
+function FileFold({ file, extra = [] }) {
+	const why = omittedText(file.omitted);
+	const meta = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "ms-spec-meta",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: sizeText(file.size) }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["changed ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: file.modifiedAt })] }),
+			extra.map((word) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: word }, word)),
+			why === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: why })
+		]
+	});
+	if (file.body === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "msd-item",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "msd-sum msd-sum-file",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ms-spec-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "msd-name",
+					children: file.path
+				}), meta]
+			})
+		})
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "msd-item",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "msd-fold",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+				className: "msd-sum msd-sum-file",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ms-spec-main",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "msd-name",
+						children: file.path
+					}), meta]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ms-chev",
+					"aria-hidden": "true"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "msd-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileBody, { file })
+			})]
+		})
+	});
+}
+/** The words after a worklog's size: how the tracker ties it to the milestone, and a distilled stub. */
+function worklogWords(worklog) {
+	const words = worklog.link === "spec" ? ["a thread names a spec here"] : [];
+	if (worklog.distilledAt !== null) words.push(`distilled ${worklog.distilledAt.slice(0, 10)}`);
+	return words;
+}
+//#endregion
+//#region app/routes/milestone.tsx
+var milestone_exports = /* @__PURE__ */ __exportAll({
+	ErrorBoundary: () => RouteError,
+	default: () => milestone_default,
+	loader: () => loader$8,
+	meta: () => meta$6
+});
+/**
+* Serves `/w/:ws/milestones/:milestone`: one milestone of the workspace's
+* linked checkout in full, read-only. `:milestone` is the id (`M12`), or the
+* directory name (`M12-cart`) when two open milestones share an id.
+*/
+function loader$8({ context, params }) {
+	const status = statusOf(context);
+	const project = status.projects.find((candidate) => candidate.name === params.ws);
+	if (project === void 0) throw data(`No workspace named ${params.ws} on this host.`, { status: 404 });
+	const detail = context.milestone(params.ws, params.milestone);
+	if (detail === null) throw data(`No open milestone ${params.milestone} in workspace ${params.ws}.`, { status: 404 });
+	return { view: milestoneDetailView(detail, project.milestones, status.today) };
+}
+var meta$6 = ({ data: loaded, params }) => [{ title: `${loaded === void 0 ? params.milestone : `${loaded.view.head.id} ${loaded.view.head.title}`} · ${params.ws} | darius` }];
+/** Read-only: a legacy tracker milestone with its README, spec texts, worklogs and other files. */
+var milestone_default = withComponentProps(function Milestone({ loaderData }) {
+	const { view } = loaderData;
+	const { head, project } = view;
+	const { target } = head;
+	const readmeWhy = view.readme === null ? null : omittedText(view.readme.omitted);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ms-page msd",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "ms-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Crumbs, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: workspacePath(project),
+							children: project
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							"aria-hidden": "true",
+							children: " / "
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+							to: sectionPath(project, "milestones"),
+							children: "Milestones"
+						})
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h1", {
+						className: "ms-h1 msd-h1",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ms-id msd-id",
+							children: head.id
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TitleText, { text: head.title })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "ms-meta msd-meta",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: view.status }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: head.started === null ? "not started" : `started ${head.started}` }),
+							target === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "no target" }) : target.past ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ms-late",
+								children: `target ${target.text}, past`
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `target ${target.text}` }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+								className: "msd-dir",
+								children: `.tracker/${view.dir}/`
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "ms-prog msd-prog",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
+							className: `ms-bar${head.ticked ? " ms-bar-done" : ""}`,
+							value: head.done,
+							max: Math.max(head.total, 1),
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ms-count",
+							children: head.checks
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ms-sub",
+						children: "Read-only, from the tracker"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DetailStrip, { counts: view.counts }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: "README",
+				id: "readme",
+				children: view.readme === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "This milestone has no README." }) : view.readme.body === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: readmeWhy ?? "The README could not be read." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "msd-card measure",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks: view.readme.body })
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: `Specs (${view.specs.length})`,
+				id: "specs",
+				children: view.specs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No specs yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "msd-list",
+					children: view.specs.map((spec) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SpecFold, { spec }, spec.view.slug))
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: `Worklogs (${view.worklogs.length})`,
+				id: "worklogs",
+				children: view.worklogs.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No worklog belongs to this milestone." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "msd-list",
+					children: view.worklogs.map((worklog) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileFold, {
+						file: worklog,
+						extra: worklogWords(worklog)
+					}, worklog.path))
+				})
+			}),
+			view.others.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: `Other files (${view.others.length})`,
+				id: "files",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "msd-list",
+					children: view.others.map((file) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileFold, { file }, file.path))
+				})
+			})
+		]
 	});
 });
 //#endregion
@@ -14517,7 +14940,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DYO3AHgM.js",
+			"module": "/assets/root-C4yXU0_v.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
@@ -14527,7 +14950,7 @@ var server_manifest_default = {
 				"/assets/agenda-DsBhSY-d.js",
 				"/assets/settings-YoGy02pU.js"
 			],
-			"css": ["/assets/root-B1BrSRWm.css"],
+			"css": ["/assets/root-B6LaPBYD.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -14546,11 +14969,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CFX2J8in.js",
+			"module": "/assets/overview-B8uuaQh4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
@@ -14578,11 +15002,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CFX2J8in.js",
+			"module": "/assets/overview-B8uuaQh4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
@@ -14610,11 +15035,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CFX2J8in.js",
+			"module": "/assets/overview-B8uuaQh4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
@@ -14708,11 +15134,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-BRydtwC9.js",
+			"module": "/assets/rituals-CD48ZaDf.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/route-error-CXM-1ayp.js",
 				"/assets/section-DjYA-TW_.js",
@@ -14742,11 +15169,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-BRydtwC9.js",
+			"module": "/assets/rituals-CD48ZaDf.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/route-error-CXM-1ayp.js",
 				"/assets/section-DjYA-TW_.js",
@@ -14776,14 +15204,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-d5qSmtAE.js",
+			"module": "/assets/milestones-CWj6EQMN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
+				"/assets/route-error-CXM-1ayp.js",
+				"/assets/milestones-DnPCN2Tn.js",
+				"/assets/clock-Ct7sKB8T.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
-				"/assets/route-error-CXM-1ayp.js",
-				"/assets/clock-Ct7sKB8T.js",
 				"/assets/kind-8wVldGY6.js"
 			],
 			"css": [],
@@ -14805,15 +15234,49 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-d5qSmtAE.js",
+			"module": "/assets/milestones-CWj6EQMN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
+				"/assets/route-error-CXM-1ayp.js",
+				"/assets/milestones-DnPCN2Tn.js",
+				"/assets/clock-Ct7sKB8T.js",
+				"/assets/ui-BjCHtTJ4.js",
+				"/assets/row--RGqd44Q.js",
+				"/assets/kind-8wVldGY6.js"
+			],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"routes/milestone": {
+			"id": "routes/milestone",
+			"parentId": "root",
+			"path": "w/:ws/milestones/:milestone",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": true,
+			"hasErrorBoundary": true,
+			"module": "/assets/milestone-B07OsMOy.js",
+			"imports": [
+				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
+				"/assets/jsx-runtime-D2R7ag_K.js",
+				"/assets/clock-Ct7sKB8T.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
-				"/assets/clock-Ct7sKB8T.js",
-				"/assets/kind-8wVldGY6.js"
+				"/assets/milestones-DnPCN2Tn.js",
+				"/assets/kind-8wVldGY6.js",
+				"/assets/chip-Bo5mS-wT.js",
+				"/assets/view-BvK4mdQT.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -14862,17 +15325,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DHxYCCZn.js",
+			"module": "/assets/runs-OFXntitk.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/route-error-CXM-1ayp.js",
 				"/assets/kind-8wVldGY6.js",
 				"/assets/clock-Ct7sKB8T.js",
 				"/assets/chip-Bo5mS-wT.js",
 				"/assets/view-BvK4mdQT.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/row--RGqd44Q.js"
 			],
 			"css": [],
@@ -14963,14 +15427,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-T6LdJhbX.js",
+			"module": "/assets/ritual-CEbbQwjf.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
 				"/assets/clock-Ct7sKB8T.js",
 				"/assets/chip-Bo5mS-wT.js",
 				"/assets/view-BvK4mdQT.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
@@ -14995,14 +15460,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DZCLb2Q7.js",
+			"module": "/assets/run-DW5cxyOO.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-DbcS844Q.js",
 				"/assets/jsx-runtime-D2R7ag_K.js",
 				"/assets/clock-Ct7sKB8T.js",
 				"/assets/chip-Bo5mS-wT.js",
 				"/assets/view-BvK4mdQT.js",
-				"/assets/runs-4zxMvrsx.js",
+				"/assets/runs-CyPdSz2b.js",
+				"/assets/pulse-H_7USwpE.js",
 				"/assets/ui-BjCHtTJ4.js",
 				"/assets/row--RGqd44Q.js",
 				"/assets/route-error-CXM-1ayp.js",
@@ -15040,8 +15506,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-acc86571.js",
-	"version": "acc86571",
+	"url": "/assets/manifest-d7d4a284.js",
+	"version": "d7d4a284",
 	"sri": void 0
 };
 //#endregion
@@ -15146,6 +15612,14 @@ var routes = {
 		index: void 0,
 		caseSensitive: void 0,
 		module: milestones_exports
+	},
+	"routes/milestone": {
+		id: "routes/milestone",
+		parentId: "root",
+		path: "w/:ws/milestones/:milestone",
+		index: void 0,
+		caseSensitive: void 0,
+		module: milestone_exports
 	},
 	"routes/settings": {
 		id: "routes/settings",

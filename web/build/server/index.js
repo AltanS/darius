@@ -6,7 +6,8 @@ function loadContext(context) {
 		nonce: context.nonce,
 		status: () => context.status(),
 		ritual: (project, slug) => context.ritual(project, slug),
-		run: (project, run) => context.run(project, run)
+		run: (project, run) => context.run(project, run),
+		milestone: (project, milestone) => context.milestone(project, milestone)
 	};
 }
 //#endregion
@@ -17,7 +18,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-CgNxv1lq.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-aWms4syt.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };
