@@ -14,6 +14,12 @@
  * (title), `due` (nextDue), `daysOverdue` (overdueDays), `cadence`, `lastRun`
  * (lastCompleted). An absent optional fact is `null`, never a missing key, so
  * a consumer can read every field without an `in` check first.
+ *
+ * `--brief` (0.38.0) is for a Claude Code SessionStart hook (`darius skill
+ * hook`): at most one plain line for the project in cwd, naming what waits
+ * and the next command, or nothing. It reads the local store only (no sync,
+ * no network), prints no colour, and always exits 0, so a hook never fails a
+ * session start.
  */
 
 import { readLedger } from "../core/ledger.ts";
@@ -105,10 +111,60 @@ function printRows(rows: readonly DueRow[]): void {
   for (const row of rows) console.log(rowLine(row));
 }
 
+/** The one line `--brief` prints, or null when nothing waits. Pure. */
+export function briefLine(rows: readonly { slug: string; isDue: boolean; heldRun: string | null; mode: Ritual["policy"]["mode"] }[]): string | null {
+  const due = rows.filter((row) => row.isDue);
+  const held = rows.filter((row) => row.heldRun !== null);
+  const parts: string[] = [];
+  if (due.length > 0) parts.push(`${listed(due.map((row) => row.slug))} due`);
+  if (held.length > 0) parts.push(`${listed(held.map((row) => row.slug))} held with questions for the operator`);
+  const first = due[0];
+  const firstHeld = held[0];
+  let next: string;
+  if (first !== undefined) {
+    next = first.mode === "off" ? `darius run start ${first.slug}` : `darius run now ${first.slug}`;
+  } else if (firstHeld !== undefined && firstHeld.heldRun !== null) {
+    next = `darius run answer ${firstHeld.heldRun} <n> <text>`;
+  } else {
+    return null;
+  }
+  return `darius: ${parts.join("; ")}, run: ${next}`;
+}
+
+const BRIEF_NAMES = 3;
+
+function listed(slugs: readonly string[]): string {
+  const shown = slugs.slice(0, BRIEF_NAMES).join(", ");
+  return slugs.length > BRIEF_NAMES ? `${shown} and ${String(slugs.length - BRIEF_NAMES)} more` : shown;
+}
+
+/** `due --brief`: one line or nothing, exit 0 whatever happens. */
+function printBrief(args: ParsedArgs): number {
+  try {
+    const project = openProject(resolveProject(stringFlag(args, "project")));
+    const ledger = readLedger(project);
+    const today = localToday();
+    const rows = project.listItems("ritual").flatMap((slug) => {
+      const doc = project.readItem<Ritual>("ritual", slug);
+      if (doc === null) return [];
+      const state = ritualState(doc, ledger, today);
+      return [{ slug, isDue: state.isDue, heldRun: state.heldRun ?? null, mode: doc.header.policy.mode }];
+    });
+    const line = briefLine(rows);
+    if (line !== null) console.log(line);
+  } catch {
+    // Outside a project, or a store this darius cannot read: say nothing.
+  }
+  return 0;
+}
+
 export const dueCommand: Command = {
   name: "due",
-  summary: "rituals due now, computed from the ledger. --project P | --all-projects",
+  summary: "rituals due now, computed from the ledger. --project P | --all-projects | --brief",
+  audience: "session",
+  usage: "due [--all-projects] [--brief]",
   async run(args: ParsedArgs): Promise<number> {
+    if (args.flags.brief === true) return printBrief(args);
     if (args.flags["all-projects"] === true) {
       const projects = listProjects();
       const rituals = projects.flatMap((name) => collectRows(openProject(name)));

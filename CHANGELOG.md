@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.38.0] - 2026-09-30
+
+### Added
+
+- `darius skill` prints one generated Claude Code skill for darius, and `darius --skill` is the same. It lists only the verbs a working session needs and stays under 4 KB.
+- `darius skill install` writes the skill to `~/.claude/skills/darius/SKILL.md` (or under `CLAUDE_CONFIG_DIR`) and prints the path. It refuses a file there that darius did not write.
+- `darius skill uninstall` removes the skill file darius wrote.
+- `darius skill hook` prints a SessionStart hook to paste into Claude Code's `settings.json`. It runs `darius due --brief`.
+- `darius due --brief` prints at most one line for the project in the current directory: the due and held rituals and the next command. It reads the local store only and always exits 0.
+- `darius setup`, and so `darius update`, refreshes an installed skill file that darius wrote.
+
 ## [0.37.0] - 2026-09-30
 
 ### Changed

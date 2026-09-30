@@ -35,6 +35,9 @@ export DARIUS_TAILSCALE="$SANDBOX/no-tailscale"
 export DARIUS_APP_DIR="$SANDBOX/app"
 export DARIUS_SOURCE="$SANDBOX/no-source"
 export DARIUS_SSH="$SANDBOX/no-ssh"
+# Claude Code's config dir: `darius setup` refreshes a stamped skill file
+# there, and `darius skill install` writes one. No test may touch ~/.claude.
+export CLAUDE_CONFIG_DIR="$SANDBOX/claude"
 # Push: no test reaches a real push service; a test that needs one adds its own
 # fake's origin, and nothing else may add one.
 unset DARIUS_PUSH_ORIGINS

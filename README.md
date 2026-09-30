@@ -209,7 +209,8 @@ the full reference.
 - `darius update [vX.Y.Z] [--check] [--major] [--hosts h1,h2]`: move this host, or other hosts, to a release.
 - `darius ritual add|list|show|set|pause|resume|retire`: recurring work with a cadence and a policy.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
-- `darius due [--all-projects]`: what is due now.
+- `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
+- `darius skill [install|uninstall|hook]`: print, install or remove the Claude Code skill for darius, or print its SessionStart hook.
 - `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.

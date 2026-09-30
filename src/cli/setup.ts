@@ -16,6 +16,8 @@
  *   2. write `~/.config/darius/config.toml`, a skeleton, if none exists.
  *      `src/core/config.ts` owns the format.
  *   3. create the state root (`~/.local/share/darius`, or `DARIUS_STATE_DIR`).
+ *   4. refresh the Claude Code skill file when it carries a darius stamp
+ *      (src/cli/skill.ts); it never installs one.
  *
  * `--systemd`: renders the units that config.toml's `[setup] units` lists
  * (sync, vigil-sweep, run-due and web; all four when the key is absent) from
@@ -52,12 +54,14 @@ import { currentBin, installKind } from "../core/app.ts";
 import { loadConfig, loadConfigIfPresent, SETUP_UNITS, writeConfigSkeleton } from "../core/config.ts";
 import type { Config, SetupUnit } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
-import { appDir, stateDir } from "../core/paths.ts";
+import { appDir, claudeDir, stateDir } from "../core/paths.ts";
 import { createS3 } from "../core/s3.ts";
 import type { Credentials, RemoteConfig } from "../core/s3.ts";
 import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-path.ts";
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
+import { listCommands } from "./registry.ts";
+import { refreshSkill, renderSkill, skillPath } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -491,8 +495,24 @@ export function defaultDeps(): SetupDeps {
   };
 }
 
+// --- step: refresh the Claude Code skill --------------------------------------------
+
+/**
+ * Rewrites `<claude>/skills/darius/SKILL.md` when it carries a darius stamp
+ * and differs from this version's text, so `darius update` (which runs
+ * setup) keeps every host's skill current. Installs nothing new: that is
+ * `darius skill install`. An unstamped file is the operator's; left alone.
+ */
+function refreshSkillStep(home: string): Step {
+  try {
+    return { what: "skill", ...refreshSkill(renderSkill(listCommands()), skillPath(claudeDir(home))) };
+  } catch (cause) {
+    return { ok: false, what: "skill", detail: errorMessage(cause) };
+  }
+}
+
 export async function runSetup(flags: SetupFlags, deps: SetupDeps = defaultDeps()): Promise<Step[]> {
-  const steps: Step[] = [installCliSymlink(deps.root, deps.app, deps.home), installConfigSkeleton(), ensureStateDir()];
+  const steps: Step[] = [installCliSymlink(deps.root, deps.app, deps.home), installConfigSkeleton(), ensureStateDir(), refreshSkillStep(deps.home)];
 
   if (flags.systemd) {
     steps.push(...installSystemdUnits(deps));

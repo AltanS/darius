@@ -478,6 +478,8 @@ function runShow(args: ParsedArgs): number {
 export const runCommand: Command = {
   name: "run",
   summary: "start, hold, answer, resume, complete, acknowledge, list and show ritual runs",
+  audience: "session",
+  usage: `run ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

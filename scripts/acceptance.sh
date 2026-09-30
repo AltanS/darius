@@ -316,6 +316,20 @@ run setup2 180 "$DARIUS" setup --systemd --remote --json || fail "second setup e
 second="$(js setupRerun "$WORK/setup2.out")" || fail "$second"
 pass "first run: $first; $second"
 
+# --- 2b. the Claude Code skill, into a throwaway config dir ---------------------------
+# Never the real ~/.claude: CLAUDE_CONFIG_DIR points into $WORK.
+begin "2b skill"
+SKILL_DIR="$WORK/claude"
+SKILL_FILE="$SKILL_DIR/skills/darius/SKILL.md"
+run skill1 30 env CLAUDE_CONFIG_DIR="$SKILL_DIR" "$DARIUS" skill install || fail "skill install exited non-zero" "$WORK/skill1.out" "$WORK/skill1.err"
+[ "$(cat "$WORK/skill1.out")" = "$SKILL_FILE" ] || fail "skill install did not print $SKILL_FILE" "$WORK/skill1.out"
+bytes="$(wc -c <"$SKILL_FILE")"
+[ "$bytes" -lt 4096 ] || fail "the skill is $bytes bytes, over 4096"
+grep -q '^<!-- darius-skill ' "$SKILL_FILE" || fail "the skill has no darius stamp"
+run skill2 30 env CLAUDE_CONFIG_DIR="$SKILL_DIR" "$DARIUS" skill uninstall || fail "skill uninstall exited non-zero" "$WORK/skill2.out" "$WORK/skill2.err"
+[ ! -e "$SKILL_FILE" ] || fail "skill uninstall left $SKILL_FILE"
+pass "installed $bytes bytes with a stamp, then removed it"
+
 # --- 3. SeaweedFS -------------------------------------------------------------------
 begin "3 seaweedfs"
 [ -n "$TAILNET_IP" ] || fail "no tailnet address: set DARIUS_TAILNET_IP or start tailscale"

@@ -33,6 +33,14 @@ export interface ParsedArgs {
 export interface Command {
   name: string;
   summary: string;
+  /**
+   * `"session"`: a working Claude Code session needs this verb, so
+   * `darius skill` lists it (src/cli/skill.ts). Absent: hidden from the
+   * skill. `darius help` lists every command either way.
+   */
+  audience?: "session";
+  /** The verb's shape for the skill's table, e.g. `run start|complete <run>`. Defaults to the name. */
+  usage?: string;
   run(args: ParsedArgs): Promise<number>;
 }
 

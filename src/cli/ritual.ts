@@ -391,6 +391,8 @@ function setLifecycle(args: ParsedArgs, state: "active" | "paused" | "retired"):
 export const ritualCommand: Command = {
   name: "ritual",
   summary: "add, list, show, edit and change lifecycle of rituals",
+  audience: "session",
+  usage: `ritual ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

@@ -34,6 +34,7 @@ function printHelpText(): void {
   console.log("Usage:");
   console.log("  darius               open the Due and Run screens (in a terminal; else this help)");
   console.log("  darius --version     print the version and the runtime");
+  console.log("  darius --skill       print the Claude Code skill (darius skill)");
   console.log("  darius <command>     run a registered command\n");
   console.log("Commands:");
   for (const entry of helpEntries()) {
@@ -62,6 +63,7 @@ register(helpCommand);
 function resolveCommandName(first: string | undefined): string {
   if (first === undefined) return isInteractive() ? "tui" : "help";
   if (first === "--help" || first === "-h") return "help";
+  if (first === "--skill") return "skill";
   return first;
 }
 

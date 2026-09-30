@@ -39,6 +39,15 @@ export function appDir(): string {
   return envDir("DARIUS_APP_DIR") ?? join(homedir(), ".local", "opt", "darius");
 }
 
+/**
+ * Claude Code's user config dir: `CLAUDE_CONFIG_DIR` when set, else
+ * `<home>/.claude`. `darius skill install` writes `skills/darius/SKILL.md`
+ * under it.
+ */
+export function claudeDir(home: string = homedir()): string {
+  return envDir("CLAUDE_CONFIG_DIR") ?? join(home, ".claude");
+}
+
 /** `<stateDir>/<project>`, the one directory a project's store lives under. */
 export function projectDir(project: string): string {
   return join(stateDir(), project);

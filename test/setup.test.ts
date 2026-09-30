@@ -836,7 +836,7 @@ test("setupCommand --json prints exactly one JSON object with the expected steps
         const parsed = JSON.parse(lines[0] ?? "");
         assert.equal(parsed.ok, true);
         const whats = parsed.steps.map((step: Step) => step.what);
-        assert.deepEqual(whats, ["cli", "config", "state dir", "systemd", "remote"]);
+        assert.deepEqual(whats, ["cli", "config", "state dir", "skill", "systemd", "remote"]);
         assert.equal(parsed.steps.find((step: Step) => step.what === "systemd").skipped, true);
         assert.equal(parsed.steps.find((step: Step) => step.what === "remote").skipped, true);
       });
@@ -862,7 +862,7 @@ test("setupCommand without --json prints one ✓/·/! line per step", async () =
           console.log = originalLog;
         }
         assert.equal(exitCode, 0);
-        assert.equal(lines.length, 5);
+        assert.equal(lines.length, 6);
         assert.ok(lines.every((line) => /^[✓·!] /.test(line)));
       });
     });
