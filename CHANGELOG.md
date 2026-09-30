@@ -2,6 +2,23 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.40.0] - 2026-09-30
+
+### Added
+
+- One CLI: `darius` runs every legacy tracker verb through the vendored, frozen `src/legacy/`, and `DARIUS_KINDS` decides which verbs use the store.
+- `darius init` links a repo, fresh or legacy, and the install script prints the lines that lead to a working repo.
+- The generated skill teaches the absorbed verbs, and its size cap is 6 KB.
+
+### Changed
+
+- The tests remove their temp dirs, and `scripts/test.sh` runs the suite in one temp dir it deletes.
+- `darius context` is a plain unknown-command usage error, since the legacy CLI has no such verb.
+
+### Fixed
+
+- A run that cannot start because `claude` is not on PATH now says so and names the fix.
+
 ## [0.38.1] - 2026-09-30
 
 ### Changed

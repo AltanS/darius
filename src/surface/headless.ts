@@ -45,6 +45,14 @@ function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   }
 }
 
+/** The spawn failure as one line that names the fix when the program is missing. */
+export function spawnFailure(bin: string, cause: unknown): string {
+  const message = errorMessage(cause);
+  if (!message.includes("ENOENT")) return message;
+  const name = bin.split("/").pop() ?? bin;
+  return `${name} is not on PATH: install ${name === "claude" ? "Claude Code" : name} or set the profile's command`;
+}
+
 interface ChildEnd {
   code: number | null;
   signal: string | null;
@@ -82,7 +90,7 @@ export async function launchHeadless(plan: LaunchPlan): Promise<LaunchResult> {
   // No pid: the process never started, and "close" is not guaranteed to follow.
   const failedToStart = new Promise<ChildEnd>((resolve) => {
     child.on("error", (cause) => {
-      spawnError = errorMessage(cause);
+      spawnError = spawnFailure(plan.bin, cause);
       if (child.pid === undefined) resolve({ code: null, signal: null });
     });
   });

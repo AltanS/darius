@@ -1640,3 +1640,11 @@ test("run show prints a run's facts, its result and its findings; run list carri
   assert.equal(listed.runs[0].result.questions, 1);
   await assert.rejects(runCli(runCommand, ["show", "01NOPE", "--project", "res-show"]), /no run '01NOPE'/u);
 });
+
+test("a harness that is not on PATH says how to fix it", async () => {
+  const { launchHeadless } = await import("../src/surface/headless.ts");
+  const result = await launchHeadless({ bin: "claude-not-installed-here", argv: [], cwd: tmpdir(), env: {}, timeoutMs: 5_000 });
+  assert.equal(result.spawnError, "claude-not-installed-here is not on PATH: install claude-not-installed-here or set the profile's command");
+  const { spawnFailure } = await import("../src/surface/headless.ts");
+  assert.match(spawnFailure("/usr/bin/claude", new Error("spawn /usr/bin/claude ENOENT")), /^claude is not on PATH: install Claude Code or set the profile's command$/u);
+});

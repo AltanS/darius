@@ -59,7 +59,6 @@ export const LEGACY_VERBS: ReadonlySet<string> = new Set([
   "migrate",
   "scan",
   "vigil",
-  "context",
 ]);
 
 /** The kind a top-level verb acts on, or null for a verb of no kind. */

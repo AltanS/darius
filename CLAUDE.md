@@ -73,13 +73,17 @@ real use; see `docs/concept.md`, "Migration plan".
 
 The old `tracker` CLI is called from many Claude Code skills and hooks, from an unattended daily
 sweep script, and from project CLAUDE.md files.
-Until phase 5 retires the router:
+Rules for the legacy verbs:
 
 - A `--json` field that the old CLI emits is never renamed or removed. New fields may be added.
 - Exit codes follow the probe contract: 0 ok, 1 refused or failed, 2 usage, 3 inconclusive
   environment.
-- darius never writes to a project's `.tracker/` directory. Each kind has exactly one writer at a
-  time: the legacy CLI until its phase, darius after.
+- Each kind has one writer module. A kind in `DARIUS_KINDS` is written by the store code only. A
+  kind outside it is written by `src/legacy/` only, and only under `.tracker/`. darius native code
+  never writes `.tracker/` files, and the legacy tree never writes the store.
+- `src/legacy/` is the vendored legacy CLI, frozen. It has carve-outs (its own oxlint and tsconfig
+  settings, dev dependencies only), and `bun run test:legacy` is a gate next to `bun run check`.
+  Milestones, specs and worklogs stay in `.tracker/` in git; a store move is a 1.0.0 decision.
 
 ## Versioning: MANDATORY
 

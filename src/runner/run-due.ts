@@ -315,7 +315,8 @@ function rejectedFindings(runDir: string): string | null {
 
 function failureBlob(launch: LaunchResult, facts: ResultFacts, harness: string, runDir: string): string {
   let reason = `${harness} exited without completing or holding the run`;
-  if (launch.spawnError !== undefined) reason = `${harness} did not start: ${launch.spawnError}`;
+  if (launch.spawnError !== undefined) reason = launch.spawnError.includes("is not on PATH") ? launch.spawnError : `${harness} did not start: ${launch.spawnError}`;
+  else if (launch.exitCode === 127) reason = `${harness} is not on PATH: install it or set the profile's command`;
   else if (launch.timedOut) reason = `${harness} was stopped after the run timeout (${String(launch.durationMs)} ms)`;
   const blob: JsonValue = {
     reason,
