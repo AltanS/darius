@@ -13,6 +13,7 @@
 # `darius update --hosts` on another host pushes to it.
 #
 # Usage:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)
 #   scripts/install.sh [--tag vX.Y.Z] [--source URL]
 #   ssh host bash -s -- --tag v0.17.0 < scripts/install.sh
 #
@@ -22,6 +23,9 @@
 #
 # An old full clone at <app> itself (a host set up before 0.17.0) is moved aside to
 # <app>.legacy-<UTC time>. Nothing is deleted.
+#
+# It ends with what to do next: `darius init` in each repo, and `darius skill
+# install` when no Claude Code skill teaches darius yet.
 #
 # Idempotent: a second run with the same tag changes nothing.
 # Exit codes: 0 ok, 1 failed, 2 usage, 3 the source could not be reached.
@@ -145,6 +149,29 @@ main() {
     systemctl --user try-restart darius-web.service </dev/null >/dev/null 2>&1 || true
   fi
   echo "✓ darius $version runs from $app/current"
+  next_steps "$app"
+}
+
+# The tail: what to do next, one line each. The PATH line comes only when
+# ~/.local/bin is missing from PATH, the skill line only when no Claude Code
+# skill teaches darius yet (`darius skill status` exits 1; an older darius
+# without that verb exits 2 and gets no line).
+next_steps() {
+  local bin="$HOME/.local/bin"
+  case ":$PATH:" in
+    *":$bin:"*) ;;
+    *)
+      local rc=".bashrc"
+      [ "$(basename "${SHELL:-}")" = zsh ] && rc=".zshrc"
+      echo "! $bin is not on PATH. Add it: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/$rc, then open a new shell"
+      ;;
+  esac
+  echo "next: cd into a repo you track and run: darius init"
+  local skill=0
+  "$1/current/bin/darius" skill status </dev/null >/dev/null 2>&1 || skill=$?
+  if [ "$skill" = 1 ]; then
+    echo "next: to teach Claude Code sessions darius, run: darius skill install"
+  fi
 }
 
 main "$@"

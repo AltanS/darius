@@ -19,7 +19,7 @@ import { getCommand, listCommands, register, UsageError, type Command } from "./
 import { isInteractive } from "./cli/tui.ts";
 import { DARIUS_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { runLegacy } from "./core/legacy-entry.ts";
-import { isUnlinkedTrackerRepo } from "./core/paths.ts";
+import { findTrackerDir, isUnlinkedTrackerRepo } from "./core/paths.ts";
 import { errorMessage, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
 
@@ -115,8 +115,18 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-/** A verb darius does not own: the legacy CLI gets the argv as given, and its exit code passes through. */
+/**
+ * A verb darius does not own: the legacy CLI gets the argv as given, and its
+ * exit code passes through. When it fails and there is no `.tracker/` here
+ * or above, one more stderr line names the fix. It hooks `exit` because a
+ * legacy verb may end the process itself.
+ */
 async function runLegacyVerb(argv: string[]): Promise<number> {
+  process.once("exit", (code) => {
+    if (code !== 0 && findTrackerDir(process.cwd()) === null) {
+      console.error("darius: no .tracker/ here or above. Run darius init in the repo root to create one.");
+    }
+  });
   try {
     return await runLegacy(argv);
   } catch (error) {

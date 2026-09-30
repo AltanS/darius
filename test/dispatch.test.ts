@@ -143,10 +143,13 @@ test("a legacy entry that cannot load, or has no main, fails with exit 1 and one
   assert.match(noMain.stderr, /exports no main\(\)/u);
 });
 
-test("init is not a legacy verb: it stays unknown until darius has its own", () => {
-  const result = darius(["init"]);
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /unknown command 'init'/u);
+test("init is darius's own verb, never a legacy one", () => {
+  assert.ok(!LEGACY_VERBS.has("init"));
+  const repo = join(SANDBOX, "init-own");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  const result = darius(["init", "--json"], { cwd: repo });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).project, "init-own", "the fake legacy entry never answered");
 });
 
 test("a ritual or run verb in an unlinked tracker repo exits 1 with one line", () => {

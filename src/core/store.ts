@@ -101,6 +101,11 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
  * walks projects treats it as one. Sync includes it on purpose.
  */
 export const GLOBAL_PROJECT = "_global";
+
+/** True when `name` may name a project: letters, digits, '-', '_' or '.', a letter or digit first. */
+export function isProjectName(name: string): boolean {
+  return PROJECT_NAME.test(name);
+}
 const SLUG = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 

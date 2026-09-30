@@ -47,3 +47,22 @@ export async function runLegacy(argv: string[]): Promise<number> {
   if (loaded.main === undefined) throw new Error(`the legacy tracker CLI at ${path} exports no main()`);
   return loaded.main(argv);
 }
+
+/** The vendored writer module: `initTracker` scaffolds `.tracker/00-INDEX.md`. */
+const VENDORED_WRITER = new URL("../legacy/lib/tracker-writer.ts", import.meta.url);
+
+/** What `darius init` needs from the writer module. */
+interface LegacyWriter {
+  initTracker(opts: { projectRoot: string }): void;
+}
+
+/**
+ * Scaffolds `<root>/.tracker/` through the vendored writer, the one writer of
+ * `.tracker/` (docs/concept.md, "Risks"). Throws when `.tracker/` exists.
+ */
+export async function scaffoldTracker(root: string): Promise<void> {
+  // SAFETY: darius's own vendored module; `initTracker` is checked before it is called.
+  const loaded = (await import(VENDORED_WRITER.href)) as Partial<LegacyWriter>;
+  if (loaded.initTracker === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no initTracker()`);
+  loaded.initTracker({ projectRoot: root });
+}

@@ -96,10 +96,10 @@ test("link refuses to move a project to a second checkout without --force, and a
   assert.equal(readLinks().get("ln-move"), third);
 });
 
-test("link without a .darius.toml is a usage error that shows the file to write", async () => {
+test("link without a .darius.toml is a usage error that names darius init", async () => {
   const bare = join(SANDBOX, "no-marker");
   mkdirSync(bare, { recursive: true });
-  await assert.rejects(runCli(linkCommand, [bare]), (cause: Error) => cause instanceof UsageError && /project = "<name>"/u.test(cause.message));
+  await assert.rejects(runCli(linkCommand, [bare]), (cause: Error) => cause instanceof UsageError && /Run darius init in the repo root/u.test(cause.message));
 });
 
 test("link --list shows each link and what is wrong with it", async () => {

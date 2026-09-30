@@ -79,36 +79,61 @@ function isRecorded(project: Project, dir: string): boolean {
   return latest?.path === dir;
 }
 
+/** What `linkCheckout` did. */
+export interface LinkOutcome {
+  outcome: "linked" | "unchanged";
+  /** A `project.linked` line was appended. */
+  recorded: boolean;
+  /** The dir the project was linked to before, when it moved. */
+  replaced?: string;
+}
+
+/**
+ * The dir `project` is linked to on this host when that is another dir that
+ * still exists, or undefined. Linking there needs `--force`.
+ */
+export function conflictingLink(project: string, dir: string): string | undefined {
+  const old = readLinks().get(project);
+  return old !== undefined && old !== dir && existsSync(old) ? old : undefined;
+}
+
+/**
+ * Links `project` to the checkout `dir` on this host and records the
+ * `project.linked` line once. Refuses a project linked to another dir that
+ * still exists, unless `force`. `darius init` links through this too.
+ */
+export function linkCheckout(name: string, dir: string, force: boolean): LinkOutcome {
+  const old = readLinks().get(name);
+  const conflict = conflictingLink(name, dir);
+  if (conflict !== undefined && !force) {
+    throw new Error(`${name} is already linked to ${conflict} on this host. Pass --force to link ${dir} instead.`);
+  }
+  if (old !== dir) writeLink(name, dir);
+  const project = openProject(name, { create: true });
+  const recorded = !isRecorded(project, dir);
+  if (recorded) appendLine(project, { who: defaultWho(), type: LINKED_LINE, path: dir });
+  const result: LinkOutcome = { outcome: old === dir ? "unchanged" : "linked", recorded };
+  if (old !== undefined && old !== dir) result.replaced = old;
+  return result;
+}
+
 function runLink(args: ParsedArgs): number {
   const [target, ...extra] = args.positional;
   if (extra.length > 0) throw new UsageError(USAGE);
   const start = resolve(target ?? process.cwd());
   const marker = findMarker(start);
   if (marker === null) {
-    throw new UsageError(
-      `no ${MARKER_FILE} in ${start} or above it. Commit one at the repo root first:\n` +
-        `  v = 1\n  project = "<name>"`,
-    );
+    throw new UsageError(`no ${MARKER_FILE} in ${start} or above it. Run darius init in the repo root to write one and link it.`);
   }
   const { project: name, dir } = marker;
-  const old = readLinks().get(name);
-  if (old !== undefined && old !== dir && existsSync(old) && args.flags.force !== true) {
-    throw new Error(`${name} is already linked to ${old} on this host. Pass --force to link ${dir} instead.`);
-  }
-  if (old !== dir) writeLink(name, dir);
-  const project = openProject(name, { create: true });
-  const isNewLine = !isRecorded(project, dir);
-  if (isNewLine) appendLine(project, { who: defaultWho(), type: LINKED_LINE, path: dir });
-
-  const outcome = old === dir ? "unchanged" : "linked";
+  const linked = linkCheckout(name, dir, args.flags.force === true);
   if (args.json) {
-    const result: LinkResult = { project: name, dir, outcome, recorded: isNewLine };
-    if (old !== undefined && old !== dir) result.replaced = old;
+    const result: LinkResult = { project: name, dir, ...linked };
     console.log(JSON.stringify(result));
     return 0;
   }
-  if (outcome === "unchanged") console.log(`· ${name} is linked to ${dir}`);
-  else console.log(`✓ linked ${name} to ${dir}${old === undefined ? "" : ` (was ${old})`}`);
+  if (linked.outcome === "unchanged") console.log(`· ${name} is linked to ${dir}`);
+  else console.log(`✓ linked ${name} to ${dir}${linked.replaced === undefined ? "" : ` (was ${linked.replaced})`}`);
   return 0;
 }
 

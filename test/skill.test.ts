@@ -14,12 +14,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { briefLine } from "../src/cli/due.ts";
-import { readStamp, renderSkill, SKILL_MAX_BYTES } from "../src/cli/skill.ts";
+import { readStamp, renderSkill, SKILL_MAX_BYTES, TRACKER_VERB_GROUPS } from "../src/cli/skill.ts";
+import { LEGACY_VERBS } from "../src/core/kinds.ts";
 import { VERSION } from "../src/version.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const RUNTIMES = ["node", "bun"] as const;
-const SESSION_VERBS = ["due", "ritual", "run"];
+const SESSION_VERBS = ["due", "init", "ritual", "run"];
 
 interface Sandbox {
   root: string;
@@ -56,7 +57,7 @@ function darius(env: NodeJS.ProcessEnv, argv: string[], opts: { runtime?: string
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-test("the skill stays under 4096 bytes, and its stamp names this version and hashes the body", () => {
+test("the skill stays under 6144 bytes, and its stamp names this version and hashes the body", () => {
   const { env } = sandbox();
   for (const runtime of RUNTIMES) {
     const result = darius(env, ["skill"], { runtime });
@@ -82,6 +83,48 @@ test("the verb table lists the session verbs only, in registry order", () => {
   }
   const help = darius(env, ["help"]).stdout;
   assert.match(help, /darius setup/, "help still lists every command");
+});
+
+test("the skill states the one decision rule and lists only real tracker verbs, one group per line", () => {
+  const { env } = sandbox();
+  const text = darius(env, ["skill"]).stdout;
+  assert.match(text, /darius owns every tracker verb\. Rituals and runs live in the darius store; milestones, specs, worklogs and vigils live in \.tracker\/ and darius writes them\./u);
+  for (const [group, verbs] of TRACKER_VERB_GROUPS) {
+    assert.ok(text.includes(`- ${group}: ${verbs}\n`), group);
+    for (const match of verbs.matchAll(/`([a-z-]+)/gu)) {
+      assert.ok(LEGACY_VERBS.has(match[1] ?? ""), `${group}: ${match[1] ?? ""} is not a tracker verb`);
+    }
+  }
+});
+
+test("skill status: exit 1 and the fix with no skill, exit 0 for a user-level or a plugin's stamped skill", () => {
+  const { root, env } = sandbox();
+  const none = darius(env, ["skill", "status"]);
+  assert.equal(none.code, 1);
+  assert.match(none.stdout, /darius skill install/u);
+
+  const plugin = join(root, "claude", "plugins", "cache", "market", "tracker", "11.0.0");
+  mkdirSync(join(plugin, "skills", "darius"), { recursive: true });
+  writeFileSync(join(plugin, "skills", "darius", "SKILL.md"), darius(env, ["skill"]).stdout);
+  const listed = { version: 2, plugins: { "tracker@market": [{ scope: "user", installPath: plugin }] } };
+  writeFileSync(join(root, "claude", "plugins", "installed_plugins.json"), JSON.stringify(listed));
+  const fromPlugin = darius(env, ["skill", "status", "--json"], { runtime: "bun" });
+  assert.equal(fromPlugin.code, 0, fromPlugin.stderr);
+  assert.deepEqual(JSON.parse(fromPlugin.stdout), { ok: true, source: "plugin", path: join(plugin, "skills", "darius", "SKILL.md") });
+  const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
+  const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
+  assert.match(step.detail, /a plugin teaches/u);
+  assert.doesNotMatch(step.detail, /skill install/u);
+
+  assert.equal(darius(env, ["skill", "install"]).code, 0);
+  assert.equal(JSON.parse(darius(env, ["skill", "status", "--json"]).stdout).source, "user");
+});
+
+test("setup names darius skill install when no skill teaches darius", () => {
+  const { env } = sandbox();
+  const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
+  const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
+  assert.match(step.detail, /darius skill install/u);
 });
 
 test("renderSkill is pure: an unmarked command is hidden, a marked one shows its usage", () => {

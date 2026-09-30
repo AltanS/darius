@@ -100,6 +100,7 @@ case "\${1:-}" in
     if [ "$to" = "$version" ]; then outcome=up-to-date; else outcome=updated; fi
     echo "a login script says hello"
     printf '{"ok":true,"outcome":"%s","from":"%s","to":"%s","detail":"","pruned":[]}\\n' "$outcome" "$version" "$to" ;;
+  skill) exit "\${FAKE_SKILL_STATUS:-1}" ;;
   *) echo "fake darius $version: $*" ;;
 esac
 `;
@@ -506,8 +507,18 @@ test("install.sh installs the newest tag fresh, runs setup, and a second run cha
   assert.equal(readlinkSync(join(home, ".local", "bin", "darius")), join(app, "current", "bin", "darius"));
   assert.match(first.stdout, /✓ cloned v1\.0\.0/);
   assert.match(first.stdout, /✓ darius 1\.0\.0 runs from/);
-  assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["1.0.0 --version", "1.0.0 setup --systemd"]);
+  assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["1.0.0 --version", "1.0.0 setup --systemd", "1.0.0 skill status"]);
   assert.deepEqual(readFileSync(bin.log, "utf8").trim().split("\n"), ["--user try-restart darius-web.service"]);
+  const tail = first.stdout.trim().split("\n").slice(-3);
+  assert.match(tail[0] ?? "", /^! .*\/\.local\/bin is not on PATH\. Add it: echo 'export PATH="\$HOME\/\.local\/bin:\$PATH"' >> ~\/\.(bash|zsh)rc, then open a new shell$/u);
+  assert.equal(tail[1], "next: cd into a repo you track and run: darius init");
+  assert.equal(tail[2], "next: to teach Claude Code sessions darius, run: darius skill install");
+
+  process.env.FAKE_SKILL_STATUS = "0";
+  const taught = runInstall(home, app, bin.dir, ["--tag", "v1.0.0", "--source", source.url]);
+  delete process.env.FAKE_SKILL_STATUS;
+  assert.equal(taught.status, 0, taught.stderr);
+  assert.match(taught.stdout, /next: cd into a repo you track and run: darius init\n$/u, "a skill already teaches: no skill line");
 
   const second = runInstall(home, app, bin.dir, ["--tag", "v1.0.0", "--source", `file://${join(tempDir("gone"), "x")}`]);
   assert.equal(second.status, 0, second.stderr);

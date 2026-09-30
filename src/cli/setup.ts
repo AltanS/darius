@@ -17,7 +17,9 @@
  *      `src/core/config.ts` owns the format.
  *   3. create the state root (`~/.local/share/darius`, or `DARIUS_STATE_DIR`).
  *   4. refresh the Claude Code skill file when it carries a darius stamp
- *      (src/cli/skill.ts); it never installs one.
+ *      (src/cli/skill.ts); it never installs one. With no user-level file,
+ *      it says `darius skill install`, unless an installed plugin ships a
+ *      stamped darius skill: then the plugin teaches and nothing is needed.
  *
  * `--systemd`: renders the units that config.toml's `[setup] units` lists
  * (sync, vigil-sweep, run-due and web; all four when the key is absent) from
@@ -61,7 +63,7 @@ import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-p
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
-import { refreshSkill, renderSkill, skillPath } from "./skill.ts";
+import { findPluginSkill, refreshSkill, renderSkill, skillPath } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -505,7 +507,8 @@ export function defaultDeps(): SetupDeps {
  */
 function refreshSkillStep(home: string): Step {
   try {
-    return { what: "skill", ...refreshSkill(renderSkill(listCommands()), skillPath(claudeDir(home))) };
+    const dir = claudeDir(home);
+    return { what: "skill", ...refreshSkill(renderSkill(listCommands()), skillPath(dir), findPluginSkill(dir)) };
   } catch (cause) {
     return { ok: false, what: "skill", detail: errorMessage(cause) };
   }

@@ -51,6 +51,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "major",
   "help",
   "brief",
+  "no-import",
 ]);
 
 function looksLikeFlag(token: string): boolean {

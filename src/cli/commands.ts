@@ -15,6 +15,7 @@ import { register, type Command } from "./registry.ts";
 import { dueCommand } from "./due.ts";
 import { harnessCommand } from "./harness.ts";
 import { importCommand } from "./import.ts";
+import { initCommand } from "./init.ts";
 import { linkCommand } from "./link.ts";
 import { policyCheckCommand } from "./policy-check.ts";
 import { profileCommand } from "./profile.ts";
@@ -35,6 +36,7 @@ const COMMANDS: readonly Command[] = [
   dueCommand,
   harnessCommand,
   importCommand,
+  initCommand,
   linkCommand,
   policyCheckCommand,
   profileCommand,

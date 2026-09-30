@@ -66,7 +66,7 @@ export function resolveProject(flag?: string, cwd?: string): string {
   const marker = findMarker(cwd ?? process.cwd());
   if (marker !== null) return marker.project;
   throw new UsageError(
-    "no project: pass --project, set DARIUS_PROJECT, or run inside a repo with a .darius.toml marker",
+    "no project here: run darius init in the repo root, or pass --project <name>",
   );
 }
 

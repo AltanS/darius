@@ -27,11 +27,12 @@ symlink `current` names the live one. `~/.local/bin/darius` points to `current/b
 1. Install the newest release. `scripts/install.sh` clones it, links `~/.local/bin/darius`,
    writes a config skeleton to `~/.config/darius/config.toml`, creates the store dir
    `~/.local/share/darius`, and enables the units: sync every 15 minutes, the vigil sweep daily
-   at 06:30, run-due hourly at :05, and the web page.
+   at 06:30, run-due hourly at :05, and the web page. Its last lines say what to do next:
+   `darius init` in each repo, and `darius skill install` when no Claude Code plugin teaches
+   darius yet.
 
    ```bash
-   git clone -q --depth 1 https://github.com/AltanS/darius.git /tmp/darius-install
-   bash /tmp/darius-install/scripts/install.sh && rm -rf /tmp/darius-install
+   bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)
    ```
 
 2. On the bucket host only, start SeaweedFS. It runs as the user unit `darius-seaweedfs.service`
@@ -118,16 +119,29 @@ app in place.
 
 ## Link a repo
 
+Run `darius init` once in each repo, on each host. It prints what it did and what to run next.
+
+- In a new repo it writes `.darius.toml`, links the checkout on this host, and creates
+  `.tracker/`. Commit both.
+- In a repo with a `.tracker/` from the old tracker plugin it imports the rituals, runs and
+  verification log into the darius store, writes `.darius.toml` and links the checkout.
+  `.tracker/` stays as it is. It refuses the import when the store already holds rituals for the
+  project; `darius init --no-import` then links without it.
+- In a repo with a committed `.darius.toml` (a clone on another host) it links the checkout.
+  A second run says `already linked`.
+
+`--project <name>` names the project; the default is the directory name.
+
 A repo defines its project in one committed file at its root. The bucket holds all other state.
 
 ```toml
 # .darius.toml
-v = 1                               # format version
+v = 2                               # format version
 project = "acme-web"                 # the project this repo belongs to
 max_mode = "report"                 # optional: the highest ritual mode the timer may run here
 ```
 
-Run this once inside each local checkout:
+`darius init` links through `darius link`, which you can also run by hand:
 
 ```bash
 darius link          # writes <project> = "<checkout>" to ~/.config/darius/links.toml
@@ -210,10 +224,11 @@ the full reference.
 - `darius ritual add|list|show|set|pause|resume|retire`: recurring work with a cadence and a policy.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
-- `darius skill [install|uninstall|hook]`: print, install or remove the Claude Code skill for darius, or print its SessionStart hook.
+- `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, or print its SessionStart hook.
 - `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
+- `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.
 - `darius selftest seed|fire|status`: the `darius-selftest` project the acceptance run uses.
