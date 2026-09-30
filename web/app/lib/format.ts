@@ -29,6 +29,11 @@ export function relativeDate(date: string, today: string): string {
   return days > 0 ? `in ${days} d` : `${-days} d ago`;
 }
 
+/** Whole days from one YYYY-MM-DD date to another; negative when `to` is earlier. */
+export function dayGap(from: string, to: string): number {
+  return dayNumber(to) - dayNumber(from);
+}
+
 function pair(big: number, bigUnit: string, small: number, smallUnit: string): string {
   return small === 0 ? `${big} ${bigUnit}` : `${big} ${bigUnit} ${small} ${smallUnit}`;
 }

@@ -1,15 +1,19 @@
-/** The pieces of the command board: the status strip, the Now rows, and the Needs you card. */
+/** The pieces of the command board: the Next line, the status strip, the Now rows, the Needs you card and the Last night rows. */
 
 import { Link } from "react-router";
 
 import type { MdBlock } from "../../../src/web/api.ts";
+import type { NextLine } from "../lib/agenda.ts";
 import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
+import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
+import { KindChips } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
 import { QuestionList } from "./result.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
+import { Row, RowList } from "./row.tsx";
 import { Fold, Status } from "./ui.tsx";
 
 interface PiecesProps {
@@ -28,7 +32,7 @@ export function Pieces({ pieces }: PiecesProps): React.ReactNode {
 interface ReportProps {
   report: Excerpt;
   /** How many lines of the paragraph show. */
-  lines: 3 | 4;
+  lines: 2 | 3 | 4;
   fades: boolean;
 }
 
@@ -59,6 +63,7 @@ interface StatusStripProps {
 
 /** The status strip: the `Pill` segments of the project page, over all projects. Each segment is a link to what it counts. */
 export function StatusStrip({ segments }: StatusStripProps): React.ReactNode {
+  if (segments.length === 0) return null;
   return (
     <nav className="pulse pulse-home" aria-label="Summary">
       {segments.map((segment) => (
@@ -72,28 +77,73 @@ interface NowListProps {
   runs: readonly NowRun[];
 }
 
-/** One compact row per run that runs now, with its project, how long it has run and the sweeping light. */
+/** One row per run that runs now, with its project, how long it has run and the sweeping light. */
 export function NowList({ runs }: NowListProps): React.ReactNode {
   return (
-    <ul className="rows now-rows">
+    <RowList>
       {runs.map((run) => (
-        <li key={run.id}>
-          <Link to={run.href} className="row row-live now-row">
-            <span className="live-bar" aria-hidden="true" />
-            <span className="row-main">
-              <span className="row-title has-kind">
-                <KindIcon kind={run.kind} titled className="kind-lead" />
-                {run.title}
-              </span>
-              <span className="row-sub">
-                {run.project}, <Elapsed since={run.startedAt} />, {run.who === "timer" ? "by timer" : `by ${run.who}`}
-              </span>
-            </span>
-            <Status tone="run" label="Running" />
-          </Link>
-        </li>
+        <Row
+          key={run.id}
+          kind={run.kind}
+          href={run.href}
+          title={run.title}
+          rail="run"
+          live
+          chips={<KindChips kind={run.kind} manual={run.manual} />}
+          state={RUNNING}
+          meta={[run.project, run.who === "timer" ? "by timer" : `by ${run.who}`]}
+          time={
+            <>
+              for <Elapsed since={run.startedAt} />
+            </>
+          }
+        />
       ))}
-    </ul>
+    </RowList>
+  );
+}
+
+interface NextUpProps {
+  next: NextLine;
+}
+
+/** "Next ⟳ Daily site report · tomorrow": one link under the verdict to the first item that is not late. */
+export function NextUp({ next }: NextUpProps): React.ReactNode {
+  return (
+    <Link to={next.href} className="nextup">
+      <span className="nextup-l">Next</span>
+      <KindIcon kind={next.kind} className="nextup-icon" />
+      <span className="nextup-t">{next.title}</span>
+      <span className={next.isToday ? "nextup-w is-today" : "nextup-w"}>{next.when}</span>
+    </Link>
+  );
+}
+
+interface DoneRowsProps {
+  cards: readonly Card[];
+}
+
+/** The Last night rows: what finished, as rows. The row opens the report; a desktop shows an excerpt under it. */
+export function DoneRows({ cards }: DoneRowsProps): React.ReactNode {
+  return (
+    <RowList>
+      {cards.map((card) => (
+        <Row
+          key={card.id}
+          id={card.id}
+          kind={card.item ?? "ritual"}
+          href={card.href}
+          title={card.title}
+          chips={card.item === null ? undefined : <KindChips kind={card.item} manual={card.manual} />}
+          state={card.word.ink === "plain" || card.word.ink === "mute" ? null : { tone: card.word.ink, label: card.word.text }}
+          meta={card.meta}
+          time={card.side === null ? undefined : card.side.text}
+          acts={card.actions[0] === undefined ? undefined : <Link to={card.actions[0].href}>{card.actions[0].text}</Link>}
+          note={card.meta2}
+          excerpt={card.report === null ? undefined : <Report report={card.report} lines={2} fades={false} />}
+        />
+      ))}
+    </RowList>
   );
 }
 
@@ -145,7 +195,14 @@ export function CardView({ card }: CardViewProps): React.ReactNode {
             {card.item === null ? null : <KindIcon kind={card.item} titled />}
             <Link to={card.href}>{card.title}</Link>
           </h3>
-          <p className="card-meta">{card.meta}</p>
+          <p className="card-meta rw-line">
+            {card.item === null ? null : (
+              <span className="rw-seg rw-chips">
+                <KindChips kind={card.item} manual={card.manual} />
+              </span>
+            )}
+            <span className="rw-seg rw-meta">{card.meta.join(", ")}</span>
+          </p>
           {card.meta2 === null ? null : <p className="card-meta">{card.meta2}</p>}
         </div>
         <div className="hc-side">

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../src/web/api.ts";
-import { agendaSentence, buildAgenda, phoneHidden, whenWord, type Agenda } from "../web/app/lib/agenda.ts";
+import { buildAgenda, nextLine, phoneHidden, type Agenda } from "../web/app/lib/agenda.ts";
 import { cadenceText } from "../web/app/lib/view.ts";
 
 const TODAY = "2026-09-30";
@@ -104,22 +104,27 @@ test("vigils: dated ones join the agenda, event ones wait apart, closed ones van
   assert.deepEqual(agenda.waiting.map((row) => row.slug), ["event-flagged", "event-a"], "flagged first");
   assert.equal(agenda.armed, 5);
   const late = agenda.groups[0]?.rows.find((row) => row.slug === "dated-late");
-  assert.equal(late?.flag, "flagged, last check failed");
-  assert.equal(late?.state?.word, "1 day late");
+  assert.equal(late?.note, "last check failed, 1 day late");
+  assert.equal(late?.state?.label, "Flagged");
+  assert.equal(late?.rail, "bad");
   assert.equal(late?.overdueDays, 1);
 });
 
-test("the counts and the sub line: overdue first, then the first thing that is not overdue", () => {
+test("the counts and the Next line: overdue first, then the first thing that is not overdue", () => {
   const agenda = build([SAMPLE]);
   assert.equal(agenda.overdue, 3, "two rituals and one dated vigil");
   assert.equal(agenda.dueToday, 3);
   assert.equal(agenda.next?.title, "due-djinn");
-  assert.equal(agendaSentence(agenda, TODAY), " 3 overdue. Next: due-djinn, today.");
+  assert.deepEqual(nextLine(agenda, TODAY), { title: "due-djinn", href: "/p/shop/rituals/due-djinn", kind: "ritual", manual: false, when: "today", isToday: true });
   const quiet = build([project("shop", [ritual("only", { nextDue: "2026-10-01" })])]);
-  assert.equal(agendaSentence(quiet, TODAY), " Next: only, tomorrow.");
-  assert.equal(agendaSentence(build([project("shop", [])]), TODAY), "");
+  const tomorrow = nextLine(quiet, TODAY);
+  assert.equal(tomorrow?.when, "tomorrow");
+  assert.equal(tomorrow?.isToday, false);
+  assert.equal(tomorrow?.manual, true, "a ritual in mode off is manual: the Next line shows the ritual icon, the manual modifier is on the row");
+  assert.equal(nextLine(build([project("shop", [])]), TODAY), null);
   const long = build([project("shop", [ritual("long", { title: "Partner App of the Month booking ends (no date window exists)", nextDue: "2026-10-01" })])]);
-  assert.equal(agendaSentence(long, TODAY), " Next: Partner App of the Month booking ends…, tomorrow.", "a long title ends at a word, without a dangling bracket");
+  assert.equal(nextLine(long, TODAY)?.title, "Partner App of the Month booking ends (no date window exists)", "the title is whole: the page wraps it");
+  assert.equal(nextLine(build([project("shop", [ritual("far", { nextDue: "2026-11-15" })])]), TODAY)?.when, "15 Nov");
 });
 
 test("running and held djinns sit in Today with their state word; a failure today waits until tomorrow", () => {
@@ -131,9 +136,9 @@ test("running and held djinns sit in Today with their state word; a failure toda
     ]),
   ]);
   assert.deepEqual(titles(agenda, "Today"), ["holds", "runs"]);
-  assert.deepEqual(agenda.groups.find((group) => group.label === "Today")?.rows.map((row) => row.state?.word), ["Held", "Running"]);
+  assert.deepEqual(agenda.groups.find((group) => group.label === "Today")?.rows.map((row) => row.state?.label), ["Waiting for you", "Running"]);
   assert.deepEqual(titles(agenda, "Tomorrow"), ["broke"]);
-  assert.equal(agenda.groups.find((group) => group.label === "Tomorrow")?.rows[0]?.state?.word, "Failed");
+  assert.equal(agenda.groups.find((group) => group.label === "Tomorrow")?.rows[0]?.state?.label, "Failed");
   assert.equal(agenda.overdue, 0, "a held djinn is not overdue");
   assert.equal(agenda.dueToday, 0, "running and held rows are not due today");
 });
@@ -153,7 +158,7 @@ test("a complete run that asks the operator something shows as Asks you", () => 
     acknowledged: null,
   };
   const agenda = build([project("shop", [ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-01" })], [], [asks])]);
-  assert.equal(agenda.groups[0]?.rows[0]?.state?.word, "Asks you");
+  assert.equal(agenda.groups[0]?.rows[0]?.state?.label, "Asks you");
 });
 
 test("the project name shows only when more than one project contributes", () => {
@@ -178,9 +183,6 @@ test("cadence and last done are in words", () => {
 test("the horizon: day 14 has its own group, day 15 is Later", () => {
   const agenda = build([project("shop", [ritual("edge", { nextDue: "2026-10-14" }), ritual("past", { nextDue: "2026-10-15" })])]);
   assert.deepEqual(labels(agenda), ["Wed 14 Oct", "Later"]);
-  assert.equal(whenWord(TODAY, "2026-10-14"), "Wed 14 Oct");
-  assert.equal(whenWord(TODAY, "2026-10-01"), "tomorrow");
-  assert.equal(whenWord(TODAY, TODAY), "today");
 });
 
 test("a phone shows Overdue, Today and Tomorrow in full, then six more rows", () => {

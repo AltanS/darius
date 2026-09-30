@@ -2,17 +2,20 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/ritual";
 import type { RitualHandoff } from "../../../src/web/api.ts";
-import { KindTag } from "../components/kind.tsx";
+import { KindChips } from "../components/chip.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Report } from "../components/board.tsx";
-import { ResultQuestions, ResultTags } from "../components/result.tsx";
+import { ResultChips, ResultQuestions } from "../components/result.tsx";
+import { StateWord } from "../components/row.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
 import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
 import { projectPath, runPath } from "../lib/format.ts";
-import { ritualKind } from "../lib/kind.ts";
+import { isManual } from "../lib/kind.ts";
+import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
-import { asksYou, cadenceText, isImported, isUnattended, nextStep, nextText, reportExcerpt, ritualFailure, runState } from "../lib/view.ts";
+import { summaryTags } from "../lib/result.ts";
+import { asksYou, cadenceText, isImported, nextStep, reportExcerpt, ritualFailure, runState } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -60,9 +63,8 @@ function modeText(mode: string): string {
 export default function Ritual({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { ritual, held, finished, next, asks, report } = loaderData;
   const { row, policy, project } = ritual;
-  const kind = ritualKind(row);
-  const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind }));
-  const unattended = isUnattended(row);
+  const manual = isManual(row);
+  const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
   const cadence = cadenceText(row.cadence);
   const model = policy.model ?? "the profile's model";
   const { today } = useClock();
@@ -72,32 +74,42 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         <Crumbs>
           <Link to={projectPath(project)}>{project}</Link>
         </Crumbs>
-        <h1 className="page-title">
+        <h1 className="page-title page-title-sans">
           <TitleText text={row.title} />
         </h1>
-        <p className="page-meta">
-          <KindTag kind={kind} />
-          <code className="text-faint">{row.slug}</code>
+        <p className="page-meta meta-flow">
+          <span className="rw-chips">
+            <KindChips kind="ritual" manual={manual} />
+          </span>
+          <StateWord state={ritualWord(row, today)} />
           {cadence === null ? null : <span>{cadence}</span>}
-          <span>{nextText(row, today)}</span>
+          <code className="text-faint">{row.slug}</code>
         </p>
-        <p className="lede">
-          {unattended
-            ? `darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`
-            : "darius does not run this ritual (mode off). It is done by hand and only tracked here."}
-          {row.skill === null ? null : (
-            <>
-              {" "}
-              It follows the repo skill <code className="inline-code">{row.skill}</code>.
-            </>
-          )}
-          {row.host === null ? null : (
-            <>
-              {" "}
-              Runs on <code className="inline-code">{row.host}</code> only; the timer of any other host skips it.
-            </>
-          )}
-        </p>
+        {manual ? (
+          <div className="note-box">
+            <p>
+              {row.mode === "off" ? "darius does not start this ritual (mode off)." : "darius does not start this ritual, because it is not active."} You run it by hand; darius tracks the schedule. To let darius run it, give it a policy with{" "}
+              <code className="inline-code">darius ritual set {row.slug} --mode report ...</code>.
+            </p>
+          </div>
+        ) : (
+          <p className="lede">{`darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`}</p>
+        )}
+        {row.skill === null && row.host === null ? null : (
+          <p className="lede lede-tight">
+            {row.skill === null ? null : (
+              <>
+                It follows the repo skill <code className="inline-code">{row.skill}</code>.
+              </>
+            )}
+            {row.skill === null || row.host === null ? null : " "}
+            {row.host === null ? null : (
+              <>
+                Runs on <code className="inline-code">{row.host}</code> only; the timer of any other host skips it.
+              </>
+            )}
+          </p>
+        )}
       </header>
 
       <div className="board">
@@ -126,7 +138,11 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
             <Section title="Latest report" aside={<Link to={runPath(project, finished.run)}>Read it all</Link>}>
               <div className={`card card-accent edge-${runState(finished).tone}`}>
                 <Report report={report} lines={4} fades={false} />
-                <ResultTags summary={finished.result} isAnswered={finished.acknowledged !== null} />
+                {finished.result === null || summaryTags(finished.result, finished.acknowledged !== null).length === 0 ? null : (
+                  <div className="rw-chips mt-3">
+                    <ResultChips summary={finished.result} isAnswered={finished.acknowledged !== null} />
+                  </div>
+                )}
               </div>
             </Section>
           )}
@@ -138,7 +154,9 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           )}
 
           <Section title="History">
-            <RunList runs={runs} showProject={false} showLabel={false} empty="This ritual has not run yet." />
+            <div className="panel">
+              <RunList runs={runs} showProject={false} showLabel={false} empty="This ritual has not run yet." />
+            </div>
           </Section>
         </div>
 
@@ -156,7 +174,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
                   ]}
                 />
               </Fold>
-              <Fold summary="Instructions">{ritual.body.length === 0 ? <Empty>No instructions.</Empty> : <Markdown blocks={ritual.body} />}</Fold>
+              <Fold summary="Instructions" open={manual}>{ritual.body.length === 0 ? <Empty>No instructions.</Empty> : <Markdown blocks={ritual.body} />}</Fold>
             </div>
           </Section>
         </aside>

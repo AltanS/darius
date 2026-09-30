@@ -10,6 +10,7 @@ import { useClock } from "../lib/clock.tsx";
 import { decideCommand } from "../lib/format.ts";
 import { actionTag, groupItems, itemStateTag, itemsText, metricTag, resultTone, resultWord, severityTone, summaryTags, type TagSpec } from "../lib/result.ts";
 import { decisionText } from "../lib/view.ts";
+import { Chip } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { Fold, Section, Status } from "./ui.tsx";
 
@@ -17,28 +18,20 @@ interface TagProps {
   tag: TagSpec;
 }
 
-/** A small word in a box, in its tone. The word carries the meaning; the colour only repeats it. */
+/** A small word in a chip, in its tone. The word carries the meaning; the colour only repeats it. */
 export function Tag({ tag }: TagProps): React.ReactNode {
-  return <span className={tag.tone === null ? "tag" : `tag tone-${tag.tone}`}>{tag.text}</span>;
+  return <Chip color={tag.tone ?? "idle"}>{tag.text}</Chip>;
 }
 
-interface ResultTagsProps {
-  summary: RunResultSummary | null;
+interface ResultChipsProps {
+  summary: RunResultSummary;
   /** Someone answered the questions (`darius run ack`). */
   isAnswered: boolean;
 }
 
-/** The tags of a run row: open critical and high items, and the questions. Nothing when there is nothing to say. */
-export function ResultTags({ summary, isAnswered }: ResultTagsProps): React.ReactNode {
-  const tags = summary === null ? [] : summaryTags(summary, isAnswered);
-  if (tags.length === 0) return null;
-  return (
-    <span className="tags">
-      {tags.map((tag) => (
-        <Tag key={tag.text} tag={tag} />
-      ))}
-    </span>
-  );
+/** The chips of a run row: open critical and high items, and the questions. */
+export function ResultChips({ summary, isAnswered }: ResultChipsProps): React.ReactNode {
+  return summaryTags(summary, isAnswered).map((tag) => <Tag key={tag.text} tag={tag} />);
 }
 
 interface QuestionListProps {

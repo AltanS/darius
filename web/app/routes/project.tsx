@@ -2,23 +2,24 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/project";
 import { ComingUp, Waiting } from "../components/agenda.tsx";
-import { KindIcon } from "../components/kind.tsx";
+import { KindChips } from "../components/chip.tsx";
 import { LivePanel, PhoneMore, Pulse } from "../components/pulse.tsx";
-import { DjinnCard, RunList } from "../components/runs.tsx";
-import { Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
+import { Row, RowList } from "../components/row.tsx";
+import { ReportRow, RunList } from "../components/runs.tsx";
+import { Empty, Fold, Section, Time } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
 import { vigilAnchor } from "../lib/format.ts";
 import { statusOf } from "../lib/status.ts";
 import { useHashTarget } from "../lib/target.ts";
-import { vigilBadge } from "../lib/tone.ts";
+import { vigilWord } from "../lib/state-words.ts";
 import { activity, asksYou, isDjinn, isUnattended, reportExcerpt, stuckFor } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 const RECENT = 10;
 
-/** Djinn cards a phone shows before its own button; the rest repeat what Coming up says. */
-const DJINNS_PHONE = 1;
+/** Latest-report rows a phone shows before its own button; the rest repeat what Coming up says. */
+const REPORTS_PHONE = 3;
 
 /** Recent runs a phone shows before its own button. */
 const RECENT_PHONE = 3;
@@ -60,10 +61,6 @@ export function loader({ context, params }: Route.LoaderArgs) {
 
 export const meta: Route.MetaFunction = ({ params }) => [{ title: `${params.project} | darius` }];
 
-function rowClass(target: string, id: string, extra = ""): string {
-  return `row target-row${extra}${target === id ? " is-target" : ""}`;
-}
-
 interface PathTextProps {
   path: string;
 }
@@ -87,19 +84,19 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
     <div className="proj">
       <header className="page-head page-head-tight proj-head">
         <h1 className="page-title">{project.name}</h1>
-        <p className="page-meta">
-          {project.checkout === null ? (
-            <span>not linked on this host</span>
-          ) : (
-            <code className="proj-path">
-              <PathText path={project.checkout} />
-            </code>
-          )}
+        <p className="page-meta proj-meta meta-dots">
           {project.maxMode === null ? null : <span>at most {project.maxMode} mode</span>}
           <span>
             synced <Time iso={project.lastSync} />
           </span>
         </p>
+        {project.checkout === null ? <p className="page-meta proj-meta meta-dots">not linked on this host</p> : (
+          <p className="proj-path">
+            <code>
+              <PathText path={project.checkout} />
+            </code>
+          </p>
+        )}
       </header>
 
       {project.error === null ? null : (
@@ -109,7 +106,7 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
         </div>
       )}
 
-      <Pulse data={{ project: project.name, live, openVigils, overdue: agenda.overdue, waiting: agenda.waiting.length }} />
+      <Pulse data={{ live, openVigils, overdue: agenda.overdue, dueToday: agenda.dueToday, waiting: agenda.waiting.length, flaggedWaiting: agenda.waiting.filter((row) => row.flagged).length }} />
 
       <div className="proj-body">
         <div className="band">
@@ -121,26 +118,26 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
             <ComingUp agenda={agenda} anchors target={target} />
 
             {djinns.length === 0 && unattended > 0 ? null : (
-              <Section title="Djinns" id="djinns">
+              <Section title="Latest reports" id="reports">
                 {djinns.length === 0 ? (
                   <Empty>darius runs no ritual of this project yet.</Empty>
                 ) : (
-                  <PhoneMore hidden={djinns.length - DJINNS_PHONE} noun="djinns">
-                    <div className="cards djinn-list stagger">
-                      {djinns.map(({ ritual, last, report }, index) => (
-                        <div key={ritual.slug} className={index >= DJINNS_PHONE ? "phone-extra" : undefined}>
-                          <DjinnCard project={project.name} ritual={ritual} last={last} report={report} showProject={false} />
-                        </div>
-                      ))}
-                    </div>
-                  </PhoneMore>
+                  <div className="panel">
+                    <PhoneMore hidden={djinns.length - REPORTS_PHONE} noun="report">
+                      <RowList bare className="stagger">
+                        {djinns.map(({ ritual, last, report }, index) => (
+                          <ReportRow key={ritual.slug} project={project.name} ritual={ritual} last={last} report={report} showProject={false} className={index >= REPORTS_PHONE ? "phone-extra" : undefined} />
+                        ))}
+                      </RowList>
+                    </PhoneMore>
+                  </div>
                 )}
               </Section>
             )}
 
             <Section title="Recent runs" id="recent" aside={<Link to={`/runs?project=${encodeURIComponent(project.name)}`}>All runs</Link>}>
               <div className="panel">
-                <PhoneMore hidden={recent.length - RECENT_PHONE} noun="runs">
+                <PhoneMore hidden={recent.length - RECENT_PHONE} noun="run">
                   <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
                 </PhoneMore>
               </div>
@@ -153,24 +150,13 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
             {closedVigils.length === 0 ? null : (
               <div className="folds proj-closed">
                 <Fold open={closedTarget} summary={`Closed vigils (${closedVigils.length})`}>
-                  <ul className="rows">
+                  <RowList bare>
                     {closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
-                      const badge = vigilBadge(vigil);
+                      const state = vigilWord(vigil);
                       const id = vigilAnchor(vigil.slug);
-                      return (
-                        <li key={vigil.slug} id={id} className={rowClass(target, id)}>
-                          <span className="row-main">
-                            <span className="row-title has-kind">
-                              <KindIcon kind="vigil" titled className="kind-lead" />
-                              {vigil.title}
-                            </span>
-                            {vigil.lastOutcome === null ? null : <span className="row-sub">last check {vigil.lastOutcome}</span>}
-                          </span>
-                          <Status tone={badge.tone} label={badge.label} />
-                        </li>
-                      );
+                      return <Row key={vigil.slug} id={id} kind="vigil" title={vigil.title} chips={<KindChips kind="vigil" />} state={state} meta={vigil.lastOutcome === null ? [] : [`last check ${vigil.lastOutcome}`]} className={`target-row${target === id ? " is-target" : ""}`} />;
                     })}
-                  </ul>
+                  </RowList>
                   {closedVigils.length > CLOSED_SHOWN ? <p className="rail-note mt-3">{closedVigils.length - CLOSED_SHOWN} older ones are not shown.</p> : null}
                 </Fold>
               </div>

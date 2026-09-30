@@ -1,4 +1,4 @@
-/** Small shared pieces: sections, status words, times, folds, chips. */
+/** Small shared pieces: sections, status words, times, folds, code chips. */
 
 import { useClock } from "../lib/clock.tsx";
 import { relativeDate, relativeTime } from "../lib/format.ts";
@@ -7,18 +7,6 @@ import type { Tone } from "../lib/tone.ts";
 interface StatusProps {
   tone: Tone;
   label: string;
-}
-
-/**
- * Uppercase Cinzel with its numbers in the body face: the Cinzel 1 reads as
- * an I, so "overdue 1 d" would read "OVERDUE I D".
- */
-interface WordProps {
-  text: string;
-}
-
-export function Word({ text }: WordProps): React.ReactNode {
-  return text.split(/(\d+)/u).map((part, index) => (/^\d+$/u.test(part) ? <span key={`${index}`} className="num">{part}</span> : part));
 }
 
 interface TitleTextProps {
@@ -30,14 +18,9 @@ export function TitleText({ text }: TitleTextProps): React.ReactNode {
   return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => (/^\d{4}-\d{2}-\d{2}$/u.test(part) ? <span key={`${index}`} className="whitespace-nowrap">{part}</span> : part));
 }
 
-/** A square in the state colour and the state in words: the state of a run or a ritual. */
+/** A state in words, in the state colour: sans, 13 px, weight 600, sentence case (no square; the square stays in the status strip). */
 export function Status({ tone, label }: StatusProps): React.ReactNode {
-  return (
-    <span className={`status tone-${tone}`}>
-      <span className="status-dot" aria-hidden="true" />
-      <Word text={label} />
-    </span>
-  );
+  return <span className={`status tone-${tone}`}>{label}</span>;
 }
 
 interface TimeProps {

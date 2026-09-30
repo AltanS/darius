@@ -7,16 +7,17 @@ import type { VigilRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { duration, runPath } from "../lib/format.ts";
 import type { Kind } from "../lib/kind.ts";
+import { railOf } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
 import { runState, stuckText, type ActivityRun } from "../lib/view.ts";
+import { KindChips } from "./chip.tsx";
 import { KindIcon } from "./kind.tsx";
-import { SectHead, Status, Time } from "./ui.tsx";
+import { Row, RowList } from "./row.tsx";
+import { SectHead, Time } from "./ui.tsx";
 
 interface PillProps {
   label: string;
   value: number;
-  /** A muted line after the label: what else there is to know. */
-  sub?: string;
   /** The colour while the count is above zero; a zero is always grey. */
   tone: Tone;
   /** A `#anchor` scrolls the page, anything else opens the route; null when there is nothing to open. */
@@ -28,7 +29,7 @@ interface PillProps {
 }
 
 /** One count of the status strip. The whole segment is the link. */
-export function Pill({ label, value, sub, tone, href, live = false, kind = null }: PillProps): React.ReactNode {
+export function Pill({ label, value, tone, href, live = false, kind = null }: PillProps): React.ReactNode {
   const on = value > 0;
   const className = `pill tone-${on ? tone : "idle"}`;
   const body = (
@@ -37,7 +38,6 @@ export function Pill({ label, value, sub, tone, href, live = false, kind = null 
       {kind === null ? <span className="pill-dot" aria-hidden="true" /> : <KindIcon kind={kind} size={14} className={`pill-kind${on ? "" : " is-off"}`} />}
       <span className="pill-n">{value}</span>
       <span className="pill-l">{label}</span>
-      {sub === undefined ? null : <span className="pill-sub">{sub}</span>}
     </>
   );
   if (href === null) return <div className={className}>{body}</div>;
@@ -62,39 +62,44 @@ export interface LiveRun {
 }
 
 export interface PulseData {
-  project: string;
   live: readonly LiveRun[];
   openVigils: readonly VigilRow[];
-  /** Rituals and dated vigils past due: the last segment, a link to Coming up. */
+  /** Rituals and dated vigils past due: the late segment, a link to Coming up. */
   overdue: number;
+  /** Rows due today that are not running or held now. */
+  dueToday: number;
   /** Armed vigils without a due date: the vigils segment opens their list. */
   waiting: number;
+  /** Flagged vigils among those without a due date: the flagged segment opens their list too. */
+  flaggedWaiting: number;
 }
 
 interface PulseProps {
   data: PulseData;
 }
 
-/** Whether an armed vigil is due today or late; one without a date never is. */
-export function vigilIsDue(vigil: VigilRow, today: string): boolean {
-  return vigil.due !== null && vigil.due <= today;
-}
-
-/** Running, waiting for you, armed vigils, overdue: one slim strip, each segment opens what it counts. */
+/**
+ * The status strip of a project: need you, running, flagged, late, due today,
+ * vigils armed. A segment shows only above zero, and the strip not at all
+ * when every segment is zero. Each segment opens what it counts.
+ */
 export function Pulse({ data }: PulseProps): React.ReactNode {
-  const { today } = useClock();
   const running = data.live.filter(({ run }) => run.phase === "running").length;
   const waiting = data.live.length - running;
   const flagged = data.openVigils.filter((vigil) => vigil.flagged).length;
-  const due = data.openVigils.filter((vigil) => vigilIsDue(vigil, today)).length;
-  const runsHref = (state: string) => `/runs?project=${encodeURIComponent(data.project)}&state=${state}`;
-  const vigilSub = [flagged === 0 ? null : `${flagged} flagged`, due === 0 ? null : `${due} due`].filter((part) => part !== null).join(", ");
+  const armedHref = data.waiting === 0 ? "#coming-up" : "#waiting";
+  const segments = [
+    waiting === 0 ? null : <Pill key="need" label="need you" value={waiting} tone="wait" href="#now" />,
+    running === 0 ? null : <Pill key="running" label="running" value={running} tone="run" href="#now" live />,
+    flagged === 0 ? null : <Pill key="flagged" label="flagged" value={flagged} tone="bad" href={data.flaggedWaiting > 0 ? "#waiting" : "#coming-up"} />,
+    data.overdue === 0 ? null : <Pill key="late" label="late" value={data.overdue} tone="late" href="#coming-up" />,
+    data.dueToday === 0 ? null : <Pill key="today" label="due today" value={data.dueToday} tone="gold" href="#coming-up" />,
+    data.openVigils.length === 0 ? null : <Pill key="armed" label="vigils armed" kind="vigil" value={data.openVigils.length} tone="gold" href={armedHref} />,
+  ].filter((segment) => segment !== null);
+  if (segments.length === 0) return null;
   return (
-    <nav className="pulse stagger" aria-label="Summary">
-      <Pill label="running" value={running} tone="run" href={running === 0 ? runsHref("running") : "#now"} live />
-      <Pill label="need you" value={waiting} tone="wait" href={waiting === 0 ? runsHref("held") : "#now"} />
-      <Pill label="vigils armed" kind="vigil" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : data.waiting === 0 ? "#coming-up" : "#waiting"} />
-      <Pill label="overdue" value={data.overdue} tone="late" href={data.overdue === 0 ? null : "#coming-up"} />
+    <nav className="pulse pulse-home stagger" aria-label="Summary">
+      {segments}
     </nav>
   );
 }
@@ -102,7 +107,7 @@ export function Pulse({ data }: PulseProps): React.ReactNode {
 interface PhoneMoreProps {
   /** How many rows the phone hides until the button is pressed. */
   hidden: number;
-  /** What the rows are, for the button: "Show 6 more runs". */
+  /** What one row is, for the button: "Show 6 more runs". */
   noun: string;
   /** Start open, for a link that points at a hidden row. */
   open?: boolean;
@@ -123,7 +128,7 @@ export function PhoneMore({ hidden, noun, open = false, children }: PhoneMorePro
     <div className={`phone-more${expanded ? " is-open" : ""}`}>
       {children}
       <button type="button" className="phone-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-        {expanded ? "Show fewer" : `Show ${hidden} more ${noun}`}
+        {expanded ? "Show fewer" : `Show ${hidden} more ${noun}${hidden === 1 ? "" : "s"}`}
       </button>
     </div>
   );
@@ -143,46 +148,43 @@ interface LivePanelProps {
   live: readonly LiveRun[];
 }
 
-/** Runs that are open now or wait for a person. A running one sweeps a light along its top edge. */
+/** Runs that are open now or wait for a person; nothing at all when there are none. A running one sweeps a light along its top edge. */
 export function LivePanel({ live }: LivePanelProps): React.ReactNode {
+  if (live.length === 0) return null;
   return (
     <section id="now" className="section">
       <SectHead title="Now" />
       <div className="panel">
-        {live.length === 0 ? (
-          <p className="panel-empty">Nothing runs and nothing waits for you.</p>
-        ) : (
-          <ul className="rows stagger">
-            {live.map(({ run, stuck }) => {
-              const state = runState(run);
-              const running = run.phase === "running";
-              return (
-                <li key={run.run}>
-                  <Link to={runPath(run.project, run.run)} className={`row row-tight${running ? " row-live" : ""}`}>
-                    {running ? <span className="live-bar" aria-hidden="true" /> : null}
-                    <span className="row-main">
-                      <span className="row-title has-kind">
-                        <KindIcon kind={run.kind} titled className="kind-lead" />
-                        {run.label}
-                      </span>
-                      <span className="row-sub">
-                        {running ? <Elapsed since={run.startedAt} /> : <Time iso={run.startedAt} />}
-                        {run.who === "timer" ? ", by timer" : `, by ${run.who}`}
-                      </span>
-                      {stuck === null ? null : <span className="row-sub tint tone-late">{stuckText(stuck)}</span>}
-                      {run.phase === "held" && run.questions.length > 0 ? (
-                        <span className="row-sub">
-                          {run.questions.length} question{run.questions.length === 1 ? "" : "s"}
-                        </span>
-                      ) : null}
-                    </span>
-                    <Status tone={state.tone} label={state.label} />
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <RowList bare className="stagger">
+          {live.map(({ run, stuck }) => {
+            const state = runState(run);
+            const running = run.phase === "running";
+            const questions = run.phase === "held" && run.questions.length > 0 ? `${run.questions.length} question${run.questions.length === 1 ? "" : "s"}` : null;
+            return (
+              <Row
+                key={run.run}
+                kind={run.kind}
+                href={runPath(run.project, run.run)}
+                title={run.label}
+                rail={stuck === null ? railOf(state) : "late"}
+                live={running}
+                chips={<KindChips kind={run.kind} manual={run.manual} />}
+                state={state}
+                meta={[questions, run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null)}
+                time={
+                  running ? (
+                    <>
+                      for <Elapsed since={run.startedAt} />
+                    </>
+                  ) : (
+                    <Time iso={run.startedAt} />
+                  )
+                }
+                detail={stuck === null ? undefined : <span className="ink-late">{stuckText(stuck)}</span>}
+              />
+            );
+          })}
+        </RowList>
       </div>
     </section>
   );

@@ -6,9 +6,9 @@
  * time-ordered list of every active ritual and every dated vigil, and Waiting
  * on an event, the vigils without a date; both built by `lib/agenda.ts`, which
  * the project page draws too)? What happened last night (the Last night
- * cards)? Is darius itself healthy (one quiet Timer and Sync line)? Every
- * value here comes from the status. The sub line under the verdict names what
- * is next: "Wed 30 Sep, 18:32. 6 overdue. Next: Daily site report, tomorrow."
+ * cards)? Is darius itself healthy (one quiet line: Timer, Sync, last ritual
+ * run)? Every value here comes from the status. The sub line under the verdict
+ * is the date and time; the Next line under it names what is next.
  *
  * Three filters keep noise off the page. Only djinns (rituals darius runs
  * that follow a repo skill) get a line. Imported and acceptance runs never
@@ -32,9 +32,10 @@
  */
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { agendaSentence, buildAgenda, type Agenda } from "./agenda.ts";
+import { buildAgenda, nextLine, type Agenda, type NextLine } from "./agenda.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, projectPath, relativeDate, ritualPath, roughDuration, runPath, shortDate, vigilPath } from "./format.ts";
-import { ritualKind, type Kind } from "./kind.ts";
+import { isManual, type Kind } from "./kind.ts";
+import { ASKS_YOU, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
 import { ackText, activity, asksYou, decisionText, excerpt, isDjinn, runState, stuckFor, type ActivityRun, type Excerpt } from "./view.ts";
 
@@ -92,8 +93,10 @@ export type CardKind = "held" | "asks" | "failed" | "stuck" | "flagged" | "unrea
 export interface Card {
   id: string;
   kind: CardKind;
-  /** What the card is about: a ritual darius runs, a ritual done by hand, or a vigil. Null for a project that cannot be read. */
+  /** What the card is about: a ritual or a vigil. Null for a project that cannot be read. */
   item: Kind | null;
+  /** The ritual is done by hand (mode off): it shows a manual chip too. */
+  manual: boolean;
   /** The colour of the left border; null for a plain card. */
   edge: Tone | null;
   word: Piece;
@@ -101,7 +104,8 @@ export interface Card {
   side: Piece | null;
   title: string;
   href: string;
-  meta: string;
+  /** The pieces of the meta line: project, who, how long. */
+  meta: string[];
   meta2: string | null;
   questions: Question[];
   /** Set on an "Asks you" card. */
@@ -136,23 +140,24 @@ export interface NowRun {
   startedAt: string;
   who: string;
   kind: Kind;
+  manual: boolean;
 }
 
 export interface Home {
   verdict: string;
   tone: Tone;
-  /** "Wed 30 Sep, 18:32. 6 overdue. Next: Daily site report, tomorrow." */
+  /** "Wed 30 Sep, 18:32": the date and time only. */
   sub: string;
+  /** The first item that is not late, for the Next line; null when nothing is dated. */
+  next: NextLine | null;
   strip: Segment[];
   /** The runs that run now and are not stuck (a stuck run has its card in Needs you). */
   now: NowRun[];
   needs: Card[];
-  /** The calm line under Needs you when nothing needs the operator. */
-  quiet: string;
   lastNight: Card[];
   /** Coming up and Waiting on an event: the same agenda the project page draws. */
   agenda: Agenda;
-  /** "Timer ok, last run 6 min ago. Synced 2 min ago." in parts, each in its own colour. */
+  /** "Timer ok, last run 6 min ago. Synced 2 min ago. Last ritual run 18 h ago, complete." in parts, each in its own colour. */
   health: Piece[];
 }
 
@@ -238,8 +243,8 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
 
 // --- cards ---------------------------------------------------------------------------------
 
-function blank(id: string, kind: CardKind, item: Kind | null): Card {
-  return { id, kind, item, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: "", meta2: null, questions: [], ask: null, report: null, fades: false, error: null, actions: [] };
+function blank(id: string, kind: CardKind, item: Kind | null, manual = false): Card {
+  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], ask: null, report: null, fades: false, error: null, actions: [] };
 }
 
 function historyHref(run: ActivityRun): string {
@@ -248,13 +253,13 @@ function historyHref(run: ActivityRun): string {
 
 function heldCard(clock: Clock, run: ActivityRun): Card {
   return {
-    ...blank(`held-${run.run}`, "held", run.kind),
+    ...blank(`held-${run.run}`, "held", run.kind, run.manual),
     edge: "wait",
-    word: { text: "Held", ink: "wait" },
+    word: { text: WAITING_FOR_YOU.label, ink: WAITING_FOR_YOU.tone },
     side: { text: when(clock, run.startedAt), ink: "plain" },
     title: run.label,
     href: runPath(run.project, run.run),
-    meta: [run.project, byText(run.who), run.questions.length === 0 ? null : plural(run.questions.length, "question")].filter((part) => part !== null).join(", "),
+    meta: [run.project, byText(run.who), run.questions.length === 0 ? null : plural(run.questions.length, "question")].filter((part) => part !== null),
     questions: run.questions.map((text, index) => ({ text, command: answerCommand(run.run, index + 1, run.project) })),
     actions: [{ text: "History", href: historyHref(run) }],
   };
@@ -265,13 +270,13 @@ function asksCard(clock: Clock, readRun: ReadRun, run: ActivityRun): Card {
   const count = run.result?.questions ?? 0;
   const result = readRun(run.project, run.run)?.result ?? null;
   return {
-    ...blank(`asks-${run.run}`, "asks", run.kind),
+    ...blank(`asks-${run.run}`, "asks", run.kind, run.manual),
     edge: "wait",
-    word: { text: "Asks you", ink: "wait" },
+    word: { text: ASKS_YOU.label, ink: ASKS_YOU.tone },
     side: { text: when(clock, run.endedAt ?? run.startedAt), ink: "plain" },
     title: run.label,
     href: runPath(run.project, run.run),
-    meta: [run.project, byText(run.who), plural(count, "question")].join(", "),
+    meta: [run.project, byText(run.who), plural(count, "question")],
     meta2: result === null ? null : result.summary,
     ask: { questions: result === null ? [] : result.questions, command: decideCommand(run.run, run.project) },
     actions: [
@@ -320,13 +325,13 @@ function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: Ac
   const report = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : reportOf(readRun, run, DONE_CHARS, DONE_FADE);
   // An acknowledged failure is a plain card: runState() makes its word grey, and the acknowledgement says who saw it.
   return {
-    ...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done", ritualKind(state.ritual)),
+    ...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done", "ritual", isManual(state.ritual)),
     edge: failed ? "bad" : null,
     word: { text: badge.label, ink: badge.tone },
     side: { text: when(clock, run.startedAt), ink: "plain" },
     title: state.ritual.title,
     href: runPath(run.project, run.run),
-    meta: [state.project, byText(run.who), tookText(run)].filter((part) => part !== null).join(", "),
+    meta: [state.project, byText(run.who), tookText(run)].filter((part) => part !== null),
     meta2: seenText(run, clock),
     ...report,
     actions: [
@@ -338,13 +343,13 @@ function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: Ac
 
 function stuckCard(clock: Clock, run: ActivityRun, stuck: string): Card {
   return {
-    ...blank(`stuck-${run.run}`, "stuck", run.kind),
+    ...blank(`stuck-${run.run}`, "stuck", run.kind, run.manual),
     edge: "late",
-    word: { text: "Running", ink: "run" },
+    word: { text: RUNNING.label, ink: RUNNING.tone },
     side: { text: `stuck, ${stuck}`, ink: "late" },
     title: run.label,
     href: runPath(run.project, run.run),
-    meta: `${run.project}, ${byText(run.who)}, started ${startedText(clock, run.startedAt)}`,
+    meta: [run.project, byText(run.who), `started ${startedText(clock, run.startedAt)}`],
     actions: [
       { text: "Open the run", href: runPath(run.project, run.run) },
       { text: "History", href: historyHref(run) },
@@ -358,15 +363,15 @@ function vigilWaitText(vigil: VigilRow, today: string): string[] {
 
 function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs: readonly ActivityRun[], generatedAt: string): Card {
   const check = runs.find((run) => run.project === project.name && run.item === `vigil/${vigil.slug}` && run.phase === "running");
-  const meta = [project.name, "vigil", vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`, ...vigilWaitText(vigil, clock.today)].filter((part) => part !== null);
+  const meta = [project.name, vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`, ...vigilWaitText(vigil, clock.today)].filter((part) => part !== null);
   const size = check === undefined ? 0 : clock.now - Date.parse(check.startedAt);
   return {
     ...blank(`flagged-${project.name}-${vigil.slug}`, "flagged", "vigil"),
     edge: "bad",
-    word: { text: "Flagged", ink: "bad" },
+    word: { text: FLAGGED.label, ink: FLAGGED.tone },
     title: vigil.title,
     href: vigilPath(project.name, vigil.slug),
-    meta: meta.join(", "),
+    meta,
     meta2: check === undefined ? null : `A new check is running, ${byText(check.who)}, ${roughDuration(size)} so far.${stuckFor(check, generatedAt) === null ? "" : " It may be stuck."}`,
     actions: [{ text: "Open the vigil", href: vigilPath(project.name, vigil.slug) }],
   };
@@ -379,7 +384,7 @@ function unreadableCard(project: ProjectStatus): Card {
     word: { text: "Unreadable", ink: "bad" },
     title: project.name,
     href: projectPath(project.name),
-    meta: "darius could not read this project",
+    meta: ["darius could not read this project"],
     error: project.error,
     actions: [{ text: "Open the project", href: projectPath(project.name) }],
   };
@@ -496,17 +501,16 @@ function verdictTone(needs: readonly Card[]): Tone {
   return kinds.has("stuck") ? "late" : "ok";
 }
 
-function quietText(clock: Clock, states: readonly DjinnState[]): string {
-  if (states.length === 0) return "Quiet. darius runs no djinn yet.";
+/** "Last ritual run 18 h ago, complete." The newest run of any ritual; nothing when no ritual is tracked. */
+function lastRunPiece(clock: Clock, states: readonly DjinnState[]): Piece[] {
+  if (states.length === 0) return [];
   const last = states
     .map((state) => state.last)
     .filter((run) => run !== null)
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
-  if (last === undefined) return "Quiet. No djinn has run yet.";
-  if (last.phase === "running") return `Quiet. A djinn is running, it started ${whenPhrase(clock, last.startedAt)}.`;
-  if (last.outcome === "complete") return `Quiet. The last djinn ran ${whenPhrase(clock, last.startedAt)} and completed.`;
-  const seen = last.acknowledged === null ? "" : ", acknowledged";
-  return `Quiet. The last djinn ran ${whenPhrase(clock, last.startedAt)} and ended ${last.outcome ?? "without an outcome"}${seen}.`;
+  if (last === undefined) return [{ text: " No ritual has run yet.", ink: "mute" }];
+  const state = runState(last);
+  return [{ text: ` Last ritual run ${when(clock, last.startedAt)}, ${state.label.toLowerCase()}.`, ink: state.tone === "bad" ? "bad" : "plain" }];
 }
 
 /** The segment of one card kind: its count and a link to the first card. Nothing when there is no such card. */
@@ -517,26 +521,27 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
 }
 
 /**
- * The status strip. "Need you" always shows (held runs and runs that ask);
- * every other segment shows only above zero: running (not the stuck ones),
- * stuck, failed, flagged, unreadable, overdue (rituals and dated vigils past
- * due), due today, and armed vigils.
+ * The status strip. A segment shows only above zero, and the strip not at all
+ * when every segment is zero. The order: need you (held runs and runs that
+ * ask), running (not the stuck ones), stuck, failed, flagged, unreadable, late
+ * (rituals and dated vigils past due), due today, and armed vigils.
  */
 function statusStrip(needs: readonly Card[], running: number, agenda: Agenda): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
   const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true, kind: null }];
-  const overdueSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "overdue", label: "overdue", count: agenda.overdue, tone: "late", href: "#coming-up", live: false, kind: null }];
+  const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
+  const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: "#coming-up", live: false, kind: null }];
   const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: "#coming-up", live: false, kind: null }];
   const armedHref = agenda.waiting.length === 0 ? "#coming-up" : "#waiting";
   const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false, kind: "vigil" }];
   return [
-    { key: "need", label: "need you", count: waiting, tone: "wait", href: waiting === 0 ? null : "#needs", live: false, kind: null },
+    ...needSegment,
     ...runningSegment,
     ...cardSegment(needs, "stuck", "stuck", "late"),
     ...cardSegment(needs, "failed", "failed", "bad"),
     ...cardSegment(needs, "flagged", "flagged", "bad"),
     ...cardSegment(needs, "unreadable", "unreadable", "bad"),
-    ...overdueSegment,
+    ...lateSegment,
     ...todaySegment,
     ...armedSegment,
   ];
@@ -547,7 +552,7 @@ function newest(left: ActivityRun, right: ActivityRun): number {
 }
 
 function nowRun(run: ActivityRun): NowRun {
-  return { id: run.run, title: run.label, project: run.project, href: runPath(run.project, run.run), startedAt: run.startedAt, who: run.who, kind: run.kind };
+  return { id: run.run, title: run.label, project: run.project, href: runPath(run.project, run.run), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual };
 }
 
 export function homeView(status: HostStatus, readRun: ReadRun): Home {
@@ -574,14 +579,14 @@ export function homeView(status: HostStatus, readRun: ReadRun): Home {
   return {
     verdict: verdictText(needs.length),
     tone: verdictTone(needs),
-    sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${agendaSentence(agenda, clock.today)}`,
+    sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
+    next: nextLine(agenda, clock.today),
     strip: statusStrip(needs, now.length, agenda),
     now,
     needs,
-    quiet: quietText(clock, states),
     lastNight,
     agenda,
-    health: [timerPiece(clock, status, states), syncPiece(clock, status)],
+    health: [timerPiece(clock, status, states), syncPiece(clock, status), ...lastRunPiece(clock, states)],
   };
 }
 

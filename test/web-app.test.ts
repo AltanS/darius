@@ -152,7 +152,7 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
   ["/profiles", ["careful", "opus", "headless"]],
-  ["/p/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Guard soak", "flagged, last check failed", "Djinns"]],
+  ["/p/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Guard soak", "last check failed", "Latest reports"]],
   ["/p/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
   [`/p/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
   [`/p/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
@@ -189,9 +189,9 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
   const coming = comingOf(body).replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, "");
-  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, tagged manual");
+  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, with a manual chip");
   assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
-  assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">overdue<\/span>/su, "and the overdue segment of the strip counts it");
+  assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">late<\/span>/su, "and the late segment of the strip counts it");
   const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();
   assert.ok(projectPage.replaceAll("<!-- -->", "").includes("Done by hand"), "the project page lists it in the same Coming up");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
@@ -236,10 +236,10 @@ test("the project page splits rituals like the home page: djinns follow a skill,
   for (const path of ["/p/demo"]) {
     const body = await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => split })).text();
     const scheduled = body.indexOf('id="coming-up"');
-    const djinns = body.indexOf('id="djinns"', scheduled);
-    assert.ok(scheduled !== -1 && djinns > scheduled, `${path}: Coming up comes before the djinn cards`);
+    const djinns = body.indexOf('id="reports"', scheduled);
+    assert.ok(scheduled !== -1 && djinns > scheduled, `${path}: Coming up comes before the latest reports`);
     assert.ok(body.slice(scheduled, djinns).includes("Heartbeat check"), `${path}: listed in Coming up`);
-    assert.doesNotMatch(body.slice(djinns), /<article[^>]*>(?:(?!<\/article>).)*Heartbeat check/su, `${path}: no skill, no djinn card`);
+    assert.doesNotMatch(body.slice(djinns), /<article[^>]*>(?:(?!<\/article>).)*Heartbeat check/su, `${path}: no skill, no report row`);
   }
 });
 
@@ -334,17 +334,19 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   const body = (await (await handler(new Request("http://darius.test/"), { ...context, status: () => quiet })).text()).replaceAll("<!-- -->", "");
   assert.equal(h1Of(body), "Nothing needs you.");
   assert.match(body, /<h1 class="verdict-h ink-ok">/u);
-  assert.ok(body.includes("Mon 28 Sep, 11:00. Next: Daily &lt;script&gt;alert(1)&lt;/script&gt; report, tomorrow."), "the host clock and what is next, derived from nextDue");
-  assert.ok(body.includes("Quiet. The last djinn ran 1 h ago and completed."));
+  assert.ok(body.includes('<p class="verdict-sub">Mon 28 Sep, 11:00</p>'), "the sub line is the host clock only");
+  assert.match(body, /class="nextup".*?<span class="nextup-t">Daily &lt;script&gt;alert\(1\)&lt;\/script&gt; report<\/span><span class="nextup-w">tomorrow<\/span>/su, "the Next line: what is next, derived from nextDue");
+  assert.equal(body.includes('id="needs"'), false, "nothing needs you: no Needs you section, and no Quiet line");
+  assert.equal(body.includes("Quiet."), false);
+  assert.ok(body.includes("Last ritual run 1 h ago, complete."), "the last run moved into the health line");
   assert.ok(body.includes("Last night"), "the completed djinn");
   assert.ok(body.includes("Findings heading"), "with its report excerpt");
   assert.equal(segment(body, "flagged"), null, "the self-test vigil does not count");
-  assert.equal(segment(body, "need you"), "0");
-  assert.match(body, /<p class="quiet">/u, "one calm line, no box");
+  assert.equal(segment(body, "need you"), null, "a zero segment does not render");
   assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted footer line");
   assert.equal(body.includes("date failed"), false, "no card for the self-test vigil");
   const page = await (await handler(new Request("http://darius.test/p/darius-selftest"), { ...context, status: () => quiet })).text();
-  assert.ok(page.includes("date failed") && page.includes("flagged, last check failed"), "the project page shows it in full");
+  assert.ok(page.includes("date failed") && page.includes("last check failed"), "the project page shows it in full");
 });
 
 test("a failed run: both pages say what happens next, then who acknowledged it; the board drops an acknowledged failure", async () => {
@@ -378,11 +380,11 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   }
   const done = await read(`/p/demo/runs/${DONE}`, open);
   assert.equal(done.includes("What happens next"), false, "a complete run has no next step");
-  assert.match(await read("/p/demo", open), /<article class="card card-grid card-accent card-link edge-bad">.*<span class="status tone-bad">.*Failed</su, "the djinn card shows an open failure in the failure colour");
+  assert.match(await read("/p/demo", open), /id="reports".*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "the latest-report row shows an open failure in the failure colour, with a rail");
   const needed = await read("/", open);
   assert.equal(h1Of(needed), "One thing needs you.");
   assert.ok(needed.includes(`id="failed-demo-daily-report"`), "an open failure needs the operator");
-  assert.match(comingOf(needed), /Tomorrow.*<li class="ag-row tone-bad">.*<span class="ag-word tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
+  assert.match(comingOf(needed), /Tomorrow.*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
 
   const seen = setup(ack);
   for (const path of [`/p/demo/runs/${FAILED}`, "/p/demo/rituals/daily-report"]) {
@@ -392,22 +394,22 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
     assert.equal(page.includes("darius run ack"), false, path);
     assert.equal(page.includes(EVIL), false, `${path}: the note stays text`);
   }
-  // Every page shows an acknowledged failure quietly: grey "Failed, acknowledged", never the failure colour.
+  // Every page shows an acknowledged failure quietly: grey "Failed, seen", never the failure colour.
   for (const path of ["/", "/runs", "/p/demo", "/p/demo/rituals/daily-report", `/p/demo/runs/${FAILED}`]) {
     const page = await read(path, seen);
-    assert.ok(page.includes('<span class="status tone-idle"><span class="status-dot" aria-hidden="true"></span>Failed, acknowledged</span>'), `${path}: the grey word`);
+    assert.match(page, /<span class="(?:status|rw-state) tone-idle">Failed, seen<\/span>/u, `${path}: the grey word`);
     for (const red of ["tone-bad", "edge-bad", "ink-bad"]) assert.equal(page.includes(red), false, `${path}: no ${red}`);
   }
   const card = await read("/p/demo", seen);
-  assert.match(card, /<article class="card card-grid card-accent card-link edge-idle">.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "the djinn card is grey, with the acknowledgement");
+  assert.match(card, /id="reports".*<li class="rw">.*Failed, seen.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "the latest-report row is grey and has no rail, with the acknowledgement");
   const home = await read("/", seen);
   assert.equal(h1Of(home), "Nothing needs you.");
   const coming = comingOf(home);
-  assert.match(coming, /<li class="ag-row tone-idle">.*<span class="ag-word tone-idle">Failed, acknowledged<\/span>/su, "Coming up says so, in grey");
+  assert.match(coming, /<li class="rw">.*<span class="rw-state tone-idle">Failed, seen<\/span>/su, "Coming up says so, in grey");
   assert.equal(coming.includes("tone-bad"), false, "no failure colour in Coming up");
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
   assert.match(home, /<h1 class="verdict-h ink-ok">/u);
-  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card hcard card-plain">/su, "a plain Last night card");
+  assert.match(home, /Last night.*<li id="done-demo-daily-report" class="rw">/su, "a plain Last night row");
   assert.match(home, /Last night.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "with the acknowledgement");
 });
 
@@ -418,6 +420,23 @@ test("the ritual page says where a pinned ritual runs", async () => {
   const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   assert.ok(page.includes(`Runs on <code class="inline-code">host-b</code> only; the timer of any other host skips it.`));
   assert.equal((await get("/p/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
+});
+
+test("a manual ritual shows both chips, a note box with the way to automate it, and its instructions open", async () => {
+  const project = STATUS.projects[0]!;
+  const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 13, nextDue: "2026-09-15" };
+  const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "by-hand" ? { ...RITUAL, row: manual, policy: { ...RITUAL.policy, mode: "off" } } : null) };
+  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/by-hand"), ctx)).text()).replaceAll("<!-- -->", "");
+  assert.match(page, /<span class="rw-chips"><span class="chip-x c-ritual">.*?ritual<\/span><span class="chip-x c-manual">.*?manual<\/span><\/span>/su, "both chips: ritual, then manual");
+  assert.ok(page.includes('<span class="rw-state tone-late">13 days late</span>'), "the state word in the vocabulary");
+  assert.ok(page.includes('<h1 class="page-title page-title-sans">'), "the title is sans");
+  assert.ok(page.includes("darius does not start this ritual (mode off). You run it by hand; darius tracks the schedule."), "the note box");
+  assert.ok(page.includes('<code class="inline-code">darius ritual set by-hand --mode report ...</code>'), "and the way to let darius run it");
+  assert.match(page, /<details class="fold scroll-mt-20" open=""><summary>Instructions<\/summary>/u, "Instructions are open for a ritual done by hand");
+  assert.match(page, /<details class="fold scroll-mt-20"><summary>Rules/u, "Rules stay closed");
+  const auto = (await get("/p/demo/rituals/daily-report")).body;
+  assert.equal(auto.includes("chip-x c-manual"), false, "an automatic ritual has no manual chip");
+  assert.match(auto, /<details class="fold scroll-mt-20"><summary>Instructions/u, "its instructions stay closed");
 });
 
 test("the ritual page shows the note for the next run, with the operator's answer (0.26.0)", async () => {
@@ -503,7 +522,7 @@ test("a run with a result: the banner, tiles, the question with the ack command,
   const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
   assert.equal(page.includes(EVIL), false, "result text never becomes a script");
   assert.equal(h1Of(page), "Findings heading", "the report heading stays the title");
-  assert.ok(page.includes('<span class="status tone-wait"><span class="status-dot" aria-hidden="true"></span>Asks you</span>'), "the run state asks");
+  assert.ok(page.includes('<span class="rw-state tone-wait">Asks you</span>'), "the run state asks");
 
   const result = page.indexOf('<h2 class="label">Result</h2>');
   const questions = page.indexOf('<h2 class="label">Questions for you</h2>');
@@ -563,12 +582,12 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
   assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
-  assert.match(comingOf(home), /<li class="ag-row tone-wait">.*<span class="ag-word tone-wait">Asks you<\/span>/su, "Coming up says so");
+  assert.match(comingOf(home), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
   assert.ok(home.includes('<span class="count tone-wait" title="1 thing needs you">1</span>'), "the Home badge counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
-  assert.ok(runs.includes('<span class="tag tone-late">2 high open</span>'), "open high items");
-  assert.ok(runs.includes('<span class="tag tone-wait">1 question</span>'), "the question, waiting");
+  assert.ok(runs.includes('<span class="chip-x c-late">2 high open</span>'), "open high items");
+  assert.ok(runs.includes('<span class="chip-x c-wait">1 question</span>'), "the question, waiting");
   assert.equal(runs.includes("critical open"), false, "no critical item is open");
 
   const ritual = await readPage("/p/demo/rituals/daily-report", ctx);
@@ -577,7 +596,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(ritual.includes('<div class="card card-accent edge-wait">'), "the latest report card waits");
 
   const project = await readPage("/p/demo", ctx);
-  assert.match(project, /<article class="card card-grid card-accent card-link edge-wait">.*?Asks you/su, "the djinn card waits");
+  assert.match(project, /id="reports".*?<li class="rw rw-rail tone-wait">.*?Asks you/su, "the latest-report row waits, with a rail");
   for (const page of [home, runs, ritual, project]) assert.equal(page.includes(EVIL), false);
 });
 
@@ -593,11 +612,11 @@ test("an answered result: the decision replaces the command, home is quiet, the 
   const home = await readPage("/", ctx);
   assert.equal(h1Of(home), "Nothing needs you.");
   assert.equal(home.includes(`id="asks-`), false);
-  assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card hcard card-plain">.*Answered by owner at 10:30/su, "a plain Last night card with the decision");
+  assert.match(home, /Last night.*<li id="done-demo-daily-report" class="rw">.*Answered by owner at 10:30/su, "a plain Last night row with the decision");
   assert.equal(home.includes('class="count tone-wait"'), false, "no badge");
 
   const runs = await readPage("/runs", ctx);
-  assert.ok(runs.includes('<span class="tag">1 question, answered</span>'), "answered, in words and without the waiting tone");
+  assert.ok(runs.includes('<span class="chip-x c-idle">1 question, answered</span>'), "answered, in words and without the waiting tone");
 });
 
 test("the app can be installed and get push notices: manifest, icons, service worker, and the links to them", async () => {

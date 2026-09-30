@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.36.0] - 2026-09-30
+
+### Added
+
+- A "Next" line under the home verdict names the next ritual or vigil and when it is due, and links to it.
+- A manual ritual's page explains that darius does not start it and how to give it a policy, and shows its instructions open.
+
+### Changed
+
+- Kinds are ritual and vigil; manual is a mark on a ritual, so a manual ritual shows both "ritual" and "manual".
+- One set of state words on every page ("13 days late", "Waiting for you", "Asks you", "Failed, seen", "Complete"), in plain sans type instead of spaced capitals.
+- Every list uses one row: the full title, then the chips, the state and the details, with the time at the end. Only rows that need attention get a coloured edge. Result counts are small chips.
+- Empty parts do not show: zero counts in the status strips, an empty Needs you, an empty Now. The home strip says "late" instead of "overdue".
+- Ritual and run titles use the sans face, so long titles stay readable. The project page's "Djinns" section is now "Latest reports", as rows.
+- Imported runs in a ritual's history carry an "imported" chip.
+
 ## [0.35.0] - 2026-09-30
 
 ### Added

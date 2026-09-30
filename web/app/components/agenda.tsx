@@ -1,18 +1,19 @@
 /**
  * Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
- * the same on the home page and on the project page. Every row is one link
- * over its whole width (44 px tall at least), with the icon of its kind, the
- * title, a kind tag, and one line of detail. The state shows in the detail
- * line and in a thin rail at the left edge.
+ * the same on the home page and on the project page. Every row is the shared
+ * `Row`: one link over its whole width, the icon of its kind, the title in
+ * full, and a second line of chips, state word and facts. A rail marks the
+ * rows that need attention.
  */
 
-import { Fragment, useEffect, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useState } from "react";
 
 import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
 import { shortDate, vigilAnchor } from "../lib/format.ts";
-import { KindIcon, KindTag } from "./kind.tsx";
-import { Fold, SectHead, Word } from "./ui.tsx";
+import { FLAGGED, railOf } from "../lib/state-words.ts";
+import { KindChips } from "./chip.tsx";
+import { Row, RowList } from "./row.tsx";
+import { Fold, SectHead } from "./ui.tsx";
 
 /** Rows of Waiting on an event before its fold. */
 export const WAITING_SHOWN = 5;
@@ -28,55 +29,19 @@ interface RowProps {
   extra: boolean;
 }
 
-/** The date of a row in Later: it is not in the group label. */
-function laterDate(row: AgendaRow, group: AgendaGroup): string | null {
-  if (group.kind !== "later" || row.date === null) return null;
-  return `${row.kind === "vigil" ? "due" : "next"} ${shortDate(row.date)}`;
-}
-
 function AgendaItem({ row, group, showProject, anchors, target, extra }: RowProps): React.ReactNode {
   const id = anchors && row.kind === "vigil" ? vigilAnchor(row.slug) : undefined;
-  const classes = ["ag-row", `tone-${row.tone}`, extra ? "phone-extra" : "", id !== undefined && target === id ? "target-row is-target" : id === undefined ? "" : "target-row"].filter((part) => part !== "");
-  const later = laterDate(row, group);
-  // A vigil with an event puts its project in front of the "waits for" line, so the row stays short.
-  const lead = row.kind === "vigil" && row.flag === null && row.until !== null;
-  const pieces = [showProject && !lead ? row.project : null, ...(row.facts === "" ? [] : row.facts.split(", ")), later].filter((part) => part !== null);
-  return (
-    <li id={id} className={classes.join(" ")}>
-      <KindIcon kind={row.kind} className="ag-icon" />
-      <div className="ag-main">
-        <Link to={row.href} className="ag-title">
-          {row.title}
-        </Link>
-        <p className="ag-line">
-          {row.state === null ? null : (
-            <span className={`ag-word tone-${row.state.tone}`}>
-              <Word text={row.state.word} />
-            </span>
-          )}
-          {pieces.map((piece, index) => (
-            <Fragment key={piece}>
-              {index === 0 ? null : " "}
-              <span className="ag-bit">
-                {piece}
-                {index === pieces.length - 1 ? "" : ","}
-              </span>
-            </Fragment>
-          ))}
-          {row.flag === null ? null : <span className="ag-flag ink-bad">{row.flag}</span>}
-          {lead ? (
-            <span className="ag-until">
-              {showProject ? <span className="ag-proj">{row.project}</span> : null}
-              {showProject ? " " : null}waits for: {row.until}
-            </span>
-          ) : null}
-        </p>
-      </div>
-      <span className="ag-kind">
-        <KindTag kind={row.kind} />
-      </span>
-    </li>
-  );
+  const classes = [extra ? "phone-extra" : "", id !== undefined && target === id ? "target-row is-target" : id === undefined ? "" : "target-row"].filter((part) => part !== "");
+  // A row in Later names its date in the place of a state; under a day label the label says it.
+  const state = row.state ?? (group.kind === "later" && row.date !== null ? { tone: "idle" as const, label: shortDate(row.date) } : null);
+  const meta = [showProject ? row.project : null, ...(row.facts === "" ? [] : row.facts.split(", ")), row.note].filter((part) => part !== null);
+  return <Row id={id} kind={row.kind} href={row.href} title={row.title} rail={row.rail} chips={<KindChips kind={row.kind} manual={row.manual} />} state={state} meta={meta} detail={row.until === null ? undefined : `waits for: ${row.until}`} className={classes.join(" ")} />;
+}
+
+/** The label of a day group: "Overdue · 6", "Today · 2", "Tomorrow · 4", "Later · 5", or the weekday date as it is. */
+function groupLabel(group: AgendaGroup): string {
+  const counted = group.kind === "overdue" || group.kind === "today" || group.kind === "tomorrow" || group.kind === "later";
+  return counted ? `${group.label} · ${group.rows.length}` : group.label;
 }
 
 interface ComingUpProps {
@@ -112,12 +77,12 @@ export function ComingUp({ agenda, anchors, target }: ComingUpProps): React.Reac
             const gone = group.rows.every((row) => hidden.has(row.key));
             return (
               <div key={group.key} className={`ag-group${isFolded(group) ? " desk-extra" : ""}${gone ? " phone-extra" : ""}`}>
-                <h3 className={`ag-day ag-day-${group.kind}`}>{group.label}</h3>
-                <ul className="ag-rows">
+                <h3 className={`ag-day ag-day-${group.kind}`}>{groupLabel(group)}</h3>
+                <RowList bare>
                   {group.rows.map((row) => (
                     <AgendaItem key={row.key} row={row} group={group} showProject={agenda.showProject} anchors={anchors} target={target} extra={hidden.has(row.key)} />
                   ))}
-                </ul>
+                </RowList>
               </div>
             );
           })
@@ -146,27 +111,9 @@ interface WaitingItemProps {
 
 function WaitingItem({ row, showProject, anchors, target }: WaitingItemProps): React.ReactNode {
   const id = anchors ? vigilAnchor(row.slug) : undefined;
-  const classes = ["ag-row", "ag-row-plain", `tone-${row.flagged ? "bad" : "idle"}`, id === undefined ? "" : target === id ? "target-row is-target" : "target-row"].filter((part) => part !== "");
-  return (
-    <li id={id} className={classes.join(" ")}>
-      <KindIcon kind="vigil" className="ag-icon" />
-      <div className="ag-main">
-        <Link to={row.href} className="ag-title">
-          {row.title}
-        </Link>
-        <p className="ag-line">
-          {row.flagged ? <span className="ag-word tone-bad">Flagged</span> : null}
-          {row.until === null && !showProject ? null : (
-            <span className="ag-until ag-until-2">
-              {showProject ? <span className="ag-proj">{row.project}</span> : null}
-              {showProject && row.until !== null ? " " : null}
-              {row.until}
-            </span>
-          )}
-        </p>
-      </div>
-    </li>
-  );
+  const cls = id === undefined ? "" : target === id ? "target-row is-target" : "target-row";
+  const state = row.flagged ? FLAGGED : null;
+  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(state)} chips={<KindChips kind="vigil" />} state={state} meta={showProject ? [row.project] : []} detail={row.until} className={cls} />;
 }
 
 interface WaitingProps {
@@ -188,18 +135,18 @@ export function Waiting({ rows, shown, showProject, anchors, target }: WaitingPr
     <section id="waiting" className="section sec-waiting">
       <SectHead title="Waiting on an event" />
       <div className="panel ag">
-        <ul className="ag-rows">
+        <RowList bare>
           {head.map((row) => (
             <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} />
           ))}
-        </ul>
+        </RowList>
         {rest.length === 0 ? null : (
           <Fold open={pointed} summary={`${rest.length} more waiting`}>
-            <ul className="ag-rows">
+            <RowList bare>
               {rest.map((row) => (
                 <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} />
               ))}
-            </ul>
+            </RowList>
           </Fold>
         )}
       </div>

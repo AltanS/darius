@@ -110,7 +110,9 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
       </header>
       <div className="board">
         <div className="board-main">
-          <RunList runs={runs} showProject={project === ""} empty="No run matches this filter." />
+          <div className="panel">
+            <RunList runs={runs} showProject={project === ""} empty="No run matches this filter." />
+          </div>
         </div>
         <aside className="board-rail rail-first rail-filter">
           <Section title="Filter">

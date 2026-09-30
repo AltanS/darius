@@ -17,9 +17,10 @@
  */
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { dayName, ritualPath, shortDate, vigilPath } from "./format.ts";
-import { type Kind, ritualKind } from "./kind.ts";
-import type { Tone } from "./tone.ts";
+import { dayGap, dayName, ritualPath, shortDate, vigilPath } from "./format.ts";
+import { type Kind, isManual } from "./kind.ts";
+import { ASKS_YOU, datePhrase, FAILED, FAILED_SEEN, FLAGGED, lateWord, railOf, type Rail, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
+import type { Badge } from "./tone.ts";
 import { asksYou, cadenceText } from "./view.ts";
 
 const DAY = 24 * 60 * 60_000;
@@ -29,30 +30,29 @@ export const HORIZON_DAYS = 14;
 
 export type GroupKind = "overdue" | "today" | "tomorrow" | "day" | "later" | "none";
 
-/** A state word that is not plain: "13 days late", "Running", "Held", "Failed", "Asks you". */
-export interface AgendaState {
-  word: string;
-  tone: Tone;
-}
+/** A state word that is not plain: "13 days late", "Running", "Waiting for you", "Failed", "Asks you", "Flagged". */
+export type AgendaState = Badge;
 
 export interface AgendaRow {
   key: string;
   kind: Kind;
+  /** A ritual darius never starts: it shows a manual chip next to the ritual chip. */
+  manual: boolean;
   project: string;
   slug: string;
   title: string;
   href: string;
   /** The YYYY-MM-DD it comes up on; null in No schedule. */
   date: string | null;
-  /** The colour of the square. */
-  tone: Tone;
+  /** The rail colour at the row's left edge; null for a plain row (only a row that needs attention has one). */
+  rail: Rail | null;
   state: AgendaState | null;
   /** A ritual: "every 7 days, last done 14 Sep". Empty for a vigil. */
   facts: string;
   /** A vigil: the event it also waits for. */
   until: string | null;
-  /** A flagged vigil: "flagged, last check failed". */
-  flag: string | null;
+  /** A flagged vigil: "last check failed, 1 day late". */
+  note: string | null;
   /** Days past due; 0 when not overdue. */
   overdueDays: number;
 }
@@ -100,11 +100,6 @@ export interface AgendaInput {
 
 // --- dates ---------------------------------------------------------------------------------
 
-/** Whole days from one YYYY-MM-DD date to another; negative when `to` is earlier. */
-function dayGap(from: string, to: string): number {
-  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY);
-}
-
 function addDays(date: string, days: number): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
 }
@@ -112,13 +107,6 @@ function addDays(date: string, days: number): string {
 /** "Fri 2 Oct" for a YYYY-MM-DD date. */
 export function weekdayDate(date: string): string {
   return dayName(`${date}T00:00:00Z`, 0);
-}
-
-/** "today", "tomorrow" or "Fri 2 Oct", to follow "Next: <title>,". */
-export function whenWord(today: string, date: string): string {
-  const gap = dayGap(today, date);
-  if (gap === 0) return "today";
-  return gap === 1 ? "tomorrow" : weekdayDate(date);
 }
 
 interface GroupSpec {
@@ -138,10 +126,6 @@ function groupOf(today: string, date: string | null, overdue: boolean): GroupSpe
 }
 
 // --- words ---------------------------------------------------------------------------------
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 /** "every 7 days, last done 14 Sep": the cadence in words, then when it was last done. */
 function factsText(ritual: RitualRow): string {
@@ -172,35 +156,35 @@ interface Placement {
 
 function placement(input: AgendaInput, project: ProjectStatus, ritual: RitualRow): Placement {
   const { today } = input;
-  if (ritual.heldRun !== null) return { date: today, overdueDays: 0, state: { word: "Held", tone: "wait" } };
-  if (ritual.openRun !== null) return { date: today, overdueDays: 0, state: { word: "Running", tone: "run" } };
+  if (ritual.heldRun !== null) return { date: today, overdueDays: 0, state: WAITING_FOR_YOU };
+  if (ritual.openRun !== null) return { date: today, overdueDays: 0, state: RUNNING };
   if (ritual.failedToday !== null) {
     const seen = ritual.failedToday.acknowledged !== null;
-    return { date: addDays(today, 1), overdueDays: 0, state: seen ? { word: "Failed, acknowledged", tone: "idle" } : { word: "Failed", tone: "bad" } };
+    return { date: addDays(today, 1), overdueDays: 0, state: seen ? FAILED_SEEN : FAILED };
   }
-  const asks: AgendaState | null = asksNow(project, ritual) ? { word: "Asks you", tone: "wait" } : null;
+  const asks: AgendaState | null = asksNow(project, ritual) ? ASKS_YOU : null;
   if (ritual.nextDue === null) return { date: null, overdueDays: 0, state: asks };
   const late = Math.max(ritual.overdueDays, dayGap(ritual.nextDue, today));
-  if (late > 0) return { date: ritual.nextDue, overdueDays: late, state: { word: `${plural(late, "day")} late`, tone: "late" } };
+  if (late > 0) return { date: ritual.nextDue, overdueDays: late, state: lateWord(late) };
   return { date: ritual.nextDue <= today ? today : ritual.nextDue, overdueDays: 0, state: asks };
 }
 
 function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow): AgendaRow {
   const at = placement(input, project, ritual);
-  const tone: Tone = at.state !== null ? at.state.tone : at.date === input.today ? "gold" : "idle";
   return {
     key: `${project.name}/ritual/${ritual.slug}`,
-    kind: ritualKind(ritual),
+    kind: "ritual",
+    manual: isManual(ritual),
     project: project.name,
     slug: ritual.slug,
     title: ritual.title,
     href: ritualPath(project.name, ritual.slug),
     date: at.date,
-    tone,
+    rail: railOf(at.state),
     state: at.state,
     facts: factsText(ritual),
     until: null,
-    flag: null,
+    note: null,
     overdueDays: at.overdueDays,
   };
 }
@@ -213,21 +197,24 @@ function isArmed(vigil: VigilRow): boolean {
 
 function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, due: string): AgendaRow {
   const late = Math.max(0, dayGap(due, input.today));
-  const flag = vigil.flagged ? (vigil.lastOutcome === null ? "flagged" : `flagged, last check ${vigil.lastOutcome}`) : null;
-  const tone: Tone = vigil.flagged ? "bad" : late > 0 ? "late" : due <= input.today ? "gold" : "idle";
+  // A flagged vigil is "Flagged"; how late it is moves to the note, so the days are not lost.
+  const noted = vigil.flagged ? [vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`, late > 0 ? lateWord(late).label : null].filter((part) => part !== null) : [];
+  const note = noted.length === 0 ? null : noted.join(", ");
+  const state: AgendaState | null = vigil.flagged ? FLAGGED : late > 0 ? lateWord(late) : null;
   return {
     key: `${project.name}/vigil/${vigil.slug}`,
     kind: "vigil",
+    manual: false,
     project: project.name,
     slug: vigil.slug,
     title: vigil.title,
     href: vigilPath(project.name, vigil.slug),
     date: due,
-    tone,
-    state: late > 0 ? { word: `${plural(late, "day")} late`, tone: "late" } : null,
+    rail: railOf(state),
+    state,
     facts: "",
     until: vigil.until,
-    flag,
+    note,
     overdueDays: late,
   };
 }
@@ -240,7 +227,7 @@ function waitingRow(project: ProjectStatus, vigil: VigilRow): WaitingRow {
 
 /** Rituals darius runs lead their day; manual rituals and vigils follow, by title. */
 function ritualFirst(row: AgendaRow): number {
-  return row.kind === "ritual" ? 0 : 1;
+  return row.kind === "ritual" && !row.manual ? 0 : 1;
 }
 
 /** Overdue: the latest first. Other groups: the date, rituals darius runs first, then the title. */
@@ -286,30 +273,28 @@ export function buildAgenda(input: AgendaInput): Agenda {
     showProject: new Set([...rows.map((row) => row.project), ...waiting.map((row) => row.project)]).size > 1,
     next: dated[0] ?? null,
     overdue: ordered.find((group) => group.kind === "overdue")?.rows.length ?? 0,
-    dueToday: today?.rows.filter((row) => row.state === null || (row.state.word !== "Running" && row.state.word !== "Held")).length ?? 0,
+    dueToday: today?.rows.filter((row) => row.state === null || (row.state !== RUNNING && row.state !== WAITING_FOR_YOU)).length ?? 0,
     armed,
   };
 }
 
-/** The longest title the sub line quotes; a longer one ends in an ellipsis, so the line stays short on a phone. */
-const SENTENCE_TITLE = 44;
-
-function clipTitle(title: string): string {
-  if (title.length <= SENTENCE_TITLE) return title;
-  const cut = title.slice(0, SENTENCE_TITLE);
-  const space = cut.lastIndexOf(" ");
-  let text = space > SENTENCE_TITLE / 2 ? cut.slice(0, space) : cut;
-  // A bracket the cut leaves open goes, with what follows it: "ends (no…" reads worse than "ends…".
-  const open = text.lastIndexOf("(");
-  if (open > text.lastIndexOf(")") && open > SENTENCE_TITLE / 2) text = text.slice(0, open);
-  return `${text.replace(/[\s([{,;:\u2014-]+$/u, "")}…`;
+/** The Next line under the home verdict: the first item that is not late, with when it comes up. */
+export interface NextLine {
+  title: string;
+  href: string;
+  kind: Kind;
+  manual: boolean;
+  /** "today", "tomorrow", "Fri 2 Oct" or "15 Nov". */
+  when: string;
+  isToday: boolean;
 }
 
-/** The end of the home sub line: "6 overdue. Next: Daily site report, tomorrow." */
-export function agendaSentence(agenda: Agenda, today: string): string {
-  const late = agenda.overdue === 0 ? "" : ` ${agenda.overdue} overdue.`;
-  const next = agenda.next === null || agenda.next.date === null ? "" : ` Next: ${clipTitle(agenda.next.title)}, ${whenWord(today, agenda.next.date)}.`;
-  return `${late}${next}`;
+/** The first dated row that is not overdue (the strip already counts the overdue ones); null when there is none. */
+export function nextLine(agenda: Agenda, today: string): NextLine | null {
+  const row = agenda.next;
+  if (row === null || row.date === null) return null;
+  const when = datePhrase(today, row.date);
+  return { title: row.title, href: row.href, kind: row.kind, manual: row.manual, when, isToday: when === "today" };
 }
 
 /** How many rows show on a phone: every row of Overdue, Today and Tomorrow, then this many more. */

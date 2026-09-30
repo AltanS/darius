@@ -8,7 +8,8 @@
 
 import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { ackCommand, hostDate, momentText, relativeDate, roughDuration, runNowCommand, shortDate } from "./format.ts";
-import { isUnattended, itemKind, type Kind } from "./kind.ts";
+import { isUnattended, itemKind, itemManual, type Kind } from "./kind.ts";
+import { runWord } from "./state-words.ts";
 import type { Badge, Tone } from "./tone.ts";
 
 export { isUnattended };
@@ -35,8 +36,10 @@ export interface ActivityRun extends RunRow {
   label: string;
   /** The ritual or vigil slug. */
   slug: string;
-  /** What the item is: a ritual darius runs, a ritual done by hand, or a vigil. */
+  /** What the item is: a ritual or a vigil. */
   kind: Kind;
+  /** A ritual darius never starts (mode off): it shows a manual chip next to the ritual chip. */
+  manual: boolean;
 }
 
 export function itemSlug(item: string): string {
@@ -56,7 +59,7 @@ export function activity(projects: readonly ProjectStatus[], opts: { withImporte
     .flatMap((project) =>
       project.runs
         .filter((run) => opts.withImported || !isImported(run))
-        .map((run): ActivityRun => Object.assign({}, run, { project: project.name, slug: itemSlug(run.item), label: itemLabel(project, run.item), kind: itemKind(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item))) })),
+        .map((run): ActivityRun => Object.assign({}, run, { project: project.name, slug: itemSlug(run.item), label: itemLabel(project, run.item), kind: itemKind(run.item), manual: itemManual(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item))) })),
     )
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
@@ -70,25 +73,9 @@ export function asksYou(run: RunRow): boolean {
   return run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
 }
 
-/**
- * How a run ended, in words and a tone. A run a person acknowledged
- * (`darius run ack`) is quiet on every page: "Failed, acknowledged" in grey,
- * never the failure colour. A complete run that asks a question is not
- * "Complete" until someone answered it.
- */
+/** How a run ended, in words and a tone (the table in `state-words.ts`). */
 export function runState(run: RunRow): Badge {
-  if (run.phase === "held") return { tone: "wait", label: "Waiting for you" };
-  if (run.phase === "running") return { tone: "run", label: "Running" };
-  if (asksYou(run)) return { tone: "wait", label: "Asks you" };
-  if (run.outcome === "complete") return { tone: "ok", label: "Complete" };
-  const badge = closedState(run.outcome);
-  return run.acknowledged === null ? badge : { tone: "idle", label: `${badge.label}, acknowledged` };
-}
-
-function closedState(outcome: string | null): Badge {
-  if (outcome === "failed") return { tone: "bad", label: "Failed" };
-  if (outcome === null) return { tone: "idle", label: "Closed" };
-  return { tone: "idle", label: outcome.charAt(0).toUpperCase() + outcome.slice(1) };
+  return runWord(run, asksYou(run));
 }
 
 // --- stuck runs ------------------------------------------------------------------------
@@ -142,16 +129,6 @@ export function cadenceText(cadence: string | null): string | null {
   const count = Number(match[1]);
   const unit = { h: "hour", d: "day", w: "week", m: "month" }[match[2] ?? "d"] ?? "day";
   return count === 1 ? `every ${unit}` : `every ${count} ${unit}s`;
-}
-
-/** When the ritual runs next, in words, against the host's today. */
-export function nextText(ritual: RitualRow, today: string): string {
-  if (ritual.heldRun !== null) return "waits for your answer";
-  if (ritual.openRun !== null) return "running now";
-  if (ritual.nextDue === null) return "not scheduled";
-  if (ritual.overdueDays > 0) return `overdue ${ritual.overdueDays} d`;
-  if (ritual.isDue) return "due today";
-  return `next due ${relativeDate(ritual.nextDue, today)}`;
 }
 
 // --- failed runs: what happens next ------------------------------------------------------
