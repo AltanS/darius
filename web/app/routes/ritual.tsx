@@ -2,6 +2,7 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/ritual";
 import type { RitualHandoff } from "../../../src/web/api.ts";
+import { KindTag } from "../components/kind.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Report } from "../components/board.tsx";
 import { ResultQuestions, ResultTags } from "../components/result.tsx";
@@ -9,6 +10,7 @@ import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
 import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
 import { projectPath, runPath } from "../lib/format.ts";
+import { ritualKind } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { asksYou, cadenceText, isImported, isUnattended, nextStep, nextText, reportExcerpt, ritualFailure, runState } from "../lib/view.ts";
 
@@ -58,7 +60,8 @@ function modeText(mode: string): string {
 export default function Ritual({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { ritual, held, finished, next, asks, report } = loaderData;
   const { row, policy, project } = ritual;
-  const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug }));
+  const kind = ritualKind(row);
+  const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind }));
   const unattended = isUnattended(row);
   const cadence = cadenceText(row.cadence);
   const model = policy.model ?? "the profile's model";
@@ -73,6 +76,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           <TitleText text={row.title} />
         </h1>
         <p className="page-meta">
+          <KindTag kind={kind} />
           <code className="text-faint">{row.slug}</code>
           {cadence === null ? null : <span>{cadence}</span>}
           <span>{nextText(row, today)}</span>

@@ -6,8 +6,10 @@ import { Link } from "react-router";
 import type { VigilRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { duration, runPath } from "../lib/format.ts";
+import type { Kind } from "../lib/kind.ts";
 import type { Tone } from "../lib/tone.ts";
 import { runState, stuckText, type ActivityRun } from "../lib/view.ts";
+import { KindIcon } from "./kind.tsx";
 import { SectHead, Status, Time } from "./ui.tsx";
 
 interface PillProps {
@@ -21,16 +23,18 @@ interface PillProps {
   href: string | null;
   /** Sweep a light along the top edge while the count is above zero. */
   live?: boolean;
+  /** Mark the segment with the icon of a kind instead of a square. */
+  kind?: Kind | null;
 }
 
 /** One count of the status strip. The whole segment is the link. */
-export function Pill({ label, value, sub, tone, href, live = false }: PillProps): React.ReactNode {
+export function Pill({ label, value, sub, tone, href, live = false, kind = null }: PillProps): React.ReactNode {
   const on = value > 0;
   const className = `pill tone-${on ? tone : "idle"}`;
   const body = (
     <>
       {on && live ? <span className="live-bar" aria-hidden="true" /> : null}
-      <span className="pill-dot" aria-hidden="true" />
+      {kind === null ? <span className="pill-dot" aria-hidden="true" /> : <KindIcon kind={kind} size={14} className={`pill-kind${on ? "" : " is-off"}`} />}
       <span className="pill-n">{value}</span>
       <span className="pill-l">{label}</span>
       {sub === undefined ? null : <span className="pill-sub">{sub}</span>}
@@ -89,7 +93,7 @@ export function Pulse({ data }: PulseProps): React.ReactNode {
     <nav className="pulse stagger" aria-label="Summary">
       <Pill label="running" value={running} tone="run" href={running === 0 ? runsHref("running") : "#now"} live />
       <Pill label="need you" value={waiting} tone="wait" href={waiting === 0 ? runsHref("held") : "#now"} />
-      <Pill label="vigils armed" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : data.waiting === 0 ? "#coming-up" : "#waiting"} />
+      <Pill label="vigils armed" kind="vigil" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : data.waiting === 0 ? "#coming-up" : "#waiting"} />
       <Pill label="overdue" value={data.overdue} tone="late" href={data.overdue === 0 ? null : "#coming-up"} />
     </nav>
   );
@@ -157,7 +161,10 @@ export function LivePanel({ live }: LivePanelProps): React.ReactNode {
                   <Link to={runPath(run.project, run.run)} className={`row row-tight${running ? " row-live" : ""}`}>
                     {running ? <span className="live-bar" aria-hidden="true" /> : null}
                     <span className="row-main">
-                      <span className="row-title">{run.label}</span>
+                      <span className="row-title has-kind">
+                        <KindIcon kind={run.kind} titled className="kind-lead" />
+                        {run.label}
+                      </span>
                       <span className="row-sub">
                         {running ? <Elapsed since={run.startedAt} /> : <Time iso={run.startedAt} />}
                         {run.who === "timer" ? ", by timer" : `, by ${run.who}`}

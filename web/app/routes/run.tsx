@@ -1,11 +1,13 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/run";
+import { KindTag } from "../components/kind.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { Crumbs, Empty, Facts, Section, Status, Time, TitleText } from "../components/ui.tsx";
 import { duration, itemPath, projectPath } from "../lib/format.ts";
+import { itemKind } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
@@ -19,13 +21,14 @@ export function loader({ context, params }: Route.LoaderArgs) {
   // Against the status time, not the browser clock, so the page hydrates with the same text.
   const failure = runFailure(run.project, run.row, status.utcOffset);
   const next = failure === null ? null : nextStep(failure, { today: status.today, offset: status.utcOffset });
-  return { run, label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next };
+  const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
+  return { run, kind: itemKind(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next };
 }
 
 export const meta: Route.MetaFunction = ({ loaderData }) => [{ title: `${loaderData?.label ?? "Run"} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, label, stuck, next } = loaderData;
+  const { run, kind, label, stuck, next } = loaderData;
   const { row, project } = run;
   const state = stuck === null ? runState(row) : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -57,6 +60,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           )}
         </h1>
         <p className="page-meta">
+          <KindTag kind={kind} />
           <Status tone={state.tone} label={state.label} />
           <span>
             started <Time iso={row.startedAt} />

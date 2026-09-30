@@ -43,6 +43,10 @@
   --color-run: #8080ff;
   --color-idle: #958d7d;
   --color-late: #d98b3a;
+  /* The three kinds. Clearly apart from the states above and from each other; 6.5:1 or better on the surface. */
+  --color-ritual: #4cc0c8;
+  --color-manual: #ec8fb4;
+  --color-vigil: #c088e8;
   --color-black: #000;
   --color-transparent: transparent;
 
@@ -1632,6 +1636,18 @@
     background: var(--tone);
   }
 
+  /* A segment marked with a kind icon instead of a square: same place, a little larger. */
+  .pill-kind {
+    position: absolute;
+    top: 50%;
+    left: 14px;
+    margin-top: -7px;
+  }
+
+  .pill-kind.is-off {
+    color: var(--color-idle);
+  }
+
   .pill-n {
     font: 700 18px/1 var(--font-sans);
     font-variant-numeric: tabular-nums;
@@ -1870,11 +1886,19 @@
       left: 14px;
     }
 
+    .pulse .pill-kind {
+      left: 11px;
+    }
+
     .proj .pulse .pill {
       min-height: 48px;
     }
 
     .proj .pulse .pill-dot {
+      top: 22px;
+    }
+
+    .proj .pulse .pill-kind {
       top: 22px;
     }
 
@@ -2441,11 +2465,11 @@
   .ag-row {
     position: relative;
     display: grid;
-    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
     grid-template-areas:
-      "sq title kind"
-      "sq line line";
-    column-gap: 14px;
+      "ic title kind"
+      "ic line line";
+    column-gap: 12px;
     align-items: start;
     min-height: 44px;
     padding: 10px 16px;
@@ -2453,10 +2477,10 @@
   }
 
   .ag-row-plain {
-    grid-template-columns: 8px minmax(0, 1fr);
+    grid-template-columns: 16px minmax(0, 1fr);
     grid-template-areas:
-      "sq title"
-      "sq line";
+      "ic title"
+      "ic line";
   }
 
   .ag-day + .ag-rows > .ag-row:first-child {
@@ -2467,18 +2491,28 @@
     border-top: 0;
   }
 
-  /* A failed ritual or a flagged vigil: a square left accent in the state colour. */
+  /* The state is a square rail at the left edge in the state colour (the kind is the icon); grey rows have none. */
   .ag-row.tone-bad {
     box-shadow: inset 3px 0 0 var(--color-bad);
+  }
+
+  .ag-row.tone-wait,
+  .ag-row.tone-run,
+  .ag-row.tone-late {
+    box-shadow: inset 2px 0 0 var(--edge);
+  }
+
+  .ag-row.tone-gold {
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-gold) 55%, transparent);
   }
 
   .ag-row:hover {
     background: rgb(42 33 23 / 0.5);
   }
 
-  .ag-row .djinn-sq {
-    grid-area: sq;
-    margin-top: 7px;
+  .ag-row .ag-icon {
+    grid-area: ic;
+    margin-top: 3px;
   }
 
   /* The title and the detail line are grid items of the row, so the detail runs under the kind tag too. */
@@ -2486,15 +2520,14 @@
     display: contents;
   }
 
+  /* The whole title shows: two rituals may share a long start and differ only at the end. */
   .ag-title {
     grid-area: title;
-    display: -webkit-box;
-    overflow: hidden;
+    display: block;
     font-size: 15px;
     line-height: 1.4;
     color: var(--color-parchment);
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    overflow-wrap: break-word;
   }
 
   .ag-title::after {
@@ -2564,13 +2597,7 @@
 
   .ag-kind {
     grid-area: kind;
-    margin-top: 3px;
-    padding: 0 6px;
-    border: 1px solid var(--line-soft);
-    font: 11px/1.6 var(--font-sans);
-    letter-spacing: 0.04em;
-    white-space: nowrap;
-    color: var(--color-faint);
+    margin-top: 1px;
   }
 
   .ag .fold {
@@ -3185,4 +3212,63 @@
   .ink-late { color: var(--color-late); }
   .ink-gold { color: var(--color-gold-hi); }
   .ink-mute { color: var(--color-faint); }
+
+  /* --- kinds: ritual, manual, vigil (each has a word, a colour and an icon) ---------- */
+
+  .kind-ritual { --kind: var(--color-ritual); }
+  .kind-manual { --kind: var(--color-manual); }
+  .kind-vigil { --kind: var(--color-vigil); }
+
+  .kind-icon {
+    flex: none;
+    color: var(--kind);
+  }
+
+  /* The word and icon of a kind: small, in the kind colour, in a thin tinted box. */
+  .kind-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px 0 5px;
+    border: 1px solid color-mix(in srgb, var(--kind) 42%, transparent);
+    background: color-mix(in srgb, var(--kind) 10%, transparent);
+    font: 500 11px/1.65 var(--font-sans);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: var(--kind);
+  }
+
+  /* A title with a kind icon hanging in front of it, so a wrapped line stays under the text. */
+  .has-kind {
+    position: relative;
+    padding-left: 24px;
+  }
+
+  .has-kind > .kind-lead {
+    position: absolute;
+    top: 0.22em;
+    left: 0;
+  }
+
+  /* A card title with an icon: the icon beside the link; the link keeps its stretched target. */
+  .card-title.has-kind-flex {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .card-title.has-kind-flex > .kind-icon {
+    margin-top: 0.24em;
+  }
+
+  /* A targeted row keeps its outline over the state rail. */
+  .ag-row.target-row:target,
+  .ag-row.target-row.is-target {
+    box-shadow: inset 0 0 0 1px rgb(200 162 78 / 0.45);
+  }
+
+  /* The kind tag in a page head sits on the meta line. */
+  .page-meta .kind-tag {
+    align-self: center;
+  }
 }

@@ -6,6 +6,7 @@ import type { MdBlock } from "../../../src/web/api.ts";
 import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { Command } from "./command.tsx";
+import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
 import { QuestionList } from "./result.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
@@ -61,7 +62,7 @@ export function StatusStrip({ segments }: StatusStripProps): React.ReactNode {
   return (
     <nav className="pulse pulse-home" aria-label="Summary">
       {segments.map((segment) => (
-        <Pill key={segment.key} label={segment.label} value={segment.count} tone={segment.tone} href={segment.href} live={segment.live} />
+        <Pill key={segment.key} label={segment.label} value={segment.count} tone={segment.tone} href={segment.href} live={segment.live} kind={segment.kind} />
       ))}
     </nav>
   );
@@ -80,7 +81,10 @@ export function NowList({ runs }: NowListProps): React.ReactNode {
           <Link to={run.href} className="row row-live now-row">
             <span className="live-bar" aria-hidden="true" />
             <span className="row-main">
-              <span className="row-title">{run.title}</span>
+              <span className="row-title has-kind">
+                <KindIcon kind={run.kind} titled className="kind-lead" />
+                {run.title}
+              </span>
               <span className="row-sub">
                 {run.project}, <Elapsed since={run.startedAt} />, {run.who === "timer" ? "by timer" : `by ${run.who}`}
               </span>
@@ -137,7 +141,8 @@ export function CardView({ card }: CardViewProps): React.ReactNode {
     <article id={card.id} className={`card hcard ${edge}`}>
       <div className="hc-head">
         <div className="hc-main">
-          <h3 className="card-title">
+          <h3 className={card.item === null ? "card-title" : "card-title has-kind-flex"}>
+            {card.item === null ? null : <KindIcon kind={card.item} titled />}
             <Link to={card.href}>{card.title}</Link>
           </h3>
           <p className="card-meta">{card.meta}</p>

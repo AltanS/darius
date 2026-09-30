@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.35.0] - 2026-09-30
+
+### Added
+
+- Three kinds, each with a word, a colour and an icon, on every page: ritual (darius runs it, turquoise, circling arrows), manual (done by hand, rose, a hand) and vigil (a one-shot check, amethyst, an eye). The state colours keep their meaning.
+- Runs carry the icon of what they belong to, in Now, Last night, Recent runs and the runs list, and the ritual and run pages show the kind next to the title.
+
+### Changed
+
+- The tags in Coming up read "ritual" and "manual" instead of "djinn" and "by hand", and a row shows its state as a thin rail in the state colour.
+- The "vigils armed" part of the status strip carries the vigil icon.
+- Titles in Coming up show in full, so two rituals that differ only at the end stay apart. The "Next:" title in the home sub line ends at a word.
+
 ## [0.34.0] - 2026-09-30
 
 ### Added

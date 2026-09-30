@@ -18,15 +18,15 @@
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { dayName, ritualPath, shortDate, vigilPath } from "./format.ts";
+import { type Kind, ritualKind } from "./kind.ts";
 import type { Tone } from "./tone.ts";
-import { asksYou, cadenceText, isUnattended } from "./view.ts";
+import { asksYou, cadenceText } from "./view.ts";
 
 const DAY = 24 * 60 * 60_000;
 
 /** Days ahead that get a group of their own; a later date joins "Later". */
 export const HORIZON_DAYS = 14;
 
-export type AgendaKind = "djinn" | "hand" | "vigil";
 export type GroupKind = "overdue" | "today" | "tomorrow" | "day" | "later" | "none";
 
 /** A state word that is not plain: "13 days late", "Running", "Held", "Failed", "Asks you". */
@@ -37,7 +37,7 @@ export interface AgendaState {
 
 export interface AgendaRow {
   key: string;
-  kind: AgendaKind;
+  kind: Kind;
   project: string;
   slug: string;
   title: string;
@@ -190,7 +190,7 @@ function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
   const tone: Tone = at.state !== null ? at.state.tone : at.date === input.today ? "gold" : "idle";
   return {
     key: `${project.name}/ritual/${ritual.slug}`,
-    kind: isUnattended(ritual) ? "djinn" : "hand",
+    kind: ritualKind(ritual),
     project: project.name,
     slug: ritual.slug,
     title: ritual.title,
@@ -238,14 +238,14 @@ function waitingRow(project: ProjectStatus, vigil: VigilRow): WaitingRow {
 
 // --- the agenda ----------------------------------------------------------------------------
 
-/** Djinns lead their day; by hand rituals and vigils follow, by title. */
-function djinnFirst(row: AgendaRow): number {
-  return row.kind === "djinn" ? 0 : 1;
+/** Rituals darius runs lead their day; manual rituals and vigils follow, by title. */
+function ritualFirst(row: AgendaRow): number {
+  return row.kind === "ritual" ? 0 : 1;
 }
 
-/** Overdue: the latest first. Other groups: the date, djinns first, then the title. */
+/** Overdue: the latest first. Other groups: the date, rituals darius runs first, then the title. */
 function byRow(left: AgendaRow, right: AgendaRow): number {
-  return right.overdueDays - left.overdueDays || (left.date ?? "").localeCompare(right.date ?? "") || djinnFirst(left) - djinnFirst(right) || left.title.localeCompare(right.title);
+  return right.overdueDays - left.overdueDays || (left.date ?? "").localeCompare(right.date ?? "") || ritualFirst(left) - ritualFirst(right) || left.title.localeCompare(right.title);
 }
 
 function byWaiting(left: WaitingRow, right: WaitingRow): number {
@@ -295,7 +295,14 @@ export function buildAgenda(input: AgendaInput): Agenda {
 const SENTENCE_TITLE = 44;
 
 function clipTitle(title: string): string {
-  return title.length <= SENTENCE_TITLE ? title : `${title.slice(0, SENTENCE_TITLE - 1).trimEnd()}…`;
+  if (title.length <= SENTENCE_TITLE) return title;
+  const cut = title.slice(0, SENTENCE_TITLE);
+  const space = cut.lastIndexOf(" ");
+  let text = space > SENTENCE_TITLE / 2 ? cut.slice(0, space) : cut;
+  // A bracket the cut leaves open goes, with what follows it: "ends (no…" reads worse than "ends…".
+  const open = text.lastIndexOf("(");
+  if (open > text.lastIndexOf(")") && open > SENTENCE_TITLE / 2) text = text.slice(0, open);
+  return `${text.replace(/[\s([{,;:\u2014-]+$/u, "")}…`;
 }
 
 /** The end of the home sub line: "6 overdue. Next: Daily site report, tomorrow." */

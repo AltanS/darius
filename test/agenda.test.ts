@@ -90,11 +90,11 @@ test("the groups run from Overdue through the days to Later and No schedule", ()
   assert.deepEqual(agenda.groups.map((group) => group.kind), ["overdue", "today", "tomorrow", "day", "later", "none"]);
 });
 
-test("Overdue runs from the most overdue; other groups put djinns first, then the title", () => {
+test("Overdue runs from the most overdue; other groups put rituals darius runs first, then the title", () => {
   const agenda = build([SAMPLE]);
   assert.deepEqual(titles(agenda, "Overdue"), ["late-most", "late-less", "dated-late"]);
-  assert.deepEqual(titles(agenda, "Today"), ["due-djinn", "dated-today", "due-hand"], "the djinn first, then by title");
-  assert.equal(agenda.groups[1]?.rows[0]?.kind, "djinn", "the djinn leads Today");
+  assert.deepEqual(titles(agenda, "Today"), ["due-djinn", "dated-today", "due-hand"], "the ritual darius runs first, then by title");
+  assert.equal(agenda.groups[1]?.rows[0]?.kind, "ritual", "the ritual darius runs leads Today");
 });
 
 test("vigils: dated ones join the agenda, event ones wait apart, closed ones vanish", () => {
@@ -118,6 +118,8 @@ test("the counts and the sub line: overdue first, then the first thing that is n
   const quiet = build([project("shop", [ritual("only", { nextDue: "2026-10-01" })])]);
   assert.equal(agendaSentence(quiet, TODAY), " Next: only, tomorrow.");
   assert.equal(agendaSentence(build([project("shop", [])]), TODAY), "");
+  const long = build([project("shop", [ritual("long", { title: "Partner App of the Month booking ends (no date window exists)", nextDue: "2026-10-01" })])]);
+  assert.equal(agendaSentence(long, TODAY), " Next: Partner App of the Month booking ends…, tomorrow.", "a long title ends at a word, without a dangling bracket");
 });
 
 test("running and held djinns sit in Today with their state word; a failure today waits until tomorrow", () => {

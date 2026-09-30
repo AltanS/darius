@@ -189,7 +189,7 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
   const coming = comingOf(body).replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, "");
-  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("by hand"), "the late manual ritual is a row of Coming up");
+  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, tagged manual");
   assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
   assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">overdue<\/span>/su, "and the overdue segment of the strip counts it");
   const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();

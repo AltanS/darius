@@ -5,9 +5,11 @@ import { Link } from "react-router";
 import type { Acknowledgement, RitualRow, RunRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { answerCommand, duration, ritualPath, runPath } from "../lib/format.ts";
+import { ritualKind } from "../lib/kind.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, cadenceText, decisionText, nextText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
 import { Command } from "./command.tsx";
+import { KindIcon } from "./kind.tsx";
 import { Report } from "./board.tsx";
 import { ResultTags } from "./result.tsx";
 import { Empty, Status, Time } from "./ui.tsx";
@@ -37,7 +39,16 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
             <Link to={runPath(run.project, run.run)} className={state.tone === "run" ? "row row-live" : "row"}>
               {state.tone === "run" ? <span className="live-bar" aria-hidden="true" /> : null}
               <span className="row-main">
-                <span className="row-title">{showLabel ? run.label : <Time iso={run.startedAt} />}</span>
+                {showLabel ? (
+                  <span className="row-title has-kind">
+                    <KindIcon kind={run.kind} titled className="kind-lead" />
+                    {run.label}
+                  </span>
+                ) : (
+                  <span className="row-title">
+                    <Time iso={run.startedAt} />
+                  </span>
+                )}
                 {sub.length === 0 ? null : <span className="row-sub">{sub.join(", ")}</span>}
                 <ResultTags summary={run.result} isAnswered={run.acknowledged !== null} />
               </span>
@@ -133,7 +144,8 @@ export function DjinnCard({ project, ritual, last, report, showProject }: DjinnC
     <article className={`card card-grid card-accent card-link edge-${state.tone}${state.tone === "run" ? " is-live" : ""}`}>
       {state.tone === "run" ? <span className="live-bar" aria-hidden="true" /> : null}
       <div className="card-main">
-        <h3 className="card-title">
+        <h3 className="card-title has-kind-flex">
+          <KindIcon kind={ritualKind(ritual)} titled />
           <Link to={ritualPath(project, ritual.slug)}>{ritual.title}</Link>
         </h3>
         <p className="card-meta">{meta.join(", ")}</p>

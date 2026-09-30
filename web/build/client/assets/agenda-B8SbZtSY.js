@@ -1,0 +1,1 @@
+import"./clock-B4mPWm6W.js";import"./view-DSEnasfl.js";function e(e){let t=new Set,n=0;for(let r of e.groups){let e=r.kind===`overdue`||r.kind===`today`||r.kind===`tomorrow`;for(let i of r.rows)e||(n+=1,n>6&&t.add(i.key))}return t}function t(e){return e.kind===`later`||e.kind===`none`}export{e as n,t};

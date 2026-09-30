@@ -8,12 +8,10 @@
 
 import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { ackCommand, hostDate, momentText, relativeDate, roughDuration, runNowCommand, shortDate } from "./format.ts";
+import { isUnattended, itemKind, type Kind } from "./kind.ts";
 import type { Badge, Tone } from "./tone.ts";
 
-/** True when darius itself starts this ritual. */
-export function isUnattended(ritual: RitualRow): boolean {
-  return ritual.mode !== "off" && ritual.lifecycle === "active";
-}
+export { isUnattended };
 
 /** A djinn: a ritual darius runs that follows a repo skill. */
 export function isDjinn(ritual: RitualRow): boolean {
@@ -37,6 +35,8 @@ export interface ActivityRun extends RunRow {
   label: string;
   /** The ritual or vigil slug. */
   slug: string;
+  /** What the item is: a ritual darius runs, a ritual done by hand, or a vigil. */
+  kind: Kind;
 }
 
 export function itemSlug(item: string): string {
@@ -56,7 +56,7 @@ export function activity(projects: readonly ProjectStatus[], opts: { withImporte
     .flatMap((project) =>
       project.runs
         .filter((run) => opts.withImported || !isImported(run))
-        .map((run): ActivityRun => Object.assign({}, run, { project: project.name, slug: itemSlug(run.item), label: itemLabel(project, run.item) })),
+        .map((run): ActivityRun => Object.assign({}, run, { project: project.name, slug: itemSlug(run.item), label: itemLabel(project, run.item), kind: itemKind(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item))) })),
     )
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }

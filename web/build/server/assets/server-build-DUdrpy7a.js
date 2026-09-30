@@ -9264,11 +9264,30 @@ function itemPath(project, item) {
 	return vigilPath(project, slug);
 }
 //#endregion
-//#region app/lib/view.ts
+//#region app/lib/kind.ts
 /** True when darius itself starts this ritual. */
 function isUnattended(ritual) {
 	return ritual.mode !== "off" && ritual.lifecycle === "active";
 }
+/** `ritual` when darius starts the ritual itself, `manual` when a person does it. */
+function ritualKind(ritual) {
+	return isUnattended(ritual) ? "ritual" : "manual";
+}
+/**
+* The kind of a run's item (`ritual/<slug>` or `vigil/<slug>`). A ritual that
+* the status no longer lists counts as a ritual darius runs, since only such a
+* ritual leaves runs behind.
+*/
+function itemKind(item, ritual) {
+	if (item.startsWith("vigil/")) return "vigil";
+	return ritual === void 0 ? "ritual" : ritualKind(ritual);
+}
+/** The word that names a kind on a tag. */
+function kindWord(kind) {
+	return kind;
+}
+//#endregion
+//#region app/lib/view.ts
 /** A djinn: a ritual darius runs that follows a repo skill. */
 function isDjinn(ritual) {
 	return isUnattended(ritual) && ritual.skill !== null;
@@ -9290,7 +9309,8 @@ function activity(projects, opts) {
 	return projects.flatMap((project) => project.runs.filter((run) => opts.withImported || !isImported(run)).map((run) => Object.assign({}, run, {
 		project: project.name,
 		slug: itemSlug(run.item),
-		label: itemLabel(project, run.item)
+		label: itemLabel(project, run.item),
+		kind: itemKind(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item)))
 	}))).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 /**
@@ -9667,7 +9687,7 @@ function ritualRow(input, project, ritual) {
 	const tone = at.state !== null ? at.state.tone : at.date === input.today ? "gold" : "idle";
 	return {
 		key: `${project.name}/ritual/${ritual.slug}`,
-		kind: isUnattended(ritual) ? "djinn" : "hand",
+		kind: ritualKind(ritual),
 		project: project.name,
 		slug: ritual.slug,
 		title: ritual.title,
@@ -9718,13 +9738,13 @@ function waitingRow(project, vigil) {
 		flagged: vigil.flagged
 	};
 }
-/** Djinns lead their day; by hand rituals and vigils follow, by title. */
-function djinnFirst(row) {
-	return row.kind === "djinn" ? 0 : 1;
+/** Rituals darius runs lead their day; manual rituals and vigils follow, by title. */
+function ritualFirst(row) {
+	return row.kind === "ritual" ? 0 : 1;
 }
-/** Overdue: the latest first. Other groups: the date, djinns first, then the title. */
+/** Overdue: the latest first. Other groups: the date, rituals darius runs first, then the title. */
 function byRow(left, right) {
-	return right.overdueDays - left.overdueDays || (left.date ?? "").localeCompare(right.date ?? "") || djinnFirst(left) - djinnFirst(right) || left.title.localeCompare(right.title);
+	return right.overdueDays - left.overdueDays || (left.date ?? "").localeCompare(right.date ?? "") || ritualFirst(left) - ritualFirst(right) || left.title.localeCompare(right.title);
 }
 function byWaiting(left, right) {
 	return Number(right.flagged) - Number(left.flagged) || left.title.localeCompare(right.title);
@@ -9782,7 +9802,13 @@ function buildAgenda(input) {
 /** The longest title the sub line quotes; a longer one ends in an ellipsis, so the line stays short on a phone. */
 var SENTENCE_TITLE = 44;
 function clipTitle(title) {
-	return title.length <= SENTENCE_TITLE ? title : `${title.slice(0, 43).trimEnd()}…`;
+	if (title.length <= SENTENCE_TITLE) return title;
+	const cut = title.slice(0, SENTENCE_TITLE);
+	const space = cut.lastIndexOf(" ");
+	let text = space > SENTENCE_TITLE / 2 ? cut.slice(0, space) : cut;
+	const open = text.lastIndexOf("(");
+	if (open > text.lastIndexOf(")") && open > SENTENCE_TITLE / 2) text = text.slice(0, open);
+	return `${text.replace(/[\s([{,;:\u2014-]+$/u, "")}…`;
 }
 /** The end of the home sub line: "6 overdue. Next: Daily site report, tomorrow." */
 function agendaSentence(agenda, today) {
@@ -9926,10 +9952,11 @@ function djinnState(clock, project, ritual, runs) {
 		missed: ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday
 	};
 }
-function blank(id, kind) {
+function blank(id, kind, item) {
 	return {
 		id,
 		kind,
+		item,
 		edge: null,
 		word: {
 			text: "",
@@ -9953,7 +9980,7 @@ function historyHref(run) {
 }
 function heldCard(clock, run) {
 	return {
-		...blank(`held-${run.run}`, "held"),
+		...blank(`held-${run.run}`, "held", run.kind),
 		edge: "wait",
 		word: {
 			text: "Held",
@@ -9985,7 +10012,7 @@ function asksCard(clock, readRun, run) {
 	const count = run.result?.questions ?? 0;
 	const result = readRun(run.project, run.run)?.result ?? null;
 	return {
-		...blank(`asks-${run.run}`, "asks"),
+		...blank(`asks-${run.run}`, "asks", run.kind),
 		edge: "wait",
 		word: {
 			text: "Asks you",
@@ -10050,7 +10077,7 @@ function finishedCard(clock, readRun, state, run) {
 	const badge = runState(run);
 	const report = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : reportOf(readRun, run, DONE_CHARS, DONE_FADE);
 	return {
-		...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done"),
+		...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done", ritualKind(state.ritual)),
 		edge: failed ? "bad" : null,
 		word: {
 			text: badge.label,
@@ -10080,7 +10107,7 @@ function finishedCard(clock, readRun, state, run) {
 }
 function stuckCard(clock, run, stuck) {
 	return {
-		...blank(`stuck-${run.run}`, "stuck"),
+		...blank(`stuck-${run.run}`, "stuck", run.kind),
 		edge: "late",
 		word: {
 			text: "Running",
@@ -10115,7 +10142,7 @@ function flaggedCard(clock, project, vigil, runs, generatedAt) {
 	].filter((part) => part !== null);
 	const size = check === void 0 ? 0 : clock.now - Date.parse(check.startedAt);
 	return {
-		...blank(`flagged-${project.name}-${vigil.slug}`, "flagged"),
+		...blank(`flagged-${project.name}-${vigil.slug}`, "flagged", "vigil"),
 		edge: "bad",
 		word: {
 			text: "Flagged",
@@ -10133,7 +10160,7 @@ function flaggedCard(clock, project, vigil, runs, generatedAt) {
 }
 function unreadableCard(project) {
 	return {
-		...blank(`unreadable-${project.name}`, "unreadable"),
+		...blank(`unreadable-${project.name}`, "unreadable", null),
 		edge: "bad",
 		word: {
 			text: "Unreadable",
@@ -10268,7 +10295,8 @@ function cardSegment(needs, kind, label, tone) {
 		count: cards.length,
 		tone,
 		href: `#${first.id}`,
-		live: false
+		live: false,
+		kind: null
 	}];
 }
 /**
@@ -10285,7 +10313,8 @@ function statusStrip(needs, running, agenda) {
 		count: running,
 		tone: "run",
 		href: "#now",
-		live: true
+		live: true,
+		kind: null
 	}];
 	const overdueSegment = agenda.overdue === 0 ? [] : [{
 		key: "overdue",
@@ -10293,7 +10322,8 @@ function statusStrip(needs, running, agenda) {
 		count: agenda.overdue,
 		tone: "late",
 		href: "#coming-up",
-		live: false
+		live: false,
+		kind: null
 	}];
 	const todaySegment = agenda.dueToday === 0 ? [] : [{
 		key: "today",
@@ -10301,7 +10331,8 @@ function statusStrip(needs, running, agenda) {
 		count: agenda.dueToday,
 		tone: "gold",
 		href: "#coming-up",
-		live: false
+		live: false,
+		kind: null
 	}];
 	const armedHref = agenda.waiting.length === 0 ? "#coming-up" : "#waiting";
 	const armedSegment = agenda.armed === 0 ? [] : [{
@@ -10310,7 +10341,8 @@ function statusStrip(needs, running, agenda) {
 		count: agenda.armed,
 		tone: "gold",
 		href: armedHref,
-		live: false
+		live: false,
+		kind: "vigil"
 	}];
 	return [
 		{
@@ -10319,7 +10351,8 @@ function statusStrip(needs, running, agenda) {
 			count: waiting,
 			tone: "wait",
 			href: waiting === 0 ? null : "#needs",
-			live: false
+			live: false,
+			kind: null
 		},
 		...runningSegment,
 		...cardSegment(needs, "stuck", "stuck", "late"),
@@ -10341,7 +10374,8 @@ function nowRun(run) {
 		project: run.project,
 		href: runPath(run.project, run.run),
 		startedAt: run.startedAt,
-		who: run.who
+		who: run.who,
+		kind: run.kind
 	};
 }
 function homeView(status, readRun) {
@@ -10822,6 +10856,56 @@ var ErrorBoundary = withErrorBoundaryProps(function ErrorBoundary({ error }) {
 	});
 });
 //#endregion
+//#region app/components/kind.tsx
+/**
+* The three kinds (`lib/kind.ts`) as drawn things: an icon and a tag. The icon
+* is decoration (two arrows chasing each other for a ritual darius runs, an
+* open hand for a ritual done by hand, an eye for a vigil that keeps watch);
+* the word carries the meaning. Where only an icon shows, `titled` gives it a
+* name for screen readers.
+*/
+/** The strokes of each icon, in a 16 by 16 box. */
+var PATHS = {
+	ritual: ["M3.3 5.8A5.2 5.2 0 0 1 12.7 5.8M13.4 2.9L12.7 5.8L10 4.4", "M12.7 10.2A5.2 5.2 0 0 1 3.3 10.2M2.6 13.1L3.3 10.2L6 11.6"],
+	manual: [
+		"M3.2 6.2V10.4C3.2 12.8 5 14.4 7.5 14.4C9.8 14.4 11.3 13.3 12.4 11.6L14.1 8.9A1.1 1.1 0 0 0 12.3 7.7L10.7 9.6",
+		"M5.7 8.2V4M8.2 8.2V2.6M10.7 9.2V4",
+		"M3.2 6.2V7.8"
+	],
+	vigil: ["M1.4 8C3 4.9 5.3 3.6 8 3.6C10.7 3.6 13 4.9 14.6 8C13 11.1 10.7 12.4 8 12.4C5.3 12.4 3 11.1 1.4 8Z", "M8 6.1A1.9 1.9 0 1 0 8 9.9A1.9 1.9 0 1 0 8 6.1Z"]
+};
+/** The icon of a kind, in the kind's colour. */
+function KindIcon({ kind, size = 16, titled = false, className }) {
+	const named = titled ? {
+		role: "img",
+		"aria-label": kindWord(kind)
+	} : { "aria-hidden": true };
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: `kind-icon kind-${kind}${className === void 0 ? "" : ` ${className}`}`,
+		width: size,
+		height: size,
+		viewBox: "0 0 16 16",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.6",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		focusable: "false",
+		...named,
+		children: PATHS[kind].map((path) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: path }, path))
+	});
+}
+/** The icon and the word of a kind in a small tinted box. */
+function KindTag({ kind }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: `kind-tag kind-${kind}`,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+			kind,
+			size: 12
+		}), kindWord(kind)]
+	});
+}
+//#endregion
 //#region app/components/ui.tsx
 /** Small shared pieces: sections, status words, times, folds, chips. */
 function Word({ text }) {
@@ -10947,14 +11031,10 @@ function Crumbs({ children }) {
 /**
 * Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
 * the same on the home page and on the project page. Every row is one link
-* over its whole width (44 px tall at least), with a small kind tag, the
-* title, and one line of detail.
+* over its whole width (44 px tall at least), with the icon of its kind, the
+* title, a kind tag, and one line of detail. The state shows in the detail
+* line and in a thin rail at the left edge.
 */
-var KIND_LABEL = {
-	djinn: "djinn",
-	hand: "by hand",
-	vigil: "vigil"
-};
 /** The date of a row in Later: it is not in the group label. */
 function laterDate(row, group) {
 	if (group.kind !== "later" || row.date === null) return null;
@@ -10979,9 +11059,9 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }) {
 		id,
 		className: classes.join(" "),
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "djinn-sq",
-				"aria-hidden": "true"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+				kind: row.kind,
+				className: "ag-icon"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ag-main",
@@ -11021,7 +11101,7 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "ag-kind",
-				children: KIND_LABEL[row.kind]
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindTag, { kind: row.kind })
 			})
 		]
 	});
@@ -11098,9 +11178,9 @@ function WaitingItem({ row, showProject, anchors, target }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		id,
 		className: classes.join(" "),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "djinn-sq",
-			"aria-hidden": "true"
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+			kind: "vigil",
+			className: "ag-icon"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ag-main",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
@@ -11646,7 +11726,7 @@ function ResultPanel({ project, row, result }) {
 //#region app/components/pulse.tsx
 /** The head of a project page: the status strip, and the panel for what is open now. */
 /** One count of the status strip. The whole segment is the link. */
-function Pill({ label, value, sub, tone, href, live = false }) {
+function Pill({ label, value, sub, tone, href, live = false, kind = null }) {
 	const on = value > 0;
 	const className = `pill tone-${on ? tone : "idle"}`;
 	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -11654,9 +11734,13 @@ function Pill({ label, value, sub, tone, href, live = false }) {
 			className: "live-bar",
 			"aria-hidden": "true"
 		}) : null,
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		kind === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "pill-dot",
 			"aria-hidden": "true"
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+			kind,
+			size: 14,
+			className: `pill-kind${on ? "" : " is-off"}`
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "pill-n",
@@ -11718,6 +11802,7 @@ function Pulse({ data }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
 				label: "vigils armed",
+				kind: "vigil",
 				value: data.openVigils.length,
 				sub: vigilSub === "" ? void 0 : vigilSub,
 				tone: flagged > 0 ? "bad" : due > 0 ? "late" : "gold",
@@ -11784,9 +11869,13 @@ function LivePanel({ live }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "row-main",
 								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "row-title",
-										children: run.label
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "row-title has-kind",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+											kind: run.kind,
+											titled: true,
+											className: "kind-lead"
+										}), run.label]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 										className: "row-sub",
@@ -11861,7 +11950,8 @@ function StatusStrip({ segments }) {
 			value: segment.count,
 			tone: segment.tone,
 			href: segment.href,
-			live: segment.live
+			live: segment.live,
+			kind: segment.kind
 		}, segment.key))
 	});
 }
@@ -11879,9 +11969,13 @@ function NowList({ runs }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "row-main",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "row-title",
-						children: run.title
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "row-title has-kind",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+							kind: run.kind,
+							titled: true,
+							className: "kind-lead"
+						}), run.title]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "row-sub",
 						children: [
@@ -11940,12 +12034,15 @@ function CardView({ card }) {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "hc-main",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-							className: "card-title",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+							className: card.item === null ? "card-title" : "card-title has-kind-flex",
+							children: [card.item === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+								kind: card.item,
+								titled: true
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 								to: card.href,
 								children: card.title
-							})
+							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "card-meta",
@@ -12167,9 +12264,16 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "row-main",
 							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "row-title has-kind",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+										kind: run.kind,
+										titled: true,
+										className: "kind-lead"
+									}), run.label]
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "row-title",
-									children: showLabel ? run.label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt })
 								}),
 								sub.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "row-sub",
@@ -12255,12 +12359,15 @@ function DjinnCard({ project, ritual, last, report, showProject }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "card-main",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-						className: "card-title",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+						className: "card-title has-kind-flex",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+							kind: ritualKind(ritual),
+							titled: true
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 							to: ritualPath(project, ritual.slug),
 							children: ritual.title
-						})
+						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "card-meta",
@@ -12759,9 +12866,13 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 											className: rowClass(target, id),
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 												className: "row-main",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "row-title",
-													children: vigil.title
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "row-title has-kind",
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+														kind: "vigil",
+														titled: true,
+														className: "kind-lead"
+													}), vigil.title]
 												}), vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 													className: "row-sub",
 													children: ["last check ", vigil.lastOutcome]
@@ -12842,11 +12953,13 @@ function modeText(mode) {
 var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 	const { ritual, held, finished, next, asks, report } = loaderData;
 	const { row, policy, project } = ritual;
+	const kind = ritualKind(row);
 	const runs = ritual.runs.map((run) => ({
 		...run,
 		project,
 		label: row.title,
-		slug: row.slug
+		slug: row.slug,
+		kind
 	}));
 	const unattended = isUnattended(row);
 	const cadence = cadenceText(row.cadence);
@@ -12866,6 +12979,7 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "page-meta",
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindTag, { kind }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
 						className: "text-faint",
 						children: row.slug
@@ -13038,8 +13152,10 @@ function loader$1({ context, params }) {
 		today: status.today,
 		offset: status.utcOffset
 	});
+	const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
 	return {
 		run,
+		kind: itemKind(run.row.item, ritual),
 		label: itemLabel(project, run.row.item),
 		stuck: stuckFor(run.row, status.generatedAt),
 		next
@@ -13047,7 +13163,7 @@ function loader$1({ context, params }) {
 }
 var meta$1 = ({ loaderData }) => [{ title: `${loaderData?.label ?? "Run"} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, label, stuck, next } = loaderData;
+	const { run, kind, label, stuck, next } = loaderData;
 	const { row, project } = run;
 	const state = stuck === null ? runState(row) : {
 		tone: "late",
@@ -13081,6 +13197,7 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "page-meta",
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindTag, { kind }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
 						tone: state.tone,
 						label: state.label
@@ -13217,14 +13334,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-WEcHOsdw.js",
+			"module": "/assets/root-BhJkBnYu.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-B4mPWm6W.js",
-				"/assets/view-CCanQLEb.js",
-				"/assets/agenda-CkP2PghJ.js"
+				"/assets/view-DSEnasfl.js",
+				"/assets/agenda-B8SbZtSY.js"
 			],
-			"css": ["/assets/root-Bl-oYXFC.css"],
+			"css": ["/assets/root-CvHRuGP0.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -13243,16 +13360,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-JNgMfi7D.js",
+			"module": "/assets/overview-BZCveK2I.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
+				"/assets/board-qjevP4Hj.js",
 				"/assets/ui-DygCT6KJ.js",
-				"/assets/agenda-CtD0iIM5.js",
-				"/assets/board-U8_AnqOg.js",
+				"/assets/agenda-PSl05dO6.js",
 				"/assets/route-error-DI3wO4-Y.js",
 				"/assets/clock-B4mPWm6W.js",
-				"/assets/agenda-CkP2PghJ.js",
-				"/assets/view-CCanQLEb.js"
+				"/assets/view-DSEnasfl.js",
+				"/assets/agenda-B8SbZtSY.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13273,15 +13390,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-UBfzYfsA.js",
+			"module": "/assets/runs-Df-liAMt.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/ui-DygCT6KJ.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DXtLCu84.js",
+				"/assets/runs-Bi33s0BK.js",
 				"/assets/clock-B4mPWm6W.js",
-				"/assets/view-CCanQLEb.js",
-				"/assets/board-U8_AnqOg.js"
+				"/assets/board-qjevP4Hj.js",
+				"/assets/view-DSEnasfl.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13349,17 +13466,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/project-F0f-U6aZ.js",
+			"module": "/assets/project-gOcs-NLy.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-B4mPWm6W.js",
+				"/assets/board-qjevP4Hj.js",
 				"/assets/ui-DygCT6KJ.js",
-				"/assets/agenda-CtD0iIM5.js",
-				"/assets/board-U8_AnqOg.js",
+				"/assets/agenda-PSl05dO6.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DXtLCu84.js",
-				"/assets/agenda-CkP2PghJ.js",
-				"/assets/view-CCanQLEb.js"
+				"/assets/runs-Bi33s0BK.js",
+				"/assets/view-DSEnasfl.js",
+				"/assets/agenda-B8SbZtSY.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13380,15 +13497,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CHHnFr7C.js",
+			"module": "/assets/ritual-AnVsSGIa.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-B4mPWm6W.js",
-				"/assets/view-CCanQLEb.js",
+				"/assets/board-qjevP4Hj.js",
+				"/assets/view-DSEnasfl.js",
 				"/assets/ui-DygCT6KJ.js",
-				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DXtLCu84.js"
+				"/assets/runs-Bi33s0BK.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13409,15 +13526,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BQWbHlJb.js",
+			"module": "/assets/run-DBlb26Pw.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
 				"/assets/clock-B4mPWm6W.js",
-				"/assets/view-CCanQLEb.js",
+				"/assets/board-qjevP4Hj.js",
+				"/assets/view-DSEnasfl.js",
 				"/assets/ui-DygCT6KJ.js",
-				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DXtLCu84.js"
+				"/assets/runs-Bi33s0BK.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13447,8 +13564,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-b20afed1.js",
-	"version": "b20afed1",
+	"url": "/assets/manifest-d629db91.js",
+	"version": "d629db91",
 	"sri": void 0
 };
 //#endregion

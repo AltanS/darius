@@ -2,6 +2,7 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/project";
 import { ComingUp, Waiting } from "../components/agenda.tsx";
+import { KindIcon } from "../components/kind.tsx";
 import { LivePanel, PhoneMore, Pulse } from "../components/pulse.tsx";
 import { DjinnCard, RunList } from "../components/runs.tsx";
 import { Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
@@ -159,7 +160,10 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
                       return (
                         <li key={vigil.slug} id={id} className={rowClass(target, id)}>
                           <span className="row-main">
-                            <span className="row-title">{vigil.title}</span>
+                            <span className="row-title has-kind">
+                              <KindIcon kind="vigil" titled className="kind-lead" />
+                              {vigil.title}
+                            </span>
                             {vigil.lastOutcome === null ? null : <span className="row-sub">last check {vigil.lastOutcome}</span>}
                           </span>
                           <Status tone={badge.tone} label={badge.label} />

@@ -1,18 +1,18 @@
 /**
  * Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
  * the same on the home page and on the project page. Every row is one link
- * over its whole width (44 px tall at least), with a small kind tag, the
- * title, and one line of detail.
+ * over its whole width (44 px tall at least), with the icon of its kind, the
+ * title, a kind tag, and one line of detail. The state shows in the detail
+ * line and in a thin rail at the left edge.
  */
 
 import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router";
 
-import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaKind, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
+import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
 import { shortDate, vigilAnchor } from "../lib/format.ts";
+import { KindIcon, KindTag } from "./kind.tsx";
 import { Fold, SectHead, Word } from "./ui.tsx";
-
-const KIND_LABEL = { djinn: "djinn", hand: "by hand", vigil: "vigil" } as const satisfies Record<AgendaKind, string>;
 
 /** Rows of Waiting on an event before its fold. */
 export const WAITING_SHOWN = 5;
@@ -43,7 +43,7 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }: RowProp
   const pieces = [showProject && !lead ? row.project : null, ...(row.facts === "" ? [] : row.facts.split(", ")), later].filter((part) => part !== null);
   return (
     <li id={id} className={classes.join(" ")}>
-      <span className="djinn-sq" aria-hidden="true" />
+      <KindIcon kind={row.kind} className="ag-icon" />
       <div className="ag-main">
         <Link to={row.href} className="ag-title">
           {row.title}
@@ -72,7 +72,9 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }: RowProp
           ) : null}
         </p>
       </div>
-      <span className="ag-kind">{KIND_LABEL[row.kind]}</span>
+      <span className="ag-kind">
+        <KindTag kind={row.kind} />
+      </span>
     </li>
   );
 }
@@ -147,7 +149,7 @@ function WaitingItem({ row, showProject, anchors, target }: WaitingItemProps): R
   const classes = ["ag-row", "ag-row-plain", `tone-${row.flagged ? "bad" : "idle"}`, id === undefined ? "" : target === id ? "target-row is-target" : "target-row"].filter((part) => part !== "");
   return (
     <li id={id} className={classes.join(" ")}>
-      <span className="djinn-sq" aria-hidden="true" />
+      <KindIcon kind="vigil" className="ag-icon" />
       <div className="ag-main">
         <Link to={row.href} className="ag-title">
           {row.title}
