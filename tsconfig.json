@@ -18,5 +18,7 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // The vendored legacy tracker CLI is frozen and typechecked by src/legacy/tsconfig.json.
+  "exclude": ["src/legacy"]
 }

@@ -23,7 +23,8 @@
     "web/build/**",
     "web/.react-router/**",
     "tools/oxlint/anti-slop/**",
-    "bin/**"
+    "bin/**",
+    "src/legacy/**"
   ],
   "jsPlugins": [
     {
