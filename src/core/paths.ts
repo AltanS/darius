@@ -8,8 +8,9 @@
  * command ever touching the operator's real store.
  */
 
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { findMarker } from "./marker.ts";
 import { UsageError } from "./model.ts";
@@ -67,4 +68,31 @@ export function resolveProject(flag?: string, cwd?: string): string {
   throw new UsageError(
     "no project: pass --project, set DARIUS_PROJECT, or run inside a repo with a .darius.toml marker",
   );
+}
+
+/** The nearest `.tracker/` directory walked up from `start`, or null. The legacy CLI walks the same way. */
+export function findTrackerDir(start: string): string | null {
+  let dir = resolve(start);
+  for (let depth = 0; depth < 50; depth += 1) {
+    const candidate = join(dir, ".tracker");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * True when a store verb has no project to act on and runs in a legacy repo:
+ * no `--project`, no `DARIUS_PROJECT`, no `.darius.toml` above `cwd`, but a
+ * `.tracker/`. Such a repo must be linked first (`darius init`); without the
+ * check the verb would fail with the generic "no project" usage error.
+ */
+export function isUnlinkedTrackerRepo(flag: string | undefined, cwd: string): boolean {
+  if (flag !== undefined && flag.length > 0) return false;
+  const fromEnv = process.env.DARIUS_PROJECT;
+  if (fromEnv !== undefined && fromEnv.length > 0) return false;
+  if (findMarker(cwd) !== null) return false;
+  return findTrackerDir(cwd) !== null;
 }

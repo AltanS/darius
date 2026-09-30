@@ -330,6 +330,21 @@ run skill2 30 env CLAUDE_CONFIG_DIR="$SKILL_DIR" "$DARIUS" skill uninstall || fa
 [ ! -e "$SKILL_FILE" ] || fail "skill uninstall left $SKILL_FILE"
 pass "installed $bytes bytes with a stamp, then removed it"
 
+# --- 2c. legacy verbs under both runtimes, in a throwaway repo -------------------------
+# darius hands every verb it does not own to the vendored legacy CLI
+# (src/core/kinds.ts). Both runtimes must run it and print the same thing.
+begin "2c legacy"
+LEGACY_REPO="$WORK/legacy-repo"
+mkdir -p "$LEGACY_REPO/.tracker"
+cp -R "$ROOT/test/fixtures/tracker-mini/." "$LEGACY_REPO/.tracker/"
+for runtime in node bun; do
+  (cd "$LEGACY_REPO" && run "status-$runtime" 60 env DARIUS_RUNTIME="$runtime" "$DARIUS" status) || fail "darius status failed under $runtime" "$WORK/status-$runtime.out" "$WORK/status-$runtime.err"
+  (cd "$LEGACY_REPO" && run "vigils-$runtime" 60 env DARIUS_RUNTIME="$runtime" "$DARIUS" vigil list --json) || fail "darius vigil list --json failed under $runtime" "$WORK/vigils-$runtime.out" "$WORK/vigils-$runtime.err"
+done
+cmp -s "$WORK/status-node.out" "$WORK/status-bun.out" || fail "darius status differs between node and bun" "$WORK/status-node.out" "$WORK/status-bun.out"
+cmp -s "$WORK/vigils-node.out" "$WORK/vigils-bun.out" || fail "darius vigil list --json differs between node and bun" "$WORK/vigils-node.out" "$WORK/vigils-bun.out"
+pass "darius status and darius vigil list --json run under node and bun, same output"
+
 # --- 3. SeaweedFS -------------------------------------------------------------------
 begin "3 seaweedfs"
 [ -n "$TAILNET_IP" ] || fail "no tailnet address: set DARIUS_TAILNET_IP or start tailscale"

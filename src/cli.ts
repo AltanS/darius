@@ -6,7 +6,9 @@
  * contract with scripts/test.sh and the operator's scripts, not just a
  * command. Every other verb is a `Command` registered by a module under
  * src/cli/ (src/cli/commands.ts holds the fixed import list; a command
- * module calls `register()` once, at import time). Exit codes follow the
+ * module calls `register()` once, at import time), or a verb of the vendored
+ * legacy CLI: `routeVerb` in src/core/kinds.ts decides, and a legacy verb
+ * gets the whole argv, its output and its exit code unchanged. Exit codes follow the
  * operator's probe contract: 0 ok, 1 refused or failed, 2 usage, 3
  * inconclusive environment.
  */
@@ -15,6 +17,9 @@ import { parseArgs, readStdin } from "./cli/args.ts";
 import { registerCommands } from "./cli/commands.ts";
 import { getCommand, listCommands, register, UsageError, type Command } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
+import { DARIUS_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
+import { runLegacy } from "./core/legacy-entry.ts";
+import { isUnlinkedTrackerRepo } from "./core/paths.ts";
 import { errorMessage, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
 
@@ -40,6 +45,8 @@ function printHelpText(): void {
   for (const entry of helpEntries()) {
     console.log(`  darius ${entry.name.padEnd(12)} ${entry.summary}`);
   }
+  console.log("\nTracker verbs (milestones, specs, worklogs, vigils in .tracker/):");
+  console.log(`  ${[...LEGACY_VERBS].join(", ")}`);
   console.log("\nThe full command surface is planned in docs/concept.md.");
 }
 
@@ -76,13 +83,22 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const name = resolveCommandName(first);
+  const route = routeVerb(name, argv[1], (verb) => getCommand(verb) !== undefined);
+  if (route === "legacy") return runLegacyVerb(argv);
   const command = getCommand(name);
-  if (command === undefined) {
+  if (route === "unknown" || command === undefined) {
     console.error(`darius: unknown command '${name}'. Run 'darius help'.`);
     return 2;
   }
 
   const args = parseArgs(argv.slice(1));
+  const kind = kindOfVerb(name);
+  const project = args.flags.project;
+  const named = project !== undefined && project !== false && project !== true ? project : undefined;
+  if (kind !== null && DARIUS_KINDS.has(kind) && isUnlinkedTrackerRepo(named, process.cwd())) {
+    console.error("darius: this repo is not linked: run darius init");
+    return 1;
+  }
   if (args.flags.stdin === true) {
     args.stdin = readStdin();
   }
@@ -94,6 +110,16 @@ async function main(argv: string[]): Promise<number> {
       console.error(`darius: ${error.message}`);
       return 2;
     }
+    console.error(`darius: ${errorMessage(error)}`);
+    return 1;
+  }
+}
+
+/** A verb darius does not own: the legacy CLI gets the argv as given, and its exit code passes through. */
+async function runLegacyVerb(argv: string[]): Promise<number> {
+  try {
+    return await runLegacy(argv);
+  } catch (error) {
     console.error(`darius: ${errorMessage(error)}`);
     return 1;
   }
