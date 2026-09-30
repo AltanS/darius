@@ -1,51 +1,34 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/project";
-import { LivePanel, PhoneMore, Pulse, ScheduledPanel, VigilPanel, type ScheduledEntry } from "../components/pulse.tsx";
+import { ComingUp, Waiting } from "../components/agenda.tsx";
+import { LivePanel, PhoneMore, Pulse } from "../components/pulse.tsx";
 import { DjinnCard, RunList } from "../components/runs.tsx";
-import { DateLabel, Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
-import { ritualPath, vigilAnchor } from "../lib/format.ts";
+import { Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
+import { buildAgenda } from "../lib/agenda.ts";
+import { vigilAnchor } from "../lib/format.ts";
 import { statusOf } from "../lib/status.ts";
 import { useHashTarget } from "../lib/target.ts";
-import { ritualBadge, vigilBadge } from "../lib/tone.ts";
-import { activity, asksYou, cadenceText, isDjinn, isUnattended, reportExcerpt, runState, stuckFor } from "../lib/view.ts";
-import type { RitualRow, VigilRow } from "../../../src/web/api.ts";
+import { vigilBadge } from "../lib/tone.ts";
+import { activity, asksYou, isDjinn, isUnattended, reportExcerpt, stuckFor } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 const RECENT = 10;
 
-/** Manual rituals shown before the fold. */
-const MANUAL_SHOWN = 3;
-
-/** Djinn cards a phone shows before its own button; the rest repeat what Scheduled says. */
+/** Djinn cards a phone shows before its own button; the rest repeat what Coming up says. */
 const DJINNS_PHONE = 1;
 
 /** Recent runs a phone shows before its own button. */
 const RECENT_PHONE = 3;
 
+/** Rows of Waiting on an event before its fold: a project page has more to show than the home page. */
+const WAITING_PROJECT = 3;
+
 /** Closed vigils shown in their fold; a long-running project has dozens. */
 const CLOSED_SHOWN = 10;
 
-/** Manual rituals: the ones to do soon first, then the rest by date, retired and dormant ones last. */
-function manualRank(ritual: RitualRow): number {
-  if (ritual.lifecycle !== "active") return 3;
-  if (ritual.nextDue === null) return 2;
-  return ritual.overdueDays > 0 || ritual.isDue ? 0 : 1;
-}
-
-function byManualOrder(left: RitualRow, right: RitualRow): number {
-  return manualRank(left) - manualRank(right) || right.overdueDays - left.overdueDays || (left.nextDue ?? "").localeCompare(right.nextDue ?? "") || left.title.localeCompare(right.title);
-}
-
-/** Armed vigils: flagged first, then late or due today, then dated ones, then the ones that wait for an event. */
-function vigilRank(vigil: VigilRow, today: string): number {
-  if (vigil.flagged) return 0;
-  if (vigil.due !== null && vigil.due <= today) return 1;
-  return vigil.due === null ? 3 : 2;
-}
-
-export function loader({ context, params, request }: Route.LoaderArgs) {
+export function loader({ context, params }: Route.LoaderArgs) {
   const status = statusOf(context);
   const project = status.projects.find((candidate) => candidate.name === params.project);
   if (project === undefined) throw data(`No project named ${params.project} on this host.`, { status: 404 });
@@ -58,25 +41,17 @@ export function loader({ context, params, request }: Route.LoaderArgs) {
       const finished = runs.find((run) => run.slug === ritual.slug && run.findingsSha !== null) ?? null;
       return { ritual, last: lastOf(ritual.slug), report: finished === null ? null : reportExcerpt(context.run(project.name, finished.run)) };
     });
-  const manual = project.rituals.filter((ritual) => !isUnattended(ritual)).toSorted(byManualOrder);
-  // Open and scheduled, for the head of the page: what runs or waits now, and what darius runs next.
+  // Open, for the head of the page: what runs or waits now.
   const live = runs.filter((run) => run.phase !== "closed" || asksYou(run)).map((run) => ({ run, stuck: stuckFor(run, status.generatedAt) }));
-  const scheduled: ScheduledEntry[] = project.rituals
-    .filter((ritual) => isUnattended(ritual) && ritual.lifecycle === "active")
-    .toSorted((left, right) => (left.nextDue ?? "9999").localeCompare(right.nextDue ?? "9999") || left.title.localeCompare(right.title))
-    .map((ritual) => {
-      const last = lastOf(ritual.slug);
-      return { ritual, badge: last === null ? { tone: "idle", label: "No run yet" } : runState(last) };
-    });
+  const agenda = buildAgenda({ projects: [project], today: status.today });
   return {
     project,
     djinns,
     live,
-    scheduled,
-    overdue: manual.filter((ritual) => ritual.lifecycle === "active" && ritual.overdueDays > 0).length,
-    manual,
-    showManual: new URL(request.url).searchParams.get("show") === "manual",
-    openVigils: project.vigils.filter((vigil) => vigil.state !== "closed").toSorted((left, right) => vigilRank(left, status.today) - vigilRank(right, status.today) || (left.due ?? "9999").localeCompare(right.due ?? "9999") || left.title.localeCompare(right.title)),
+    agenda,
+    /** Rituals darius runs: a project with some but no djinn hides the Djinns section. */
+    unattended: project.rituals.filter((ritual) => isUnattended(ritual)).length,
+    openVigils: project.vigils.filter((vigil) => vigil.state !== "closed"),
     closedVigils: project.vigils.filter((vigil) => vigil.state === "closed"),
     recent: runs.slice(0, RECENT),
   };
@@ -86,19 +61,6 @@ export const meta: Route.MetaFunction = ({ params }) => [{ title: `${params.proj
 
 function rowClass(target: string, id: string, extra = ""): string {
   return `row target-row${extra}${target === id ? " is-target" : ""}`;
-}
-
-interface ManualStateProps {
-  ritual: RitualRow;
-}
-
-/** When a manual ritual is due, in the same words and colours as everywhere else. */
-function ManualState({ ritual }: ManualStateProps): React.ReactNode {
-  const badge = ritualBadge(ritual);
-  if (badge.label === "scheduled") return <DateLabel iso={ritual.nextDue} />;
-  // "overdue 9 days", not "overdue 9 d": a lone small-cap d after a number reads badly.
-  if (badge.tone === "late" && ritual.overdueDays > 0) return <Status tone={badge.tone} label={`overdue ${ritual.overdueDays} ${ritual.overdueDays === 1 ? "day" : "days"}`} />;
-  return <Status tone={badge.tone} label={badge.label === "due" ? "due today" : badge.label} />;
 }
 
 interface PathTextProps {
@@ -116,46 +78,10 @@ function PathText({ path }: PathTextProps): React.ReactNode {
   ));
 }
 
-/** "Manual rituals (7), 5 overdue. Done by hand, darius does not run them." */
-function manualSummary(manual: readonly RitualRow[]): string {
-  const overdue = manual.filter((ritual) => ritual.lifecycle === "active" && ritual.overdueDays > 0).length;
-  return `Manual rituals (${manual.length})${overdue === 0 ? "" : `, ${overdue} overdue`}. Done by hand, darius does not run them.`;
-}
-
-interface ManualRowsProps {
-  project: string;
-  rituals: readonly RitualRow[];
-}
-
-function ManualRows({ project, rituals }: ManualRowsProps): React.ReactNode {
-  return (
-    <ul className="rows">
-      {rituals.map((ritual) => {
-        const resting = ritual.lifecycle !== "active" || ritual.nextDue === null;
-        return (
-          <li key={ritual.slug}>
-            <Link to={ritualPath(project, ritual.slug)} className={`row${resting ? " row-dim" : ""}`}>
-              <span className="row-main">
-                <span className="row-title">{ritual.title}</span>
-                <span className="row-sub">{[ritual.slug, cadenceText(ritual.cadence)].filter((part) => part !== null).join(", ")}</span>
-              </span>
-              <span className="row-time">
-                <ManualState ritual={ritual} />
-              </span>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 export default function Project({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { project, djinns, live, scheduled, overdue, manual, showManual, openVigils, closedVigils, recent } = loaderData;
+  const { project, djinns, live, agenda, unattended, openVigils, closedVigils, recent } = loaderData;
   const target = useHashTarget();
   const closedTarget = closedVigils.some((vigil) => vigilAnchor(vigil.slug) === target);
-  const manualHead = manual.slice(0, MANUAL_SHOWN);
-  const manualRest = manual.slice(MANUAL_SHOWN);
   return (
     <div className="proj">
       <header className="page-head page-head-tight proj-head">
@@ -182,23 +108,18 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
         </div>
       )}
 
-      <Pulse data={{ project: project.name, live, scheduled, openVigils, overdue, manual: manual.length }} />
+      <Pulse data={{ project: project.name, live, openVigils, overdue: agenda.overdue, waiting: agenda.waiting.length }} />
 
       <div className="proj-body">
         <div className="band">
           <LivePanel live={live} />
-          <ScheduledPanel project={project.name} entries={scheduled} />
         </div>
-
-        {openVigils.length === 0 ? null : (
-          <div className="band-tail">
-            <VigilPanel vigils={openVigils} target={target} />
-          </div>
-        )}
 
         <div className="board">
           <div className="board-main">
-            {djinns.length === 0 && scheduled.length > 0 ? null : (
+            <ComingUp agenda={agenda} anchors target={target} />
+
+            {djinns.length === 0 && unattended > 0 ? null : (
               <Section title="Djinns" id="djinns">
                 {djinns.length === 0 ? (
                   <Empty>darius runs no ritual of this project yet.</Empty>
@@ -226,19 +147,7 @@ export default function Project({ loaderData }: Route.ComponentProps): React.Rea
           </div>
 
           <aside className="board-rail">
-            {manual.length === 0 ? null : (
-              <Section title="By hand" id="manual">
-                <div className="panel">
-                  <p className="rail-note">{manualSummary(manual)}</p>
-                  <ManualRows project={project.name} rituals={manualHead} />
-                  {manualRest.length === 0 ? null : (
-                    <Fold open={showManual} summary={`${manualRest.length} more`}>
-                      <ManualRows project={project.name} rituals={manualRest} />
-                    </Fold>
-                  )}
-                </div>
-              </Section>
-            )}
+            <Waiting rows={agenda.waiting} shown={WAITING_PROJECT} showProject={false} anchors target={target} />
 
             {closedVigils.length === 0 ? null : (
               <div className="folds proj-closed">

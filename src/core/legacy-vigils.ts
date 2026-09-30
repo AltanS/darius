@@ -28,9 +28,17 @@ function headerOf(text: string): Map<string, string> {
     if (line.trim() === "---") break;
     const match = /^([A-Za-z_][\w-]*):\s*(.*)$/u.exec(line);
     if (match === null) continue;
-    header.set(match[1] ?? "", (match[2] ?? "").trim().replace(/^"(.*)"$/u, "$1"));
+    header.set(match[1] ?? "", unquote((match[2] ?? "").trim()));
   }
   return header;
+}
+
+/** A YAML scalar without its quotes: `"a"` is a, `'it''s'` is it's. */
+function unquote(value: string): string {
+  const double = /^"(.*)"$/u.exec(value);
+  if (double !== null) return double[1] ?? "";
+  const single = /^'(.*)'$/u.exec(value);
+  return single === null ? value : (single[1] ?? "").replaceAll("''", "'");
 }
 
 function valueOf(header: Map<string, string>, key: string): string | null {

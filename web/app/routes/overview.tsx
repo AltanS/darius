@@ -1,5 +1,6 @@
 import type { Route } from "./+types/overview";
-import { CardView, LineList, NowList, Pieces, StatusStrip } from "../components/board.tsx";
+import { ComingUp, Waiting, WAITING_SHOWN } from "../components/agenda.tsx";
+import { CardView, NowList, Pieces, StatusStrip } from "../components/board.tsx";
 import { SectHead } from "../components/ui.tsx";
 import { homeView } from "../lib/home.ts";
 import { statusOf } from "../lib/status.ts";
@@ -13,14 +14,14 @@ export function loader({ context }: Route.LoaderArgs) {
 export const meta: Route.MetaFunction = () => [{ title: "darius" }];
 
 /**
- * The command board, across all projects. The verdict and the status strip
- * on top; then, on a phone, Now, Needs you and Last night, and Up next, one
- * health line and the djinns below. On a desktop the wide column holds Needs
- * you, Now and Last night, and the rail holds Up next, the health line and
- * the djinns. Each run shows once.
+ * The command board, across all projects. The verdict (with what is next) and
+ * the status strip on top; then, on a phone, Needs you, Now, Coming up,
+ * Waiting on an event, Last night and one health line. On a desktop the wide
+ * column holds Needs you, Now and Coming up, and the rail holds Waiting on an
+ * event, Last night and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { verdict, tone, sub, strip, now, needs, quiet, lastNight, upNext, health, djinns } = loaderData;
+  const { verdict, tone, sub, strip, now, needs, quiet, lastNight, agenda, health } = loaderData;
   return (
     <>
       <section className="verdict">
@@ -48,6 +49,10 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
               <NowList runs={now} />
             </section>
           )}
+          <ComingUp agenda={agenda} anchors={false} target="" />
+        </div>
+        <aside className="board-rail">
+          <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={agenda.showProject} anchors={false} target="" />
           {lastNight.length === 0 ? null : (
             <section className="section sec-last">
               <SectHead title="Last night" />
@@ -58,19 +63,9 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
               </div>
             </section>
           )}
-        </div>
-        <aside className="board-rail">
-          <section className="section sec-up" id="upnext">
-            <SectHead title="Up next" />
-            <LineList label="Up next" lines={upNext.lines} more={upNext.more} empty="Nothing is due. No djinn is scheduled and no manual ritual is late." />
-          </section>
           <p className="health sec-health">
             <Pieces pieces={health} />
           </p>
-          <section className="section sec-djinns">
-            <SectHead title="Djinns" />
-            <LineList label="Djinns" lines={djinns} empty="No djinn yet. Give a ritual a repo skill with --skill." />
-          </section>
         </aside>
       </div>
     </>

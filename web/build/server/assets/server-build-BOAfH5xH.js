@@ -9120,7 +9120,7 @@ function PushSwitch() {
 /** Text helpers for times, ids and commands. Pure, so server and client agree. */
 var MINUTE = 6e4;
 var HOUR$1 = 60 * MINUTE;
-var DAY$1 = 24 * HOUR$1;
+var DAY$2 = 24 * HOUR$1;
 /** "3 min ago", "in 2 h", relative to `now` (ms). */
 function relativeTime(iso, now) {
 	const at = Date.parse(iso);
@@ -9128,11 +9128,11 @@ function relativeTime(iso, now) {
 	const delta = now - at;
 	const size = Math.abs(delta);
 	if (size < MINUTE) return "just now";
-	const amount = size < HOUR$1 ? `${Math.round(size / MINUTE)} min` : size < DAY$1 ? `${Math.round(size / HOUR$1)} h` : `${Math.round(size / DAY$1)} d`;
+	const amount = size < HOUR$1 ? `${Math.round(size / MINUTE)} min` : size < DAY$2 ? `${Math.round(size / HOUR$1)} h` : `${Math.round(size / DAY$2)} d`;
 	return delta >= 0 ? `${amount} ago` : `in ${amount}`;
 }
 function dayNumber(date) {
-	return Math.round(Date.parse(`${date}T00:00:00Z`) / DAY$1);
+	return Math.round(Date.parse(`${date}T00:00:00Z`) / DAY$2);
 }
 /** A YYYY-MM-DD date against the host's `today`: "today", "in 3 d", "2 d ago". */
 function relativeDate(date, today) {
@@ -9152,14 +9152,14 @@ function duration(start, end) {
 	if (Number.isNaN(size) || size < 0) return "";
 	if (size < MINUTE) return `${Math.round(size / 1e3)} s`;
 	if (size < HOUR$1) return `${Math.round(size / MINUTE)} min`;
-	if (size < DAY$1) return pair(Math.floor(size / HOUR$1), "h", Math.round(size % HOUR$1 / MINUTE), "min");
-	return pair(Math.floor(size / DAY$1), "d", Math.round(size % DAY$1 / HOUR$1), "h");
+	if (size < DAY$2) return pair(Math.floor(size / HOUR$1), "h", Math.round(size % HOUR$1 / MINUTE), "min");
+	return pair(Math.floor(size / DAY$2), "d", Math.round(size % DAY$2 / HOUR$1), "h");
 }
 /** A long span in one coarse unit: "12 h", "3 d". */
 function roughDuration(size) {
 	if (size < HOUR$1) return `${Math.max(1, Math.round(size / MINUTE))} min`;
-	if (size < 2 * DAY$1) return `${Math.floor(size / HOUR$1)} h`;
-	return `${Math.floor(size / DAY$1)} d`;
+	if (size < 2 * DAY$2) return `${Math.floor(size / HOUR$1)} h`;
+	return `${Math.floor(size / DAY$2)} d`;
 }
 var WEEKDAYS = [
 	"Sun",
@@ -9218,11 +9218,6 @@ function dayName(iso, offset) {
 	if (date === null) return iso;
 	return `${WEEKDAYS[date.getUTCDay()] ?? ""} ${date.getUTCDate()} ${MONTHS[date.getUTCMonth()] ?? ""}`;
 }
-/** The date after a YYYY-MM-DD date. */
-function nextDay(date) {
-	const at = Date.parse(`${date}T00:00:00Z`);
-	return Number.isNaN(at) ? date : new Date(at + DAY$1).toISOString().slice(0, 10);
-}
 /** A moment on the host's clock: "09:12" on `today`, "27 Sep 09:12" on another day. */
 function momentText(iso, today, offset) {
 	const date = hostDate(iso, offset);
@@ -9267,68 +9262,6 @@ function itemPath(project, item) {
 	const [kind = "", slug = ""] = item.split("/");
 	if (kind === "ritual") return ritualPath(project, slug);
 	return vigilPath(project, slug);
-}
-//#endregion
-//#region app/lib/tone.ts
-var BAD_OUTCOMES = /* @__PURE__ */ new Set([
-	"failed",
-	"refused",
-	"error",
-	"gate-broken",
-	"harness-unchecked",
-	"profile-invalid",
-	"subagents-unproven",
-	"tool-missing"
-]);
-function outcomeTone(outcome) {
-	if (outcome === null) return "idle";
-	if (outcome === "complete" || outcome === "done" || outcome === "ok") return "ok";
-	if (BAD_OUTCOMES.has(outcome)) return "bad";
-	return "idle";
-}
-function ritualBadge(ritual) {
-	if (ritual.heldRun !== null) return {
-		tone: "wait",
-		label: "held"
-	};
-	if (ritual.openRun !== null) return {
-		tone: "run",
-		label: "running"
-	};
-	if (ritual.lifecycle !== "active") return {
-		tone: "idle",
-		label: ritual.lifecycle
-	};
-	if (ritual.overdueDays > 0) return {
-		tone: "late",
-		label: `overdue ${ritual.overdueDays} d`
-	};
-	if (ritual.isDue) return {
-		tone: "gold",
-		label: "due"
-	};
-	if (ritual.nextDue === null) return {
-		tone: "idle",
-		label: "dormant"
-	};
-	return {
-		tone: "ok",
-		label: "scheduled"
-	};
-}
-function vigilBadge(vigil) {
-	if (vigil.state === "closed") return {
-		tone: vigil.verdict === "failed" ? "bad" : "ok",
-		label: vigil.verdict ?? "closed"
-	};
-	if (vigil.flagged) return {
-		tone: "bad",
-		label: "flagged"
-	};
-	return {
-		tone: "idle",
-		label: "armed"
-	};
 }
 //#endregion
 //#region app/lib/view.ts
@@ -9427,10 +9360,6 @@ function stuckFor(run, generatedAt) {
 /** The warning line for a stuck run. */
 function stuckText(runningFor) {
 	return `Running for ${runningFor}. Runs stop after 20 min, so this one may be stuck.`;
-}
-/** What a vigil waits for, in words: "due in 3 d", "waits for: the first batch", or both. */
-function vigilWaits(vigil, today) {
-	return [vigil.due === null ? null : `due ${relativeDate(vigil.due, today)}`, vigil.until === null ? null : `waits for: ${vigil.until}`].filter((part) => part !== null);
 }
 /** "every day", "every 7 days", "every week"; null without a cadence. */
 function cadenceText(cadence) {
@@ -9607,6 +9536,309 @@ function reportExcerpt(detail) {
 	return detail === null ? null : excerpt(detail.findings);
 }
 //#endregion
+//#region app/lib/agenda.ts
+var DAY$1 = 864e5;
+/** Whole days from one YYYY-MM-DD date to another; negative when `to` is earlier. */
+function dayGap(from, to) {
+	return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY$1);
+}
+function addDays(date, days) {
+	return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY$1).toISOString().slice(0, 10);
+}
+/** "Fri 2 Oct" for a YYYY-MM-DD date. */
+function weekdayDate(date) {
+	return dayName(`${date}T00:00:00Z`, 0);
+}
+/** "today", "tomorrow" or "Fri 2 Oct", to follow "Next: <title>,". */
+function whenWord(today, date) {
+	const gap = dayGap(today, date);
+	if (gap === 0) return "today";
+	return gap === 1 ? "tomorrow" : weekdayDate(date);
+}
+function groupOf(today, date, overdue) {
+	if (date === null) return {
+		key: "none",
+		kind: "none",
+		label: "No schedule"
+	};
+	if (overdue) return {
+		key: "overdue",
+		kind: "overdue",
+		label: "Overdue"
+	};
+	const gap = dayGap(today, date);
+	if (gap <= 0) return {
+		key: "today",
+		kind: "today",
+		label: "Today"
+	};
+	if (gap === 1) return {
+		key: "tomorrow",
+		kind: "tomorrow",
+		label: "Tomorrow"
+	};
+	if (gap <= 14) return {
+		key: `d-${date}`,
+		kind: "day",
+		label: weekdayDate(date)
+	};
+	return {
+		key: "later",
+		kind: "later",
+		label: "Later"
+	};
+}
+function plural$2(count, noun) {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+/** "every 7 days, last done 14 Sep": the cadence in words, then when it was last done. */
+function factsText(ritual) {
+	const cadence = cadenceText(ritual.cadence);
+	const done = ritual.lastCompleted === null ? "not done yet" : `last done ${shortDate(ritual.lastCompleted)}`;
+	return cadence === null ? done : `${cadence}, ${done}`;
+}
+/** Runs that count: imports and install proofs are history, not activity. */
+function isNoise$1(run) {
+	return run.who === "import" || run.who === "acceptance";
+}
+/** Whether the newest counted run of a ritual is a complete run that asks the operator something. */
+function asksNow(project, ritual) {
+	const last = project.runs.filter((run) => run.item === `ritual/${ritual.slug}` && !isNoise$1(run)).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+	return last !== void 0 && asksYou(last);
+}
+function placement(input, project, ritual) {
+	const { today } = input;
+	if (ritual.heldRun !== null) return {
+		date: today,
+		overdueDays: 0,
+		state: {
+			word: "Held",
+			tone: "wait"
+		}
+	};
+	if (ritual.openRun !== null) return {
+		date: today,
+		overdueDays: 0,
+		state: {
+			word: "Running",
+			tone: "run"
+		}
+	};
+	if (ritual.failedToday !== null) {
+		const seen = ritual.failedToday.acknowledged !== null;
+		return {
+			date: addDays(today, 1),
+			overdueDays: 0,
+			state: seen ? {
+				word: "Failed, acknowledged",
+				tone: "idle"
+			} : {
+				word: "Failed",
+				tone: "bad"
+			}
+		};
+	}
+	const asks = asksNow(project, ritual) ? {
+		word: "Asks you",
+		tone: "wait"
+	} : null;
+	if (ritual.nextDue === null) return {
+		date: null,
+		overdueDays: 0,
+		state: asks
+	};
+	const late = Math.max(ritual.overdueDays, dayGap(ritual.nextDue, today));
+	if (late > 0) return {
+		date: ritual.nextDue,
+		overdueDays: late,
+		state: {
+			word: `${plural$2(late, "day")} late`,
+			tone: "late"
+		}
+	};
+	return {
+		date: ritual.nextDue <= today ? today : ritual.nextDue,
+		overdueDays: 0,
+		state: asks
+	};
+}
+function ritualRow(input, project, ritual) {
+	const at = placement(input, project, ritual);
+	const tone = at.state !== null ? at.state.tone : at.date === input.today ? "gold" : "idle";
+	return {
+		key: `${project.name}/ritual/${ritual.slug}`,
+		kind: isUnattended(ritual) ? "djinn" : "hand",
+		project: project.name,
+		slug: ritual.slug,
+		title: ritual.title,
+		href: ritualPath(project.name, ritual.slug),
+		date: at.date,
+		tone,
+		state: at.state,
+		facts: factsText(ritual),
+		until: null,
+		flag: null,
+		overdueDays: at.overdueDays
+	};
+}
+function isArmed(vigil) {
+	return vigil.state !== "closed";
+}
+function vigilRow(input, project, vigil, due) {
+	const late = Math.max(0, dayGap(due, input.today));
+	const flag = vigil.flagged ? vigil.lastOutcome === null ? "flagged" : `flagged, last check ${vigil.lastOutcome}` : null;
+	const tone = vigil.flagged ? "bad" : late > 0 ? "late" : due <= input.today ? "gold" : "idle";
+	return {
+		key: `${project.name}/vigil/${vigil.slug}`,
+		kind: "vigil",
+		project: project.name,
+		slug: vigil.slug,
+		title: vigil.title,
+		href: vigilPath(project.name, vigil.slug),
+		date: due,
+		tone,
+		state: late > 0 ? {
+			word: `${plural$2(late, "day")} late`,
+			tone: "late"
+		} : null,
+		facts: "",
+		until: vigil.until,
+		flag,
+		overdueDays: late
+	};
+}
+function waitingRow(project, vigil) {
+	return {
+		key: `${project.name}/vigil/${vigil.slug}`,
+		project: project.name,
+		slug: vigil.slug,
+		title: vigil.title,
+		href: vigilPath(project.name, vigil.slug),
+		until: vigil.until,
+		flagged: vigil.flagged
+	};
+}
+/** Djinns lead their day; by hand rituals and vigils follow, by title. */
+function djinnFirst(row) {
+	return row.kind === "djinn" ? 0 : 1;
+}
+/** Overdue: the latest first. Other groups: the date, djinns first, then the title. */
+function byRow(left, right) {
+	return right.overdueDays - left.overdueDays || (left.date ?? "").localeCompare(right.date ?? "") || djinnFirst(left) - djinnFirst(right) || left.title.localeCompare(right.title);
+}
+function byWaiting(left, right) {
+	return Number(right.flagged) - Number(left.flagged) || left.title.localeCompare(right.title);
+}
+var GROUP_ORDER = {
+	overdue: 0,
+	today: 1,
+	tomorrow: 2,
+	day: 3,
+	later: 4,
+	none: 5
+};
+function buildAgenda(input) {
+	const rows = [];
+	const waiting = [];
+	let armed = 0;
+	for (const project of input.projects) {
+		for (const ritual of project.rituals) if (ritual.lifecycle === "active") rows.push(ritualRow(input, project, ritual));
+		for (const vigil of project.vigils.filter((candidate) => isArmed(candidate))) {
+			armed += 1;
+			if (vigil.due === null) waiting.push(waitingRow(project, vigil));
+			else rows.push(vigilRow(input, project, vigil, vigil.due));
+		}
+	}
+	const groups = /* @__PURE__ */ new Map();
+	for (const row of rows.toSorted(byRow)) {
+		const spec = groupOf(input.today, row.date, row.overdueDays > 0);
+		const found = groups.get(spec.key);
+		if (found === void 0) groups.set(spec.key, {
+			...spec,
+			rows: [row],
+			order: GROUP_ORDER[spec.kind],
+			date: row.date ?? ""
+		});
+		else found.rows.push(row);
+	}
+	const ordered = [...groups.values()].toSorted((left, right) => left.order - right.order || left.date.localeCompare(right.date)).map(({ key, kind, label, rows: members }) => ({
+		key,
+		kind,
+		label,
+		rows: members
+	}));
+	const dated = ordered.filter((group) => group.kind !== "overdue" && group.kind !== "none").flatMap((group) => group.rows);
+	const today = ordered.find((group) => group.kind === "today");
+	return {
+		groups: ordered,
+		waiting: waiting.toSorted(byWaiting),
+		showProject: (/* @__PURE__ */ new Set([...rows.map((row) => row.project), ...waiting.map((row) => row.project)])).size > 1,
+		next: dated[0] ?? null,
+		overdue: ordered.find((group) => group.kind === "overdue")?.rows.length ?? 0,
+		dueToday: today?.rows.filter((row) => row.state === null || row.state.word !== "Running" && row.state.word !== "Held").length ?? 0,
+		armed
+	};
+}
+/** The longest title the sub line quotes; a longer one ends in an ellipsis, so the line stays short on a phone. */
+var SENTENCE_TITLE = 44;
+function clipTitle(title) {
+	return title.length <= SENTENCE_TITLE ? title : `${title.slice(0, 43).trimEnd()}…`;
+}
+/** The end of the home sub line: "6 overdue. Next: Daily site report, tomorrow." */
+function agendaSentence(agenda, today) {
+	return `${agenda.overdue === 0 ? "" : ` ${agenda.overdue} overdue.`}${agenda.next === null || agenda.next.date === null ? "" : ` Next: ${clipTitle(agenda.next.title)}, ${whenWord(today, agenda.next.date)}.`}`;
+}
+/** The rows a phone hides until "Show more": past Tomorrow, after the first few. */
+function phoneHidden(agenda) {
+	const hidden = /* @__PURE__ */ new Set();
+	let shown = 0;
+	for (const group of agenda.groups) {
+		const always = group.kind === "overdue" || group.kind === "today" || group.kind === "tomorrow";
+		for (const row of group.rows) {
+			if (always) continue;
+			shown += 1;
+			if (shown > 6) hidden.add(row.key);
+		}
+	}
+	return hidden;
+}
+/** The groups a desktop keeps in a closed fold. */
+function isFolded(group) {
+	return group.kind === "later" || group.kind === "none";
+}
+//#endregion
+//#region app/lib/tone.ts
+var BAD_OUTCOMES = /* @__PURE__ */ new Set([
+	"failed",
+	"refused",
+	"error",
+	"gate-broken",
+	"harness-unchecked",
+	"profile-invalid",
+	"subagents-unproven",
+	"tool-missing"
+]);
+function outcomeTone(outcome) {
+	if (outcome === null) return "idle";
+	if (outcome === "complete" || outcome === "done" || outcome === "ok") return "ok";
+	if (BAD_OUTCOMES.has(outcome)) return "bad";
+	return "idle";
+}
+function vigilBadge(vigil) {
+	if (vigil.state === "closed") return {
+		tone: vigil.verdict === "failed" ? "bad" : "ok",
+		label: vigil.verdict ?? "closed"
+	};
+	if (vigil.flagged) return {
+		tone: "bad",
+		label: "flagged"
+	};
+	return {
+		tone: "idle",
+		label: "armed"
+	};
+}
+//#endregion
 //#region app/lib/home.ts
 var HOUR = 36e5;
 var DAY = 24 * HOUR;
@@ -9675,11 +9907,6 @@ function startedText(clock, iso) {
 	const date = hostDate(iso, clock.offset);
 	return `${date === clock.today ? "today" : shortDate(date)} ${clockTime(iso, clock.offset)}`;
 }
-/** A YYYY-MM-DD date ahead: "tomorrow", "2 Oct". */
-function aheadText(clock, date) {
-	if (date === clock.today) return "today";
-	return date === nextDay(clock.today) ? "tomorrow" : shortDate(date);
-}
 function blocksSize(blocks) {
 	return blocks.reduce((sum, block) => {
 		if (block.kind === "paragraph") return sum + block.lines.flat().reduce((size, span) => size + span.text.length, 0);
@@ -9690,110 +9917,13 @@ function blocksSize(blocks) {
 function djinnState(clock, project, ritual, runs) {
 	const own = runs.filter((run) => run.project === project && run.item === `ritual/${ritual.slug}`);
 	const last = own[0] ?? null;
-	const endedOn = last?.endedAt === null || last === null ? null : hostDate(last.endedAt, clock.offset);
-	const failedToday = last !== null && last.phase === "closed" && (last.outcome === "failed" || last.outcome === "abandoned") && endedOn === clock.today;
 	const waiting = ritual.heldRun !== null || ritual.openRun !== null;
 	const ranToday = own.some((run) => hostDate(run.startedAt, clock.offset) === clock.today);
-	const missed = ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday;
-	let next = null;
-	if (!waiting && failedToday) next = nextDay(clock.today);
-	else if (!waiting && ritual.nextDue !== null) next = ritual.nextDue <= clock.today ? "now" : ritual.nextDue;
 	return {
 		project,
 		ritual,
 		last,
-		failedToday,
-		missed,
-		next
-	};
-}
-function nextWords(clock, next) {
-	if (next === null) return null;
-	return next === "now" ? "due now" : `next ${aheadText(clock, next)}`;
-}
-/** The subline sentence about the next djinn start, or "" when nothing is scheduled. */
-function nextSentence(clock, states) {
-	const nexts = states.map((state) => state.next).filter((next) => next !== null);
-	if (nexts.includes("now")) return " A djinn is due now.";
-	const first = nexts.toSorted()[0];
-	return first === void 0 ? "" : ` Next djinn: ${aheadText(clock, first)}.`;
-}
-var LINE_ORDER = {
-	bad: 0,
-	wait: 1,
-	late: 2,
-	run: 3,
-	gold: 4,
-	ok: 5,
-	idle: 6
-};
-function djinnLine(clock, generatedAt, state) {
-	const { project, ritual, last } = state;
-	const base = {
-		key: `${project}/${ritual.slug}`,
-		title: ritual.title,
-		href: ritualPath(project, ritual.slug)
-	};
-	if (last !== null && last.phase === "running") {
-		const stuck = stuckFor(last, generatedAt);
-		const detail = stuck === null ? [{
-			text: `started ${when(clock, last.startedAt)}`,
-			ink: "plain"
-		}] : [{
-			text: `${stuck}, `,
-			ink: "plain"
-		}, {
-			text: "stuck",
-			ink: "late"
-		}];
-		return {
-			...base,
-			tone: "run",
-			word: "Running",
-			detail
-		};
-	}
-	if (last !== null && last.phase === "held") return {
-		...base,
-		tone: "wait",
-		word: "Held",
-		detail: [{
-			text: `since ${when(clock, last.startedAt)}`,
-			ink: "plain"
-		}]
-	};
-	if (state.missed) {
-		const ran = last === null ? "never ran" : `last ran ${when(clock, last.startedAt)}`;
-		return {
-			...base,
-			tone: "late",
-			word: "Overdue",
-			detail: [{
-				text: `${ritual.overdueDays} d, ${ran}`,
-				ink: "plain"
-			}]
-		};
-	}
-	const next = nextWords(clock, state.next);
-	if (last === null) return {
-		...base,
-		tone: "idle",
-		word: "No run yet",
-		detail: next === null ? [] : [{
-			text: next,
-			ink: "plain"
-		}]
-	};
-	const badge = runState(last);
-	const text = [when(clock, last.startedAt), next].filter((part) => part !== null).join(", ");
-	return {
-		...base,
-		tone: badge.tone,
-		word: badge.label,
-		detail: [{
-			text,
-			ink: "plain"
-		}]
+		missed: ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday
 	};
 }
 function blank(id, kind) {
@@ -10113,115 +10243,6 @@ function needCounts(status) {
 function needsText(count) {
 	return count === 1 ? "1 thing needs you" : `${count} things need you`;
 }
-/** Rows of Up next before the "more" links. */
-var UP_NEXT_SHOWN = 6;
-function padDays(days) {
-	return String(1e6 - days).padStart(7, "0");
-}
-function djinnEntry(clock, state) {
-	const { project, ritual } = state;
-	const base = {
-		key: `${project}/${ritual.slug}`,
-		title: ritual.title,
-		href: ritualPath(project, ritual.slug)
-	};
-	const detail = [{
-		text: project,
-		ink: "plain"
-	}];
-	if (state.missed) return {
-		rank: 0,
-		order: padDays(ritual.overdueDays),
-		project,
-		line: {
-			...base,
-			tone: "late",
-			word: `Overdue ${plural$1(ritual.overdueDays, "day")}`,
-			detail
-		}
-	};
-	if (state.next === null) return null;
-	if (state.next === "now") return {
-		rank: 2,
-		order: "",
-		project,
-		line: {
-			...base,
-			tone: "gold",
-			word: "Due now",
-			detail
-		}
-	};
-	return {
-		rank: 3,
-		order: state.next,
-		project,
-		line: {
-			...base,
-			tone: "idle",
-			word: `Next ${aheadText(clock, state.next)}`,
-			detail
-		}
-	};
-}
-/** A manual ritual (mode off, active) that is overdue or due today. */
-function manualEntry(project, ritual) {
-	if (ritual.lifecycle !== "active" || ritual.mode !== "off") return null;
-	const base = {
-		key: `${project}/${ritual.slug}`,
-		title: ritual.title,
-		href: ritualPath(project, ritual.slug)
-	};
-	const detail = [{
-		text: project,
-		ink: "plain"
-	}];
-	if (ritual.overdueDays > 0) return {
-		rank: 0,
-		order: padDays(ritual.overdueDays),
-		project,
-		line: {
-			...base,
-			tone: "late",
-			word: `Overdue ${plural$1(ritual.overdueDays, "day")}`,
-			detail
-		}
-	};
-	if (ritual.isDue) return {
-		rank: 1,
-		order: "",
-		project,
-		line: {
-			...base,
-			tone: "gold",
-			word: "Due today",
-			detail
-		}
-	};
-	return null;
-}
-function byEntry(left, right) {
-	return left.rank - right.rank || left.order.localeCompare(right.order) || left.line.title.localeCompare(right.line.title);
-}
-function upNext(clock, all) {
-	const entries = all.flatMap((needs) => [...needs.states.map((state) => djinnEntry(clock, state)), ...needs.project.rituals.map((ritual) => manualEntry(needs.project.name, ritual))]).filter((entry) => entry !== null).toSorted(byEntry);
-	const hidden = /* @__PURE__ */ new Map();
-	for (const entry of entries.slice(UP_NEXT_SHOWN)) hidden.set(entry.project, (hidden.get(entry.project) ?? 0) + 1);
-	return {
-		lines: entries.slice(0, UP_NEXT_SHOWN).map((entry) => entry.line),
-		more: [...hidden].map(([project, count]) => ({
-			project,
-			count,
-			href: projectPath(project)
-		}))
-	};
-}
-/** Overdue djinns and overdue manual rituals: the "overdue" segment of the strip. */
-function overdueCount(all) {
-	return all.reduce((sum, needs) => {
-		return sum + needs.project.rituals.filter((ritual) => ritual.lifecycle === "active" && ritual.mode === "off" && ritual.overdueDays > 0).length + needs.states.filter((state) => state.missed).length;
-	}, 0);
-}
 function verdictTone(needs) {
 	const kinds = new Set(needs.map((card) => card.kind));
 	if (kinds.has("failed") || kinds.has("flagged") || kinds.has("unreadable")) return "bad";
@@ -10253,9 +10274,10 @@ function cardSegment(needs, kind, label, tone) {
 /**
 * The status strip. "Need you" always shows (held runs and runs that ask);
 * every other segment shows only above zero: running (not the stuck ones),
-* stuck, failed, flagged, unreadable and overdue.
+* stuck, failed, flagged, unreadable, overdue (rituals and dated vigils past
+* due), due today, and armed vigils.
 */
-function statusStrip(needs, running, overdue) {
+function statusStrip(needs, running, agenda) {
 	const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
 	const runningSegment = running === 0 ? [] : [{
 		key: "running",
@@ -10265,12 +10287,29 @@ function statusStrip(needs, running, overdue) {
 		href: "#now",
 		live: true
 	}];
-	const overdueSegment = overdue === 0 ? [] : [{
+	const overdueSegment = agenda.overdue === 0 ? [] : [{
 		key: "overdue",
 		label: "overdue",
-		count: overdue,
+		count: agenda.overdue,
 		tone: "late",
-		href: "#upnext",
+		href: "#coming-up",
+		live: false
+	}];
+	const todaySegment = agenda.dueToday === 0 ? [] : [{
+		key: "today",
+		label: "due today",
+		count: agenda.dueToday,
+		tone: "gold",
+		href: "#coming-up",
+		live: false
+	}];
+	const armedHref = agenda.waiting.length === 0 ? "#coming-up" : "#waiting";
+	const armedSegment = agenda.armed === 0 ? [] : [{
+		key: "armed",
+		label: "vigils armed",
+		count: agenda.armed,
+		tone: "gold",
+		href: armedHref,
 		live: false
 	}];
 	return [
@@ -10287,7 +10326,9 @@ function statusStrip(needs, running, overdue) {
 		...cardSegment(needs, "failed", "failed", "bad"),
 		...cardSegment(needs, "flagged", "flagged", "bad"),
 		...cardSegment(needs, "unreadable", "unreadable", "bad"),
-		...overdueSegment
+		...overdueSegment,
+		...todaySegment,
+		...armedSegment
 	];
 }
 function newest(left, right) {
@@ -10321,19 +10362,22 @@ function homeView(status, readRun) {
 		...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project))
 	];
 	const lastNight = states.filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY).toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? "")).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]);
+	const agenda = buildAgenda({
+		projects: all.map((entry) => entry.project),
+		today: clock.today
+	});
 	const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
 	return {
 		verdict: verdictText(needs.length),
 		tone: verdictTone(needs),
-		sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${nextSentence(clock, states)}`,
-		strip: statusStrip(needs, now.length, overdueCount(all)),
+		sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${agendaSentence(agenda, clock.today)}`,
+		strip: statusStrip(needs, now.length, agenda),
 		now,
 		needs,
 		quiet: quietText(clock, states),
 		lastNight,
-		upNext: upNext(clock, all),
-		health: [timerPiece(clock, status, states), syncPiece(clock, status)],
-		djinns: states.map((state) => djinnLine(clock, status.generatedAt, state)).toSorted((left, right) => LINE_ORDER[left.tone] - LINE_ORDER[right.tone])
+		agenda,
+		health: [timerPiece(clock, status, states), syncPiece(clock, status)]
 	};
 }
 /** "Self-test: heartbeat ran 12 h ago. 1 vigil flagged." for each self-test project on this host. */
@@ -10778,6 +10822,347 @@ var ErrorBoundary = withErrorBoundaryProps(function ErrorBoundary({ error }) {
 	});
 });
 //#endregion
+//#region app/components/ui.tsx
+/** Small shared pieces: sections, status words, times, folds, chips. */
+function Word({ text }) {
+	return text.split(/(\d+)/u).map((part, index) => /^\d+$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "num",
+		children: part
+	}, `${index}`) : part);
+}
+/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
+function TitleText({ text }) {
+	return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => /^\d{4}-\d{2}-\d{2}$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "whitespace-nowrap",
+		children: part
+	}, `${index}`) : part);
+}
+/** A square in the state colour and the state in words: the state of a run or a ritual. */
+function Status({ tone, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: `status tone-${tone}`,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "status-dot",
+			"aria-hidden": "true"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: label })]
+	});
+}
+/** A relative time with the absolute ISO time on hover. */
+function Time({ iso }) {
+	const { now } = useClock();
+	if (iso === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "text-muted",
+		children: "never"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
+		dateTime: iso,
+		title: iso,
+		children: relativeTime(iso, now)
+	});
+}
+/** A section label between two rules that end in the small square tick of a D2 panel. */
+function SectHead({ title, aside }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+		className: "sect",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sect-rule sect-rule-start",
+				"aria-hidden": "true"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+				className: "label",
+				children: title
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sect-rule",
+				"aria-hidden": "true"
+			}),
+			aside === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sect-aside",
+				children: aside
+			})
+		]
+	});
+}
+/** A titled part of a page: the section label, then its content. */
+function Section({ title, id, aside, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id,
+		className: "section",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, {
+			title,
+			aside
+		}), children]
+	});
+}
+/** Detail that most visits do not need, closed until asked for. */
+function Fold({ summary, id, open = false, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		id,
+		className: "fold scroll-mt-20",
+		open,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fold-body",
+			children
+		})]
+	});
+}
+function Empty({ children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "empty",
+		children
+	});
+}
+function Chips({ items, none }) {
+	if (items.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "text-muted",
+		children: none
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "flex flex-wrap gap-1.5",
+		children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			className: "chip",
+			children: item
+		}, item))
+	});
+}
+function Facts({ facts }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+		className: "facts",
+		children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "contents",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: fact.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: fact.value })]
+		}, fact.label))
+	});
+}
+/** The path back up, above a page title. */
+function Crumbs({ children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "crumbs",
+		children
+	});
+}
+//#endregion
+//#region app/components/agenda.tsx
+/**
+* Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
+* the same on the home page and on the project page. Every row is one link
+* over its whole width (44 px tall at least), with a small kind tag, the
+* title, and one line of detail.
+*/
+var KIND_LABEL = {
+	djinn: "djinn",
+	hand: "by hand",
+	vigil: "vigil"
+};
+/** The date of a row in Later: it is not in the group label. */
+function laterDate(row, group) {
+	if (group.kind !== "later" || row.date === null) return null;
+	return `${row.kind === "vigil" ? "due" : "next"} ${shortDate(row.date)}`;
+}
+function AgendaItem({ row, group, showProject, anchors, target, extra }) {
+	const id = anchors && row.kind === "vigil" ? vigilAnchor(row.slug) : void 0;
+	const classes = [
+		"ag-row",
+		`tone-${row.tone}`,
+		extra ? "phone-extra" : "",
+		id !== void 0 && target === id ? "target-row is-target" : id === void 0 ? "" : "target-row"
+	].filter((part) => part !== "");
+	const later = laterDate(row, group);
+	const lead = row.kind === "vigil" && row.flag === null && row.until !== null;
+	const pieces = [
+		showProject && !lead ? row.project : null,
+		...row.facts === "" ? [] : row.facts.split(", "),
+		later
+	].filter((part) => part !== null);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		id,
+		className: classes.join(" "),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "djinn-sq",
+				"aria-hidden": "true"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ag-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: row.href,
+					className: "ag-title",
+					children: row.title
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "ag-line",
+					children: [
+						row.state === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: `ag-word tone-${row.state.tone}`,
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: row.state.word })
+						}),
+						pieces.map((piece, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [index === 0 ? null : " ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ag-bit",
+							children: [piece, index === pieces.length - 1 ? "" : ","]
+						})] }, piece)),
+						row.flag === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ag-flag ink-bad",
+							children: row.flag
+						}),
+						lead ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ag-until",
+							children: [
+								showProject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ag-proj",
+									children: row.project
+								}) : null,
+								showProject ? " " : null,
+								"waits for: ",
+								row.until
+							]
+						}) : null
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ag-kind",
+				children: KIND_LABEL[row.kind]
+			})
+		]
+	});
+}
+/**
+* The time-ordered agenda. A phone shows Overdue, Today and Tomorrow in full,
+* a few more rows, then one button. A desktop shows every day and keeps Later
+* and No schedule in a fold under the list.
+*/
+function ComingUp({ agenda, anchors, target }) {
+	const hidden = phoneHidden(agenda);
+	const foldedCount = agenda.groups.filter((group) => isFolded(group)).reduce((sum, group) => sum + group.rows.length, 0);
+	const pointed = anchors && agenda.groups.some((group) => group.rows.some((row) => row.kind === "vigil" && vigilAnchor(row.slug) === target && (hidden.has(row.key) || isFolded(group))));
+	const [expanded, setExpanded] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (pointed) setExpanded(true);
+	}, [pointed]);
+	const toggle = () => setExpanded(!expanded);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id: "coming-up",
+		className: "section sec-coming",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Coming up" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: `panel ag phone-more${expanded ? " is-open" : ""}`,
+			children: [
+				agenda.groups.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "panel-empty",
+					children: "Nothing is scheduled."
+				}) : agenda.groups.map((group) => {
+					const gone = group.rows.every((row) => hidden.has(row.key));
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: `ag-group${isFolded(group) ? " desk-extra" : ""}${gone ? " phone-extra" : ""}`,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							className: `ag-day ag-day-${group.kind}`,
+							children: group.label
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+							className: "ag-rows",
+							children: group.rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgendaItem, {
+								row,
+								group,
+								showProject: agenda.showProject,
+								anchors,
+								target,
+								extra: hidden.has(row.key)
+							}, row.key))
+						})]
+					}, group.key);
+				}),
+				hidden.size === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "phone-toggle",
+					"aria-expanded": expanded,
+					onClick: toggle,
+					children: expanded ? "Show fewer" : `Show ${hidden.size} more`
+				}),
+				foldedCount === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "desk-toggle",
+					"aria-expanded": expanded,
+					onClick: toggle,
+					children: expanded ? "Show fewer" : `Show ${foldedCount} later or without a schedule`
+				})
+			]
+		})]
+	});
+}
+function WaitingItem({ row, showProject, anchors, target }) {
+	const id = anchors ? vigilAnchor(row.slug) : void 0;
+	const classes = [
+		"ag-row",
+		"ag-row-plain",
+		`tone-${row.flagged ? "bad" : "idle"}`,
+		id === void 0 ? "" : target === id ? "target-row is-target" : "target-row"
+	].filter((part) => part !== "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		id,
+		className: classes.join(" "),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "djinn-sq",
+			"aria-hidden": "true"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ag-main",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+				to: row.href,
+				className: "ag-title",
+				children: row.title
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ag-line",
+				children: [row.flagged ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ag-word tone-bad",
+					children: "Flagged"
+				}) : null, row.until === null && !showProject ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ag-until ag-until-2",
+					children: [
+						showProject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ag-proj",
+							children: row.project
+						}) : null,
+						showProject && row.until !== null ? " " : null,
+						row.until
+					]
+				})]
+			})]
+		})]
+	});
+}
+/** The armed vigils without a due date: flagged first, a few in view, the rest in a fold. */
+function Waiting({ rows, shown, showProject, anchors, target }) {
+	if (rows.length === 0) return null;
+	const head = rows.slice(0, shown);
+	const rest = rows.slice(shown);
+	const pointed = anchors && rest.some((row) => vigilAnchor(row.slug) === target);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id: "waiting",
+		className: "section sec-waiting",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Waiting on an event" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "panel ag",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ag-rows",
+				children: head.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingItem, {
+					row,
+					showProject,
+					anchors,
+					target
+				}, row.key))
+			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+				open: pointed,
+				summary: `${rest.length} more waiting`,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "ag-rows",
+					children: rest.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingItem, {
+						row,
+						showProject,
+						anchors,
+						target
+					}, row.key))
+				})
+			})]
+		})]
+	});
+}
+//#endregion
 //#region app/components/command.tsx
 /**
 * A command in a box with a Copy button. `navigator.clipboard` exists only
@@ -11043,140 +11428,6 @@ function summaryTags(summary, isAnswered) {
 	return tags;
 }
 //#endregion
-//#region app/components/ui.tsx
-/** Small shared pieces: sections, status words, times, folds, chips. */
-function Word({ text }) {
-	return text.split(/(\d+)/u).map((part, index) => /^\d+$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "num",
-		children: part
-	}, `${index}`) : part);
-}
-/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
-function TitleText({ text }) {
-	return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => /^\d{4}-\d{2}-\d{2}$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "whitespace-nowrap",
-		children: part
-	}, `${index}`) : part);
-}
-/** A square in the state colour and the state in words: the state of a run or a ritual. */
-function Status({ tone, label }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: `status tone-${tone}`,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "status-dot",
-			"aria-hidden": "true"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: label })]
-	});
-}
-/** A relative time with the absolute ISO time on hover. */
-function Time({ iso }) {
-	const { now } = useClock();
-	if (iso === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "text-muted",
-		children: "never"
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
-		dateTime: iso,
-		title: iso,
-		children: relativeTime(iso, now)
-	});
-}
-/** A YYYY-MM-DD date relative to the host's today. */
-function DateLabel({ iso }) {
-	const { today } = useClock();
-	if (iso === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "text-muted",
-		children: "none"
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
-		dateTime: iso,
-		title: iso,
-		children: relativeDate(iso, today)
-	});
-}
-/** A section label between two rules that end in the small square tick of a D2 panel. */
-function SectHead({ title, aside }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-		className: "sect",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sect-rule sect-rule-start",
-				"aria-hidden": "true"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-				className: "label",
-				children: title
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sect-rule",
-				"aria-hidden": "true"
-			}),
-			aside === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "sect-aside",
-				children: aside
-			})
-		]
-	});
-}
-/** A titled part of a page: the section label, then its content. */
-function Section({ title, id, aside, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id,
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, {
-			title,
-			aside
-		}), children]
-	});
-}
-/** Detail that most visits do not need, closed until asked for. */
-function Fold({ summary, id, open = false, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		id,
-		className: "fold scroll-mt-20",
-		open,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fold-body",
-			children
-		})]
-	});
-}
-function Empty({ children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "empty",
-		children
-	});
-}
-function Chips({ items, none }) {
-	if (items.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "text-muted",
-		children: none
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "flex flex-wrap gap-1.5",
-		children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-			className: "chip",
-			children: item
-		}, item))
-	});
-}
-function Facts({ facts }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
-		className: "facts",
-		children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "contents",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: fact.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: fact.value })]
-		}, fact.label))
-	});
-}
-/** The path back up, above a page title. */
-function Crumbs({ children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "crumbs",
-		children
-	});
-}
-//#endregion
 //#region app/components/result.tsx
 /** A small word in a box, in its tone. The word carries the meaning; the colour only repeats it. */
 function Tag({ tag }) {
@@ -11393,7 +11644,7 @@ function ResultPanel({ project, row, result }) {
 }
 //#endregion
 //#region app/components/pulse.tsx
-/** The dashboard head of a project page: the four tiles, and the panels for what is open and what is scheduled. */
+/** The head of a project page: the status strip, and the panel for what is open now. */
 /** One count of the status strip. The whole segment is the link. */
 function Pill({ label, value, sub, tone, href, live = false }) {
 	const on = value > 0;
@@ -11439,7 +11690,7 @@ function Pill({ label, value, sub, tone, href, live = false }) {
 function vigilIsDue(vigil, today) {
 	return vigil.due !== null && vigil.due <= today;
 }
-/** Running, waiting for you, armed vigils, overdue by hand: one slim strip, each segment opens what it counts. */
+/** Running, waiting for you, armed vigils, overdue: one slim strip, each segment opens what it counts. */
 function Pulse({ data }) {
 	const { today } = useClock();
 	const running = data.live.filter(({ run }) => run.phase === "running").length;
@@ -11470,13 +11721,13 @@ function Pulse({ data }) {
 				value: data.openVigils.length,
 				sub: vigilSub === "" ? void 0 : vigilSub,
 				tone: flagged > 0 ? "bad" : due > 0 ? "late" : "gold",
-				href: data.openVigils.length === 0 ? null : "#vigils"
+				href: data.openVigils.length === 0 ? null : data.waiting === 0 ? "#coming-up" : "#waiting"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pill, {
-				label: "overdue by hand",
+				label: "overdue",
 				value: data.overdue,
 				tone: "late",
-				href: data.manual === 0 ? null : "?show=manual#manual"
+				href: data.overdue === 0 ? null : "#coming-up"
 			})
 		]
 	});
@@ -11566,123 +11817,9 @@ function LivePanel({ live }) {
 		})]
 	});
 }
-/** What darius runs next, the soonest first. */
-function ScheduledPanel({ project, entries }) {
-	const { today } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id: "scheduled",
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Scheduled" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "panel",
-			children: entries.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "panel-empty",
-				children: "darius runs no ritual of this project."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "rows stagger",
-				children: entries.map(({ ritual, badge }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-					to: ritualPath(project, ritual.slug),
-					className: "row row-tight",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "row-main",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-title",
-							children: ritual.title
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-sub",
-							children: [cadenceText(ritual.cadence), nextText(ritual, today)].filter((part) => part !== null).join(", ")
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-						tone: badge.tone,
-						label: badge.label
-					})]
-				}) }, ritual.slug))
-			})
-		})]
-	});
-}
-/** How many armed vigils show before the fold. */
-var VIGILS_SHOWN = 3;
-/** The state of an armed vigil: flagged, late, due today, or waiting. */
-function armedBadge(vigil, today) {
-	if (vigil.flagged) return {
-		tone: "bad",
-		label: "Flagged"
-	};
-	if (vigil.due !== null && vigil.due < today) return {
-		tone: "late",
-		label: "Overdue"
-	};
-	if (vigil.due === today) return {
-		tone: "gold",
-		label: "Due today"
-	};
-	return {
-		tone: "idle",
-		label: "Armed"
-	};
-}
-function VigilRows({ vigils, target }) {
-	const { today } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-		className: "rows stagger",
-		children: vigils.map((vigil) => {
-			const badge = armedBadge(vigil, today);
-			const id = vigilAnchor(vigil.slug);
-			const waits = vigilWaits(vigil, today);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				id,
-				className: `row target-row${vigil.flagged ? " row-flagged tone-bad" : ""}${target === id ? " is-target" : ""}`,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "row-main",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-title",
-							children: vigil.title
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "row-sub row-clamp",
-							children: waits.length === 0 ? "no date and no event set" : waits.join(", ")
-						}),
-						vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "row-sub",
-							children: ["last check ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: vigil.lastOutcome })]
-						})
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-					tone: badge.tone,
-					label: badge.label
-				})]
-			}, vigil.slug);
-		})
-	});
-}
-/** Armed vigils, the most urgent first (the page sorts them): a few in view, the rest one press away. */
-function VigilPanel({ vigils, target }) {
-	const head = vigils.slice(0, VIGILS_SHOWN);
-	const rest = vigils.slice(VIGILS_SHOWN);
-	const inRest = rest.some((vigil) => vigilAnchor(vigil.slug) === target);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id: "vigils",
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Vigils" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
-				vigils: head,
-				target
-			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-				open: inRest,
-				summary: `${rest.length} more armed`,
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilRows, {
-					vigils: rest,
-					target
-				})
-			})]
-		})]
-	});
-}
 //#endregion
 //#region app/components/board.tsx
-/** The pieces of the command board: the status strip, the Now rows, the Needs you card and the djinn and Up next lists. */
+/** The pieces of the command board: the status strip, the Now rows, and the Needs you card. */
 /** Text in parts, each part in its own colour. */
 function Pieces({ pieces }) {
 	return pieces.map((piece, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -11867,49 +12004,6 @@ function CardView({ card }) {
 		]
 	});
 }
-/** One row per line: a square in its state colour, its title, and its state in one line. Each row is a 44 px link. */
-function LineList({ label, lines, empty, more = [] }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "panel",
-		"aria-label": label,
-		children: [lines.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "panel-empty",
-			children: empty
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-			className: "djinns",
-			children: lines.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				className: `djinn tone-${line.tone}`,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "djinn-sq",
-					"aria-hidden": "true"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "min-w-0",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: line.href,
-						className: "djinn-title",
-						children: line.title
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "djinn-line",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "djinn-word",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Word, { text: line.word })
-						}), line.detail.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: line.detail }) })]
-					})]
-				})]
-			}, line.key))
-		}), more.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "more",
-			children: more.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-				to: entry.href,
-				children: [
-					entry.count,
-					" more in ",
-					entry.project
-				]
-			}, entry.project))
-		})]
-	});
-}
 //#endregion
 //#region app/components/route-error.tsx
 /** The error boundary of every page: a 404 or a failure, inside the frame. */
@@ -11971,14 +12065,14 @@ function loader$7({ context }) {
 }
 var meta$6 = () => [{ title: "darius" }];
 /**
-* The command board, across all projects. The verdict and the status strip
-* on top; then, on a phone, Now, Needs you and Last night, and Up next, one
-* health line and the djinns below. On a desktop the wide column holds Needs
-* you, Now and Last night, and the rail holds Up next, the health line and
-* the djinns. Each run shows once.
+* The command board, across all projects. The verdict (with what is next) and
+* the status strip on top; then, on a phone, Needs you, Now, Coming up,
+* Waiting on an event, Last night and one health line. On a desktop the wide
+* column holds Needs you, Now and Coming up, and the rail holds Waiting on an
+* event, Last night and the health line. Each run shows once.
 */
 var overview_default = withComponentProps(function Overview({ loaderData }) {
-	const { verdict, tone, sub, strip, now, needs, quiet, lastNight, upNext, health, djinns } = loaderData;
+	const { verdict, tone, sub, strip, now, needs, quiet, lastNight, agenda, health } = loaderData;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 			className: "verdict",
@@ -12012,38 +12106,32 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 						id: "now",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Now" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NowList, { runs: now })]
 					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ComingUp, {
+						agenda,
+						anchors: false,
+						target: ""
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+				className: "board-rail",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Waiting, {
+						rows: agenda.waiting,
+						shown: 5,
+						showProject: agenda.showProject,
+						anchors: false,
+						target: ""
+					}),
 					lastNight.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 						className: "section sec-last",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Last night" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "lastnight",
 							children: lastNight.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
 						})]
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-				className: "board-rail",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						className: "section sec-up",
-						id: "upnext",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Up next" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineList, {
-							label: "Up next",
-							lines: upNext.lines,
-							more: upNext.more,
-							empty: "Nothing is due. No djinn is scheduled and no manual ritual is late."
-						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "health sec-health",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pieces, { pieces: health })
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						className: "section sec-djinns",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Djinns" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineList, {
-							label: "Djinns",
-							lines: djinns,
-							empty: "No djinn yet. Give a ritual a repo skill with --skill."
-						})]
 					})
 				]
 			})]
@@ -12494,65 +12582,41 @@ var project_exports = /* @__PURE__ */ __exportAll({
 	meta: () => meta$3
 });
 var RECENT = 10;
-/** Manual rituals shown before the fold. */
-var MANUAL_SHOWN = 3;
-/** Djinn cards a phone shows before its own button; the rest repeat what Scheduled says. */
+/** Djinn cards a phone shows before its own button; the rest repeat what Coming up says. */
 var DJINNS_PHONE = 1;
 /** Recent runs a phone shows before its own button. */
 var RECENT_PHONE = 3;
+/** Rows of Waiting on an event before its fold: a project page has more to show than the home page. */
+var WAITING_PROJECT = 3;
 /** Closed vigils shown in their fold; a long-running project has dozens. */
 var CLOSED_SHOWN = 10;
-/** Manual rituals: the ones to do soon first, then the rest by date, retired and dormant ones last. */
-function manualRank(ritual) {
-	if (ritual.lifecycle !== "active") return 3;
-	if (ritual.nextDue === null) return 2;
-	return ritual.overdueDays > 0 || ritual.isDue ? 0 : 1;
-}
-function byManualOrder(left, right) {
-	return manualRank(left) - manualRank(right) || right.overdueDays - left.overdueDays || (left.nextDue ?? "").localeCompare(right.nextDue ?? "") || left.title.localeCompare(right.title);
-}
-/** Armed vigils: flagged first, then late or due today, then dated ones, then the ones that wait for an event. */
-function vigilRank(vigil, today) {
-	if (vigil.flagged) return 0;
-	if (vigil.due !== null && vigil.due <= today) return 1;
-	return vigil.due === null ? 3 : 2;
-}
-function loader$3({ context, params, request }) {
+function loader$3({ context, params }) {
 	const status = statusOf(context);
 	const project = status.projects.find((candidate) => candidate.name === params.project);
 	if (project === void 0) throw data(`No project named ${params.project} on this host.`, { status: 404 });
 	const runs = activity([project], { withImported: false });
 	const lastOf = (slug) => runs.find((run) => run.slug === slug) ?? null;
-	const djinns = project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => {
-		const finished = runs.find((run) => run.slug === ritual.slug && run.findingsSha !== null) ?? null;
-		return {
-			ritual,
-			last: lastOf(ritual.slug),
-			report: finished === null ? null : reportExcerpt(context.run(project.name, finished.run))
-		};
-	});
-	const manual = project.rituals.filter((ritual) => !isUnattended(ritual)).toSorted(byManualOrder);
 	return {
 		project,
-		djinns,
+		djinns: project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => {
+			const finished = runs.find((run) => run.slug === ritual.slug && run.findingsSha !== null) ?? null;
+			return {
+				ritual,
+				last: lastOf(ritual.slug),
+				report: finished === null ? null : reportExcerpt(context.run(project.name, finished.run))
+			};
+		}),
 		live: runs.filter((run) => run.phase !== "closed" || asksYou(run)).map((run) => ({
 			run,
 			stuck: stuckFor(run, status.generatedAt)
 		})),
-		scheduled: project.rituals.filter((ritual) => isUnattended(ritual) && ritual.lifecycle === "active").toSorted((left, right) => (left.nextDue ?? "9999").localeCompare(right.nextDue ?? "9999") || left.title.localeCompare(right.title)).map((ritual) => {
-			const last = lastOf(ritual.slug);
-			return {
-				ritual,
-				badge: last === null ? {
-					tone: "idle",
-					label: "No run yet"
-				} : runState(last)
-			};
+		agenda: buildAgenda({
+			projects: [project],
+			today: status.today
 		}),
-		overdue: manual.filter((ritual) => ritual.lifecycle === "active" && ritual.overdueDays > 0).length,
-		manual,
-		showManual: new URL(request.url).searchParams.get("show") === "manual",
-		openVigils: project.vigils.filter((vigil) => vigil.state !== "closed").toSorted((left, right) => vigilRank(left, status.today) - vigilRank(right, status.today) || (left.due ?? "9999").localeCompare(right.due ?? "9999") || left.title.localeCompare(right.title)),
+		/** Rituals darius runs: a project with some but no djinn hides the Djinns section. */
+		unattended: project.rituals.filter((ritual) => isUnattended(ritual)).length,
+		openVigils: project.vigils.filter((vigil) => vigil.state !== "closed"),
 		closedVigils: project.vigils.filter((vigil) => vigil.state === "closed"),
 		recent: runs.slice(0, RECENT)
 	};
@@ -12560,19 +12624,6 @@ function loader$3({ context, params, request }) {
 var meta$3 = ({ params }) => [{ title: `${params.project} | darius` }];
 function rowClass(target, id, extra = "") {
 	return `row target-row${extra}${target === id ? " is-target" : ""}`;
-}
-/** When a manual ritual is due, in the same words and colours as everywhere else. */
-function ManualState({ ritual }) {
-	const badge = ritualBadge(ritual);
-	if (badge.label === "scheduled") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DateLabel, { iso: ritual.nextDue });
-	if (badge.tone === "late" && ritual.overdueDays > 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-		tone: badge.tone,
-		label: `overdue ${ritual.overdueDays} ${ritual.overdueDays === 1 ? "day" : "days"}`
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-		tone: badge.tone,
-		label: badge.label === "due" ? "due today" : badge.label
-	});
 }
 /** A path that may break after each slash, so a long checkout wraps at a folder. */
 function PathText({ path }) {
@@ -12582,42 +12633,10 @@ function PathText({ path }) {
 		part
 	] }, `${index}`));
 }
-/** "Manual rituals (7), 5 overdue. Done by hand, darius does not run them." */
-function manualSummary(manual) {
-	const overdue = manual.filter((ritual) => ritual.lifecycle === "active" && ritual.overdueDays > 0).length;
-	return `Manual rituals (${manual.length})${overdue === 0 ? "" : `, ${overdue} overdue`}. Done by hand, darius does not run them.`;
-}
-function ManualRows({ project, rituals }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-		className: "rows",
-		children: rituals.map((ritual) => {
-			const resting = ritual.lifecycle !== "active" || ritual.nextDue === null;
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-				to: ritualPath(project, ritual.slug),
-				className: `row${resting ? " row-dim" : ""}`,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "row-main",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "row-title",
-						children: ritual.title
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "row-sub",
-						children: [ritual.slug, cadenceText(ritual.cadence)].filter((part) => part !== null).join(", ")
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "row-time",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualState, { ritual })
-				})]
-			}) }, ritual.slug);
-		})
-	});
-}
 var project_default = withComponentProps(function Project({ loaderData }) {
-	const { project, djinns, live, scheduled, overdue, manual, showManual, openVigils, closedVigils, recent } = loaderData;
+	const { project, djinns, live, agenda, unattended, openVigils, closedVigils, recent } = loaderData;
 	const target = useHashTarget();
 	const closedTarget = closedVigils.some((vigil) => vigilAnchor(vigil.slug) === target);
-	const manualHead = manual.slice(0, MANUAL_SHOWN);
-	const manualRest = manual.slice(MANUAL_SHOWN);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "proj",
 		children: [
@@ -12655,33 +12674,26 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pulse, { data: {
 				project: project.name,
 				live,
-				scheduled,
 				openVigils,
-				overdue,
-				manual: manual.length
+				overdue: agenda.overdue,
+				waiting: agenda.waiting.length
 			} }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "proj-body",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "band",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LivePanel, { live }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduledPanel, {
-							project: project.name,
-							entries: scheduled
-						})]
-					}),
-					openVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "band-tail",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VigilPanel, {
-							vigils: openVigils,
-							target
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "board",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "board-main",
-							children: [djinns.length === 0 && scheduled.length > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "band",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LivePanel, { live })
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "board",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "board-main",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ComingUp, {
+								agenda,
+								anchors: true,
+								target
+							}),
+							djinns.length === 0 && unattended > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 								title: "Djinns",
 								id: "djinns",
 								children: djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "darius runs no ritual of this project yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneMore, {
@@ -12701,7 +12713,8 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 										}, ritual.slug))
 									})
 								})
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 								title: "Recent runs",
 								id: "recent",
 								aside: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
@@ -12721,70 +12734,52 @@ var project_default = withComponentProps(function Project({ loaderData }) {
 										})
 									})
 								})
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-							className: "board-rail",
-							children: [manual.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-								title: "By hand",
-								id: "manual",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "panel",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-											className: "rail-note",
-											children: manualSummary(manual)
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
-											project: project.name,
-											rituals: manualHead
-										}),
-										manualRest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-											open: showManual,
-											summary: `${manualRest.length} more`,
-											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualRows, {
-												project: project.name,
-												rituals: manualRest
-											})
-										})
-									]
-								})
-							}), closedVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "folds proj-closed",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
-									open: closedTarget,
-									summary: `Closed vigils (${closedVigils.length})`,
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-										className: "rows",
-										children: closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
-											const badge = vigilBadge(vigil);
-											const id = vigilAnchor(vigil.slug);
-											return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-												id,
-												className: rowClass(target, id),
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-													className: "row-main",
-													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "row-title",
-														children: vigil.title
-													}), vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-														className: "row-sub",
-														children: ["last check ", vigil.lastOutcome]
-													})]
-												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
-													tone: badge.tone,
-													label: badge.label
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+						className: "board-rail",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Waiting, {
+							rows: agenda.waiting,
+							shown: WAITING_PROJECT,
+							showProject: false,
+							anchors: true,
+							target
+						}), closedVigils.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "folds proj-closed",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+								open: closedTarget,
+								summary: `Closed vigils (${closedVigils.length})`,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+									className: "rows",
+									children: closedVigils.slice(0, CLOSED_SHOWN).map((vigil) => {
+										const badge = vigilBadge(vigil);
+										const id = vigilAnchor(vigil.slug);
+										return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+											id,
+											className: rowClass(target, id),
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "row-main",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "row-title",
+													children: vigil.title
+												}), vigil.lastOutcome === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "row-sub",
+													children: ["last check ", vigil.lastOutcome]
 												})]
-											}, vigil.slug);
-										})
-									}), closedVigils.length > CLOSED_SHOWN ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "rail-note mt-3",
-										children: [closedVigils.length - CLOSED_SHOWN, " older ones are not shown."]
-									}) : null]
-								})
-							})]
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+												tone: badge.tone,
+												label: badge.label
+											})]
+										}, vigil.slug);
+									})
+								}), closedVigils.length > CLOSED_SHOWN ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "rail-note mt-3",
+									children: [closedVigils.length - CLOSED_SHOWN, " older ones are not shown."]
+								}) : null]
+							})
 						})]
-					})
-				]
+					})]
+				})]
 			})
 		]
 	});
@@ -13222,13 +13217,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CA-AdaUo.js",
+			"module": "/assets/root-WEcHOsdw.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js"
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/view-CCanQLEb.js",
+				"/assets/agenda-CkP2PghJ.js"
 			],
-			"css": ["/assets/root-j4HyrIWv.css"],
+			"css": ["/assets/root-Bl-oYXFC.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -13247,14 +13243,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-C37P1Tiw.js",
+			"module": "/assets/overview-JNgMfi7D.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/board-DiZf9pZ1.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/ui-DygCT6KJ.js",
+				"/assets/agenda-CtD0iIM5.js",
+				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js"
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/agenda-CkP2PghJ.js",
+				"/assets/view-CCanQLEb.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13275,15 +13273,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-3VB5Qgji.js",
+			"module": "/assets/runs-UBfzYfsA.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/ui-DygCT6KJ.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DJ2GtR1p.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js",
-				"/assets/board-DiZf9pZ1.js"
+				"/assets/runs-DXtLCu84.js",
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/view-CCanQLEb.js",
+				"/assets/board-U8_AnqOg.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13325,12 +13323,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/profiles-j2kV5oPS.js",
+			"module": "/assets/profiles-COGcRMRg.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/ui-DygCT6KJ.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/clock-DOuU4B9z.js"
+				"/assets/clock-B4mPWm6W.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13351,15 +13349,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/project-B35VppxL.js",
+			"module": "/assets/project-F0f-U6aZ.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js",
-				"/assets/board-DiZf9pZ1.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/ui-DygCT6KJ.js",
+				"/assets/agenda-CtD0iIM5.js",
+				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DJ2GtR1p.js"
+				"/assets/runs-DXtLCu84.js",
+				"/assets/agenda-CkP2PghJ.js",
+				"/assets/view-CCanQLEb.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13380,15 +13380,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-oZo9-A5S.js",
+			"module": "/assets/ritual-CHHnFr7C.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js",
-				"/assets/board-DiZf9pZ1.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/view-CCanQLEb.js",
+				"/assets/ui-DygCT6KJ.js",
+				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DJ2GtR1p.js"
+				"/assets/runs-DXtLCu84.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13409,15 +13409,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DwZrZTwa.js",
+			"module": "/assets/run-BQWbHlJb.js",
 			"imports": [
 				"/assets/jsx-runtime-BqQc0GKz.js",
-				"/assets/clock-DOuU4B9z.js",
-				"/assets/view-3SNEkFkZ.js",
-				"/assets/board-DiZf9pZ1.js",
-				"/assets/ui-wVd2PoG1.js",
+				"/assets/clock-B4mPWm6W.js",
+				"/assets/view-CCanQLEb.js",
+				"/assets/ui-DygCT6KJ.js",
+				"/assets/board-U8_AnqOg.js",
 				"/assets/route-error-DI3wO4-Y.js",
-				"/assets/runs-DJ2GtR1p.js"
+				"/assets/runs-DXtLCu84.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -13447,8 +13447,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-f48a747f.js",
-	"version": "f48a747f",
+	"url": "/assets/manifest-b20afed1.js",
+	"version": "b20afed1",
 	"sri": void 0
 };
 //#endregion

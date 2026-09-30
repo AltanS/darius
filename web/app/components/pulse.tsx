@@ -1,14 +1,14 @@
-/** The dashboard head of a project page: the four tiles, and the panels for what is open and what is scheduled. */
+/** The head of a project page: the status strip, and the panel for what is open now. */
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
-import type { RitualRow, VigilRow } from "../../../src/web/api.ts";
+import type { VigilRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
-import { duration, ritualPath, runPath, vigilAnchor } from "../lib/format.ts";
-import type { Badge, Tone } from "../lib/tone.ts";
-import { cadenceText, nextText, runState, stuckText, vigilWaits, type ActivityRun } from "../lib/view.ts";
-import { Fold, SectHead, Status, Time } from "./ui.tsx";
+import { duration, runPath } from "../lib/format.ts";
+import type { Tone } from "../lib/tone.ts";
+import { runState, stuckText, type ActivityRun } from "../lib/view.ts";
+import { SectHead, Status, Time } from "./ui.tsx";
 
 interface PillProps {
   label: string;
@@ -60,11 +60,11 @@ export interface LiveRun {
 export interface PulseData {
   project: string;
   live: readonly LiveRun[];
-  scheduled: readonly ScheduledEntry[];
   openVigils: readonly VigilRow[];
+  /** Rituals and dated vigils past due: the last segment, a link to Coming up. */
   overdue: number;
-  /** How many rituals are done by hand; the last segment opens their list, so it needs one. */
-  manual: number;
+  /** Armed vigils without a due date: the vigils segment opens their list. */
+  waiting: number;
 }
 
 interface PulseProps {
@@ -76,7 +76,7 @@ export function vigilIsDue(vigil: VigilRow, today: string): boolean {
   return vigil.due !== null && vigil.due <= today;
 }
 
-/** Running, waiting for you, armed vigils, overdue by hand: one slim strip, each segment opens what it counts. */
+/** Running, waiting for you, armed vigils, overdue: one slim strip, each segment opens what it counts. */
 export function Pulse({ data }: PulseProps): React.ReactNode {
   const { today } = useClock();
   const running = data.live.filter(({ run }) => run.phase === "running").length;
@@ -89,8 +89,8 @@ export function Pulse({ data }: PulseProps): React.ReactNode {
     <nav className="pulse stagger" aria-label="Summary">
       <Pill label="running" value={running} tone="run" href={running === 0 ? runsHref("running") : "#now"} live />
       <Pill label="need you" value={waiting} tone="wait" href={waiting === 0 ? runsHref("held") : "#now"} />
-      <Pill label="vigils armed" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : "#vigils"} />
-      <Pill label="overdue by hand" value={data.overdue} tone="late" href={data.manual === 0 ? null : "?show=manual#manual"} />
+      <Pill label="vigils armed" value={data.openVigils.length} sub={vigilSub === "" ? undefined : vigilSub} tone={flagged > 0 ? "bad" : due > 0 ? "late" : "gold"} href={data.openVigils.length === 0 ? null : data.waiting === 0 ? "#coming-up" : "#waiting"} />
+      <Pill label="overdue" value={data.overdue} tone="late" href={data.overdue === 0 ? null : "#coming-up"} />
     </nav>
   );
 }
@@ -175,116 +175,6 @@ export function LivePanel({ live }: LivePanelProps): React.ReactNode {
               );
             })}
           </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
-/** A ritual darius runs, with the state of its latest run. */
-export interface ScheduledEntry {
-  ritual: RitualRow;
-  /** The state of its latest run, or "No run yet". */
-  badge: Badge;
-}
-
-interface ScheduledPanelProps {
-  project: string;
-  entries: readonly ScheduledEntry[];
-}
-
-/** What darius runs next, the soonest first. */
-export function ScheduledPanel({ project, entries }: ScheduledPanelProps): React.ReactNode {
-  const { today } = useClock();
-  return (
-    <section id="scheduled" className="section">
-      <SectHead title="Scheduled" />
-      <div className="panel">
-        {entries.length === 0 ? (
-          <p className="panel-empty">darius runs no ritual of this project.</p>
-        ) : (
-          <ul className="rows stagger">
-            {entries.map(({ ritual, badge }) => (
-              <li key={ritual.slug}>
-                <Link to={ritualPath(project, ritual.slug)} className="row row-tight">
-                  <span className="row-main">
-                    <span className="row-title">{ritual.title}</span>
-                    <span className="row-sub">{[cadenceText(ritual.cadence), nextText(ritual, today)].filter((part) => part !== null).join(", ")}</span>
-                  </span>
-                  <Status tone={badge.tone} label={badge.label} />
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
-interface VigilPanelProps {
-  vigils: readonly VigilRow[];
-  target: string;
-}
-
-/** How many armed vigils show before the fold. */
-const VIGILS_SHOWN = 3;
-
-/** The state of an armed vigil: flagged, late, due today, or waiting. */
-function armedBadge(vigil: VigilRow, today: string): Badge {
-  if (vigil.flagged) return { tone: "bad", label: "Flagged" };
-  if (vigil.due !== null && vigil.due < today) return { tone: "late", label: "Overdue" };
-  if (vigil.due === today) return { tone: "gold", label: "Due today" };
-  return { tone: "idle", label: "Armed" };
-}
-
-interface VigilRowsProps {
-  vigils: readonly VigilRow[];
-  target: string;
-}
-
-function VigilRows({ vigils, target }: VigilRowsProps): React.ReactNode {
-  const { today } = useClock();
-  return (
-    <ul className="rows stagger">
-      {vigils.map((vigil) => {
-        const badge = armedBadge(vigil, today);
-        const id = vigilAnchor(vigil.slug);
-        const waits = vigilWaits(vigil, today);
-        return (
-          <li key={vigil.slug} id={id} className={`row target-row${vigil.flagged ? " row-flagged tone-bad" : ""}${target === id ? " is-target" : ""}`}>
-            <span className="row-main">
-              <span className="row-title">{vigil.title}</span>
-              <span className="row-sub row-clamp">{waits.length === 0 ? "no date and no event set" : waits.join(", ")}</span>
-              {vigil.lastOutcome === null ? null : (
-                <span className="row-sub">
-                  last check <strong>{vigil.lastOutcome}</strong>
-                </span>
-              )}
-            </span>
-            <Status tone={badge.tone} label={badge.label} />
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-/** Armed vigils, the most urgent first (the page sorts them): a few in view, the rest one press away. */
-export function VigilPanel({ vigils, target }: VigilPanelProps): React.ReactNode {
-  const head = vigils.slice(0, VIGILS_SHOWN);
-  const rest = vigils.slice(VIGILS_SHOWN);
-  // A link to a vigil in the fold opens the fold.
-  const inRest = rest.some((vigil) => vigilAnchor(vigil.slug) === target);
-  return (
-    <section id="vigils" className="section">
-      <SectHead title="Vigils" />
-      <div className="panel">
-        <VigilRows vigils={head} target={target} />
-        {rest.length === 0 ? null : (
-          <Fold open={inRest} summary={`${rest.length} more armed`}>
-            <VigilRows vigils={rest} target={target} />
-          </Fold>
         )}
       </div>
     </section>

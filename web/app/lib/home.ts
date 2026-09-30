@@ -2,12 +2,13 @@
  * The home page, "the command board": one read of the status, across all
  * projects, that answers the operator's questions in the order they matter.
  * Does anything need me (the verdict, the status strip and the Needs you
- * cards)? What runs now (the Now rows)? What is coming (the Up next rows: the
- * next djinn starts, and the manual rituals that are overdue or due today)?
- * What happened last night (the Last night cards)? Is darius itself healthy
- * (one quiet Timer and Sync line)? Every value here comes from the status.
- * Where the status has no such fact (the next start time of a djinn, say) the
- * page says what it knows instead.
+ * cards)? What runs now (the Now rows)? What is coming (Coming up, one
+ * time-ordered list of every active ritual and every dated vigil, and Waiting
+ * on an event, the vigils without a date; both built by `lib/agenda.ts`, which
+ * the project page draws too)? What happened last night (the Last night
+ * cards)? Is darius itself healthy (one quiet Timer and Sync line)? Every
+ * value here comes from the status. The sub line under the verdict names what
+ * is next: "Wed 30 Sep, 18:32. 6 overdue. Next: Daily site report, tomorrow."
  *
  * Three filters keep noise off the page. Only djinns (rituals darius runs
  * that follow a repo skill) get a line. Imported and acceptance runs never
@@ -21,8 +22,8 @@
  *
  * A failed run that a person acknowledged (`darius run ack`) needs nobody
  * any more: it leaves Needs you and shows as a plain Last night card with
- * the acknowledgement, so the verdict stops saying "Failed", and its djinn
- * line in the rail says "failed, acknowledged" in grey.
+ * the acknowledgement, so the verdict stops saying "Failed", and its row in
+ * Coming up says "Failed, acknowledged" in grey.
  *
  * A complete run whose result asks the operator something (0.22.0) is an
  * "Asks you" card, like a held run, until someone records a decision with
@@ -31,7 +32,8 @@
  */
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, nextDay, projectPath, relativeDate, ritualPath, roughDuration, runPath, shortDate, vigilPath } from "./format.ts";
+import { agendaSentence, buildAgenda, type Agenda } from "./agenda.ts";
+import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, projectPath, relativeDate, ritualPath, roughDuration, runPath, shortDate, vigilPath } from "./format.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
 import { ackText, activity, asksYou, decisionText, excerpt, isDjinn, runState, stuckFor, type ActivityRun, type Excerpt } from "./view.ts";
 
@@ -130,32 +132,10 @@ export interface NowRun {
   who: string;
 }
 
-/** One row of a djinn or Up next list: a square in its state colour, a title, and its state in one line. */
-export interface DjinnLine {
-  key: string;
-  title: string;
-  href: string;
-  tone: Tone;
-  word: string;
-  detail: Piece[];
-}
-
-/** Rows of Up next past the sixth: how many are left, and where to read them. */
-export interface MoreLink {
-  project: string;
-  count: number;
-  href: string;
-}
-
-export interface UpNext {
-  lines: DjinnLine[];
-  more: MoreLink[];
-}
-
 export interface Home {
   verdict: string;
   tone: Tone;
-  /** "Tue 29 Sep, 12:14. Next djinn: tomorrow." */
+  /** "Wed 30 Sep, 18:32. 6 overdue. Next: Daily site report, tomorrow." */
   sub: string;
   strip: Segment[];
   /** The runs that run now and are not stuck (a stuck run has its card in Needs you). */
@@ -164,10 +144,10 @@ export interface Home {
   /** The calm line under Needs you when nothing needs the operator. */
   quiet: string;
   lastNight: Card[];
-  upNext: UpNext;
+  /** Coming up and Waiting on an event: the same agenda the project page draws. */
+  agenda: Agenda;
   /** "Timer ok, last run 6 min ago. Synced 2 min ago." in parts, each in its own colour. */
   health: Piece[];
-  djinns: DjinnLine[];
 }
 
 type ReadRun = (project: string, run: string) => RunDetail | null;
@@ -223,12 +203,6 @@ function startedText(clock: Clock, iso: string): string {
   return `${day} ${clockTime(iso, clock.offset)}`;
 }
 
-/** A YYYY-MM-DD date ahead: "tomorrow", "2 Oct". */
-function aheadText(clock: Clock, date: string): string {
-  if (date === clock.today) return "today";
-  return date === nextDay(clock.today) ? "tomorrow" : shortDate(date);
-}
-
 function blocksSize(blocks: readonly MdBlock[]): number {
   return blocks.reduce((sum, block) => {
     if (block.kind === "paragraph") return sum + block.lines.flat().reduce((size, span) => size + span.text.length, 0);
@@ -243,61 +217,17 @@ interface DjinnState {
   project: string;
   ritual: RitualRow;
   last: ActivityRun | null;
-  /** The last run failed or was abandoned today: run-due does not retry it before tomorrow. */
-  failedToday: boolean;
   /** Due since a day or more, not started today, nothing open: the timer did not start it. */
   missed: boolean;
-  /** When the timer starts it next: "now", a YYYY-MM-DD date, or null when it waits on a run. */
-  next: string | null;
 }
 
 function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: readonly ActivityRun[]): DjinnState {
   const own = runs.filter((run) => run.project === project && run.item === `ritual/${ritual.slug}`);
   const last = own[0] ?? null;
-  const endedOn = last?.endedAt === null || last === null ? null : hostDate(last.endedAt, clock.offset);
-  const failedToday = last !== null && last.phase === "closed" && (last.outcome === "failed" || last.outcome === "abandoned") && endedOn === clock.today;
   const waiting = ritual.heldRun !== null || ritual.openRun !== null;
   const ranToday = own.some((run) => hostDate(run.startedAt, clock.offset) === clock.today);
   const missed = ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday;
-  let next: string | null = null;
-  if (!waiting && failedToday) next = nextDay(clock.today);
-  else if (!waiting && ritual.nextDue !== null) next = ritual.nextDue <= clock.today ? "now" : ritual.nextDue;
-  return { project, ritual, last, failedToday, missed, next };
-}
-
-function nextWords(clock: Clock, next: string | null): string | null {
-  if (next === null) return null;
-  return next === "now" ? "due now" : `next ${aheadText(clock, next)}`;
-}
-
-/** The subline sentence about the next djinn start, or "" when nothing is scheduled. */
-function nextSentence(clock: Clock, states: readonly DjinnState[]): string {
-  const nexts = states.map((state) => state.next).filter((next) => next !== null);
-  if (nexts.includes("now")) return " A djinn is due now.";
-  const first = nexts.toSorted()[0];
-  return first === undefined ? "" : ` Next djinn: ${aheadText(clock, first)}.`;
-}
-
-const LINE_ORDER = { bad: 0, wait: 1, late: 2, run: 3, gold: 4, ok: 5, idle: 6 } as const satisfies Record<Tone, number>;
-
-function djinnLine(clock: Clock, generatedAt: string, state: DjinnState): DjinnLine {
-  const { project, ritual, last } = state;
-  const base = { key: `${project}/${ritual.slug}`, title: ritual.title, href: ritualPath(project, ritual.slug) };
-  if (last !== null && last.phase === "running") {
-    const stuck = stuckFor(last, generatedAt);
-    const detail: Piece[] = stuck === null ? [{ text: `started ${when(clock, last.startedAt)}`, ink: "plain" }] : [{ text: `${stuck}, `, ink: "plain" }, { text: "stuck", ink: "late" }];
-    return { ...base, tone: "run", word: "Running", detail };
-  }
-  if (last !== null && last.phase === "held") return { ...base, tone: "wait", word: "Held", detail: [{ text: `since ${when(clock, last.startedAt)}`, ink: "plain" }] };
-  if (state.missed) {
-    const ran = last === null ? "never ran" : `last ran ${when(clock, last.startedAt)}`;
-    return { ...base, tone: "late", word: "Overdue", detail: [{ text: `${ritual.overdueDays} d, ${ran}`, ink: "plain" }] };
-  }
-  const next = nextWords(clock, state.next);
-  if (last === null) return { ...base, tone: "idle", word: "No run yet", detail: next === null ? [] : [{ text: next, ink: "plain" }] };
-  const badge = runState(last);
-  const text = [when(clock, last.startedAt), next].filter((part) => part !== null).join(", ");
-  return { ...base, tone: badge.tone, word: badge.label, detail: [{ text, ink: "plain" }] };
+  return { project, ritual, last, missed };
 }
 
 // --- cards ---------------------------------------------------------------------------------
@@ -551,69 +481,6 @@ export function needsText(count: number): string {
   return count === 1 ? "1 thing needs you" : `${count} things need you`;
 }
 
-// --- Up next -------------------------------------------------------------------------------
-
-/** Rows of Up next before the "more" links. */
-const UP_NEXT_SHOWN = 6;
-
-interface UpEntry {
-  /** 0 overdue, 1 manual due today, 2 djinn due now, 3 a later djinn start. */
-  rank: number;
-  /** Overdue days (largest first) or the start date (earliest first). */
-  order: string;
-  line: DjinnLine;
-  project: string;
-}
-
-function padDays(days: number): string {
-  return String(1_000_000 - days).padStart(7, "0");
-}
-
-function djinnEntry(clock: Clock, state: DjinnState): UpEntry | null {
-  const { project, ritual } = state;
-  const base = { key: `${project}/${ritual.slug}`, title: ritual.title, href: ritualPath(project, ritual.slug) };
-  const detail: Piece[] = [{ text: project, ink: "plain" }];
-  if (state.missed) return { rank: 0, order: padDays(ritual.overdueDays), project, line: { ...base, tone: "late", word: `Overdue ${plural(ritual.overdueDays, "day")}`, detail } };
-  if (state.next === null) return null;
-  if (state.next === "now") return { rank: 2, order: "", project, line: { ...base, tone: "gold", word: "Due now", detail } };
-  return { rank: 3, order: state.next, project, line: { ...base, tone: "idle", word: `Next ${aheadText(clock, state.next)}`, detail } };
-}
-
-/** A manual ritual (mode off, active) that is overdue or due today. */
-function manualEntry(project: string, ritual: RitualRow): UpEntry | null {
-  if (ritual.lifecycle !== "active" || ritual.mode !== "off") return null;
-  const base = { key: `${project}/${ritual.slug}`, title: ritual.title, href: ritualPath(project, ritual.slug) };
-  const detail: Piece[] = [{ text: project, ink: "plain" }];
-  if (ritual.overdueDays > 0) return { rank: 0, order: padDays(ritual.overdueDays), project, line: { ...base, tone: "late", word: `Overdue ${plural(ritual.overdueDays, "day")}`, detail } };
-  if (ritual.isDue) return { rank: 1, order: "", project, line: { ...base, tone: "gold", word: "Due today", detail } };
-  return null;
-}
-
-function byEntry(left: UpEntry, right: UpEntry): number {
-  return left.rank - right.rank || left.order.localeCompare(right.order) || left.line.title.localeCompare(right.line.title);
-}
-
-function upNext(clock: Clock, all: readonly ProjectNeeds[]): UpNext {
-  const entries = all
-    .flatMap((needs) => [...needs.states.map((state) => djinnEntry(clock, state)), ...needs.project.rituals.map((ritual) => manualEntry(needs.project.name, ritual))])
-    .filter((entry) => entry !== null)
-    .toSorted(byEntry);
-  const hidden = new Map<string, number>();
-  for (const entry of entries.slice(UP_NEXT_SHOWN)) hidden.set(entry.project, (hidden.get(entry.project) ?? 0) + 1);
-  return {
-    lines: entries.slice(0, UP_NEXT_SHOWN).map((entry) => entry.line),
-    more: [...hidden].map(([project, count]) => ({ project, count, href: projectPath(project) })),
-  };
-}
-
-/** Overdue djinns and overdue manual rituals: the "overdue" segment of the strip. */
-function overdueCount(all: readonly ProjectNeeds[]): number {
-  return all.reduce((sum, needs) => {
-    const manual = needs.project.rituals.filter((ritual) => ritual.lifecycle === "active" && ritual.mode === "off" && ritual.overdueDays > 0).length;
-    return sum + manual + needs.states.filter((state) => state.missed).length;
-  }, 0);
-}
-
 // --- the page ------------------------------------------------------------------------------
 
 function verdictTone(needs: readonly Card[]): Tone {
@@ -646,12 +513,16 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
 /**
  * The status strip. "Need you" always shows (held runs and runs that ask);
  * every other segment shows only above zero: running (not the stuck ones),
- * stuck, failed, flagged, unreadable and overdue.
+ * stuck, failed, flagged, unreadable, overdue (rituals and dated vigils past
+ * due), due today, and armed vigils.
  */
-function statusStrip(needs: readonly Card[], running: number, overdue: number): Segment[] {
+function statusStrip(needs: readonly Card[], running: number, agenda: Agenda): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
   const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true }];
-  const overdueSegment: Segment[] = overdue === 0 ? [] : [{ key: "overdue", label: "overdue", count: overdue, tone: "late", href: "#upnext", live: false }];
+  const overdueSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "overdue", label: "overdue", count: agenda.overdue, tone: "late", href: "#coming-up", live: false }];
+  const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: "#coming-up", live: false }];
+  const armedHref = agenda.waiting.length === 0 ? "#coming-up" : "#waiting";
+  const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false }];
   return [
     { key: "need", label: "need you", count: waiting, tone: "wait", href: waiting === 0 ? null : "#needs", live: false },
     ...runningSegment,
@@ -660,6 +531,8 @@ function statusStrip(needs: readonly Card[], running: number, overdue: number): 
     ...cardSegment(needs, "flagged", "flagged", "bad"),
     ...cardSegment(needs, "unreadable", "unreadable", "bad"),
     ...overdueSegment,
+    ...todaySegment,
+    ...armedSegment,
   ];
 }
 
@@ -689,20 +562,20 @@ export function homeView(status: HostStatus, readRun: ReadRun): Home {
     .filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY)
     .toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? ""))
     .flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]));
+  const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today });
   const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
 
   return {
     verdict: verdictText(needs.length),
     tone: verdictTone(needs),
-    sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${nextSentence(clock, states)}`,
-    strip: statusStrip(needs, now.length, overdueCount(all)),
+    sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}.${agendaSentence(agenda, clock.today)}`,
+    strip: statusStrip(needs, now.length, agenda),
     now,
     needs,
     quiet: quietText(clock, states),
     lastNight,
-    upNext: upNext(clock, all),
+    agenda,
     health: [timerPiece(clock, status, states), syncPiece(clock, status)],
-    djinns: states.map((state) => djinnLine(clock, status.generatedAt, state)).toSorted((left, right) => LINE_ORDER[left.tone] - LINE_ORDER[right.tone]),
   };
 }
 

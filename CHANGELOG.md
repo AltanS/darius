@@ -2,6 +2,23 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.34.0] - 2026-09-30
+
+### Added
+
+- "Coming up" on the home page and the project page: one list of every active ritual and every dated vigil, grouped by day (Overdue, Today, Tomorrow, the next 14 days, Later, No schedule). Each row says who runs it (djinn or by hand), how often, when it was last done, and its state.
+- "Waiting on an event" lists the armed vigils without a due date, flagged first.
+- The home sub line names what is next ("6 overdue. Next: Daily site report, tomorrow."), and the home strip counts what is due today and the armed vigils.
+
+### Changed
+
+- Home drops "Up next" and "Djinns": every djinn is now a row of Coming up. On a phone, Last night shows no report excerpt.
+- The project page shows Coming up and Waiting on an event in place of Scheduled, By hand and Vigils. Its overdue count includes dated vigils past due.
+
+### Fixed
+
+- A legacy vigil whose title is in single quotes no longer shows the quotes.
+
 ## [0.33.0] - 2026-09-30
 
 ### Changed

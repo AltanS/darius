@@ -1805,28 +1805,24 @@
       order: 1;
     }
 
-    .proj-body #scheduled {
+    .proj-body #coming-up {
       order: 2;
     }
 
-    .proj-body #manual {
+    .proj-body #waiting {
       order: 3;
     }
 
-    .proj-body #vigils {
+    .proj-body .proj-closed {
       order: 4;
     }
 
-    .proj-body .proj-closed {
+    .proj-body #djinns {
       order: 5;
     }
 
-    .proj-body #djinns {
-      order: 6;
-    }
-
     .proj-body #recent {
-      order: 7;
+      order: 6;
     }
 
     .proj .pulse {
@@ -2164,27 +2160,27 @@
       display: contents;
     }
 
-    .sec-now {
+    .sec-needs {
       order: 1;
     }
 
-    .sec-needs {
+    .sec-now {
       order: 2;
     }
 
-    .sec-last {
+    .sec-coming {
       order: 3;
     }
 
-    .sec-up {
+    .sec-waiting {
       order: 4;
     }
 
-    .sec-health {
+    .sec-last {
       order: 5;
     }
 
-    .sec-djinns {
+    .sec-health {
       order: 6;
     }
   }
@@ -2406,6 +2402,251 @@
       border-top: 1px solid var(--color-sand);
       border-left: 0;
     }
+  }
+
+  /* --- agenda: Coming up and Waiting on an event (home and project page) ---------------- */
+
+  .ag {
+    overflow: hidden;
+  }
+
+  /* A day label over its rows: small, quiet, with a rule above (not over the first). */
+  .ag-day {
+    padding: 10px 16px 6px;
+    border-top: 1px solid var(--line-soft);
+    background: rgb(0 0 0 / 0.14);
+    font: 500 11px/1.4 var(--font-display);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .ag > .ag-group:first-child .ag-day {
+    border-top: 0;
+  }
+
+  .ag-day-overdue {
+    color: var(--color-late);
+  }
+
+  .ag-day-today {
+    color: var(--color-gold);
+  }
+
+  .ag-rows {
+    padding: 0;
+    list-style: none;
+  }
+
+  .ag-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "sq title kind"
+      "sq line line";
+    column-gap: 14px;
+    align-items: start;
+    min-height: 44px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .ag-row-plain {
+    grid-template-columns: 8px minmax(0, 1fr);
+    grid-template-areas:
+      "sq title"
+      "sq line";
+  }
+
+  .ag-day + .ag-rows > .ag-row:first-child {
+    border-top: 0;
+  }
+
+  .ag > .ag-rows:first-child > .ag-row:first-child {
+    border-top: 0;
+  }
+
+  /* A failed ritual or a flagged vigil: a square left accent in the state colour. */
+  .ag-row.tone-bad {
+    box-shadow: inset 3px 0 0 var(--color-bad);
+  }
+
+  .ag-row:hover {
+    background: rgb(42 33 23 / 0.5);
+  }
+
+  .ag-row .djinn-sq {
+    grid-area: sq;
+    margin-top: 7px;
+  }
+
+  /* The title and the detail line are grid items of the row, so the detail runs under the kind tag too. */
+  .ag-main {
+    display: contents;
+  }
+
+  .ag-title {
+    grid-area: title;
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 15px;
+    line-height: 1.4;
+    color: var(--color-parchment);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .ag-title::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .ag-row:hover .ag-title {
+    color: var(--color-gold-hi);
+  }
+
+  .ag-line {
+    grid-area: line;
+    min-width: 0;
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-muted);
+  }
+
+  .ag-line:empty {
+    display: none;
+  }
+
+  .ag-word {
+    font: 500 12px/1.4 var(--font-display);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-right: 8px;
+    color: var(--tone);
+  }
+
+  /* A piece of the detail line wraps whole: "last done 14 Sep" never splits. */
+  .ag-bit {
+    white-space: nowrap;
+  }
+
+  .ag-flag {
+    display: block;
+  }
+
+  /* What a vigil waits for: one line with an ellipsis; two in Waiting on an event. */
+  .ag-until {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ag-until-2 {
+    display: -webkit-box;
+    margin-top: 0;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .ag-proj {
+    color: var(--color-faint);
+  }
+
+  .ag-proj::after {
+    content: " /";
+  }
+
+  .ag-kind {
+    grid-area: kind;
+    margin-top: 3px;
+    padding: 0 6px;
+    border: 1px solid var(--line-soft);
+    font: 11px/1.6 var(--font-sans);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: var(--color-faint);
+  }
+
+  .ag .fold {
+    border: 0;
+    border-top: 1px solid var(--line-soft);
+    background: none;
+  }
+
+  .ag .fold-body {
+    padding: 0;
+  }
+
+  .ag .fold > summary {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
+  /* The desktop button under Coming up: Later and No schedule stay closed until pressed. */
+  .desk-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 0;
+    border-top: 1px solid var(--line-soft);
+    background: none;
+    font-size: 14px;
+    text-align: left;
+    color: var(--color-muted);
+    cursor: pointer;
+  }
+
+  .desk-toggle::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-right: 1px solid var(--color-gold);
+    border-bottom: 1px solid var(--color-gold);
+    transform: rotate(-45deg);
+  }
+
+  .phone-more.is-open > .desk-toggle::before {
+    transform: rotate(45deg);
+  }
+
+  .desk-toggle:hover {
+    color: var(--color-parchment);
+  }
+
+  @media (min-width: 640px) {
+    .phone-more:not(.is-open) .desk-extra {
+      display: none;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .desk-toggle {
+      display: none;
+    }
+
+    .ag-day {
+      padding-inline: 16px;
+    }
+
+    /* Last night on a phone is compact: the status, the title, and the link. The excerpt is one tap away. */
+    .lastnight .rep {
+      display: none;
+    }
+  }
+
+  /* The rail is narrow: Last night is one column there. */
+  .board-rail .lastnight {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* --- small pieces ------------------------------------------------------------------ */

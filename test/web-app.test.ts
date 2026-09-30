@@ -148,11 +148,11 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 }
 
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Up next", "Djinns", "Guard soak", "seen by", "owner on phone", "testhost"]],
+  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Coming up", "Guard soak", "seen by", "owner on phone", "testhost"]],
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
   ["/profiles", ["careful", "opus", "headless"]],
-  ["/p/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Guard soak", "Flagged", "Djinns"]],
+  ["/p/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Guard soak", "flagged, last check failed", "Djinns"]],
   ["/p/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
   [`/p/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
   [`/p/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
@@ -179,21 +179,21 @@ test("the run filter keeps only matching runs", async () => {
   assert.equal(page.body.includes(`/p/demo/runs/${DONE}`), false);
 });
 
-test("the home page shows manual rituals only as late rows of Up next, and never imported runs", async () => {
+test("the home page shows a manual ritual as a late row of Coming up, and never imported runs", async () => {
   const project = STATUS.projects[0]!;
-  const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 4 };
+  const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 4, nextDue: "2026-09-24" };
   const imported = { ...RUNS[2]!, run: "01KDDDDDDDDDDDDDDDDDDDDDDD", item: "ritual/by-hand", who: "import" };
   const busy: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [...project.rituals, manual], runs: [...project.runs, imported] }] };
   const response = await handler(new Request("http://darius.test/"), { ...context, status: () => busy });
   const body = await response.text();
-  assert.equal(body.includes("Done by hand</a></p>"), false, "no djinn line for a manual ritual");
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
-  const upNext = body.slice(body.indexOf('id="upnext"'), body.indexOf("Djinns")).replaceAll(/<[^>]+>/gu, "");
-  assert.ok(upNext.includes("Done by hand") && upNext.includes("Overdue 4 days"), "the late manual ritual is a row of Up next");
-  assert.match(body, /<a href="#upnext" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">overdue<\/span>/su, "and the overdue segment of the strip counts it");
+  const coming = comingOf(body).replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, "");
+  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("by hand"), "the late manual ritual is a row of Coming up");
+  assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
+  assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">overdue<\/span>/su, "and the overdue segment of the strip counts it");
   const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();
-  assert.ok(projectPage.replaceAll("<!-- -->", "").includes("Manual rituals (1), 1 overdue."), "one quiet line on the project page");
+  assert.ok(projectPage.replaceAll("<!-- -->", "").includes("Done by hand"), "the project page lists it in the same Coming up");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
   assert.ok(runs.includes(imported.run), "the runs page shows them on request");
 });
@@ -219,9 +219,10 @@ test("client navigation fetches route data from the same handler", async () => {
   assert.ok((await response.text()).includes("/home/test/demo"));
 });
 
-/** The Djinns rail of the home page. */
-function railOf(body: string): string {
-  return body.slice(body.indexOf('aria-label="Djinns"'));
+/** The Coming up section of the home page: from its id to the rail. */
+function comingOf(body: string): string {
+  const start = body.indexOf('id="coming-up"');
+  return body.slice(start, body.indexOf("<aside", start));
 }
 
 function h1Of(body: string): string {
@@ -234,10 +235,10 @@ test("the project page splits rituals like the home page: djinns follow a skill,
   const split: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [...project.rituals, heartbeat] }] };
   for (const path of ["/p/demo"]) {
     const body = await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => split })).text();
-    const scheduled = body.indexOf('id="scheduled"');
-    const djinns = body.indexOf("Djinns", scheduled);
-    assert.ok(scheduled !== -1 && djinns > scheduled, `${path}: the scheduled panel comes before the djinn cards`);
-    assert.ok(body.slice(scheduled, djinns).includes("Heartbeat check"), `${path}: listed as scheduled`);
+    const scheduled = body.indexOf('id="coming-up"');
+    const djinns = body.indexOf('id="djinns"', scheduled);
+    assert.ok(scheduled !== -1 && djinns > scheduled, `${path}: Coming up comes before the djinn cards`);
+    assert.ok(body.slice(scheduled, djinns).includes("Heartbeat check"), `${path}: listed in Coming up`);
     assert.doesNotMatch(body.slice(djinns), /<article[^>]*>(?:(?!<\/article>).)*Heartbeat check/su, `${path}: no skill, no djinn card`);
   }
 });
@@ -267,7 +268,7 @@ test("a run open far past the run timeout shows as possibly stuck, against the s
   assert.equal(young.includes("may be stuck"), false, "a run half an hour old is just running");
   const home = await read("/");
   const needs = home.slice(home.indexOf("Needs you"), home.indexOf('id="now"'));
-  const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf('id="upnext"'));
+  const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf('id="coming-up"'));
   assert.match(nowRows, new RegExp(`/p/demo/runs/${FRESH}`, "u"), "Now lists the fresh run");
   assert.doesNotMatch(nowRows, new RegExp(STUCK, "u"), "the stuck run has its card in Needs you, not a row in Now");
   assert.match(needs, new RegExp(`id="stuck-${STUCK}".*href="/p/demo/runs/${STUCK}".*stuck, 12 h`, "su"), "a Needs you card that opens the run");
@@ -333,7 +334,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   const body = (await (await handler(new Request("http://darius.test/"), { ...context, status: () => quiet })).text()).replaceAll("<!-- -->", "");
   assert.equal(h1Of(body), "Nothing needs you.");
   assert.match(body, /<h1 class="verdict-h ink-ok">/u);
-  assert.ok(body.includes("Mon 28 Sep, 11:00. Next djinn: tomorrow."), "the host clock and the next djinn, derived from nextDue");
+  assert.ok(body.includes("Mon 28 Sep, 11:00. Next: Daily &lt;script&gt;alert(1)&lt;/script&gt; report, tomorrow."), "the host clock and what is next, derived from nextDue");
   assert.ok(body.includes("Quiet. The last djinn ran 1 h ago and completed."));
   assert.ok(body.includes("Last night"), "the completed djinn");
   assert.ok(body.includes("Findings heading"), "with its report excerpt");
@@ -343,7 +344,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted footer line");
   assert.equal(body.includes("date failed"), false, "no card for the self-test vigil");
   const page = await (await handler(new Request("http://darius.test/p/darius-selftest"), { ...context, status: () => quiet })).text();
-  assert.ok(page.includes("date failed") && page.includes("Flagged"), "the project page shows it in full");
+  assert.ok(page.includes("date failed") && page.includes("flagged, last check failed"), "the project page shows it in full");
 });
 
 test("a failed run: both pages say what happens next, then who acknowledged it; the board drops an acknowledged failure", async () => {
@@ -381,7 +382,7 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   const needed = await read("/", open);
   assert.equal(h1Of(needed), "One thing needs you.");
   assert.ok(needed.includes(`id="failed-demo-daily-report"`), "an open failure needs the operator");
-  assert.match(railOf(needed), /<li class="djinn tone-bad">.*<span class="djinn-word">Failed<\/span>/su, "the rail shows an open failure in the failure colour");
+  assert.match(comingOf(needed), /Tomorrow.*<li class="ag-row tone-bad">.*<span class="ag-word tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
 
   const seen = setup(ack);
   for (const path of [`/p/demo/runs/${FAILED}`, "/p/demo/rituals/daily-report"]) {
@@ -401,9 +402,9 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   assert.match(card, /<article class="card card-grid card-accent card-link edge-idle">.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "the djinn card is grey, with the acknowledgement");
   const home = await read("/", seen);
   assert.equal(h1Of(home), "Nothing needs you.");
-  const rail = railOf(home);
-  assert.match(rail, /<li class="djinn tone-idle">.*<span class="djinn-word">Failed, acknowledged<\/span>/su, "the rail says so, in grey");
-  assert.equal(rail.includes("tone-bad"), false, "no failure colour in the rail");
+  const coming = comingOf(home);
+  assert.match(coming, /<li class="ag-row tone-idle">.*<span class="ag-word tone-idle">Failed, acknowledged<\/span>/su, "Coming up says so, in grey");
+  assert.equal(coming.includes("tone-bad"), false, "no failure colour in Coming up");
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
   assert.match(home, /<h1 class="verdict-h ink-ok">/u);
   assert.match(home, /Last night.*<article id="done-demo-daily-report" class="card hcard card-plain">/su, "a plain Last night card");
@@ -562,7 +563,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
   assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
-  assert.match(railOf(home), /<li class="djinn tone-wait">.*<span class="djinn-word">Asks you<\/span>/su, "the rail says so");
+  assert.match(comingOf(home), /<li class="ag-row tone-wait">.*<span class="ag-word tone-wait">Asks you<\/span>/su, "Coming up says so");
   assert.ok(home.includes('<span class="count tone-wait" title="1 thing needs you">1</span>'), "the Home badge counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
@@ -613,4 +614,22 @@ test("the app can be installed and get push notices: manifest, icons, service wo
   const home = await readPage("/", context);
   assert.match(home, /<link [^>]*rel="manifest" href="\/manifest.webmanifest"/u);
   assert.match(home, /<link [^>]*rel="apple-touch-icon" href="\/apple-touch-icon.png"/u);
+});
+
+test("Coming up and Waiting on an event: dated vigils join the agenda, event vigils wait apart, the same on both pages", async () => {
+  const project = STATUS.projects[0]!;
+  const dated = { slug: "dated", title: "Dated soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-28", until: "the next batch" };
+  const event = { slug: "event", title: "Event soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: `the first deploy ${EVIL}` };
+  const busy: HostStatus = { ...STATUS, projects: [{ ...project, vigils: [dated, event] }] };
+  const read = async (path: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
+  for (const path of ["/", "/p/demo"]) {
+    const body = await read(path);
+    const coming = between(body, body.indexOf('id="coming-up"'), body.indexOf('id="waiting"'));
+    assert.ok(coming.includes("Dated soak") && coming.includes("waits for: the next batch"), `${path}: the dated vigil is in Coming up`);
+    assert.equal(coming.includes("Event soak"), false, `${path}: the event vigil is not`);
+    const waiting = between(body, body.indexOf('id="waiting"'), body.length);
+    assert.ok(waiting.includes("Event soak") && waiting.includes("the first deploy &lt;script&gt;"), `${path}: the event vigil waits, as text`);
+    assert.equal(waiting.includes(EVIL), false, `${path}: store text stays text`);
+  }
+  assert.match(await read("/"), /<a href="#waiting" class="pill tone-gold">.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
 });

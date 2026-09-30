@@ -43,6 +43,13 @@ test("armed and resolved vigils, newest resolved first, empty fields as null", (
   assert.equal(second?.title, "Held two", "the slug falls back to the file name");
 });
 
+test("a single-quoted name loses its quotes, and a doubled quote is one apostrophe", () => {
+  const root = checkout({ "q.md": "---\nname: 'M1/02: the batch''s tip holds'\nuntil: 'the next batch'\n---\n" });
+  const [vigil] = readLegacyVigils(root);
+  assert.equal(vigil?.title, "M1/02: the batch's tip holds");
+  assert.equal(vigil?.until, "the next batch");
+});
+
 test("a checkout without vigils gives none, and reading writes nothing", () => {
   const empty = mkdtempSync(join(tmpdir(), "darius-legacy-vigils-"));
   assert.deepEqual(readLegacyVigils(empty), []);

@@ -1,15 +1,15 @@
-/** The pieces of the command board: the status strip, the Now rows, the Needs you card and the djinn and Up next lists. */
+/** The pieces of the command board: the status strip, the Now rows, and the Needs you card. */
 
 import { Link } from "react-router";
 
 import type { MdBlock } from "../../../src/web/api.ts";
-import type { Card, DjinnLine, MoreLink, NowRun, Piece, Segment } from "../lib/home.ts";
+import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { Command } from "./command.tsx";
 import { Markdown } from "./markdown.tsx";
 import { QuestionList } from "./result.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
-import { Fold, Status, Word } from "./ui.tsx";
+import { Fold, Status } from "./ui.tsx";
 
 interface PiecesProps {
   pieces: readonly Piece[];
@@ -174,55 +174,5 @@ export function CardView({ card }: CardViewProps): React.ReactNode {
         ))}
       </div>
     </article>
-  );
-}
-
-interface LineListProps {
-  label: string;
-  lines: readonly DjinnLine[];
-  empty: string;
-  more?: readonly MoreLink[];
-}
-
-/** One row per line: a square in its state colour, its title, and its state in one line. Each row is a 44 px link. */
-export function LineList({ label, lines, empty, more = [] }: LineListProps): React.ReactNode {
-  return (
-    <section className="panel" aria-label={label}>
-      {lines.length === 0 ? (
-        <p className="panel-empty">{empty}</p>
-      ) : (
-        <ul className="djinns">
-          {lines.map((line) => (
-            <li key={line.key} className={`djinn tone-${line.tone}`}>
-              <span className="djinn-sq" aria-hidden="true" />
-              <div className="min-w-0">
-                <Link to={line.href} className="djinn-title">
-                  {line.title}
-                </Link>
-                <p className="djinn-line">
-                  <span className="djinn-word">
-                    <Word text={line.word} />
-                  </span>
-                  {line.detail.length === 0 ? null : (
-                    <span>
-                      <Pieces pieces={line.detail} />
-                    </span>
-                  )}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {more.length === 0 ? null : (
-        <div className="more">
-          {more.map((entry) => (
-            <Link key={entry.project} to={entry.href}>
-              {entry.count} more in {entry.project}
-            </Link>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
