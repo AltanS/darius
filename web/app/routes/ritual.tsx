@@ -10,7 +10,7 @@ import { StateWord } from "../components/row.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
 import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
-import { projectPath, runPath } from "../lib/format.ts";
+import { runPath, workspacePath } from "../lib/format.ts";
 import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
@@ -33,7 +33,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   return { ritual, held, finished, next, asks, report: reportExcerpt(detail) };
 }
 
-export const meta: Route.MetaFunction = ({ loaderData }) => [{ title: `${loaderData?.ritual.row.title ?? "Ritual"} | darius` }];
+export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.project} | darius` }];
 
 interface HandoffCardProps {
   handoff: RitualHandoff;
@@ -72,7 +72,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
     <div>
       <header className="page-head">
         <Crumbs>
-          <Link to={projectPath(project)}>{project}</Link>
+          <Link to={workspacePath(project)}>{project}</Link>
         </Crumbs>
         <h1 className="page-title page-title-sans">
           <TitleText text={row.title} />

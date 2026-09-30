@@ -145,26 +145,37 @@ export function decideCommand(run: string, project: string): string {
   return `darius run ack ${run} --note "your decision" --project ${project}`;
 }
 
-export function projectPath(project: string): string {
+/** The Overview of a workspace (a darius project). `/p/<project>` redirects here. */
+export function workspacePath(workspace: string): string {
+  return `/w/${encodeURIComponent(workspace)}`;
+}
+
+/** A section of a workspace, or of all workspaces when `workspace` is null: `/w/<ws>/vigils` or `/vigils`. */
+export function sectionPath(workspace: string | null, section: "vigils" | "rituals" | "milestones"): string {
+  return workspace === null ? `/${section}` : `${workspacePath(workspace)}/${section}`;
+}
+
+/** The detail pages keep the `/p/<project>` root. */
+function detailRoot(project: string): string {
   return `/p/${encodeURIComponent(project)}`;
 }
 
 export function ritualPath(project: string, slug: string): string {
-  return `${projectPath(project)}/rituals/${encodeURIComponent(slug)}`;
+  return `${detailRoot(project)}/rituals/${encodeURIComponent(slug)}`;
 }
 
 export function runPath(project: string, run: string): string {
-  return `${projectPath(project)}/runs/${encodeURIComponent(run)}`;
+  return `${detailRoot(project)}/runs/${encodeURIComponent(run)}`;
 }
 
-/** The id of a vigil row on the project page. */
+/** The id of a vigil row on the Vigils page. */
 export function vigilAnchor(slug: string): string {
   return `vigil-${slug}`;
 }
 
-/** Where a vigil lives: its row on the project page. */
+/** Where a vigil lives: its row on the Vigils page of its workspace. */
 export function vigilPath(project: string, slug: string): string {
-  return `${projectPath(project)}#${encodeURIComponent(vigilAnchor(slug))}`;
+  return `${sectionPath(project, "vigils")}#${encodeURIComponent(vigilAnchor(slug))}`;
 }
 
 /** Where an item (`ritual/<slug>` or `vigil/<slug>`) lives on the page. */

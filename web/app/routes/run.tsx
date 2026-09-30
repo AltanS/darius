@@ -7,7 +7,7 @@ import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Crumbs, Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
-import { duration, itemPath, projectPath } from "../lib/format.ts";
+import { duration, itemPath, workspacePath } from "../lib/format.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
@@ -26,7 +26,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   return { run, kind: itemKind(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next };
 }
 
-export const meta: Route.MetaFunction = ({ loaderData }) => [{ title: `${loaderData?.label ?? "Run"} | darius` }];
+export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.project} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { run, kind, manual, label, stuck, next } = loaderData;
@@ -43,7 +43,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
     <article>
       <header className="page-head">
         <Crumbs>
-          <Link to={projectPath(project)}>{project}</Link>
+          <Link to={workspacePath(project)}>{project}</Link>
           {title === label ? null : (
             <>
               <span aria-hidden="true"> / </span>

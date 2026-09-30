@@ -81,6 +81,25 @@ const STATUS: HostStatus = {
       ],
       runs: RUNS,
       vigils: [{ slug: "soak", title: "Guard soak", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-10-01", until: null }],
+      milestones: [
+        {
+          source: "legacy",
+          id: "M7",
+          label: "M7",
+          slug: "cart",
+          title: `Cart ${EVIL} survives`,
+          started: "2026-09-01",
+          target: "2026-09-10",
+          status: "In Progress",
+          done: 7,
+          total: 10,
+          specs: [
+            { source: "legacy", slug: "m7-01-keep", label: "M7/01", number: 1, title: "Keep items", status: "Complete", done: 6, total: 6, verified: false, verifiedAt: null, dependsOn: [] },
+            { source: "legacy", slug: "m7-02-tax", label: "M7/02", number: 2, title: "Tax rules", status: "Waiting", done: 1, total: 4, verified: false, verifiedAt: null, dependsOn: ["m7-01-keep"] },
+          ],
+        },
+      ],
+      milestonesArchived: 3,
       error: null,
     },
   ],
@@ -148,11 +167,21 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 }
 
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Coming up", "Guard soak", "seen by", "owner on phone", "testhost"]],
+  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
+  ["/w/demo/milestones", ["Milestones", "In progress", "M7", "7 of 10 checks done", "<details", "M7/01", "6 of 6 checks", "M7/02", "Waiting", "depends on M7/01", "target 10 Sep, past", "3 archived", "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives"]],
+  ["/milestones", ["demo", "/w/demo/milestones", "M7/02", "3 archived"]],
   ["/profiles", ["careful", "opus", "headless"]],
-  ["/p/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Guard soak", "last check failed", "Latest reports"]],
+  ["/all", ["Two things need you.", "Needs you", "Guard soak"]],
+  ["/w/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Latest reports", "Recent runs", "synced"]],
+  ["/vigils", ["Vigils", "Coming up", "Guard soak", "last check failed", "/w/demo/vigils#vigil-soak"]],
+  ["/w/demo/vigils", ["Vigils", "Guard soak", "last check failed"]],
+  ["/rituals", ["Rituals", "Coming up", "/p/demo/rituals/daily-report", "Recent runs", "All runs"]],
+  ["/w/demo/rituals", ["Rituals", "/p/demo/rituals/daily-report", "/runs?project=demo"]],
+  ["/milestones", ["Milestones"]],
+  ["/w/demo/milestones", ["Milestones"]],
+  ["/settings", ["Settings"]],
   ["/p/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
   [`/p/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
   [`/p/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
@@ -188,18 +217,19 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   const body = await response.text();
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
-  const coming = comingOf(body).replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, "");
+  const rituals = (await (await handler(new Request("http://darius.test/rituals"), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
+  const coming = comingOf(rituals).replaceAll(/<[^>]+>/gu, "");
   assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, marked manual");
   assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
-  assert.match(body, /<a href="#coming-up" class="pill tone-late">.*?<span class="pill-n">1<\/span><span class="pill-l">late<\/span>/su, "and the late segment of the strip counts it");
-  const projectPage = await (await handler(new Request("http://darius.test/p/demo"), { ...context, status: () => busy })).text();
-  assert.ok(projectPage.replaceAll("<!-- -->", "").includes("Done by hand"), "the project page lists it in the same Coming up");
+  assert.match(body, /<a [^>]*href="\/rituals#coming-up"[^>]*>.*?<span class="pill-n">1<\/span><span class="pill-l">late<\/span>/su, "and the late segment of the strip counts it, and opens the Rituals section");
+  const workspacePage = await (await handler(new Request("http://darius.test/w/demo/rituals"), { ...context, status: () => busy })).text();
+  assert.ok(workspacePage.replaceAll("<!-- -->", "").includes("Done by hand"), "the workspace section lists it in the same Coming up");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
   assert.ok(runs.includes(imported.run), "the runs page shows them on request");
 });
 
 test("unknown projects, rituals, runs and paths answer a themed 404", async () => {
-  for (const path of ["/p/ghost", "/p/demo/rituals/nope", "/p/ghost/rituals/daily-report", "/p/demo/runs/NOPE", "/nowhere", "/p/demo/runs"]) {
+  for (const path of ["/w/ghost", "/w/ghost/vigils", "/w/ghost/rituals", "/w/ghost/milestones", "/p/demo/rituals/nope", "/p/ghost/rituals/daily-report", "/p/demo/runs/NOPE", "/nowhere", "/p/demo/runs"]) {
     const page = await get(path);
     assert.equal(page.status, 404, path);
     assert.ok(page.body.includes("Nothing here"), path);
@@ -214,33 +244,33 @@ test("the 0.9 run URL redirects to the project run page", async () => {
 });
 
 test("client navigation fetches route data from the same handler", async () => {
-  const response = await handler(new Request("http://darius.test/p/demo.data"), context);
+  const response = await handler(new Request("http://darius.test/w/demo.data"), context);
   assert.equal(response.status, 200);
   assert.ok((await response.text()).includes("/home/test/demo"));
 });
 
-/** The Coming up section of the home page: from its id to the rail. */
+/** The Coming up section of the Rituals or Vigils page: from its id to its end. */
 function comingOf(body: string): string {
   const start = body.indexOf('id="coming-up"');
-  return body.slice(start, body.indexOf("<aside", start));
+  return body.slice(start, body.indexOf("</section>", start));
 }
 
 function h1Of(body: string): string {
   return (/<h1\b[^>]*>(.*?)<\/h1>/su.exec(body)?.[1] ?? "").replaceAll(/<[^>]+>/gu, "").replaceAll("<!-- -->", "");
 }
 
-test("the project page splits rituals like the home page: djinns follow a skill, scheduled checks do not", async () => {
+test("the workspace pages split rituals like the home page: djinns follow a skill, scheduled checks do not", async () => {
   const project = STATUS.projects[0]!;
   const heartbeat = { ...project.rituals[0]!, slug: "heartbeat", title: "Heartbeat check", skill: null, heldRun: null };
   const split: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [...project.rituals, heartbeat] }] };
-  for (const path of ["/p/demo"]) {
-    const body = await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => split })).text();
-    const scheduled = body.indexOf('id="coming-up"');
-    const djinns = body.indexOf('id="reports"', scheduled);
-    assert.ok(scheduled !== -1 && djinns > scheduled, `${path}: Coming up comes before the latest reports`);
-    assert.ok(body.slice(scheduled, djinns).includes("Heartbeat check"), `${path}: listed in Coming up`);
-    assert.doesNotMatch(body.slice(djinns), /<article[^>]*>(?:(?!<\/article>).)*Heartbeat check/su, `${path}: no skill, no report row`);
-  }
+  const read = async (path: string): Promise<string> => await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => split })).text();
+  const section = await read("/w/demo/rituals");
+  assert.ok(comingOf(section).includes("Heartbeat check"), "a scheduled check is listed in the Rituals section");
+  const overview = await read("/w/demo");
+  const reports = overview.indexOf('id="reports"');
+  assert.ok(reports !== -1, "the Overview has Latest reports");
+  assert.doesNotMatch(overview.slice(reports), /<article[^>]*>(?:(?!<\/article>).)*Heartbeat check/su, "no skill, no report row");
+  assert.equal(overview.includes('id="coming-up"'), false, "what is coming up lives in the sections, not on the Overview");
 });
 
 test("a run open far past the run timeout shows as possibly stuck, against the status time", async () => {
@@ -268,7 +298,7 @@ test("a run open far past the run timeout shows as possibly stuck, against the s
   assert.equal(young.includes("may be stuck"), false, "a run half an hour old is just running");
   const home = await read("/");
   const needs = home.slice(home.indexOf("Needs you"), home.indexOf('id="now"'));
-  const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf('id="coming-up"'));
+  const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf("<aside"));
   assert.match(nowRows, new RegExp(`/p/demo/runs/${FRESH}`, "u"), "Now lists the fresh run");
   assert.doesNotMatch(nowRows, new RegExp(STUCK, "u"), "the stuck run has its card in Needs you, not a row in Now");
   assert.match(needs, new RegExp(`id="stuck-${STUCK}".*href="/p/demo/runs/${STUCK}".*stuck, 12 h`, "su"), "a Needs you card that opens the run");
@@ -285,10 +315,10 @@ test("the run page title: the report heading for a complete run, the ritual titl
   }
 });
 
-test("the Home badge counts the things that need you, like the home verdict: not questions", async () => {
-  const page = await get("/p/demo");
-  assert.ok(page.body.includes('title="2 things need you"'), "the badge names the things");
-  assert.match(page.body, /<span class="count tone-wait" title="2 things need you">2<\/span>/u);
+test("the switcher counts the things that need you, like the verdict: not questions", async () => {
+  const page = await get("/w/demo");
+  assert.ok(page.body.includes("2 needs you") || page.body.includes("2 need you"), "the workspace entry names the number");
+  assert.match(page.body, /<span class="sw-need">2 need you<\/span>/u, "All workspaces says 2 need you");
   assert.equal(h1Of((await get("/")).body), "Two things need you.", "the same number as the verdict");
 });
 
@@ -345,8 +375,8 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.equal(segment(body, "need you"), null, "a zero segment does not render");
   assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted footer line");
   assert.equal(body.includes("date failed"), false, "no card for the self-test vigil");
-  const page = await (await handler(new Request("http://darius.test/p/darius-selftest"), { ...context, status: () => quiet })).text();
-  assert.ok(page.includes("date failed") && page.includes("last check failed"), "the project page shows it in full");
+  const page = await (await handler(new Request("http://darius.test/w/darius-selftest"), { ...context, status: () => quiet })).text();
+  assert.ok(page.includes("date failed") && page.includes("last check failed"), "its own Overview shows it in full");
 });
 
 test("a failed run: both pages say what happens next, then who acknowledged it; the board drops an acknowledged failure", async () => {
@@ -380,11 +410,11 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   }
   const done = await read(`/p/demo/runs/${DONE}`, open);
   assert.equal(done.includes("What happens next"), false, "a complete run has no next step");
-  assert.match(await read("/p/demo", open), /id="reports".*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "the latest-report row shows an open failure in the failure colour, with a rail");
+  assert.match(await read("/w/demo", open), /id="reports".*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "the latest-report row shows an open failure in the failure colour, with a rail");
   const needed = await read("/", open);
   assert.equal(h1Of(needed), "One thing needs you.");
   assert.ok(needed.includes(`id="failed-demo-daily-report"`), "an open failure needs the operator");
-  assert.match(comingOf(needed), /Tomorrow.*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
+  assert.match(comingOf(await read("/rituals", open)), /Tomorrow.*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
 
   const seen = setup(ack);
   for (const path of [`/p/demo/runs/${FAILED}`, "/p/demo/rituals/daily-report"]) {
@@ -395,16 +425,16 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
     assert.equal(page.includes(EVIL), false, `${path}: the note stays text`);
   }
   // Every page shows an acknowledged failure quietly: grey "Failed, seen", never the failure colour.
-  for (const path of ["/", "/runs", "/p/demo", "/p/demo/rituals/daily-report", `/p/demo/runs/${FAILED}`]) {
+  for (const path of ["/", "/rituals", "/runs", "/w/demo", "/p/demo/rituals/daily-report", `/p/demo/runs/${FAILED}`]) {
     const page = await read(path, seen);
     assert.match(page, /<span class="(?:status|rw-state) tone-idle">Failed, seen<\/span>/u, `${path}: the grey word`);
     for (const red of ["tone-bad", "edge-bad", "ink-bad"]) assert.equal(page.includes(red), false, `${path}: no ${red}`);
   }
-  const card = await read("/p/demo", seen);
+  const card = await read("/w/demo", seen);
   assert.match(card, /id="reports".*<li class="rw">.*Failed, seen.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "the latest-report row is grey and has no rail, with the acknowledgement");
   const home = await read("/", seen);
   assert.equal(h1Of(home), "Nothing needs you.");
-  const coming = comingOf(home);
+  const coming = comingOf(await read("/rituals", seen));
   assert.match(coming, /<li class="rw">.*<span class="rw-state tone-idle">Failed, seen<\/span>/su, "Coming up says so, in grey");
   assert.equal(coming.includes("tone-bad"), false, "no failure colour in Coming up");
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
@@ -584,8 +614,8 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
   assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
-  assert.match(comingOf(home), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
-  assert.ok(home.includes('<span class="count tone-wait" title="1 thing needs you">1</span>'), "the Home badge counts the thing that needs you");
+  assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
+  assert.match(home, /<span class="sw-need">1 needs you<\/span>/u, "the switcher counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
   assert.ok(runs.includes('<span class="chip-x c-late">2 high open</span>'), "open high items");
@@ -597,7 +627,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(ritual.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.ok(ritual.includes('<div class="card card-accent edge-wait">'), "the latest report card waits");
 
-  const project = await readPage("/p/demo", ctx);
+  const project = await readPage("/w/demo", ctx);
   assert.match(project, /id="reports".*?<li class="rw rw-rail tone-wait">.*?Asks you/su, "the latest-report row waits, with a rail");
   for (const page of [home, runs, ritual, project]) assert.equal(page.includes(EVIL), false);
 });
@@ -643,7 +673,7 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
   const event = { slug: "event", title: "Event soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: `the first deploy ${EVIL}` };
   const busy: HostStatus = { ...STATUS, projects: [{ ...project, vigils: [dated, event] }] };
   const read = async (path: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
-  for (const path of ["/", "/p/demo"]) {
+  for (const path of ["/vigils", "/w/demo/vigils"]) {
     const body = await read(path);
     const coming = between(body, body.indexOf('id="coming-up"'), body.indexOf('id="waiting"'));
     assert.ok(coming.includes("Dated soak") && coming.includes("waits for: the next batch"), `${path}: the dated vigil is in Coming up`);
@@ -652,5 +682,130 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
     assert.ok(waiting.includes("Event soak") && waiting.includes("the first deploy &lt;script&gt;"), `${path}: the event vigil waits, as text`);
     assert.equal(waiting.includes(EVIL), false, `${path}: store text stays text`);
   }
-  assert.match(await read("/"), /<a href="#waiting" class="pill tone-gold">.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
+  assert.match(await read("/"), /<a [^>]*href="\/vigils#waiting"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
+});
+
+// --- the information architecture (0.39.0): scopes, tabs, the switcher, settings -------------
+
+const SETTINGS_COOKIE = "darius-settings";
+
+/** A page read with a settings cookie, the way the browser sends it. */
+async function readWith(path: string, settings: Record<string, string>, status: HostStatus = STATUS): Promise<{ status: number; body: string; location: string | null }> {
+  const cookie = `${SETTINGS_COOKIE}=${encodeURIComponent(new URLSearchParams(settings).toString())}`;
+  const response = await handler(new Request(`http://darius.test${path}`, { headers: { Cookie: cookie } }), { ...context, status: () => status });
+  return { status: response.status, body: (await response.text()).replaceAll("<!-- -->", ""), location: response.headers.get("location") };
+}
+
+/** A second workspace and the self-test one, next to demo. */
+function threeWorkspaces(): HostStatus {
+  const demo = STATUS.projects[0]!;
+  const other = { ...demo, name: "atlas", rituals: [], runs: [], vigils: [], checkout: null };
+  const selftest = { ...demo, name: "darius-selftest", rituals: [], runs: [], vigils: [{ slug: "st", title: "Self-test vigil", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-09-27", until: null }], checkout: null };
+  return { ...STATUS, projects: [demo, other, selftest] };
+}
+
+test("/p/<project> redirects to the workspace Overview, and the detail pages keep their addresses", async () => {
+  const response = await handler(new Request("http://darius.test/p/demo"), context);
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("location"), "/w/demo");
+  const ghost = await handler(new Request("http://darius.test/p/ghost"), context);
+  assert.equal(ghost.headers.get("location"), "/w/ghost", "the redirect does not look the workspace up; the new address answers 404");
+  assert.equal((await get("/w/ghost")).status, 404);
+  assert.equal((await get("/p/demo/rituals/daily-report")).status, 200);
+});
+
+/** The opening tag of the first link to an address, or null. */
+function linkTo(body: string, href: string): string | null {
+  return [...body.matchAll(/<a\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(` href="${href}"`)) ?? null;
+}
+
+/** The demo workspace with its ritual late by a day and nothing held. */
+function lateStatus(status: HostStatus = STATUS): HostStatus {
+  const [demo, ...rest] = status.projects;
+  return { ...status, projects: [{ ...demo!, rituals: [{ ...demo!.rituals[0]!, heldRun: null }] }, ...rest] };
+}
+
+test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, Rituals, Milestones, in that order, and no Home or Runs link", async () => {
+  const { body } = await readWith("/w/demo", {}, lateStatus());
+  assert.ok(linkTo(body, "/w/demo")?.includes('class="brand"'), "the gem opens the Overview of the scope");
+  assert.ok(linkTo(body, "/settings")?.includes('aria-label="Settings"'), "the gear opens Settings");
+  assert.match(body, /<span class="sw-now">demo<\/span>/u, "the switcher names the scope");
+  for (const nav of ["Sections", "Tabs"]) {
+    const from = body.indexOf(`aria-label="${nav}"`);
+    assert.ok(from !== -1, nav);
+    const links = [...body.slice(from, body.indexOf("</nav>", from)).matchAll(/href="([^"]+)"/gu)].map((match) => match[1]);
+    assert.deepEqual(links, ["/w/demo/vigils", "/w/demo/rituals", "/w/demo/milestones"], `${nav}: the three tabs in order`);
+  }
+  assert.equal(body.includes('aria-label="Main"'), false, "no Home and Runs links any more");
+  const all = await get("/milestones");
+  const tabs = all.body.slice(all.body.indexOf('aria-label="Sections"'));
+  assert.ok(linkTo(tabs, "/vigils") !== null && linkTo(tabs, "/rituals") !== null, "the tabs of all workspaces have plain addresses");
+  assert.ok(linkTo(tabs, "/milestones")?.includes('aria-current="page"'), "the Milestones tab is lit");
+  // The badges: vigils due today or late, rituals late.
+  const rituals = await readWith("/rituals", {}, lateStatus());
+  assert.match(rituals.body, /<span class="tab-bdg tone-late" title="1 late">/u, "the ritual is one day late");
+  assert.ok(linkTo(rituals.body.slice(rituals.body.indexOf('aria-label="Sections"')), "/rituals")?.includes('aria-current="page"'), "the Rituals tab is lit");
+  assert.equal(/<span class="tab-bdg tone-wait"/u.test(rituals.body), false, "no vigil is due today or late");
+});
+
+test("the switcher lists Overview, All workspaces and each workspace with what needs you, and marks the current one", async () => {
+  const status = threeWorkspaces();
+  const { body } = await readWith("/w/demo/rituals", {}, status);
+  const from = body.indexOf('class="sw-list"');
+  const list = body.slice(from, body.indexOf("</details>", from));
+  const names = [...list.matchAll(/<span class="sw-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
+  assert.deepEqual(names, ["Overview", "All workspaces", "demo", "atlas"], "the self-test workspace is not listed");
+  assert.ok(linkTo(list, "/w/demo") !== null && linkTo(list, "/rituals") !== null, "Overview, and All workspaces on the same section");
+  assert.ok(linkTo(list, "/w/atlas/rituals") !== null, "switching keeps the section");
+  assert.ok(linkTo(list, "/w/demo/rituals")?.includes('aria-current="true"'), "the current workspace is marked");
+  assert.match(list, /<span class="sw-need">2 need you<\/span>/u, "the count of a workspace");
+  assert.match(list, /<span class="sw-clear">all clear<\/span>/u, "a quiet workspace says so");
+  assert.equal(body.includes('class="sw-dot"'), false, "no red square: the workspace you are in is the one that needs you");
+  const other = await readWith("/w/atlas", {}, status);
+  assert.ok(other.body.includes('class="sw-dot"'), "a red square on the button when another workspace needs you");
+});
+
+test("a section page covers one scope: a workspace, or all of them", async () => {
+  const status = threeWorkspaces();
+  const extra = { ...status.projects[1]!, rituals: [{ ...status.projects[0]!.rituals[0]!, slug: "atlas-ritual", title: "Atlas ritual", heldRun: null }], vigils: [{ slug: "av", title: "Atlas vigil", state: "open", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-29", until: null }] };
+  const two: HostStatus = { ...status, projects: [status.projects[0]!, extra, status.projects[2]!] };
+  const one = await readWith("/w/demo/rituals", {}, two);
+  assert.ok(one.body.includes("Daily &lt;script&gt;") && !one.body.includes("Atlas ritual"), "one workspace: only its rituals");
+  const everything = await readWith("/rituals", {}, two);
+  assert.ok(everything.body.includes("Atlas ritual") && everything.body.includes("Daily &lt;script&gt;"), "all workspaces: every ritual");
+  assert.ok(everything.body.includes("<span>All workspaces</span>"), "the head names the scope");
+  const vigils = await readWith("/w/atlas/vigils", {}, two);
+  assert.ok(vigils.body.includes("Atlas vigil") && !vigils.body.includes("Guard soak"), "vigils of one workspace");
+  assert.equal(vigils.body.includes("Self-test vigil"), false, "never the self-test workspace");
+});
+
+test("showSelftest hides the self-test workspace from the switcher, the badges and the all-workspaces lists", async () => {
+  const status = threeWorkspaces();
+  const off = await readWith("/vigils", {}, status);
+  assert.equal(off.body.includes("Self-test vigil"), false, "no row in the all-workspaces list");
+  assert.equal(off.body.includes('<span class="sw-name">darius-selftest</span>'), false, "not in the switcher");
+  assert.equal(off.body.includes("due today or late"), false, "not in the badge");
+  assert.equal(h1Of((await readWith("/", {}, status)).body), "Two things need you.", "not in the verdict");
+  assert.ok((await readWith("/", {}, status)).body.includes("Self-test:"), "the footer line stays");
+  const on = await readWith("/vigils", { selftest: "1" }, status);
+  assert.ok(on.body.includes("Self-test vigil"), "the row shows");
+  assert.ok(on.body.includes('<span class="sw-name">darius-selftest</span>'), "it is in the switcher");
+  assert.match(on.body, /<span class="tab-bdg tone-wait" title="1 due today or late">/u, "it counts");
+  assert.equal(h1Of((await readWith("/", { selftest: "1" }, status)).body), "Three things need you.", "and needs you");
+  assert.equal((await readWith("/w/darius-selftest", {}, status)).status, 200, "its own address always works");
+});
+
+test("defaultWorkspace decides what / opens; /all is always all workspaces", async () => {
+  const status = threeWorkspaces();
+  const plain = await readWith("/", {}, status);
+  assert.match(plain.body, /<span class="sw-now">All workspaces<\/span>/u, "no default: all workspaces");
+  const set = await readWith("/", { ws: "demo" }, status);
+  assert.match(set.body, /<span class="sw-now">demo<\/span>/u, "the default workspace");
+  assert.ok(set.body.includes("/home/test/demo"), "it is the workspace Overview, with its checkout");
+  assert.ok(linkTo(set.body, "/all") !== null, "all workspaces get an address of their own");
+  const all = await readWith("/all", { ws: "demo" }, status);
+  assert.match(all.body, /<span class="sw-now">All workspaces<\/span>/u);
+  assert.equal(h1Of(all.body), "Two things need you.");
+  const ghost = await readWith("/", { ws: "gone" }, status);
+  assert.match(ghost.body, /<span class="sw-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
 });

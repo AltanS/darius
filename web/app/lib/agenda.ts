@@ -96,6 +96,8 @@ export interface AgendaInput {
   projects: readonly ProjectStatus[];
   /** The host's YYYY-MM-DD today. */
   today: string;
+  /** Keep only the rituals or only the vigils, for the Rituals and Vigils sections; all of them by default. */
+  only?: Kind;
 }
 
 // --- dates ---------------------------------------------------------------------------------
@@ -246,10 +248,10 @@ export function buildAgenda(input: AgendaInput): Agenda {
   const waiting: WaitingRow[] = [];
   let armed = 0;
   for (const project of input.projects) {
-    for (const ritual of project.rituals) {
+    for (const ritual of input.only === "vigil" ? [] : project.rituals) {
       if (ritual.lifecycle === "active") rows.push(ritualRow(input, project, ritual));
     }
-    for (const vigil of project.vigils.filter((candidate) => isArmed(candidate))) {
+    for (const vigil of (input.only === "ritual" ? [] : project.vigils).filter((candidate) => isArmed(candidate))) {
       armed += 1;
       if (vigil.due === null) waiting.push(waitingRow(project, vigil));
       else rows.push(vigilRow(input, project, vigil, vigil.due));

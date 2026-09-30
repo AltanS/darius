@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { ritualState } from "../core/due.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
+import { readLegacyMilestones } from "../core/legacy-milestones.ts";
 import { readLegacyVigils } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
 import { readMarker } from "../core/marker.ts";
@@ -25,6 +26,7 @@ import { VERSION } from "../version.ts";
 import type {
   Acknowledgement,
   HostStatus,
+  MilestoneRow,
   ProfileRow,
   ProjectStatus,
   RitualDetail,
@@ -181,6 +183,28 @@ function legacyVigilRows(checkout: string | null, known: readonly VigilRow[]): V
     });
 }
 
+/** Milestones that only the legacy tracker holds: read from the linked checkout, read-only. */
+function legacyMilestones(checkout: string | null): Pick<ProjectStatus, "milestones" | "milestonesArchived"> {
+  if (checkout === null) return { milestones: [], milestonesArchived: 0 };
+  const { milestones, archived } = readLegacyMilestones(checkout);
+  const rows = milestones.map(
+    (milestone): MilestoneRow => ({
+      source: "legacy",
+      id: milestone.id,
+      label: milestone.id,
+      slug: milestone.slug,
+      title: milestone.title,
+      started: milestone.started,
+      target: milestone.target,
+      status: milestone.status,
+      done: milestone.done,
+      total: milestone.total,
+      specs: milestone.specs.map((spec) => ({ source: "legacy", ...spec })),
+    }),
+  );
+  return { milestones: rows, milestonesArchived: archived };
+}
+
 function lastSync(name: string): string | null {
   const file = join(projectDir(name), "sync.json");
   if (!existsSync(file)) return null;
@@ -194,7 +218,7 @@ function lastSync(name: string): string | null {
 
 function projectStatus(name: string, today: string): ProjectStatus {
   const checkout = linkedDir(name) ?? null;
-  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], error: null };
+  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, error: null };
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
@@ -202,6 +226,9 @@ function projectStatus(name: string, today: string): ProjectStatus {
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
     const stored = vigilRows(project, ledger);
     status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
+    const tracked = legacyMilestones(checkout);
+    status.milestones = tracked.milestones;
+    status.milestonesArchived = tracked.milestonesArchived;
     if (checkout !== null) status.maxMode = readMarker(checkout)?.maxMode ?? null;
   } catch (cause) {
     status.error = errorMessage(cause);

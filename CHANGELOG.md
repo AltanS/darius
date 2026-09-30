@@ -2,6 +2,26 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.41.0] - 2026-09-30
+
+### Added
+
+- The web app is organised by workspace. The top bar holds the brand mark (the Overview), a workspace switcher (Overview, All workspaces, each workspace with its needs-you count, a red mark when another workspace needs you) and a settings gear. Three tabs, a bar at the bottom of a phone and a row under the top bar on a desktop: Vigils, Rituals, Milestones, with counts of what is due or late.
+- Milestones, read-only from the legacy tracker: each workspace lists its milestones (In progress, Not started, Complete, Closed) with a progress bar and "103 of 143 checks done", the same numbers as the tracker index; a milestone opens in place to its specs, with a tick when all checks are done and what each depends on. A past target shows as late.
+- A Settings page: theme (dark, light, follow the system), density (comfortable, compact), default workspace, show the self-test workspace, reduce motion, the notification switch (moved from the footer), and host and version. The choices live in one cookie in the browser.
+- A light theme, with every text colour at 4.5:1 contrast or more on its ground; the browser's theme colour follows it.
+
+### Changed
+
+- URLs: `/w/<workspace>` and `/w/<workspace>/vigils|rituals|milestones`, `/vigils|rituals|milestones` and `/all` for all workspaces; `/` opens the default workspace. `/p/<project>` redirects to `/w/<project>`; ritual and run pages keep their URLs.
+- The project page is now the workspace Overview. Coming up and Waiting on an event moved into the Rituals and Vigils sections.
+- `darius serve` forwards the `darius-settings` cookie, and no other, to the web app, so a page renders in the chosen theme.
+- Page titles read "Section · workspace | darius"; ritual and run pages show their own title again.
+
+### Fixed
+
+- The runs filter no longer lists the self-test workspace when it is hidden.
+
 ## [0.40.0] - 2026-09-30
 
 ### Added

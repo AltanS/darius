@@ -8,7 +8,7 @@
  * part of it.
  */
 
-import type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { HostStatus, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, VigilRow, WebContext } from "../../src/web/api.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -68,6 +68,46 @@ function vigil(slug: string, title: string, extra: Partial<VigilRow> = {}): Vigi
   return { slug, title, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, ...extra };
 }
 
+function spec(milestoneId: string, number: number, title: string, done: number, total: number, extra: Partial<SpecRow> = {}): SpecRow {
+  const label = `${milestoneId}/${String(number).padStart(2, "0")}`;
+  const state = done === 0 ? "Not Started" : done === total ? "Complete" : "In Progress";
+  const verified = done === total && total > 0;
+  return {
+    source: "legacy",
+    slug: `${milestoneId.toLowerCase()}-${String(number).padStart(2, "0")}-${title.toLowerCase().replaceAll(" ", "-")}`,
+    label,
+    number,
+    title,
+    status: state,
+    done,
+    total,
+    verified,
+    verifiedAt: verified ? "2026-09-20T09:30:00.000Z" : null,
+    dependsOn: [],
+    ...extra,
+  };
+}
+
+function milestoneRow(id: string, title: string, status: string, specs: SpecRow[], extra: Partial<MilestoneRow> = {}): MilestoneRow {
+  const slug = title.toLowerCase().replaceAll(" ", "-");
+  const done = specs.reduce((sum, row) => sum + row.done, 0);
+  const total = specs.reduce((sum, row) => sum + row.total, 0);
+  return { source: "legacy", id, label: id, slug, title, started: "2026-09-01", target: null, status, done, total, specs, ...extra };
+}
+
+/** Milestones in every state: in progress with a waiting spec, not started, complete, and one the owner closed. */
+function milestones(): MilestoneRow[] {
+  const cart = spec("M12", 2, "Cart totals use the shop tax rules", 0, 4, { dependsOn: ["m12-01-cart-keeps-items-between-visits"], status: "Waiting" });
+  return [
+    milestoneRow("M12", "Cart survives a page reload", "In Progress", [spec("M12", 1, "Cart keeps items between visits", 6, 6), cart, spec("M12", 3, "Cart shows the free shipping bar", 1, 5)], {
+      target: "2026-10-15",
+    }),
+    milestoneRow("M14", "Product search finds typos", "Not Started", [spec("M14", 1, "Search ignores one typo", 0, 3), spec("M14", 2, "Search explains an empty result", 0, 2)]),
+    milestoneRow("M9", "Checkout mail is reliable", "Complete", [spec("M9", 1, "Order mail has one sender", 4, 4), spec("M9", 2, "Order mail retries on error", 5, 5)], { started: "2026-08-10", target: "2026-09-10" }),
+    milestoneRow("M11", "Old theme cleanup", "Closed", [spec("M11", 1, "Remove the old theme files", 1, 3)], { started: "2026-07-01" }),
+  ].toSorted((left, right) => Number.parseInt(left.id.slice(1), 10) - Number.parseInt(right.id.slice(1), 10));
+}
+
 function project(now: number): ProjectStatus {
   const running = run(now, "link-check", "running", null, 6 * MINUTE, { who: "timer" });
   const held = run(now, "price-sync", "held", null, 25 * MINUTE, { questions: ["Push the new prices to the live shop?", "Which currency rounds up?"] });
@@ -117,6 +157,8 @@ function project(now: number): ProjectStatus {
       vigil("bot-rules", "Bot filter does not block the payment webhook", { flagged: true, lastOutcome: "failed", until: "the next scheduled webhook delivery from the payment provider after the firewall rule update" }),
       vigil("old-soak", "Search index soak", { state: "closed", verdict: "held", lastOutcome: "held" }),
     ],
+    milestones: milestones(),
+    milestonesArchived: 41,
   };
 }
 
@@ -140,6 +182,8 @@ function atlas(now: number): ProjectStatus {
       ritual("style-guide", "Style guide pass", { mode: "off", cadence: "1m", nextDue: day(now, 0, 12) }),
     ],
     vigils: [],
+    milestones: [],
+    milestonesArchived: 0,
   };
 }
 

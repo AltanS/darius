@@ -205,8 +205,26 @@ export class WebApp {
   }
 }
 
-/** Only these request headers reach the app: it reads nothing else, and cookies stay out of it. */
+/** Only these request headers reach the app: it reads nothing else. */
 const FORWARDED_HEADERS = ["accept", "accept-language", "if-none-match"];
+
+/**
+ * The one cookie the app may read: the operator's display settings (theme,
+ * density, default workspace), so a page renders in the chosen theme with no
+ * flash. Every other cookie stays out. The web app names it SETTINGS_COOKIE in
+ * web/app/lib/settings.ts; test/web.test.ts keeps the two names equal.
+ */
+export const SETTINGS_COOKIE = "darius-settings";
+
+/** The settings pair of a `Cookie` header, alone, or null when it has none. */
+export function settingsCookie(header: string | null): string | null {
+  if (header === null) return null;
+  const pair = header
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${SETTINGS_COOKIE}=`));
+  return pair === undefined || pair.length > 512 ? null : pair;
+}
 
 /**
  * One request, already allowed. Exported for tests, which call it without a
@@ -227,6 +245,8 @@ export async function respond(method: string, url: URL, requestHeaders: Headers,
     const value = requestHeaders.get(name);
     if (value !== null) headers.set(name, value);
   }
+  const settings = settingsCookie(requestHeaders.get("cookie"));
+  if (settings !== null) headers.set("cookie", settings);
   const response = await loaded.handler(new Request(url.href, { method, headers }), context);
   const answer: WebReply = { status: response.status, headers: new Headers(response.headers), body: new Uint8Array(await response.arrayBuffer()) };
   answer.headers.set("content-security-policy", appCsp(context.nonce));

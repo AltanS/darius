@@ -8,6 +8,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { parseHeader } from "./legacy-header.ts";
+
 /** What the page needs of one legacy vigil. */
 export interface LegacyVigil {
   slug: string;
@@ -17,28 +19,6 @@ export interface LegacyVigil {
   /** The date it was resolved; null while it is armed. */
   resolved: string | null;
   verdict: string | null;
-}
-
-/** The `key: value` lines of the `---` block at the top of a file; anything else is skipped. */
-function headerOf(text: string): Map<string, string> {
-  const header = new Map<string, string>();
-  const lines = text.split("\n");
-  if (lines[0]?.trim() !== "---") return header;
-  for (const line of lines.slice(1)) {
-    if (line.trim() === "---") break;
-    const match = /^([A-Za-z_][\w-]*):\s*(.*)$/u.exec(line);
-    if (match === null) continue;
-    header.set(match[1] ?? "", unquote((match[2] ?? "").trim()));
-  }
-  return header;
-}
-
-/** A YAML scalar without its quotes: `"a"` is a, `'it''s'` is it's. */
-function unquote(value: string): string {
-  const double = /^"(.*)"$/u.exec(value);
-  if (double !== null) return double[1] ?? "";
-  const single = /^'(.*)'$/u.exec(value);
-  return single === null ? value : (single[1] ?? "").replaceAll("''", "'");
 }
 
 function valueOf(header: Map<string, string>, key: string): string | null {
@@ -54,7 +34,7 @@ export function readLegacyVigils(checkout: string): LegacyVigil[] {
     .filter((name) => name.endsWith(".md"))
     .flatMap((name): LegacyVigil[] => {
       try {
-        const header = headerOf(readFileSync(join(dir, name), "utf8"));
+        const header = parseHeader(readFileSync(join(dir, name), "utf8")).fields;
         if (header.size === 0) return [];
         const slug = valueOf(header, "slug") ?? name.slice(0, -".md".length);
         return [

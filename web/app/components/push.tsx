@@ -1,5 +1,5 @@
 /**
- * The notification switch in the footer (0.32.0). It registers the service
+ * The notification switch (0.32.0), on the settings page since the IA work (it sat in the footer). It registers the service
  * worker (web/public/sw.js), asks the host for its VAPID key, and subscribes
  * this browser with `darius serve`'s push endpoints (src/web/push-api.ts):
  * GET /api/push/key, POST /api/push/subscribe, POST /api/push/unsubscribe.
@@ -7,7 +7,7 @@
  * Push needs a secure context (HTTPS, or localhost), a browser with a push
  * service, and on an iPhone a darius icon on the Home Screen. When one is
  * missing, the switch says what to do instead of showing a dead button.
- * Everything happens in the browser: the server render shows nothing.
+ * Everything happens in the browser: the server render only says it is checking.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -108,7 +108,7 @@ export function PushSwitch(): React.ReactNode {
 
   switch (state.kind) {
     case "checking":
-      return null;
+      return <p className="push push-note">Checking this device…</p>;
     case "unavailable":
       return <p className="push push-note">{state.text}</p>;
     case "busy":

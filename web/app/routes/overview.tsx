@@ -1,35 +1,148 @@
+import { Link } from "react-router";
+
 import type { Route } from "./+types/overview";
-import { ComingUp, Waiting, WAITING_SHOWN } from "../components/agenda.tsx";
 import { CardView, DoneRows, NextUp, NowList, Pieces, StatusStrip } from "../components/board.tsx";
-import { SectHead } from "../components/ui.tsx";
+import { PhoneMore } from "../components/pulse.tsx";
+import { RowList } from "../components/row.tsx";
+import { ReportRow, RunList } from "../components/runs.tsx";
+import { Empty, SectHead, Time } from "../components/ui.tsx";
 import { homeView } from "../lib/home.ts";
+import { scopeOfRequest } from "../lib/scope.ts";
 import { statusOf } from "../lib/status.ts";
+import { workspaceExtras, type WorkspaceExtras } from "../lib/workspace.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
-export function loader({ context }: Route.LoaderArgs) {
-  return homeView(statusOf(context), (project, run) => context.run(project, run));
-}
+/** Latest-report rows a phone shows before its own button. */
+const REPORTS_PHONE = 3;
 
-export const meta: Route.MetaFunction = () => [{ title: "darius" }];
+/** Recent runs a phone shows before its own button. */
+const RECENT_PHONE = 3;
 
 /**
- * The command board, across all projects. The verdict, the Next line and the
- * status strip on top (the strip only has the segments above zero); then, on a
- * phone, Needs you (only when something needs you), Now (only when something
- * runs), Coming up, Waiting on an event, Last night and one health line. On a desktop the wide
- * column holds Needs you, Now and Coming up, and the rail holds Waiting on an
- * event, Last night and the health line. Each run shows once.
+ * One loader for three addresses: `/` (the default workspace, else all),
+ * `/all` (all workspaces) and `/w/:ws` (one workspace).
+ */
+export function loader({ context, request, params }: Route.LoaderArgs) {
+  const status = statusOf(context);
+  const { scope, projects } = scopeOfRequest(status, request, params.ws);
+  const read = (project: string, run: string) => context.run(project, run);
+  const only = scope.workspace === null ? undefined : projects[0];
+  return {
+    workspace: scope.workspace,
+    home: homeView(status, read, scope),
+    extras: only === undefined ? null : workspaceExtras(only, read),
+  };
+}
+
+export const meta: Route.MetaFunction = ({ data }) => [{ title: data?.workspace === null || data === undefined ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
+
+interface PathTextProps {
+  path: string;
+}
+
+/** A path that may break after each slash, so a long checkout wraps at a folder. */
+function PathText({ path }: PathTextProps): React.ReactNode {
+  return path.split("/").map((part, index) => (
+    <span key={`${index}`}>
+      {index === 0 ? "" : "/"}
+      <wbr />
+      {part}
+    </span>
+  ));
+}
+
+interface WorkspaceMetaProps {
+  extras: WorkspaceExtras;
+}
+
+/** Under the verdict of a workspace: its limits, its last sync and where its checkout is. */
+function WorkspaceMeta({ extras }: WorkspaceMetaProps): React.ReactNode {
+  return (
+    <div className="ws-meta">
+      <p className="page-meta meta-dots">
+        {extras.maxMode === null ? null : <span>at most {extras.maxMode} mode</span>}
+        <span>
+          synced <Time iso={extras.lastSync} />
+        </span>
+        {extras.checkout === null ? <span>not linked on this host</span> : null}
+      </p>
+      {extras.checkout === null ? null : (
+        <p className="ws-path">
+          <code>
+            <PathText path={extras.checkout} />
+          </code>
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface ReportsProps {
+  extras: WorkspaceExtras;
+}
+
+/** The latest report of each djinn of the workspace. */
+function LatestReports({ extras }: ReportsProps): React.ReactNode {
+  const { djinns } = extras;
+  if (djinns.length === 0 && extras.hasUnattendedWithoutDjinn) return null;
+  return (
+    <section id="reports" className="section sec-reports">
+      <SectHead title="Latest reports" />
+      {djinns.length === 0 ? (
+        <Empty>darius runs no ritual of this workspace yet.</Empty>
+      ) : (
+        <div className="panel">
+          <PhoneMore hidden={djinns.length - REPORTS_PHONE} noun="report">
+            <RowList bare className="stagger">
+              {djinns.map(({ ritual, last, report }, index) => (
+                <ReportRow key={ritual.slug} project={extras.name} ritual={ritual} last={last} report={report} showProject={false} className={index >= REPORTS_PHONE ? "phone-extra" : undefined} />
+              ))}
+            </RowList>
+          </PhoneMore>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** The recent runs of the workspace, and the way to all of them. */
+function RecentRuns({ extras }: ReportsProps): React.ReactNode {
+  const { recent } = extras;
+  return (
+    <section id="recent" className="section sec-recent">
+      <SectHead title="Recent runs" aside={<Link to={`/runs?project=${encodeURIComponent(extras.name)}`}>All runs</Link>} />
+      <div className="panel">
+        <PhoneMore hidden={recent.length - RECENT_PHONE} noun="run">
+          <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
+        </PhoneMore>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Overview of a scope: the verdict, the Next line and the status strip on
+ * top (the strip only has the segments above zero). Then Needs you (only when
+ * something needs you), Now (only when something runs) and Last night. A
+ * workspace adds its latest reports, its recent runs and where its checkout
+ * is; all workspaces add one link to the list of all runs. What is coming up
+ * lives in the Rituals and Vigils sections: the Next line and the strip link
+ * there. On a phone the sections stack in the order of the day; on a desktop
+ * the wide column holds Needs you, Now and the reports, the rail holds Last
+ * night and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { verdict, tone, sub, next, strip, now, needs, lastNight, agenda, health } = loaderData;
+  const { home, extras } = loaderData;
+  const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
   return (
-    <>
+    <div className="proj ov">
       <section className="verdict">
         <h1 className={`verdict-h ink-${tone}`}>{verdict}</h1>
         <p className="verdict-sub">{sub}</p>
         {next === null ? null : <NextUp next={next} />}
       </section>
+      {extras === null ? null : <WorkspaceMeta extras={extras} />}
       <StatusStrip segments={strip} />
       <div className="board board-home">
         <div className="board-main">
@@ -49,10 +162,10 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
               <NowList runs={now} />
             </section>
           )}
-          <ComingUp agenda={agenda} anchors={false} target="" />
+          {extras === null ? null : <LatestReports extras={extras} />}
+          {extras === null ? null : <RecentRuns extras={extras} />}
         </div>
         <aside className="board-rail">
-          <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={agenda.showProject} anchors={false} target="" />
           {lastNight.length === 0 ? null : (
             <section className="section sec-last">
               <SectHead title="Last night" />
@@ -64,8 +177,13 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
           <p className="health sec-health">
             <Pieces pieces={health} />
           </p>
+          {extras === null ? (
+            <p className="rail-note sec-runs">
+              <Link to="/runs">All runs</Link>
+            </p>
+          ) : null}
         </aside>
       </div>
-    </>
+    </div>
   );
 }

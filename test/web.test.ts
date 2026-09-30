@@ -22,7 +22,8 @@ delete process.env.DARIUS_WEB_BIND;
 delete process.env.DARIUS_WEB_ALLOW;
 
 const { parseArgs } = await import("../src/cli/args.ts");
-const { WebApp, respond, serveCommand, staticFile, webBind, webPort } = await import("../src/cli/serve.ts");
+const { SETTINGS_COOKIE, WebApp, respond, serveCommand, settingsCookie, staticFile, webBind, webPort } = await import("../src/cli/serve.ts");
+const { SETTINGS_COOKIE: APP_SETTINGS_COOKIE } = await import("../web/app/lib/settings.ts");
 const { parseMarkdown } = await import("../src/web/markdown.ts");
 const { webContext } = await import("../src/web/context.ts");
 import type { MdSpan, RitualRow } from "../src/web/api.ts";
@@ -32,6 +33,7 @@ const { appendLine, readLedger } = await import("../src/core/ledger.ts");
 const { openProject, putBlob } = await import("../src/core/store.ts");
 const { acknowledgeRun } = await import("../src/runner/hold.ts");
 const { collectStatus, runRows } = await import("../src/web/status.ts");
+const { writeLink } = await import("../src/core/links.ts");
 const { ulid } = await import("../src/core/ulid.ts");
 
 interface Seeded {
@@ -131,6 +133,11 @@ test("pages go to the app with a fresh nonce in the CSP; only a few request head
   assert.ok(csp.includes(`script-src 'self' 'nonce-${page.nonce}'`), csp);
   assert.match(csp, /default-src 'none'/u);
   assert.equal(csp.includes("unsafe-inline"), false);
+  const withSettings = JSON.parse(text((await get("/", new Headers({ cookie: "secret=1; darius-settings=theme%3Dlight; other=2" }))).body));
+  assert.equal(withSettings.cookie, "darius-settings=theme%3Dlight", "the settings cookie alone reaches the app");
+  assert.equal(SETTINGS_COOKIE, APP_SETTINGS_COOKIE, "darius serve and the web app name the same cookie");
+  assert.equal(settingsCookie(`darius-settings=${"x".repeat(600)}`), null, "an oversized settings cookie stays out");
+  assert.equal(settingsCookie("darius-settingsX=1; a=b"), null, "only the exact name passes");
   const second = JSON.parse(text((await get("/")).body));
   assert.notEqual(second.nonce, page.nonce, "a new nonce per request");
 });
@@ -383,4 +390,27 @@ test("whois answers are cached for a minute; DARIUS_WEB_ALLOW names the allowed 
     delete process.env.DARIUS_WEB_ALLOW;
   }
   assert.deepEqual([...(await allowedLogins())], [], "without Tailscale and without the variable nobody is allowed");
+});
+
+test("status: a linked checkout's legacy milestones reach the project, an unlinked project has none", () => {
+  const checkout = mkdtempSync(join(tmpdir(), "darius-web-tracker-"));
+  const spec = join(checkout, ".tracker", "M7-shop");
+  mkdirSync(spec, { recursive: true });
+  writeFileSync(join(spec, "00-README.md"), "---\nname: Shop\nstarted: 2026-09-01\n---\n");
+  writeFileSync(join(spec, "01-cart.md"), "---\nupdated: 2026-09-02\n---\n\n# Cart\n\n- [x] a\n- [ ] b\n");
+  mkdirSync(join(checkout, ".tracker", "archive"), { recursive: true });
+  writeFileSync(join(checkout, ".tracker", "archive", "M1-old.md"), "# old\n");
+  openProject("web-tracked", { create: true });
+  openProject("web-untracked", { create: true });
+  writeLink("web-tracked", checkout);
+  const projects = collectStatus().projects;
+  const tracked = projects.find((entry) => entry.name === "web-tracked");
+  assert.equal(tracked?.milestonesArchived, 1);
+  assert.deepEqual(
+    tracked?.milestones.map((row) => [row.source, row.id, row.label, row.title, row.status, row.done, row.total]),
+    [["legacy", "M7", "M7", "Shop", "In Progress", 1, 2]],
+  );
+  assert.deepEqual(tracked?.milestones[0]?.specs.map((row) => [row.source, row.slug, row.label, row.done, row.total]), [["legacy", "m7-01-cart", "M7/01", 1, 2]]);
+  const untracked = projects.find((entry) => entry.name === "web-untracked");
+  assert.deepEqual([untracked?.milestones, untracked?.milestonesArchived], [[], 0]);
 });

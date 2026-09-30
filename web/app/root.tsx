@@ -6,36 +6,33 @@ import "./app.css";
 import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
 import { NonceContext } from "./lib/nonce.ts";
+import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { statusOf } from "./lib/status.ts";
-import { needCounts, selftestLines } from "./lib/home.ts";
+import { shellData } from "./lib/scope.ts";
 
-export function loader({ context }: Route.LoaderArgs) {
+export function loader({ context, request }: Route.LoaderArgs) {
+  // --- settings block (theme, density, motion): read from the cookie, put on <html> by Layout ---
+  const settings = readSettings(request.headers.get("cookie"));
+  // --- end settings block ---
   const status = statusOf(context);
-  const needs = needCounts(status);
   return {
     // Also on the client, so hydration renders the same nonce attributes.
     nonce: context.nonce,
+    settings,
     viewer: context.viewer,
     host: status.host,
     version: status.version,
     generatedAt: status.generatedAt,
     today: status.today,
     utcOffset: status.utcOffset,
-    // The things that need the operator, the number in the home verdict.
-    needs: needs.total,
-    selftest: selftestLines(status),
-    projects: status.projects.map((project) => ({
-      name: project.name,
-      error: project.error !== null,
-      // The things that need the operator in this project, for the count in the project menu.
-      needs: needs.byProject[project.name] ?? 0,
-    })),
+    // The workspaces, the tab badges and the footer line: what the top bar and the tabs show (lib/scope.ts).
+    ...shellData(status, request),
   };
 }
 
 export type RootData = Awaited<ReturnType<typeof loader>>;
 
-// The top bar counts what needs the operator, so it reloads with every page.
+// The top bar and the tab badges count what needs the operator, so they reload with every page.
 export function shouldRevalidate(): boolean {
   return true;
 }
@@ -48,6 +45,27 @@ export const links: Route.LinksFunction = () => [
   { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
 ];
 
+// --- settings block: the browser chrome follows the theme (the paper ground of the light theme, the night of the dark) ---
+const COLOR_SCHEMES = { dark: "dark", light: "light", system: "dark light" } satisfies Record<Theme, string>;
+const NIGHT = "#15100b";
+const PAPYRUS = "#f0e6c9";
+
+interface ThemeColorProps {
+  theme: Theme;
+}
+
+function ThemeColor({ theme }: ThemeColorProps): React.ReactNode {
+  if (theme === "dark") return <meta name="theme-color" content={NIGHT} />;
+  if (theme === "light") return <meta name="theme-color" content={PAPYRUS} />;
+  return (
+    <>
+      <meta name="theme-color" content={PAPYRUS} media="(prefers-color-scheme: light)" />
+      <meta name="theme-color" content={NIGHT} media="(prefers-color-scheme: dark)" />
+    </>
+  );
+}
+// --- end settings block ---
+
 interface LayoutProps {
   children: React.ReactNode;
 }
@@ -56,13 +74,16 @@ export function Layout({ children }: LayoutProps): React.ReactNode {
   const data = useRouteLoaderData<typeof loader>("root");
   // Keep the nonce of the first render; later loads bring new ones that no CSP matches.
   const [nonce] = useState(useContext(NonceContext) ?? data?.nonce);
+  // --- settings block: the attributes the themes in app.css key on ---
+  const settings = data?.settings ?? DEFAULT_SETTINGS;
   return (
-    <html lang="en">
+    <html lang="en" data-theme={settings.theme} data-density={settings.density} data-motion={settings.motion}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="color-scheme" content="dark" />
-        <meta name="theme-color" content="#15100b" />
+        <meta name="color-scheme" content={COLOR_SCHEMES[settings.theme]} />
+        <ThemeColor theme={settings.theme} />
+        {/* --- end settings block --- */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="darius" />

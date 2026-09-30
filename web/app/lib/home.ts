@@ -1,11 +1,11 @@
 /**
- * The home page, "the command board": one read of the status, across all
- * projects, that answers the operator's questions in the order they matter.
+ * The Overview, "the command board": one read of the status, across all
+ * workspaces or for one (`HomeScope`), that answers the operator's questions in the order they matter.
  * Does anything need me (the verdict, the status strip and the Needs you
  * cards)? What runs now (the Now rows)? What is coming (Coming up, one
  * time-ordered list of every active ritual and every dated vigil, and Waiting
  * on an event, the vigils without a date; both built by `lib/agenda.ts`, which
- * the project page draws too)? What happened last night (the Last night
+ * the Rituals and Vigils sections draw; the Overview links there)? What happened last night (the Last night
  * cards)? Is darius itself healthy (one quiet line: Timer, Sync, last ritual
  * run)? Every value here comes from the status. The sub line under the verdict
  * is the date and time; the Next line under it names what is next.
@@ -18,7 +18,7 @@
  * The verdict counts things that need a person: held runs, runs whose result
  * asks a question, unacknowledged failures, stuck runs, flagged vigils and
  * unreadable projects. `needCounts` gives the same number per project and in
- * total, so the Home badge and the verdict cannot drift apart.
+ * total, so the switcher counts and the verdict cannot drift apart.
  *
  * A failed run that a person acknowledged (`darius run ack`) needs nobody
  * any more: it leaves Needs you and shows as a plain Last night card with
@@ -33,7 +33,7 @@
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, type Agenda, type NextLine } from "./agenda.ts";
-import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, projectPath, relativeDate, ritualPath, roughDuration, runPath, shortDate, vigilPath } from "./format.ts";
+import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, ritualPath, roughDuration, runPath, sectionPath, shortDate, vigilPath, workspacePath } from "./format.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { ASKS_YOU, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
@@ -123,7 +123,7 @@ export interface Segment {
   label: string;
   count: number;
   tone: Tone;
-  /** A `#card` on this page, or null when there is nowhere to go. */
+  /** A `#card` on this page, a path to a section, or null when there is nowhere to go. */
   href: string | null;
   /** The segment shows the live animation while its count is above zero. */
   live: boolean;
@@ -383,10 +383,10 @@ function unreadableCard(project: ProjectStatus): Card {
     edge: "bad",
     word: { text: "Unreadable", ink: "bad" },
     title: project.name,
-    href: projectPath(project.name),
+    href: workspacePath(project.name),
     meta: ["darius could not read this project"],
     error: project.error,
-    actions: [{ text: "Open the project", href: projectPath(project.name) }],
+    actions: [{ text: "Open the workspace", href: workspacePath(project.name) }],
   };
 }
 
@@ -468,21 +468,21 @@ function needsSize(needs: ProjectNeeds): number {
 }
 
 export interface NeedCounts {
-  /** The things that need the operator over the projects home counts: the number in the verdict and on the Home badge. */
+  /** The things that need the operator over the workspaces the all-workspaces Overview counts: the number in its verdict. */
   total: number;
-  /** The same count for each project by name, self-test projects included (they never add to the total). */
+  /** The same count for each project by name, self-test projects included (they add to the total only when the operator shows them). */
   byProject: Record<string, number>;
 }
 
 /** The things that need the operator, per project and in total: what the verdict says and the badges show. */
-export function needCounts(status: HostStatus): NeedCounts {
+export function needCounts(status: HostStatus, includeSelftest = false): NeedCounts {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
   const byProject: Record<string, number> = {};
   let total = 0;
   for (const project of status.projects) {
     const size = needsSize(projectNeeds(clock, status.generatedAt, project));
     byProject[project.name] = size;
-    if (!isSelftest(project.name)) total += size;
+    if (includeSelftest || !isSelftest(project.name)) total += size;
   }
   return { total, byProject };
 }
@@ -526,13 +526,13 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
  * ask), running (not the stuck ones), stuck, failed, flagged, unreadable, late
  * (rituals and dated vigils past due), due today, and armed vigils.
  */
-function statusStrip(needs: readonly Card[], running: number, agenda: Agenda): Segment[] {
+function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
   const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true, kind: null }];
   const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
-  const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: "#coming-up", live: false, kind: null }];
-  const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: "#coming-up", live: false, kind: null }];
-  const armedHref = agenda.waiting.length === 0 ? "#coming-up" : "#waiting";
+  const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), live: false, kind: null }];
+  const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: groupHref(agenda, "today", workspace), live: false, kind: null }];
+  const armedHref = `${sectionPath(workspace, "vigils")}#${agenda.waiting.length === 0 ? "coming-up" : "waiting"}`;
   const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false, kind: "vigil" }];
   return [
     ...needSegment,
@@ -547,6 +547,13 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda): S
   ];
 }
 
+/** Where a day group of the agenda lives: the Rituals section when it holds a ritual, else the Vigils section. */
+function groupHref(agenda: Agenda, kind: "overdue" | "today", workspace: string | null): string {
+  const rows = agenda.groups.find((group) => group.kind === kind)?.rows ?? [];
+  const section = rows.some((row) => row.kind === "ritual") ? "rituals" : "vigils";
+  return `${sectionPath(workspace, section)}#coming-up`;
+}
+
 function newest(left: ActivityRun, right: ActivityRun): number {
   return right.startedAt.localeCompare(left.startedAt);
 }
@@ -555,9 +562,23 @@ function nowRun(run: ActivityRun): NowRun {
   return { id: run.run, title: run.label, project: run.project, href: runPath(run.project, run.run), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual };
 }
 
-export function homeView(status: HostStatus, readRun: ReadRun): Home {
+/** What an Overview covers: one workspace (whatever it is), or all of them without the self-test one unless it is shown. */
+export interface HomeScope {
+  workspace: string | null;
+  includeSelftest: boolean;
+}
+
+export const ALL_WORKSPACES: HomeScope = { workspace: null, includeSelftest: false };
+
+/** The projects an Overview covers. */
+export function scopeProjects(status: HostStatus, scope: HomeScope): ProjectStatus[] {
+  if (scope.workspace !== null) return status.projects.filter((project) => project.name === scope.workspace);
+  return status.projects.filter((project) => scope.includeSelftest || !isSelftest(project.name));
+}
+
+export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope = ALL_WORKSPACES): Home {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
-  const all = status.projects.filter((project) => !isSelftest(project.name)).map((project) => projectNeeds(clock, status.generatedAt, project));
+  const all = scopeProjects(status, scope).map((project) => projectNeeds(clock, status.generatedAt, project));
   const states = all.flatMap((needs) => needs.states);
   const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 
@@ -581,7 +602,7 @@ export function homeView(status: HostStatus, readRun: ReadRun): Home {
     tone: verdictTone(needs),
     sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
     next: nextLine(agenda, clock.today),
-    strip: statusStrip(needs, now.length, agenda),
+    strip: statusStrip(needs, now.length, agenda, scope.workspace),
     now,
     needs,
     lastNight,
@@ -603,7 +624,7 @@ export function selftestLines(status: HostStatus): SelftestLine[] {
   return status.projects
     .filter((project) => isSelftest(project.name))
     .map((project) => {
-      const href = projectPath(project.name);
+      const href = workspacePath(project.name);
       if (project.error !== null) return { text: `Self-test: darius could not read ${project.name}.`, href };
       const last = project.runs.find((run) => run.who !== "import");
       const slug = last === undefined ? null : (last.item.split("/")[1] ?? last.item);

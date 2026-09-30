@@ -191,6 +191,48 @@ export interface VigilRow {
   until: string | null;
 }
 
+/**
+ * One spec of a milestone. `source` tells where it lives: "legacy" is read from
+ * the old tracker's `.tracker/` (read-only), "darius" is for milestones darius
+ * will hold itself. The shape is the same for both.
+ */
+export interface SpecRow {
+  source: "legacy" | "darius";
+  /** Stable id, keeps the milestone number: `m77-01-name`. */
+  slug: string;
+  /** What the page shows: `M77/01`. */
+  label: string;
+  number: number;
+  title: string;
+  /** Not Started, In Progress, Complete, Blocked, Skipped, or Waiting (a spec it depends on is not Complete). */
+  status: string;
+  /** Checks done, and all checks. */
+  done: number;
+  total: number;
+  /** Someone checked the spec against its verification. */
+  verified: boolean;
+  verifiedAt: string | null;
+  /** Slugs of the specs this one waits for. */
+  dependsOn: string[];
+}
+
+export interface MilestoneRow {
+  source: "legacy" | "darius";
+  /** `M77` */
+  id: string;
+  label: string;
+  slug: string;
+  title: string;
+  started: string | null;
+  target: string | null;
+  /** Not Started, In Progress, Complete, Skipped, Deferred or Closed. */
+  status: string;
+  /** Checks done and all checks, summed over the specs. */
+  done: number;
+  total: number;
+  specs: SpecRow[];
+}
+
 export interface ProjectStatus {
   name: string;
   /** This host's checkout, from `darius link`; null when the project has none here. */
@@ -201,6 +243,10 @@ export interface ProjectStatus {
   /** The newest 20 runs. */
   runs: RunRow[];
   vigils: VigilRow[];
+  /** Open milestones, the lowest number first. Read-only, from the linked checkout's `.tracker/`. */
+  milestones: MilestoneRow[];
+  /** How many milestones are archived. */
+  milestonesArchived: number;
   /** Set when darius could not read the project; the lists are then empty. */
   error: string | null;
 }

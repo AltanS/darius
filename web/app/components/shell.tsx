@@ -1,56 +1,65 @@
 /**
- * The frame around every page. On a desktop: one 48 px bar with the wordmark,
- * the two main tabs (Home, Runs) and a project switcher at the far end. On a
- * phone the bar keeps the wordmark and the current project, and the tabs move
- * to a bar at the bottom, where a thumb reaches them; its Projects tab opens
- * the project list as a sheet above it. One footer line holds the host facts.
+ * The frame around every page. The top bar has three things: the brand gem
+ * (it opens the Overview of the scope you are in), the workspace switcher and
+ * the settings gear. The scope is one workspace or all of them. The switcher
+ * opens as a sheet under the bar on a phone and as a menu on a desktop; its
+ * first entry is the Overview of the current scope, then All workspaces, then
+ * each workspace with what needs you. The three sections of the scope, Vigils,
+ * Rituals and Milestones, are the tabs: at the bottom of a phone, under the
+ * bar on a desktop. One footer line holds the host facts.
  */
 
 import { useEffect } from "react";
-import { Link, NavLink, useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 
 import type { RootData } from "../root.tsx";
-import { PushSwitch } from "./push.tsx";
-import { clockTime, projectPath } from "../lib/format.ts";
-import { needsText } from "../lib/home.ts";
+import { KindIcon } from "./kind.tsx";
+import { Gem, NavIcon } from "./nav-icons.tsx";
+import { clockTime, sectionPath, workspacePath } from "../lib/format.ts";
+import { placeOf, type Place, type Section, type TabCounts } from "../lib/scope.ts";
 
-function navClass({ isActive }: { isActive: boolean }): string {
-  return isActive ? "nav-link on" : "nav-link";
+interface SectionSpec {
+  section: Section;
+  label: string;
+  /** The badge counts these: the sentence reads "3 late". */
+  badge: (tabs: TabCounts) => { count: number; tone: "wait" | "late"; text: string };
 }
 
-function tabClass({ isActive }: { isActive: boolean }): string {
-  return isActive ? "tab on" : "tab";
+/** The tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late. */
+const SECTIONS: readonly SectionSpec[] = [
+  { section: "vigils", label: "Vigils", badge: (tabs) => ({ count: tabs.vigils, tone: "wait", text: "due today or late" }) },
+  { section: "rituals", label: "Rituals", badge: (tabs) => ({ count: tabs.rituals, tone: "late", text: "late" }) },
+  { section: "milestones", label: "Milestones", badge: () => ({ count: 0, tone: "wait", text: "" }) },
+];
+
+interface SectionIconProps {
+  section: Section;
+  size: number;
 }
 
-interface CountProps {
-  things: number;
+function SectionIcon({ section, size }: SectionIconProps): React.ReactNode {
+  if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
+  return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;
 }
 
-/** The number of things that need the operator (the number in the home verdict), in the colour of waiting. */
-function Count({ things }: CountProps): React.ReactNode {
-  if (things === 0) return null;
+interface BadgeProps {
+  count: number;
+  tone: "wait" | "late";
+  text: string;
+}
+
+/** The count on a tab: a small solid square with the number; screen readers hear what it counts. */
+function TabBadge({ count, tone, text }: BadgeProps): React.ReactNode {
+  if (count === 0) return null;
   return (
-    <span className="count tone-wait" title={needsText(things)}>
-      {things}
+    <span className={`tab-bdg tone-${tone}`} title={`${count} ${text}`}>
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">{`${count} ${text}`}</span>
     </span>
   );
 }
 
-interface ProjectLinksProps {
-  projects: RootData["projects"];
-}
-
-/** One link per project, with what needs the operator and a mark when darius could not read it. */
-function ProjectLinks({ projects }: ProjectLinksProps): React.ReactNode {
-  return projects.map((project) => (
-    <NavLink key={project.name} to={projectPath(project.name)} className={({ isActive }) => (isActive ? "on" : undefined)}>
-      <span className="menu-name">{project.name}</span>
-      {project.error ? <span className="count tone-bad">!</span> : <Count things={project.needs} />}
-    </NavLink>
-  ));
-}
-
-/** Closes an open menu on a press outside it and on Escape; a link inside closes it by changing the path. */
+/** Closes open menus on a press outside them and on Escape; a link inside closes one by changing the path. */
 function useMenuDismiss(): void {
   useEffect(() => {
     const close = (except: EventTarget | null): void => {
@@ -71,12 +80,84 @@ function useMenuDismiss(): void {
   }, []);
 }
 
-/** The close button of the project sheet: it shuts the menu it sits in. */
+/** The scrim behind the switcher sheet: a press on it shuts the menu it sits in. */
 function closeMenu(event: React.MouseEvent<HTMLButtonElement>): void {
   const menu = event.currentTarget.closest<HTMLDetailsElement>("details");
   if (menu === null) return;
   menu.open = false;
   menu.querySelector("summary")?.focus();
+}
+
+interface SwitcherProps {
+  data: RootData;
+  place: Place;
+  /** The address of the scope's Overview. */
+  overview: string;
+  /** Where a click on the scope lands: the same section of it, or its Overview. */
+  to: (workspace: string | null) => string;
+  pathKey: string;
+}
+
+/** A line of the switcher: a name, what it is, and what needs you there. */
+interface EntryProps {
+  href: string;
+  name: string;
+  icon: "workspace" | "all" | "overview";
+  note: string;
+  needs: number;
+  unreadable?: boolean;
+  current: boolean;
+}
+
+function Entry({ href, name, icon, note, needs, unreadable = false, current }: EntryProps): React.ReactNode {
+  return (
+    <Link to={href} className={current ? "sw-item on" : "sw-item"} aria-current={current ? "true" : undefined}>
+      <NavIcon name={icon} size={18} className="sw-ico" />
+      <span className="sw-text">
+        <span className="sw-name">{name}</span>
+        {note === "" ? null : <span className="sw-note">{note}</span>}
+      </span>
+      {unreadable ? <span className="sw-need tone-bad">unreadable</span> : needs > 0 ? <span className="sw-need">{`${needs} ${needs === 1 ? "needs" : "need"} you`}</span> : icon === "overview" ? null : <span className="sw-clear">all clear</span>}
+      {current && icon !== "overview" ? <NavIcon name="check" size={18} className="sw-check" /> : null}
+    </Link>
+  );
+}
+
+/** The workspace switcher: a button with the current scope; its list is a sheet on a phone, a menu on a desktop. */
+function Switcher({ data, place, overview, to, pathKey }: SwitcherProps): React.ReactNode {
+  const { workspace } = place;
+  const known = data.workspaces.some((entry) => entry.name === workspace);
+  // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
+  const listed = workspace === null || known ? data.workspaces : [...data.workspaces, { name: workspace, error: false, needs: 0, tabs: { vigils: 0, rituals: 0 } }];
+  const others = workspace !== null && data.workspaces.some((entry) => entry.name !== workspace && entry.needs > 0);
+  return (
+    // Keyed by the address, so the menu closes after each navigation.
+    <details key={pathKey} data-menu className="switcher">
+      <summary className="sw-btn">
+        <span className="sw-lab">
+          <span className="sw-cap">Workspace</span>
+          <span className="sw-now">{workspace ?? "All workspaces"}</span>
+        </span>
+        <NavIcon name="chevron" size={16} className="sw-chev" />
+        {others ? (
+          <>
+            <i className="sw-dot" aria-hidden="true" />
+            <span className="sr-only">Another workspace needs you</span>
+          </>
+        ) : null}
+      </summary>
+      <button type="button" className="sw-scrim" tabIndex={-1} aria-label="Close the workspace list" onClick={closeMenu} />
+      <div className="sw-list">
+        <p className="sw-group">{workspace === null ? "All workspaces" : "This workspace"}</p>
+        <Entry href={overview} name="Overview" icon="overview" note="Verdict, next, what needs you" needs={0} current={place.overview} />
+        <p className="sw-group">Workspaces</p>
+        <Entry href={to(null)} name="All workspaces" icon="all" note="Every workspace together" needs={data.needs} current={workspace === null} />
+        {listed.map((entry) => (
+          <Entry key={entry.name} href={to(entry.name)} name={entry.name} icon="workspace" note="" needs={entry.needs} unreadable={entry.error} current={workspace === entry.name} />
+        ))}
+      </div>
+    </details>
+  );
 }
 
 interface ShellProps {
@@ -85,62 +166,50 @@ interface ShellProps {
 }
 
 export function Shell({ data, children }: ShellProps): React.ReactNode {
-  const { needs } = data;
   useMenuDismiss();
   const location = useLocation();
-  const isHome = location.pathname === "/";
-  const current = /^\/p\/([^/]+)/u.exec(location.pathname)?.[1];
-  const currentProject = current === undefined ? null : decodeURIComponent(current);
-  const inProject = currentProject !== null;
+  const place = placeOf(location.pathname, location.search, data.defaultWorkspace);
+  const { workspace } = place;
+  const tabs = workspace === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? { vigils: 0, rituals: 0 });
+  // `/` is the default workspace, so all workspaces need an address of their own when one is set.
+  const allOverview = data.defaultWorkspace === null ? "/" : "/all";
+  const overviewOf = (name: string | null): string => (name === null ? allOverview : workspacePath(name));
+  const overview = overviewOf(workspace);
+  const scopeTo = (name: string | null): string => (place.section === null ? overviewOf(name) : sectionPath(name, place.section));
+  const selectedTab = (section: Section): boolean => place.section === section;
   return (
     <div className="app">
       <header className="bar">
         <div className="bar-in wa">
-          <Link to="/" className="brand">
-            darius
+          <Link to={overview} className="brand" aria-label="darius, the Overview">
+            <Gem size={28} />
+            <span className="brand-word">darius</span>
           </Link>
-          <nav aria-label="Main" className="nav">
-            <NavLink to="/" end className={navClass} title={needs > 0 ? needsText(needs) : undefined}>
-              Home
-              <Count things={needs} />
-            </NavLink>
-            <NavLink to="/runs" end className={navClass}>
-              Runs
-            </NavLink>
-          </nav>
-          {data.projects.length === 0 ? null : (
-            <div className="bar-end">
-              {/* Keyed by the path, so the menu closes after each navigation. */}
-              <details key={location.pathname} data-menu className="menu">
-                <summary>
-                  <span className="menu-cap">Project</span>
-                  <span className="menu-now">{currentProject ?? "All"}</span>
-                </summary>
-                <div className="menu-list">
-                  <ProjectLinks projects={data.projects} />
-                </div>
-              </details>
-            </div>
-          )}
-          {inProject ? (
-            <Link to={projectPath(currentProject)} className="bar-ctx">
-              {currentProject}
-            </Link>
-          ) : null}
+          <Switcher data={data} place={place} overview={overview} to={scopeTo} pathKey={`${location.pathname}${location.search}`} />
+          <Link to="/settings" className={location.pathname === "/settings" ? "gear on" : "gear"} aria-label="Settings" aria-current={location.pathname === "/settings" ? "page" : undefined}>
+            <NavIcon name="gear" size={22} />
+          </Link>
         </div>
+        <nav aria-label="Sections" className="dtabs wa">
+          {SECTIONS.map(({ section, label, badge }) => (
+            <Link key={section} to={sectionPath(workspace, section)} className={selectedTab(section) ? "dt on" : "dt"} aria-current={selectedTab(section) ? "page" : undefined}>
+              {label}
+              <TabBadge {...badge(tabs)} />
+            </Link>
+          ))}
+        </nav>
       </header>
       <main className="wa page-main">{children}</main>
       <footer className="wa">
         <div className="foot">
           <div className="foot-left">
-            {isHome
+            {place.overview && workspace === null
               ? data.selftest.map((line) => (
                   <Link key={line.href} to={line.href} className="foot-selftest">
                     {line.text}
                   </Link>
                 ))
               : null}
-            <PushSwitch />
           </div>
           <p className="foot-host">
             {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}. <Link to="/profiles">Profiles</Link>
@@ -148,42 +217,15 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
         </div>
       </footer>
       <nav aria-label="Tabs" className="tabbar">
-        <NavLink to="/" end className={tabClass}>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 11 12 3l9 8M5 9.5V21h5v-6h4v6h5V9.5" />
-          </svg>
-          <span>
-            Home
-            <Count things={needs} />
-          </span>
-        </NavLink>
-        <NavLink to="/runs" end className={tabClass}>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 6h16M4 12h16M4 18h10" />
-          </svg>
-          <span>Runs</span>
-        </NavLink>
-        {data.projects.length === 0 ? null : (
-          <details key={location.pathname} data-menu className="tabmenu">
-            <summary className={inProject ? "tab on" : "tab"}>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 4h7v7H3zM14 4h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" />
-              </svg>
-              <span>Projects</span>
-            </summary>
-            <div className="tabmenu-list">
-              <div className="tabmenu-head">
-                <span className="label">Projects</span>
-                <button type="button" className="tabmenu-close" aria-label="Close the project list" onClick={closeMenu}>
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M6 6l12 12M18 6 6 18" />
-                  </svg>
-                </button>
-              </div>
-              <ProjectLinks projects={data.projects} />
-            </div>
-          </details>
-        )}
+        {SECTIONS.map(({ section, label, badge }) => (
+          <Link key={section} to={sectionPath(workspace, section)} className={selectedTab(section) ? "tab on" : "tab"} aria-current={selectedTab(section) ? "page" : undefined}>
+            <span className="tab-ico-wrap">
+              <SectionIcon section={section} size={22} />
+              <TabBadge {...badge(tabs)} />
+            </span>
+            <span>{label}</span>
+          </Link>
+        ))}
       </nav>
     </div>
   );

@@ -1,0 +1,1 @@
+var e=`darius-settings`,t=31536e3,n={theme:`dark`,density:`comfortable`,defaultWorkspace:null,showSelftest:!1,motion:`system`};function r(e){let t=[`theme=${e.theme}`,`density=${e.density}`,`ws=${e.defaultWorkspace??``}`,`selftest=${e.showSelftest?`1`:`0`}`,`motion=${e.motion}`].join(`&`);return encodeURIComponent(t)}export{r as i,e as n,t as r,n as t};

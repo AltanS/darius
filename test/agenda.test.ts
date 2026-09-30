@@ -39,7 +39,7 @@ function vigil(slug: string, extra: Partial<VigilRow> = {}): VigilRow {
 }
 
 function project(name: string, rituals: RitualRow[], vigils: VigilRow[] = [], runs: RunRow[] = []): ProjectStatus {
-  return { name, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, error: null };
+  return { name, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, milestones: [], milestonesArchived: 0, error: null };
 }
 
 function build(projects: ProjectStatus[]): Agenda {

@@ -4,6 +4,8 @@ import { Link } from "react-router";
 import type { Route } from "./+types/runs";
 import { RunList } from "../components/runs.tsx";
 import { Section } from "../components/ui.tsx";
+import { scopeProjects } from "../lib/home.ts";
+import { readSettings } from "../lib/settings.ts";
 import { statusOf } from "../lib/status.ts";
 import { activity, type ActivityRun } from "../lib/view.ts";
 
@@ -22,7 +24,10 @@ export function loader({ context, request }: Route.LoaderArgs) {
   const project = params.get("project") ?? "";
   const state = params.get("state") ?? "";
   const withImported = params.get("imported") === "1";
-  const { projects } = statusOf(context);
+  const status = statusOf(context);
+  // The self-test workspace stays out of the list of every project, as in all other lists, unless the settings show it (or the address names it).
+  const { showSelftest } = readSettings(request.headers.get("cookie"));
+  const projects = project === "" ? scopeProjects(status, { workspace: null, includeSelftest: showSelftest }) : status.projects;
   const runs = activity(
     projects.filter((candidate) => project === "" || candidate.name === project),
     { withImported },
