@@ -465,11 +465,11 @@ Root keys:
 | `from` | no | `YYYY-MM-DD`. The first date of the cadence grid. |
 | `timeout` | no | `<N>m` or `<N>h`, from `1m` to `12h`. The budget of one run. |
 | `profile`, `model`, `max_turns` | no | As on a v2 ritual. |
-| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold` or `notes`. |
+| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may` or `hold`. Its `notes` may be combined with it. |
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
-| `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. |
+| `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. With a `policy`, the policy's notes come first, then a blank line, then these. |
 | `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
 | `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |
 

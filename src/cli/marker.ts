@@ -83,7 +83,7 @@ function overlapWarnings(marker: Marker): string[] {
   return warnings;
 }
 
-/** A warning for each policy `notes` and each ritual's own `notes` over 300 characters. */
+/** A warning for each policy `notes` and each ritual's own `notes` over 300 characters. The two are counted apart, not joined. */
 function notesWarnings(marker: Marker): string[] {
   const warnings: string[] = [];
   const tell = (section: string, notes: string | undefined): void => {
@@ -91,8 +91,8 @@ function notesWarnings(marker: Marker): string[] {
     warnings.push(`[${section}] notes is ${String(notes.length)} characters: procedure belongs in the skill, rules in hold`);
   };
   for (const [name, policy] of Object.entries(marker.policies)) tell(`policies.${name}`, policy.notes);
-  // A ritual that names a policy carries that policy's notes, which are reported once above.
-  for (const ritual of marker.rituals) if (ritual.policyName === undefined) tell(`rituals.${ritual.slug}`, ritual.policy.notes);
+  // A ritual that names a policy carries that policy's notes, which are reported once above. Its own notes are counted alone.
+  for (const ritual of marker.rituals) tell(`rituals.${ritual.slug}`, ritual.policyName === undefined ? ritual.policy.notes : ritual.ownNotes);
   return warnings;
 }
 

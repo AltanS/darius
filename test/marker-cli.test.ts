@@ -296,6 +296,33 @@ test("marker check warns about notes over 300 characters in a ritual and in a po
   assert.equal(json.warnings.length, 2);
 });
 
+function notesPolicy(name: string, size: number): string {
+  return `[policies.${name}]\nmode = "off"\nnotes = "${"p".repeat(size)}"\n`;
+}
+
+function notesRitual(slug: string, name: string, size: number): string {
+  return `[rituals.${slug}]\ntitle = "${slug}"\nskill = "${slug}"\npolicy = "${name}"\nnotes = "${"o".repeat(size)}"\n`;
+}
+
+test("marker check counts own notes and policy notes apart, never the joined text", async () => {
+  // Each part is 200 characters: 402 joined, but neither is over 300.
+  const short = withSkills(`${ROOT}${notesPolicy("short", 200)}${notesRitual("a", "short", 200)}`, ["a"]);
+  const quiet = await runCli(markerCommand, ["check", short]);
+  assert.equal(quiet.code, 0, quiet.stderr);
+  assert.doesNotMatch(quiet.stdout, /warning/u);
+  // Own notes over 300 warn for the ritual only; the policy's notes are fine.
+  const own = withSkills(`${ROOT}${notesPolicy("calm", 100)}${notesRitual("b", "calm", 301)}`, ["b"]);
+  const ownRun = await runCli(markerCommand, ["check", own]);
+  assert.match(ownRun.stdout, /^warning: \[rituals\.b\] notes is 301 characters: procedure belongs in the skill, rules in hold$/mu);
+  assert.doesNotMatch(ownRun.stdout, /policies\.calm\] notes/u);
+  // Policy notes over 300 warn for the policy only; short own notes do not add a ritual warning.
+  const base = withSkills(`${ROOT}${notesPolicy("wide", 301)}${notesRitual("c", "wide", 10)}`, ["c"]);
+  const baseRun = await runCli(markerCommand, ["check", base]);
+  assert.match(baseRun.stdout, /^warning: \[policies\.wide\] notes is 301 characters/mu);
+  assert.doesNotMatch(baseRun.stdout, /rituals\.c\] notes/u);
+  assert.equal(JSON.parse((await runCli(markerCommand, ["check", base, "--json"])).stdout).warnings.length, 1);
+});
+
 test("marker check: short notes and unrelated hold lists give no warning", async () => {
   const dir = withSkills(`${ROOT}${inlineRitual("a", HOLDS, 'notes = "Never push."\n')}${inlineRitual("b", HOLDS.map((item) => `${item}2`))}`, ["a", "b"]);
   const run = await runCli(markerCommand, ["check", dir]);

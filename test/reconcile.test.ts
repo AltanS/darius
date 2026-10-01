@@ -14,6 +14,7 @@ import { appendLine, readLedger } from "../src/core/ledger.ts";
 import { definitionHash, readMarker, resolvedPolicy } from "../src/core/marker.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
 import { mirrorHash, reconcileProject, RITUAL_DEFINED, skillDirty } from "../src/core/reconcile.ts";
+import { buildPrompt } from "../src/runner/launch.ts";
 import { itemRef, openProject, readItemText, type Project } from "../src/core/store.ts";
 import { commitAll, dirty, initRepo, NO_GIT } from "./helpers/git.ts";
 
@@ -396,4 +397,24 @@ test("skillDirty: false outside git, as markerDirty", () => {
   mkdirSync(join(dir, ".claude", "skills", "daily"), { recursive: true });
   writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "x\n");
   assert.equal(skillDirty(dir, "daily"), false);
+});
+
+/** A marker whose ritual names a policy that has notes, and adds its own. */
+function notesMarker(own: string): string {
+  return `v = 3\nproject = "acme-web"\ntz = "UTC"\n[policies.guarded]\nmode = "report"\nnotes = "Never push."\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "guarded"\nnotes = "${own}"\n`;
+}
+
+test("a ritual with a policy and its own notes mirrors the joined notes, changes the hash with them, and reaches the run prompt", { skip: NO_GIT }, () => {
+  const { project, dir } = setup({ git: true, marker: notesMarker("Hand in a diff.") });
+  assert.equal(reconcileProject(project, dir, HOST, T1).ok, true);
+  const mirrored = ritual(project, "daily");
+  assert.equal(mirrored.policy.notes, "Never push.\n\nHand in a diff.");
+  const prompt = buildPrompt({ project: project.name, run: "r1", ritual: mirrored, body: "Do it." });
+  assert.ok(prompt.includes("Notes:\nNever push.\n\nHand in a diff."), "the effective notes are in the prompt");
+  const before = mirrored.def_hash;
+  writeFileSync(join(dir, ".darius.toml"), notesMarker("Hand in a patch.").replace('project = "acme-web"', `project = "${project.name}"`));
+  commitAll(dir, "notes");
+  const second = reconcileProject(project, dir, HOST, T2);
+  assert.deepEqual(second.updated, ["daily"]);
+  assert.notEqual(ritual(project, "daily").def_hash, before);
 });

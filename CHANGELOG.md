@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.58.0] - 2026-10-01
+
+### Changed
+
+- A ritual that names a `policy` may carry its own `notes`. The effective notes are the policy's notes, a blank line, then the ritual's. `mode`, `may` and `hold` still cannot be combined with `policy`. The joined text feeds the run prompt, the definition hash, the store mirror, export and the web, as the policy's notes did. `marker check --resolved` still leaves notes out.
+- The `marker check` notes warning (over 300 characters) counts a ritual's own notes and its policy's notes apart, not the joined text.
+
+### Upgrade note
+
+- Run 0.58.0 on every host before a marker combines `policy` with `notes`. An older host refuses such a marker, so it skips the whole project.
+
 ## [0.57.0] - 2026-10-01
 
 ### Added

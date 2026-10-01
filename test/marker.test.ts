@@ -398,7 +398,7 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["policy with mode", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmode = "off"\n`), /:12: mode cannot be combined with policy = "p"/u],
   ["policy with may", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmay = ["Bash"]\n`), /:12: may cannot be combined with policy = "p"/u],
   ["policy with hold", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nhold = ['x']\n`), /:12: hold cannot be combined with policy = "p"/u],
-  ["policy with notes", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nnotes = "x"\n`), /:12: notes cannot be combined with policy = "p"/u],
+  ["policy with notes that is not a string", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nnotes = 3\n`), /:12: notes must be a string/u],
   ["policy without mode", v3("[policies.p]\nmay = []\n"), /:5: \[policies\.p\] needs mode/u],
   ["may_extra with a bad rule", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmay_extra = ["not a rule"]\n`), /:12: may_extra must be a list of Claude Code permission rules .* got "not a rule"/u],
   ["may_extra not a list", v3(`${RITUAL}may_extra = "Bash"\n`), /:9: may_extra must be a list of strings/u],
@@ -447,6 +447,55 @@ test("definitionHash is stable across key order, comments and policy form", () =
   assert.notEqual(definitionHash(first), definitionHash(changed));
   const renamed: RepoRitual = { ...first, line: 99, policyName: "p" };
   assert.equal(definitionHash(first), definitionHash(renamed));
+});
+
+// --- notes next to a policy -------------------------------------------------------
+
+const POLICY_NOTES = `[policies.p]\nmode = "report"\nnotes = "Never push."\n`;
+const POLICY_BARE = `[policies.p]\nmode = "report"\n`;
+
+test("a ritual that names a policy: policy notes only, own notes only, both joined by a blank line, or neither", () => {
+  assert.equal(firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\n`).policy.notes, "Never push.");
+  assert.equal(firstRitual(`${POLICY_BARE}${RITUAL}policy = "p"\nnotes = "Hand in a diff."\n`).policy.notes, "Hand in a diff.");
+  const both = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Hand in a diff."\n`);
+  assert.equal(both.policy.notes, "Never push.\n\nHand in a diff.");
+  assert.equal(both.ownNotes, "Hand in a diff.");
+  const neither = firstRitual(`${POLICY_BARE}${RITUAL}policy = "p"\n`);
+  assert.equal(neither.policy.notes, undefined);
+  assert.equal("notes" in neither.policy, false);
+  assert.equal("ownNotes" in neither, false);
+});
+
+test("own notes with a policy and extras: the notes are appended, the gates are untouched, and the policy table is not changed", () => {
+  const marker = readMarker(
+    checkout(v3(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Own."\nhold_extra = ['x']\n[rituals.other]\ntitle = "Other"\nskill = "other"\npolicy = "p"\n`)),
+  );
+  assert.ok(marker !== null);
+  const [first, second] = marker.rituals;
+  assert.equal(first?.policy.notes, "Never push.\n\nOwn.");
+  assert.deepEqual(first?.policy.hold, ["x"]);
+  assert.equal(second?.policy.notes, "Never push.", "another ritual on the policy keeps the policy's notes");
+  assert.equal(marker.policies.p?.notes, "Never push.");
+});
+
+test("a ritual without a policy keeps its own notes as before", () => {
+  assert.equal(firstRitual(`${RITUAL}notes = "Own."\n`).policy.notes, "Own.");
+  assert.equal("ownNotes" in firstRitual(`${RITUAL}notes = "Own."\n`), false);
+});
+
+test("the hash changes when the own notes next to a policy change, and ignores how they are split", () => {
+  const one = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "One."\n`);
+  const two = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Two."\n`);
+  const none = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\n`);
+  assert.notEqual(definitionHash(one), definitionHash(two));
+  assert.notEqual(definitionHash(one), definitionHash(none));
+  const inline = firstRitual(`${RITUAL}mode = "report"\nnotes = "Never push.\\n\\nOne."\n`);
+  assert.equal(definitionHash(one), definitionHash(inline), "the hash covers the effective notes, not how the file writes them");
+});
+
+test("--resolved leaves notes out, with or without own notes", () => {
+  const ritual = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Own."\n`);
+  assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report"]);
 });
 
 // --- may_extra and hold_extra -----------------------------------------------------

@@ -26,6 +26,7 @@
  *   skill = "daily-report"             profile, model, max_turns, and either
  *   args = "--site acme"               `policy` or mode, may, hold, notes
  *   policy = "read-only"
+ *   notes = "Reports only."            optional next to `policy`, see below
  *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
  *   hold_extra = ['\bpush\b']          adds to the policy's hold (or the own hold)
  *
@@ -40,6 +41,11 @@
  * rule, so a ritual never has fewer `hold` patterns than its base policy.
  * The ritual's `policy` holds the effective lists, so reconcile, the hash,
  * the run, export and the web all read one resolved policy.
+ *
+ * `notes` is advice for the prompt, not a gate, so a ritual that names a
+ * `policy` may carry its own `notes` (0.58.0). The effective notes are the
+ * policy's notes, a blank line, then the ritual's. `mode`, `may` and `hold`
+ * are gates: next to `policy` they are an error.
  *
  * A file with profiles or defaults must say `v = 2` or `v = 3`. Rituals,
  * policies and `tz` need `v = 3`. An older darius refuses a newer
@@ -109,6 +115,8 @@ export interface RepoRitual {
   policyName?: string;
   /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
   policyExtra?: PolicyExtra;
+  /** The ritual's own `notes` when it also names a `policy`. Already joined into `policy.notes`; for the length warning only. */
+  ownNotes?: string;
   /** The effective policy: the base lists plus the extras, deduped. */
   policy: MarkerPolicy;
   /** The `[rituals.<slug>]` header line, for messages. */
@@ -356,6 +364,7 @@ interface ResolvedPolicy {
   policy: MarkerPolicy;
   policyName?: string;
   policyExtra?: PolicyExtra;
+  ownNotes?: string;
 }
 
 /** `base`, then each entry of `extra` it does not hold yet. Duplicates go; the first place stays. */
@@ -375,9 +384,10 @@ function decodeExtra(table: Table, section: string, source: Source): PolicyExtra
 }
 
 /**
- * The effective policy of a ritual: `base` with the extras added. Mode and
- * notes stay the base's. Every base rule stays, in its place: an extra can
- * only add, so `hold` never loses a pattern.
+ * The effective policy of a ritual: `base` with the extras added. Mode
+ * stays the base's. Every base rule stays, in its place: an extra can
+ * only add, so `hold` never loses a pattern. Notes are the base's; a ritual
+ * that names a policy appends its own after that (`resolveRitualPolicy`).
  */
 function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined): ResolvedPolicy {
   const policy: MarkerPolicy = { mode: base.mode, may: addRules(base.may, extra?.may ?? []), hold: addRules(base.hold, extra?.hold ?? []) };
@@ -387,7 +397,8 @@ function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined): Resolved
 
 /**
  * The policy of a ritual: the named `[policies.*]` table, or its own mode,
- * may, hold and notes; then `may_extra` and `hold_extra` added to it.
+ * may, hold and notes; then `may_extra` and `hold_extra` added to it. With a
+ * named policy, the ritual's own `notes` follow the policy's, after a blank line.
  */
 function resolveRitualPolicy(
   table: Table,
@@ -404,13 +415,16 @@ function resolveRitualPolicy(
   }
   const line = source.lines[`${section}.policy`];
   if (!isText(named) || named === "") throw new Error(`${where(source.file, line)}: policy must name a [policies.<name>] table`);
-  const clash = ["mode", "may", "hold", "notes"].find((key) => table[key] !== undefined);
+  const clash = ["mode", "may", "hold"].find((key) => table[key] !== undefined);
   if (clash !== undefined) {
     throw new Error(`${where(source.file, source.lines[`${section}.${clash}`])}: ${clash} cannot be combined with policy = "${named}"; put it in [policies.${named}]`);
   }
   const found = at.policies[named];
   if (found === undefined) throw new Error(`${where(source.file, line)}: policy = "${named}" names no [policies.${named}] table`);
-  return { ...withExtra(found, extra), policyName: named };
+  const resolved = { ...withExtra(found, extra), policyName: named };
+  if (own.notes === undefined) return resolved;
+  resolved.policy.notes = found.notes === undefined ? own.notes : `${found.notes}\n\n${own.notes}`;
+  return { ...resolved, ownNotes: own.notes };
 }
 
 /** `mode` against `max_mode`: above the ceiling, or `act` with none, is an error. */
@@ -477,7 +491,7 @@ function decodeRitual(
   if (maxTurns !== undefined && !isPositiveInteger(maxTurns)) {
     throw new Error(`${where(source.file, source.lines[`${section}.max_turns`])}: max_turns must be a positive integer`);
   }
-  const { policy, policyName, policyExtra } = resolveRitualPolicy(table, { section, source, policies: context.policies });
+  const { policy, policyName, policyExtra, ownNotes } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
   if (cadence !== undefined) ritual.cadence = cadence;
   if (hhmm !== undefined) ritual.at = hhmm;
@@ -490,6 +504,7 @@ function decodeRitual(
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
   if (policyName !== undefined) ritual.policyName = policyName;
   if (policyExtra !== undefined) ritual.policyExtra = policyExtra;
+  if (ownNotes !== undefined) ritual.ownNotes = ownNotes;
   checkCeiling(ritual, section, source, context.maxMode);
   return ritual;
 }
@@ -623,7 +638,7 @@ function sortedKeys<T extends object>(value: T): T {
 
 /**
  * The sha256 hex of a repo ritual's definition: canonical JSON with the keys
- * sorted at both levels, `line`, `policyName` and `policyExtra` left out. It
+ * sorted at both levels, `line`, `policyName`, `policyExtra` and `ownNotes` left out. It
  * hashes the effective policy, the one a run uses, not how the file writes
  * it: a policy inline or factored into `[policies.*]` plus extras gives the
  * same hash when its lists come out in the same order. The same content
@@ -632,10 +647,11 @@ function sortedKeys<T extends object>(value: T): T {
  * order-free view.
  */
 export function definitionHash(ritual: RepoRitual): string {
-  const { line: _line, policyName: _policyName, policyExtra: _policyExtra, policy, ...rest } = ritual;
+  const { line: _line, policyName: _policyName, policyExtra: _policyExtra, ownNotes: _ownNotes, policy, ...rest } = ritual;
   void _line;
   void _policyName;
   void _policyExtra;
+  void _ownNotes;
   const canonical = sortedKeys({ ...rest, policy: sortedKeys({ ...policy }) });
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
