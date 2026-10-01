@@ -40,6 +40,7 @@ export type SkipReason =
   | "marker-dirty"
   | "not-in-marker"
   | "skill-missing"
+  | "skill-dirty"
   | "not-active"
   | "not-resumable"
   | "not-followable"
@@ -123,6 +124,7 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
   "marker-invalid",
   "marker-dirty",
   "skill-missing",
+  "skill-dirty",
 ]);
 
 /**
@@ -138,6 +140,7 @@ const OWN_DETAILS: ReadonlySet<string> = new Set([
   "marker-invalid",
   "marker-dirty",
   "skill-missing",
+  "skill-dirty",
 ]);
 
 /**

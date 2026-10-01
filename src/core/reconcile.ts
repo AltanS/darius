@@ -101,6 +101,21 @@ export function markerDirty(checkout: string): boolean {
   return out !== undefined && out.trim() !== "";
 }
 
+/** A skill's folder in a checkout, as git sees it: `.claude/skills/<skill>/`. */
+export function skillFolder(skill: string): string {
+  return `.claude/skills/${skill}/`;
+}
+
+/**
+ * True when `git status --porcelain -- .claude/skills/<skill>/` prints
+ * anything: a modified or an untracked file. False when git fails, as for
+ * `markerDirty`. A skill is config, so only a committed one runs unattended.
+ */
+export function skillDirty(checkout: string, skill: string): boolean {
+  const out = git(checkout, ["status", "--porcelain", "--", skillFolder(skill)]);
+  return out !== undefined && out.trim() !== "";
+}
+
 function isText(value: TomlValue | undefined): value is string {
   return typeof value === "string";
 }

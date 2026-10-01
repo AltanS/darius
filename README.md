@@ -523,6 +523,7 @@ A ritual's `timeout` replaces the unit's `--timeout` for that run, and the lease
 | `marker-invalid` | `.darius.toml` does not parse. Every ritual of the project skips. | yes |
 | `marker-dirty` | `.darius.toml` has uncommitted changes. `run now` warns and runs instead. | yes |
 | `skill-missing` | `.claude/skills/<skill>/SKILL.md` is not in the checkout. | yes |
+| `skill-dirty` | `.claude/skills/<skill>/` has uncommitted or untracked files. Only that ritual skips. `run now` warns and runs instead. | yes |
 | `not-in-marker` | A store ritual that a v3 marker does not name. | no |
 | `lease-held` | Another host holds the ritual lease. Exit 0. | no |
 

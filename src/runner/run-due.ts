@@ -22,11 +22,15 @@
  *      none here skips it as `no-workdir`, and a mode above the checkout's
  *      `.darius.toml` `max_mode` skips it as `policy-capped`. Both are decided
  *      before a run starts, so neither leaves an open run behind. A v3 project
- *      adds four more skips (docs/architecture/marker-v3.md, 4.6):
+ *      adds more skips (docs/architecture/marker-v3.md, 4.6):
  *      `marker-invalid` (the marker does not parse), `marker-dirty` (unattended
  *      only: `.darius.toml` has uncommitted changes; by hand it is a warning),
- *      `not-in-marker` (a store ritual the marker does not name) and
- *      `skill-missing` (the ritual's skill file is not in the checkout).
+ *      `not-in-marker` (a store ritual the marker does not name),
+ *      `skill-missing` (the ritual's skill file is not in the checkout) and
+ *      `skill-dirty` (unattended only: `git status --porcelain` lists a
+ *      modified or untracked file in `.claude/skills/<skill>/`; by hand it is
+ *      a warning). The two skill checks apply to any ritual with a skill
+ *      that runs in a checkout, v2 included.
  *   3. Take the ritual lease (src/core/lease.ts): S3
  *      `<project>/leases/ritual-<slug>.json` when a remote is configured, else
  *      an O_EXCL file `<store>/<project>/leases/ritual-<slug>.lock`. A lease
@@ -64,7 +68,7 @@ import { takeLease, type LeaseOutcome } from "../core/lease.ts";
 import { isAboveCap, MARKER_FILE, type Marker } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
-import { reconcileProject } from "../core/reconcile.ts";
+import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
@@ -361,6 +365,20 @@ function hasSkillFile(dir: string, skill: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The skill preflight in the checkout `dir`: `skill-missing` when the skill
+ * file is not there, then `skill-dirty` when its folder has uncommitted or
+ * untracked files. Only committed config runs unattended; by hand a dirty
+ * skill is a warning and the run goes on, as for a dirty marker.
+ */
+function skillPreflight(slug: string, skill: string, at: { dir: string; isByHand: boolean }): { skip: RitualEntry } | { warnings: string[] } {
+  if (!hasSkillFile(at.dir, skill)) return { skip: skipped(slug, "skill-missing", `${skillFile(skill)} is not in ${at.dir}`) };
+  if (!skillDirty(at.dir, skill)) return { warnings: [] };
+  const folder = skillFolder(skill);
+  if (!at.isByHand) return { skip: skipped(slug, "skill-dirty", `${folder} has uncommitted changes: commit or revert them`) };
+  return { warnings: [`${folder} has uncommitted changes; this run uses them`] };
 }
 
 /** True when the ritual is active and due today, whatever its policy says. */
@@ -783,11 +801,10 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     const where = projectWorkdir(ctx.project, ledger);
     if ("missing" in where) return skipped(slug, "no-workdir", where.detail);
     const { skill } = doc.header;
-    if (skill !== undefined && where.from !== "store" && !hasSkillFile(where.dir, skill)) {
-      return skipped(slug, "skill-missing", `${skillFile(skill)} is not in ${where.dir}`);
-    }
+    const skillCheck = skill === undefined || where.from === "store" ? { warnings: [] } : skillPreflight(slug, skill, { dir: where.dir, isByHand });
+    if ("skip" in skillCheck) return skillCheck.skip;
     const timeoutMs = where.marker?.rituals.find((ritual) => ritual.slug === slug)?.timeoutMs ?? ctx.options.timeoutMs;
-    const markerWarnings = dirtyWarnings(ctx, isByHand);
+    const markerWarnings = [...dirtyWarnings(ctx, isByHand), ...skillCheck.warnings];
     if (followUp !== undefined && where.from === "store") {
       return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
     }

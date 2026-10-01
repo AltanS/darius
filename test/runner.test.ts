@@ -45,7 +45,7 @@ import { planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
 import { preflightGate } from "../src/runner/launch.ts";
 import { agentName } from "../src/surface/herdr.ts";
-import { formatReport, type BatchReport, type RitualEntry } from "../src/runner/report.ts";
+import { FAILING_SKIPS, formatReport, skipAlerts, type BatchReport, type ProjectEntry, type RitualEntry } from "../src/runner/report.ts";
 import { harnessCommand } from "../src/cli/harness.ts";
 import { readSummary, type RunResult } from "../src/core/result.ts";
 import { latestHandoff } from "../src/core/handoff.ts";
@@ -899,6 +899,42 @@ test("a ritual whose skill file is not in the checkout skips as skill-missing; w
   writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "---\nname: daily\ndescription: d\n---\n");
   const found = await batchAt(project, AFTER_AT);
   assert.equal(ritualsOf(found.report)[0]?.end, "complete", JSON.stringify(found.report));
+});
+
+test("a dirty skill folder skips only its ritual as skill-dirty and fails the batch; by hand it warns and runs", { skip: NO_GIT }, async () => {
+  const project = "rd-v3-skill-dirty";
+  const otherSkill = join(SANDBOX, `${project}-checkout`, ".claude", "skills", "other");
+  mkdirSync(otherSkill, { recursive: true });
+  writeFileSync(join(otherSkill, "SKILL.md"), "---\nname: other\ndescription: other\n---\nDo it.\n");
+  const other = ['[rituals.other]', 'title = "Other"', 'cadence = "1d"', 'from = "2026-10-02"', 'at = "07:00"', 'skill = "other"', 'mode = "report"', 'may = ["Bash(date)"]'];
+  const dir = v3Checkout(project, { git: true, extra: `\n${other.join("\n")}` });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  dirtyFile(dir, join(".claude", "skills", "daily", "SKILL.md"));
+  const timer = await batchAt(project, AFTER_AT);
+  const daily = ritualsOf(timer.report).find((entry) => entry.slug === "daily");
+  assert.deepEqual([daily?.action, daily?.reason], ["skipped", "skill-dirty"], JSON.stringify(timer.report));
+  assert.equal(daily?.detail, ".claude/skills/daily/ has uncommitted changes: commit or revert them");
+  assert.equal(ritualsOf(timer.report).find((entry) => entry.slug === "other")?.end, "complete", "the other ritual still runs");
+  assert.equal(timer.code, 1, "a failing skip");
+  assert.match(formatReport(timer.report).join("\n"), /daily: skipped, skill-dirty/u);
+  // An untracked file in the folder counts too, in a dry run as well.
+  commitAll(dir, "commit the skill");
+  writeFileSync(join(dir, ".claude", "skills", "daily", "notes.md"), "draft\n");
+  const dry = await batchAt(project, AFTER_AT, { isDryRun: true });
+  assert.equal(ritualsOf(dry.report).find((entry) => entry.slug === "daily")?.reason, "skill-dirty", JSON.stringify(dry.report));
+  const hand = await batchAt(project, AFTER_AT, { only: "daily", now: {} });
+  const ran = ritualsOf(hand.report)[0];
+  assert.equal(ran?.end, "complete", JSON.stringify(hand.report));
+  assert.ok((ran?.warnings ?? []).includes(".claude/skills/daily/ has uncommitted changes; this run uses them"), JSON.stringify(ran));
+  assert.equal(linesOf(project, "run.started").length, 2);
+});
+
+test("skill-dirty is a failing skip with its own detail in the alert", () => {
+  const entry: ProjectEntry = { project: "acme-web", syncBefore: "", syncAfter: "", rituals: [{ slug: "daily", action: "skipped", reason: "skill-dirty", detail: ".claude/skills/daily/ has uncommitted changes: commit or revert them" }] };
+  const [alert] = skipAlerts(entry, { date: "2026-10-02", host: "host-a" });
+  assert.equal(alert?.title, "daily did not start: skill-dirty");
+  assert.match(alert?.body ?? "", /\.claude\/skills\/daily\/ has uncommitted changes/u);
+  assert.equal(FAILING_SKIPS.has("skill-dirty"), true);
 });
 
 test("a store ritual that a v3 marker does not name is skipped as not-in-marker, quietly, exit 0", async () => {
