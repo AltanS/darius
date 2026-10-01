@@ -21,7 +21,7 @@ import { dayGap, dayName, ritualPath, shortDate, vigilPath } from "./format.ts";
 import { type Kind, isManual } from "./kind.ts";
 import { ASKS_YOU, datePhrase, FAILED, FAILED_SEEN, FLAGGED, lateWord, railOf, type Rail, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import type { Badge } from "./tone.ts";
-import { asksYou, cadenceText } from "./view.ts";
+import { asksYou, atText, cadenceText } from "./view.ts";
 
 const DAY = 24 * 60 * 60_000;
 
@@ -132,8 +132,10 @@ function groupOf(today: string, date: string | null, overdue: boolean): GroupSpe
 /** "every 7 days, last done 14 Sep": the cadence in words, then when it was last done. */
 function factsText(ritual: RitualRow): string {
   const cadence = cadenceText(ritual.cadence);
+  const cadenceAt = atText(ritual);
   const done = ritual.lastCompleted === null ? "not done yet" : `last done ${shortDate(ritual.lastCompleted)}`;
-  return cadence === null ? done : `${cadence}, ${done}`;
+  const every = cadence === null || cadenceAt === null ? cadence : `${cadence} at ${cadenceAt}`;
+  return every === null ? done : `${every}, ${done}`;
 }
 
 // --- rituals -------------------------------------------------------------------------------
@@ -186,7 +188,7 @@ function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
     state: at.state,
     facts: factsText(ritual),
     until: null,
-    note: null,
+    note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
     overdueDays: at.overdueDays,
   };
 }

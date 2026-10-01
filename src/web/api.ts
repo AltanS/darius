@@ -98,6 +98,27 @@ export interface RitualRow {
   openRun: string | null;
   /** The latest run failed or was abandoned today, so the timer does not start the ritual again today. */
   failedToday: { run: string; acknowledged: Acknowledgement | null } | null;
+  /**
+   * `repo`: defined in `.darius.toml` (marker v3), so git owns the definition.
+   * `unmanaged`: a store ritual that a v3 marker on this host does not name.
+   * Null: a store ritual (v2 project). Same facts as `darius ritual list --json`.
+   */
+  source: "repo" | "unmanaged" | null;
+  /** The commit, host and instant of the last reconcile; null unless `source` is `repo` (and the commit, when the checkout is not in git). */
+  defCommit: string | null;
+  defHost: string | null;
+  defAt: string | null;
+  /** `.darius.toml` had uncommitted changes at the last reconcile. */
+  defDirty: boolean;
+  /** The mirrored schedule: `HH:MM` and an IANA zone; null for a store ritual. */
+  at: string | null;
+  zone: string | null;
+  /** The per-run budget as written (`30m`); null when none is set. */
+  timeout: string | null;
+  /** The instant the next occurrence is due (ISO); null for a retired ritual. */
+  nextDueAt: string | null;
+  /** The warnings of `darius ritual list`: a stale mirror, a retired slug named again. */
+  warnings: string[];
 }
 
 // --- run results (0.22.0) ------------------------------------------------------------------

@@ -30,6 +30,16 @@ function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
     heldRun: null,
     openRun: null,
     failedToday: null,
+    source: null,
+    defCommit: null,
+    defHost: null,
+    defAt: null,
+    defDirty: false,
+    at: null,
+    zone: null,
+    timeout: null,
+    nextDueAt: null,
+    warnings: [],
     ...extra,
   };
 }

@@ -15,8 +15,9 @@ import { readLegacyMilestoneDetail, type LegacyFile } from "../core/legacy-miles
 import { readLegacyMilestones, type LegacyMilestone } from "../core/legacy-milestones.ts";
 import { readLegacyVigils } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
-import { readMarker } from "../core/marker.ts";
-import type { JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
+import { readMarker, type Marker } from "../core/marker.ts";
+import { mirrorHash } from "../core/reconcile.ts";
+import type { Document, JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { parseResult, readSummary } from "../core/result.ts";
 import { GLOBAL_PROJECT, getBlobText, listProjects, openProject, type Project } from "../core/store.ts";
@@ -115,8 +116,37 @@ function failedTodayOf(ledger: readonly LedgerLine[], slug: string, today: strin
   return { run, acknowledged };
 }
 
-function ritualRows(project: Project, ledger: LedgerLine[], now: Date): RitualRow[] {
+/** The v3 marker of the checkout, or null: no checkout, no marker, an older marker, or one that does not parse. */
+function v3MarkerAt(checkout: string | null): Marker | null {
+  if (checkout === null) return null;
+  try {
+    const marker = readMarker(checkout);
+    return marker !== null && marker.version >= 3 ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The same two warnings `darius ritual list` prints: a retired slug named again, and a mirror this checkout differs from. */
+function mirrorWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): string[] {
+  const { header } = doc;
+  const defined = marker?.rituals.find((ritual) => ritual.slug === header.slug);
+  if (marker === null || defined === undefined || header.source !== "repo") return [];
+  if (lifecycle === "retired") return [`${header.slug} was retired; use a new slug`];
+  if (header.def_hash === mirrorHash(marker, defined)) return [];
+  const commit = header.def_commit === undefined ? "" : ` (commit ${header.def_commit})`;
+  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
+}
+
+function sourceOf(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): RitualRow["source"] {
+  if (doc.header.source === "repo") return "repo";
+  if (marker === null || lifecycle === "retired") return null;
+  return marker.rituals.some((ritual) => ritual.slug === doc.header.slug) ? null : "unmanaged";
+}
+
+function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout: string | null): RitualRow[] {
   const today = localToday(now);
+  const marker = v3MarkerAt(checkout);
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
@@ -139,6 +169,16 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date): RitualRo
         heldRun: state.heldRun ?? null,
         openRun: state.openRun ?? null,
         failedToday: failedTodayOf(ledger, slug, today),
+        source: sourceOf(doc, state.lifecycle, marker),
+        defCommit: header.def_commit ?? null,
+        defHost: header.def_host ?? null,
+        defAt: header.def_at ?? null,
+        defDirty: header.def_dirty === true,
+        at: header.at ?? null,
+        zone: header.tz ?? null,
+        timeout: header.timeout ?? null,
+        nextDueAt: state.nextDueAt ?? null,
+        warnings: mirrorWarnings(doc, state.lifecycle, marker),
       },
     ];
   });
@@ -255,7 +295,7 @@ function projectStatus(name: string, now: Date): ProjectStatus {
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
-    status.rituals = ritualRows(project, ledger, now);
+    status.rituals = ritualRows(project, ledger, now, checkout);
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
     const stored = vigilRows(project, ledger);
     status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
@@ -365,7 +405,7 @@ export function ritualDetail(projectName: string, slug: string, now: Date = new 
   const doc = project.readItem<Ritual>("ritual", slug);
   if (doc === null) return null;
   const ledger = readLedger(project);
-  const row = ritualRows(project, ledger, now).find((candidate) => candidate.slug === slug);
+  const row = ritualRows(project, ledger, now, linkedDir(projectName) ?? null).find((candidate) => candidate.slug === slug);
   if (row === undefined) return null;
   const { policy } = doc.header;
   const item = `ritual/${slug}`;

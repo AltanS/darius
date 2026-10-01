@@ -132,7 +132,7 @@ A checkout's path is per host. `darius link`, run inside a checkout, finds the m
 ### Marker v3
 
 0.53.0 (design of 2026-10-01) lets the marker define rituals and policies. 0.53.0 parses and
-checks them. 0.54.0 adds reconcile, the runner steps, the CLI guards and the 15-minute tick (see "Unattended runner"). Export and the web follow in 0.55.0.
+checks them. 0.54.0 adds reconcile, the runner steps, the CLI guards and the 15-minute tick (see "Unattended runner"). 0.55.0 adds `ritual export` and the read-only web view.
 
 ```toml
 v = 3
@@ -161,6 +161,8 @@ timeout = "30m"                       # 1m to 12h
 - **TOML subset.** Arrays may span lines, with comments and a trailing comma. Single-quoted literal strings keep backslashes, so a regex is written `'\bdeploy\b'`.
 - **Check.** `darius marker check [dir]` runs the same parser and adds warnings (a skill file missing here, an unused policy, a v3 marker with no rituals). The parser never touches the file system.
 - **Rollout.** Every host must run 0.53.0 or later before a marker with the new keys is committed: an older host refuses a v3 file and skips the project.
+- **Migration (0.55.0).** `darius ritual export [--project NAME] [--write] [--json]` turns the store rituals of a v2 project (active and paused) into a v3 marker. Without `--write` it prints the marker to stdout. It keeps the root keys, `[profiles.*]` and `[defaults]` of the current marker, bumps `v = 3`, writes `tz` from the host zone, and adds one `[rituals.<slug>]` per ritual with the git-owned fields. A ritual with no `skill` gets `skill = "<slug>"`, and its body becomes `.claude/skills/<slug>/SKILL.md`. `host` is never written (decision 9). With `--write` it writes the files into the linked checkout, and refuses when the marker or a target file has uncommitted changes, when the marker is already v3, or when a skill file exists. It never runs git write commands and never commits. The steps: run export, review, commit and push, pull on each host, run `darius ritual reconcile`. A slug with a dot is refused until renamed. `darius import` is unrelated and stays v2 only.
+- **Web (0.55.0).** The web is read-only for git-owned fields. The ritual page shows `Defined in .darius.toml at commit X, host Y, <when>` (with `(uncommitted changes)` when dirty), the schedule with `at` and zone, the `timeout`, the warnings of `ritual list`, and points edits to git. The off notice for a repo ritual says to set `mode = "report"` in `.darius.toml` and commit. A ritual row shows `git`; an unmanaged ritual shows `not in .darius.toml`. Pause, resume, host pin and due stay store actions. Every fact comes from `ritual list --json` and `ritual show --json`. A stale mirror changes only what the web shows, never what runs.
 
 ### Security
 
@@ -565,11 +567,11 @@ Status: 2026-09-28, 0.8.0. Operator request: set up djinn for a project, as a lo
 The repo holds what both callers need. The skills live in `.claude/skills/` at the repo root, and they are the only skills a ritual may name. The tooling the skills call lives in the repo too; a `tools/` folder at the root is the convention. One `.darius.toml` at the root holds identity, ceiling and profiles. darius adds nothing else to the repo (decision 9 stands).
 
 - **By hand.** A person's own session invokes the skill. darius runs nothing; it only appears when the session calls `darius` verbs.
-- **Unattended.** A ritual names a skill (`ritual set <slug> --skill daily-report`). run-due, or `darius run now`, starts a harness session in the project's linked checkout, at its root. The prompt says to invoke that skill; the checkout supplies it. The profile picks the harness, model and surface; the gate and the policy replace the person.
+- **Unattended.** A ritual names a skill (`skill = "daily-report"` in its `[rituals.<slug>]` table in a v3 project, `ritual set <slug> --skill daily-report` in a v2 project). run-due, or `darius run now`, starts a harness session in the project's linked checkout, at its root. The prompt says to invoke that skill; the checkout supplies it. The profile picks the harness, model and surface; the gate and the policy replace the person.
 
-**Git and the store.** Git holds what people write and review: the marker, the skills, the tooling, `CLAUDE.md` and agents. The store holds what machines write: runs, held questions, answers, reports, evidence, vigils and their verdicts, pause state and host pins. Only committed configuration runs unattended: the store may ask for work, but git decides what is allowed. Rituals move into git later, with marker v3. Vigils never do.
+**Git and the store.** Git holds what people write and review: the marker, the skills, the tooling, `CLAUDE.md` and agents. The store holds what machines write: runs, held questions, answers, reports, evidence, vigils and their verdicts, pause state and host pins. Only committed configuration runs unattended: the store may ask for work, but git decides what is allowed. In a project with a v3 marker, rituals are defined in git too (see "Marker v3"). Vigils never are.
 
-**Activate** means: the host has a checkout, `darius link` recorded it, and the marker's `max_mode` is above `off`. There is no other state. A host without the checkout skips the project (`no-workdir`), as before.
+**Activate** means: the host has a checkout, `darius link` recorded it, and the marker's `max_mode` is above `off`. In a v3 project the ritual itself is in the marker: pulling the commit and the next reconcile (run-due does it, or `darius ritual reconcile`) activate it on that host, so a new djinn needs a commit, not a store edit. A v2 project migrates with `darius ritual export` (see "Marker v3"). A host without the checkout skips the project (`no-workdir`), as before.
 
 **Skills get the full gate.** A skill can grant tools of its own (`allowed-tools` in `SKILL.md`; the `daily-report` skill of a project grants `Bash, Read, Write`). So a ritual that names a skill always runs with gate scope `full`, which enforces `may` itself, and the hook sees every tool. `Skill` itself is allowed. Where a skill says to write a file, the prompt tells the model to put the content into the findings, because unattended runs never write files.
 
