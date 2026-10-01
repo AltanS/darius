@@ -5,7 +5,9 @@
  * The subset is exactly: `key: scalar`, `key:` followed by indented
  * `- item` lines (a list of scalars), and one level of nested map (each of
  * its own values a scalar or a list — never a further nested map). Scalars
- * are either bare text or a double-quoted string; single quotes and
+ * are either bare text or a double-quoted string (escapes: backslash-quote,
+ * double backslash, backslash-n and backslash-r, so a value with a newline
+ * stays on one line); single quotes and
  * multi-line block scalars are not supported. Anything else is a parse
  * error naming the file and line. The body is kept byte for byte: import
  * (a later task) must never rewrite a body it copied in.
@@ -101,6 +103,13 @@ function splitKeyValue(content: string, file: string, lineNumber: number): KeyVa
   return { key, inlineValue: value };
 }
 
+const QUOTED_ESCAPES = new Map([
+  ['"', '"'],
+  ["\\", "\\"],
+  ["n", "\n"],
+  ["r", "\r"],
+]);
+
 function parseScalar(raw: string, file: string, lineNumber: number): string {
   if (raw.startsWith("'")) {
     throw parseError(file, lineNumber, `single-quoted strings are not supported: ${raw}`);
@@ -119,11 +128,11 @@ function parseScalar(raw: string, file: string, lineNumber: number): string {
       index += 1;
       continue;
     }
-    const next = inner[index + 1];
-    if (next !== '"' && next !== "\\") {
+    const decoded = QUOTED_ESCAPES.get(inner[index + 1] ?? "");
+    if (decoded === undefined) {
       throw parseError(file, lineNumber, `unsupported escape sequence in ${raw}`);
     }
-    result += next;
+    result += decoded;
     index += 2;
   }
   return result;
@@ -234,7 +243,7 @@ function needsQuoting(value: string): boolean {
   if (value.length === 0) return true;
   if (value === "[]") return true;
   if (/^\s/u.test(value) || /\s$/u.test(value)) return true;
-  if (value.includes("\n")) return true;
+  if (value.includes("\n") || value.includes("\r")) return true;
   if (value.startsWith('"') || value.startsWith("'") || value.startsWith("-") || value.startsWith("#")) {
     return true;
   }
@@ -243,7 +252,7 @@ function needsQuoting(value: string): boolean {
 }
 
 function escapeQuoted(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n").replaceAll("\r", "\\r");
 }
 
 function serializeScalar(value: string): string {

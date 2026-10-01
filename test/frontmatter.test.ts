@@ -144,3 +144,11 @@ test("rejects a blank line inside frontmatter, naming the file", () => {
   const text = ["---", "title: x", "", "slug: y", "---", ""].join("\n");
   assert.throws(() => parseDocument(text, "blank.md"), /blank\.md:3: blank line inside frontmatter/);
 });
+
+test("a quoted value with newlines round-trips on one line, and an unknown escape is still an error", () => {
+  const header = { title: "one\ntwo\r\n\"three\" \\ four", tags: ["a\nb"] };
+  const text = serializeDocument(header, "body\n");
+  assert.equal(text.split("\n").length, 7, "the value adds no lines");
+  assert.deepEqual(parseDocument(text, "x.md").header, header);
+  assert.throws(() => parseDocument('---\ntitle: "a\\qb"\n---\n', "x.md"), /x\.md:2: unsupported escape sequence/u);
+});

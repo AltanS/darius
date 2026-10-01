@@ -18,8 +18,10 @@ import {
   tomlArrayMultiline,
   tomlKey,
   tomlLiteral,
+  tomlMultiline,
   tomlSectionHeader,
   tomlString,
+  tomlText,
   type TomlDocument,
 } from "../src/core/toml.ts";
 
@@ -240,4 +242,91 @@ test("tomlArrayMultiline round-trips through parseToml with either quote form", 
     assert.deepEqual(doc.root.hold, items);
     assert.equal(doc.root.after, true);
   }
+});
+
+// --- multi-line basic strings ------------------------------------------------------
+
+function multiline(text: string): string {
+  return String(parseToml(`k = ${text}\n`, "x.toml").root.k);
+}
+
+test('a multi-line string trims the newline after the opening """ and keeps the others', () => {
+  assert.equal(multiline('"""\nfirst\nsecond\n"""'), "first\nsecond\n");
+  assert.equal(multiline('"""first\nsecond"""'), "first\nsecond");
+  assert.equal(multiline('"""\n\nfirst"""'), "\nfirst");
+});
+
+test("a line-ending backslash drops the newline and the white space up to the next word", () => {
+  assert.equal(multiline('"""\nThe quick \\\n      brown \\  \n\n   fox"""'), "The quick brown fox");
+  assert.equal(multiline('"""a\\\n    b"""'), "ab");
+  // A backslash before text is an escape, not a line ending.
+  assert.equal(multiline('"""a\\\\\nb"""'), "a\\\nb");
+});
+
+test("a multi-line string reads the basic escapes", () => {
+  assert.equal(multiline('"""tab\\tnew\\nback\\\\ quote\\" cr\\r u\\u00e9 U\\U0001F600"""'), 'tab\tnew\nback\\ quote" cr\r u\u00e9 U\u{1F600}');
+  assert.throws(() => parseToml('k = """a\\qb"""\n', "x.toml"), /x\.toml:1: unsupported escape "\\q" in a multi-line string/u);
+  assert.throws(() => parseToml('k = """a\\u12"""\n', "x.toml"), /unsupported escape "\\u"/u);
+});
+
+test("a multi-line string may hold one or two quotes in a row, and end with them", () => {
+  assert.equal(multiline('"""say "hi" and ""bye"" now"""'), 'say "hi" and ""bye"" now');
+  assert.equal(multiline('"""ends with one""""'), 'ends with one"');
+  assert.equal(multiline('"""ends with two"""""'), 'ends with two""');
+  assert.throws(() => parseToml('k = """x""""""\n', "x.toml"), /x\.toml:1: too many quotes/u);
+});
+
+test('a multi-line string ends at the first """ that is not escaped', () => {
+  assert.equal(multiline('"""a\\"""b"""'), 'a"""b');
+  assert.throws(() => parseToml('k = """a""" b"""\n', "x.toml"), /x\.toml:1: trailing content after a quoted string/u);
+});
+
+test('an empty multi-line string is "" and a comment may follow the closing """', () => {
+  const doc = parseToml('a = """"""\nb = """\n"""  # note\nc = 1\n', "x.toml");
+  assert.equal(doc.root.a, "");
+  assert.equal(doc.root.b, "");
+  assert.equal(doc.root.c, 1);
+});
+
+test("an unterminated multi-line string is an error that names the line it opened on", () => {
+  assert.throws(() => parseToml('a = 1\n\nnotes = """\nline\nline\n', "x.toml"), /x\.toml:3: unterminated multi-line string/u);
+  assert.throws(() => parseToml('a = """x"" \n', "x.toml"), /x\.toml:1: unterminated multi-line string/u);
+});
+
+test("keys after a multi-line value keep their line numbers", () => {
+  const text = '[rituals.a]\nnotes = """\none\ntwo\n\nfour\n"""\ntitle = "t"\nafter = """x\ny"""\nlast = true\n';
+  const doc = parseToml(text, "x.toml");
+  assert.deepEqual(doc.sections["rituals.a"], { notes: "one\ntwo\n\nfour\n", title: "t", after: "x\ny", last: true });
+  assert.equal(doc.lines["rituals.a.notes"], 2);
+  assert.equal(doc.lines["rituals.a.title"], 8);
+  assert.equal(doc.lines["rituals.a.after"], 9);
+  assert.equal(doc.lines["rituals.a.last"], 11);
+});
+
+test("a multi-line string with CRLF line ends reads as LF", () => {
+  assert.equal(multiline('"""\r\none\r\ntwo"""'), "one\ntwo");
+  assert.equal(String(parseToml('k = """\r\na\r\nb"""\r\nz = 1\r\n', "x.toml").root.k), "a\nb");
+});
+
+test("tomlText writes the multi-line form for a newline and round-trips every value", () => {
+  assert.equal(tomlText("one line"), '"one line"');
+  assert.equal(tomlText("a\nb"), '"""\na\nb"""');
+  const values = [
+    "a\nb",
+    "\nleading newline\n",
+    'quote " and "" and """ and """" and """""\nx',
+    'ends with a quote"\nlast"',
+    'ends with three"""',
+    "back\\slash \\n \\\ntab\there\r\nthere\u0001",
+    "line one \\\n  line two",
+    "naïve 😀 text\nnext",
+  ];
+  for (const value of values) {
+    const text = `before = 1\nk = ${tomlText(value)}\nafter = 2\n`;
+    const doc = parseToml(text, "x.toml");
+    assert.equal(doc.root.k, value, text);
+    assert.equal(doc.root.after, 2);
+    assert.equal(doc.lines.after, text.split("\n").length - 1);
+  }
+  assert.equal(parseToml(`k = ${tomlMultiline("plain")}\n`, "x.toml").root.k, "plain");
 });
