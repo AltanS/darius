@@ -16,7 +16,7 @@ import { readLegacyMilestones, type LegacyMilestone } from "../core/legacy-miles
 import { readLegacyVigils } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
 import { readMarker, type Marker } from "../core/marker.ts";
-import { mirrorHash } from "../core/reconcile.ts";
+import { ritualWarnings } from "../core/reconcile.ts";
 import type { Document, JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { parseResult, readSummary } from "../core/result.ts";
@@ -127,17 +127,6 @@ function v3MarkerAt(checkout: string | null): Marker | null {
   }
 }
 
-/** The same two warnings `darius ritual list` prints: a retired slug named again, and a mirror this checkout differs from. */
-function mirrorWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): string[] {
-  const { header } = doc;
-  const defined = marker?.rituals.find((ritual) => ritual.slug === header.slug);
-  if (marker === null || defined === undefined || header.source !== "repo") return [];
-  if (lifecycle === "retired") return [`${header.slug} was retired; use a new slug`];
-  if (header.def_hash === mirrorHash(marker, defined)) return [];
-  const commit = header.def_commit === undefined ? "" : ` (commit ${header.def_commit})`;
-  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
-}
-
 function sourceOf(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): RitualRow["source"] {
   if (doc.header.source === "repo") return "repo";
   if (marker === null || lifecycle === "retired") return null;
@@ -178,7 +167,7 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout:
         zone: header.tz ?? null,
         timeout: header.timeout ?? null,
         nextDueAt: state.nextDueAt ?? null,
-        warnings: mirrorWarnings(doc, state.lifecycle, marker),
+        warnings: ritualWarnings(doc, state.lifecycle, marker),
       },
     ];
   });

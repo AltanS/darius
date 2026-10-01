@@ -318,3 +318,14 @@ export function reconcileProject(
   });
   return result;
 }
+
+/** What `ritual list` and the web warn about: a retired slug named again, and a mirror this checkout differs from (section 4.3). */
+export function ritualWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): string[] {
+  const { header } = doc;
+  const defined = marker?.rituals.find((ritual) => ritual.slug === header.slug);
+  if (marker === null || defined === undefined || header.source !== "repo") return [];
+  if (lifecycle === "retired") return [`${header.slug} was retired; use a new slug`];
+  if (header.def_hash === mirrorHash(marker, defined)) return [];
+  const commit = header.def_commit === undefined ? "" : ` (commit ${header.def_commit})`;
+  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
+}

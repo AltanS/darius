@@ -61,7 +61,7 @@ import { appendLine, defaultWho, hostId, isHostId, readLedger } from "../core/le
 import { parseDate, ritualLifecycle, ritualState, rollCadence, type RitualState } from "../core/due.ts";
 import { handoffLines, latestHandoff } from "../core/handoff.ts";
 import { findMarker, isAboveCap, MARKER_FILE, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
-import { mirrorHash, reconcileProject, type ReconcileResult } from "../core/reconcile.ts";
+import { reconcileProject, ritualWarnings, type ReconcileResult } from "../core/reconcile.ts";
 import type { Document, Policy, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
@@ -316,17 +316,6 @@ interface ListedRitual {
   warnings?: string[];
 }
 
-/** Warnings from comparing the local v3 marker with a store item (section 4.3 and the retired-stays-retired ruling). */
-function listWarnings(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, marker: Marker | null): string[] {
-  const { slug } = doc.header;
-  const defined = marker?.rituals.find((ritual) => ritual.slug === slug);
-  if (marker === null || defined === undefined || doc.header.source !== "repo") return [];
-  if (ritualLifecycle(ledger, slug) === "retired") return [`${slug} was retired; use a new slug`];
-  if (doc.header.def_hash === mirrorHash(marker, defined)) return [];
-  const commit = doc.header.def_commit === undefined ? "" : ` (commit ${doc.header.def_commit})`;
-  return [`mirror is from ${doc.header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
-}
-
 function listRituals(project: Project): ListedRitual[] {
   const ledger = readLedger(project);
   const now = new Date();
@@ -347,7 +336,7 @@ function listRituals(project: Project): ListedRitual[] {
     else if (marker !== null && !isRepoRitual(doc, slug, marker) && state.lifecycle !== "retired") listed.source = "unmanaged";
     if (doc.header.at !== undefined) listed.at = doc.header.at;
     if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
-    const warnings = listWarnings(doc, ledger, marker);
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker);
     if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
   });
@@ -379,7 +368,7 @@ function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>
   if (header.source === "repo") {
     const commit = header.def_commit === undefined ? "no commit" : `commit ${header.def_commit}`;
     const dirty = header.def_dirty === true ? ", uncommitted changes" : "";
-    const warnings = listWarnings(doc, ledger, marker).map((warning) => `\n  ! ${warning}`).join("");
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker).map((warning) => `\n  ! ${warning}`).join("");
     return `repo (${commit}, host ${header.def_host ?? "?"}, ${header.def_at ?? "?"}${dirty})${warnings}`;
   }
   return marker !== null && !isRepoRitual(doc, header.slug, marker) ? "unmanaged (not in .darius.toml; it never runs unattended)" : "store";
