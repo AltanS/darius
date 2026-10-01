@@ -209,14 +209,70 @@ test("--write refuses a dirty marker, an existing skill file and a dirty skill f
   assert.equal(readFileSync(join(a.dir, ".darius.toml"), "utf8").includes("v = 2"), true);
 
   const b = setup({ git: true });
-  const target = join(b.dir, ".claude/skills/daily-report");
+  const target = join(b.dir, ".claude/skills/daily-report-ritual");
   mkdirSync(target, { recursive: true });
   writeFileSync(join(target, "SKILL.md"), "mine\n");
   const exists = await run(b.project.name, ["--write"]);
-  assert.equal(exists.code, 2);
-  assert.match(exists.stderr, /exists/u);
+  assert.equal(exists.code, 0, "no collision on daily-report, so the name stays");
   assert.equal(readFileSync(join(target, "SKILL.md"), "utf8"), "mine\n");
-  assert.equal(readFileSync(join(b.dir, ".darius.toml"), "utf8").includes("v = 2"), true);
+  assert.equal(existsSync(join(b.dir, ".claude/skills/daily-report/SKILL.md")), true);
+});
+
+function plantSkill(dir: string, name: string): string {
+  const folder = join(dir, ".claude/skills", name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "SKILL.md"), "domain procedure\n");
+  return join(folder, "SKILL.md");
+}
+
+const COLLISION = "daily-report: .claude/skills/daily-report exists; the store body becomes the skill daily-report-ritual";
+
+test("an existing skill stays and the store body becomes <slug>-ritual", { skip: NO_GIT }, async () => {
+  const { project, dir } = setup({ git: true });
+  const existing = plantSkill(dir, "daily-report");
+  commitAll(dir, "add skill");
+  const result = await run(project.name, ["--write", "--json"]);
+  assert.equal(result.code, 0, result.stderr);
+  const parsed: { warnings: string[]; files: string[] } = JSON.parse(result.stdout);
+  assert.deepEqual(parsed.warnings.filter((line) => line.startsWith("daily-report")), [COLLISION]);
+  assert.ok(parsed.files.includes(".claude/skills/daily-report-ritual/SKILL.md"));
+  assert.equal(readFileSync(existing, "utf8"), "domain procedure\n");
+  const written = readFileSync(join(dir, ".claude/skills/daily-report-ritual/SKILL.md"), "utf8");
+  assert.equal(written, "---\nname: daily-report-ritual\ndescription: Title of daily-report\n---\nWrite the report.\n");
+  const marker = readMarker(dir);
+  assert.ok(marker !== null);
+  assert.equal(marker.rituals.find((ritual) => ritual.slug === "daily-report")?.skill, "daily-report-ritual");
+  const freshName = `acme-web-fresh-${String(counter)}`;
+  const target = join(SANDBOX, `round-${String(counter)}`);
+  mkdirSync(target);
+  writeFileSync(join(target, ".darius.toml"), readFileSync(join(dir, ".darius.toml"), "utf8").replace(`project = "${project.name}"`, `project = "${freshName}"`));
+  const fresh = openProject(freshName, { create: true });
+  const first = reconcileProject(fresh, target, "host-a", new Date("2026-10-01T06:00:00.000Z"));
+  assert.deepEqual(first.adopted.toSorted(), ["daily-report", "weekly-audit"]);
+});
+
+test("a double collision is refused and nothing is written", { skip: NO_GIT }, async () => {
+  const { project, dir } = setup({ git: true });
+  plantSkill(dir, "daily-report");
+  const other = plantSkill(dir, "daily-report-ritual");
+  commitAll(dir, "add skills");
+  const result = await run(project.name, ["--write"]);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /daily-report-ritual both exist/u);
+  assert.equal(readFileSync(join(dir, ".darius.toml"), "utf8").includes("v = 2"), true);
+  assert.equal(readFileSync(other, "utf8"), "domain procedure\n");
+});
+
+test("the stdout form names <slug>-ritual like --write does", { skip: NO_GIT }, async () => {
+  const { project, dir } = setup({ git: true });
+  plantSkill(dir, "daily-report");
+  commitAll(dir, "add skill");
+  const text = await run(project.name, []);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stderr, /^! daily-report: \.claude\/skills\/daily-report exists; the store body becomes the skill daily-report-ritual$/mu);
+  const written = await run(project.name, ["--write"]);
+  assert.equal(written.code, 0, written.stderr);
+  assert.equal(readFileSync(join(dir, ".darius.toml"), "utf8"), text.stdout);
 });
 
 test("--write refuses when the marker is already v3", async () => {

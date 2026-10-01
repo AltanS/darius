@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.55.1] - 2026-10-01
+
+### Fixed
+
+- `darius ritual export` no longer refuses when a ritual has a store body, no skill, and `.claude/skills/<slug>/SKILL.md` already exists. The existing skill is the domain procedure and stays. The store body becomes `.claude/skills/<slug>-ritual/SKILL.md`, the marker says `skill = "<slug>-ritual"`, and a warning names both. If `<slug>-ritual` also exists, export refuses before it writes anything. The stdout form gives the same marker when a checkout is linked.
+
 ## [0.55.0] - 2026-10-01
 
 ### Added

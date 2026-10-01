@@ -9,7 +9,8 @@
  * `tz` line (the host's zone) is added. One `[rituals.<slug>]` follows per
  * ritual, with the git-owned fields. `host` is never written. A ritual with
  * no skill gets `skill = "<slug>"` and its body becomes
- * `.claude/skills/<slug>/SKILL.md`.
+ * `.claude/skills/<slug>/SKILL.md`. If that skill already exists in the
+ * checkout, the body becomes `<slug>-ritual` instead.
  *
  * Without `--write` the marker goes to stdout. With `--write` the file and the
  * skill files are written (tmp and rename) in the linked checkout. Export never
@@ -55,8 +56,8 @@ function yamlValue(text: string): string {
   return /^[A-Za-z0-9][A-Za-z0-9 ,.()/_-]*$/u.test(text) ? text : JSON.stringify(text);
 }
 
-function skillContent(ritual: Ritual, body: string): string {
-  return `---\nname: ${ritual.slug}\ndescription: ${yamlValue(ritual.title)}\n---\n${body}`;
+function skillContent(ritual: Ritual, name: string, body: string): string {
+  return `---\nname: ${name}\ndescription: ${yamlValue(ritual.title)}\n---\n${body}`;
 }
 
 interface MarkerParts {
@@ -138,8 +139,25 @@ function problems(docs: readonly { header: Ritual }[]): string[] {
   return found;
 }
 
+/**
+ * The skill name for a store body. An existing `.claude/skills/<slug>` in the
+ * checkout is the domain procedure and stays; the body then becomes
+ * `<slug>-ritual`. If that exists too, export refuses. `<slug>-ritual` is at
+ * most 71 characters, so it always fits the 128 limit of a skill name.
+ */
+function exportedSkillName(slug: string, body: string, checkout: string | undefined, warnings: string[]): string {
+  if (checkout === undefined || body.trim() === "" || !existsSync(join(checkout, ".claude", "skills", slug, "SKILL.md"))) return slug;
+  const name = `${slug}-ritual`;
+  const target = join(checkout, ".claude", "skills", name, "SKILL.md");
+  if (existsSync(target)) {
+    throw new UsageError(`${slug}: .claude/skills/${slug} and .claude/skills/${name} both exist (${target}); move one away first`);
+  }
+  warnings.push(`${slug}: .claude/skills/${slug} exists; the store body becomes the skill ${name}`);
+  return name;
+}
+
 /** The v3 marker and skill files for `project`'s live rituals. `existing` is the current marker text, or null. */
-export function buildExport(project: Project, existing: string | null, zone: string): Export {
+export function buildExport(project: Project, existing: string | null, zone: string, checkout?: string): Export {
   const ledger = readLedger(project);
   const docs = project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
@@ -155,10 +173,10 @@ export function buildExport(project: Project, existing: string | null, zone: str
     if (named && body.trim() !== "") {
       warnings.push(`${header.slug}: the store body is not exported; the skill ${header.skill ?? ""} is the procedure`);
     }
-    if (!named) {
-      skills.push({ slug: header.slug, path: join(".claude", "skills", header.slug, "SKILL.md"), content: skillContent(header, body) });
-    }
-    return ritualTable(header, named ? (header.skill ?? header.slug) : header.slug);
+    if (named) return ritualTable(header, header.skill ?? header.slug);
+    const name = exportedSkillName(header.slug, body, checkout, warnings);
+    skills.push({ slug: header.slug, path: join(".claude", "skills", name, "SKILL.md"), content: skillContent(header, name, body) });
+    return ritualTable(header, name);
   });
   const rank = { off: 0, report: 1, act: 2 } as const;
   const top = docs.reduce<"off" | "report" | "act">((high, { header }) => (rank[header.policy.mode] > rank[high] ? header.policy.mode : high), "off");
@@ -209,7 +227,7 @@ export function runExport(args: ParsedArgs): number {
     const current = readMarker(checkout ?? "");
     if (current?.version === 3) throw new UsageError(`${markerFile} is already v = 3; nothing to export`);
   }
-  const built = buildExport(project, present && markerFile !== undefined ? readFileSync(markerFile, "utf8") : null, hostZone());
+  const built = buildExport(project, present && markerFile !== undefined ? readFileSync(markerFile, "utf8") : null, hostZone(), checkout);
   const isWrite = args.flags.write === true;
   if (!args.json) for (const warning of built.warnings) console.error(`! ${warning}`);
   if (!isWrite) {

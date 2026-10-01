@@ -489,12 +489,14 @@ It keeps the root keys, `[profiles.*]` and `[defaults]` of the current marker as
 `v = 3`, and adds `tz` with this host's zone. It adds one `[rituals.<slug>]` per active or paused
 ritual. It leaves out retired rituals and never writes `host`. A ritual with no skill gets
 `skill = "<slug>"`, and its body becomes `.claude/skills/<slug>/SKILL.md`. Policies are written
-inline; you can move them into `[policies.<name>]` by hand.
+inline; you can move them into `[policies.<name>]` by hand. If `.claude/skills/<slug>/SKILL.md`
+already exists in the checkout, it stays, and the store body becomes the skill `<slug>-ritual`
+instead, with a warning.
 
 Export stops with exit 2 when a slug has a dot or is not a v3 slug,
 or when a `may` or `hold` value would not pass `marker check`. `--write` also stops when
 `.darius.toml` or a target skill file has uncommitted changes, when the marker is already v3, or
-when a target skill file exists.
+when a target skill file exists (including `<slug>-ritual` after a `<slug>` collision).
 
 1. Run `darius ritual export` and read the result. Rename any slug it refuses.
 2. Run `darius ritual export --write` in the linked checkout of `acme-web`.
