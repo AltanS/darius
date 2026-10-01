@@ -48,7 +48,7 @@ import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { localToday } from "../core/sweep.ts";
-import { cutResult, parseResult, readSummary, summarizeResult, type ResultSummary, type RunResult } from "../core/result.ts";
+import { cutResult, FINDINGS_MAX, parseResult, readSummary, summarizeResult, type ResultSummary, type RunResult } from "../core/result.ts";
 import { getBlobText, itemRef, openProject, putBlob, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { acknowledgeRun, answerRun } from "../runner/hold.ts";
@@ -211,6 +211,10 @@ function resultRequired(project: Project, runId: string): boolean {
 const MISSING_RESULT =
   "the findings must end with one ```darius-result block holding the result JSON (see Result in your system prompt)";
 
+function tooLong(length: number): string {
+  return `findings: at most ${String(FINDINGS_MAX)} characters, got ${String(length)}; the result block carries the facts, keep the prose to what it cannot say`;
+}
+
 /** What `run complete` stores, or why it refuses: the findings without the result block, and the checked result. */
 type Intake = { findings?: string; result?: RunResult } | { errors: string[] };
 
@@ -225,9 +229,16 @@ function intakeFindings(findings: string | undefined, outcome: Outcome, isRequir
   if (findings === undefined) return strict && isRequired ? { errors: [MISSING_RESULT] } : {};
   const cut = cutResult(findings);
   if ("error" in cut) return strict ? { errors: [cut.error] } : { findings };
-  if (cut.block === null) return strict && isRequired ? { errors: [MISSING_RESULT] } : { findings };
+  if (cut.block === null) {
+    const length = cut.findings.trim().length;
+    const errors = [...(isRequired ? [MISSING_RESULT] : []), ...(length > FINDINGS_MAX ? [tooLong(length)] : [])];
+    return strict && errors.length > 0 ? { errors } : { findings };
+  }
   const parsed = parseResult(cut.block);
-  if ("errors" in parsed) return strict ? { errors: parsed.errors } : { findings };
+  const length = cut.findings.trim().length;
+  const errors = [...("errors" in parsed ? parsed.errors : []), ...(strict && length > FINDINGS_MAX ? [tooLong(length)] : [])];
+  if (strict && errors.length > 0) return { errors };
+  if ("errors" in parsed) return { findings };
   return { findings: cut.findings, result: parsed.result };
 }
 
@@ -295,7 +306,7 @@ function refuseFindings(args: ParsedArgs, refusal: Refusal): number {
   }
   console.log(`! darius refused the findings of run ${runId}: the run stays open.`);
   for (const error of errors) console.log(`  - ${error}`);
-  console.log(`  Fix the darius-result block and run the same command again. The findings you sent are in ${kept}.`);
+  console.log(`  Fix the findings and run the same command again. The findings you sent are in ${kept}.`);
   return 1;
 }
 

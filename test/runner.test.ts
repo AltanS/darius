@@ -326,6 +326,8 @@ test("run-due starts one run with the policy's model, turns and tools; the run c
   const prompt = readFileSync(join(runDir, "prompt.md"), "utf8");
   assert.match(prompt, new RegExp(`darius run complete ${run} --project ${project} --outcome complete --findings-stdin`));
   assert.match(prompt, new RegExp(`darius run hold ${run} --project ${project} --question`));
+  assert.ok(prompt.indexOf("## Style") > 0 && prompt.indexOf("## Style") < prompt.indexOf("## Result"), "the style section comes before Result");
+  assert.match(prompt, /At most 4000 characters\./u);
 
   const second = await runDueJson(project);
   assert.equal(second.code, 0);

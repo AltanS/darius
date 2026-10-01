@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.45.0] - 2026-10-01
+
+### Changed
+
+- `run complete --outcome complete` refuses findings markdown over 4000 characters, counted with the `darius-result` block cut out. The run stays open and the refused text goes to `runs/<run>/findings-rejected.md`. Failed and abandoned outcomes are unchanged.
+- Result text limits are tighter: summary 240, detail 400, question 300, recommendation 200, action 200. Clipping stays silent. The Result prompt names the numbers.
+
+### Added
+
+- `STYLE_PROMPT`: a Style section in the run prompt, before Result. Short sentences, facts, one line per item, and no re-listing of items. The resume message points to it.
+- A `## Prose` block in the darius skill, with the same rules for worklog entries, findings, handoff and vigil bodies.
+
 ## [0.44.0] - 2026-10-01
 
 ### Added

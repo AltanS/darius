@@ -68,6 +68,8 @@ function answerLines(view: RunView): string[] {
  * The gate does not change with an answer: a command on the hold list is
  * held again. So an approved held action goes to the operator, not the model.
  */
+const FINDINGS_STYLE = "Keep the findings to the Style and Result rules of your system prompt: at most 4000 characters, no re-listing of the items.";
+
 const HOLD_STILL_APPLIES =
   "The hold list still applies, and an answer does not lift it. When an answer approves an action on the hold list, do not run it: name it in the findings, so the operator can do it.";
 
@@ -91,6 +93,7 @@ export function resumeMessage(input: ResumeInput): string {
       "",
       "Go on with the procedure where you stopped. Follow the protocol in your system prompt: hold the run again if you need a person, and finish with darius run complete.",
       HOLD_STILL_APPLIES,
+      FINDINGS_STYLE,
     ].join("\n");
   }
   return [
@@ -102,5 +105,6 @@ export function resumeMessage(input: ResumeInput): string {
     "",
     "Do the procedure from the start, with these answers.",
     HOLD_STILL_APPLIES,
+    FINDINGS_STYLE,
   ].join("\n");
 }

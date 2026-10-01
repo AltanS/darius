@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { handoffSection, type Handoff } from "../core/handoff.ts";
 import type { Ritual } from "../core/model.ts";
-import { RESULT_PROMPT } from "../core/result.ts";
+import { RESULT_PROMPT, STYLE_PROMPT } from "../core/result.ts";
 import type { HarnessAdapter, RunFiles } from "../harness/contract.ts";
 import { allowsSubagents, type GateScope, type RunPolicy } from "../harness/gate.ts";
 import { errorMessage } from "../runtime.ts";
@@ -143,6 +143,7 @@ export function buildPrompt(input: PromptInput): string {
     "",
     ...skillSection(ritual),
     ...subagentSection(ritual),
+    ...STYLE_PROMPT,
     ...RESULT_PROMPT,
     "## Procedure",
     "",

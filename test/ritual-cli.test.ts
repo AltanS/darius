@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -551,6 +551,34 @@ test("by hand: run start, ritual show and run show print the handoff of the late
   assert.equal(plain.code, 0, "a by-hand run may skip the block");
   const third = JSON.parse((await runCli(runCommand, project, ["start", "heartbeat", "--json"])).stdout);
   assert.equal(third.handoff.run, first, "a run without a result leaves the note in place");
+});
+
+const text = (n: number): string => `${"a".repeat(n)}\n`;
+
+test("run complete: findings over 4000 characters are refused for complete, the block does not count", async () => {
+  const project = "findings-cap";
+  await addRitual(project, "heartbeat");
+  const run = await startRun(project, "heartbeat");
+  const block: HandBlock = { v: 1, status: "ok", summary: "fine", handoff: "x".repeat(200) };
+  const send = (outcome: string, body: string) => runCli(runCommand, project, ["complete", run, "--outcome", outcome, "--findings-stdin"], body);
+
+  const over = await send("complete", `${text(4001)}\`\`\`darius-result\n${JSON.stringify(block)}\n\`\`\`\n`);
+  assert.equal(over.code, 1);
+  assert.match(over.stdout, /findings: at most 4000 characters, got 4001; the result block carries the facts, keep the prose to what it cannot say/u);
+  assert.equal(readFileSync(join(openProject(project).root, "runs", run, "findings-rejected.md"), "utf8").includes("darius-result"), true, "the refused text is kept");
+  const plainOver = await send("complete", "b".repeat(4001));
+  assert.equal(plainOver.code, 1, "a block-less text is counted too");
+
+  const big = `${text(4000)}\`\`\`darius-result\n${JSON.stringify({ ...block, items: Array.from({ length: 60 }, () => ({ title: "t".repeat(100), severity: "info", state: "open" })) })}\n\`\`\`\n`;
+  assert.equal((await send("complete", big)).code, 0, "the cut block does not count; 4000 or fewer pass");
+});
+
+test("run complete: a failed run keeps findings over 4000 characters", async () => {
+  const project = "findings-cap-failed";
+  await addRitual(project, "heartbeat");
+  const run = await startRun(project, "heartbeat");
+  const done = await runCli(runCommand, project, ["complete", run, "--outcome", "failed", "--findings-stdin"], "c".repeat(5000));
+  assert.equal(done.code, 0);
 });
 
 test("due --json shows a ritual with isDue true, plus the legacy tracker field names", async () => {

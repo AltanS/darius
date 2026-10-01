@@ -103,7 +103,7 @@ test("texts are plain: control characters go, long texts are clipped", () => {
     JSON.stringify({ v: 1, status: "ok", summary: `a\u001b[31mb\u0007c ${"x".repeat(600)}`, items: [{ title: "t\nu", severity: "info", state: "open" }] }),
   );
   assert.equal(result.summary.includes("\u001b"), false);
-  assert.equal(result.summary.length, 500);
+  assert.equal(result.summary.length, 240);
   assert.ok(result.summary.endsWith("…"));
   assert.equal(result.items[0]?.title, "t u", "a title is one line");
 });
@@ -124,4 +124,23 @@ test("the handoff note is one line of at most 200 characters; a longer one is re
   assert.equal(parsed(JSON.stringify({ ...base, handoff: "é".repeat(HANDOFF_MAX) })).handoff?.length, HANDOFF_MAX, "200 characters fit");
   assert.deepEqual(errorsOf(JSON.stringify({ ...base, handoff: "x".repeat(HANDOFF_MAX + 1) })), ["handoff: at most 200 characters, got 201; make it shorter"]);
   assert.deepEqual(errorsOf(JSON.stringify({ ...base, handoff: 5 })), ["handoff: must be a string when set"]);
+});
+
+const long = (n: number): string => "y".repeat(n + 50);
+
+test("the tighter limits clip detail, question, recommendation and action silently", () => {
+  const result = parsed(
+    JSON.stringify({
+      v: 1,
+      status: "ok",
+      summary: "s",
+      items: [{ title: "t", severity: "info", state: "open", detail: long(400) }],
+      questions: [{ text: long(300), recommendation: long(200) }],
+      actions: [{ text: long(200), state: "done" }],
+    }),
+  );
+  assert.equal(result.items[0]?.detail?.length, 400);
+  assert.equal(result.questions[0]?.text.length, 300);
+  assert.equal(result.questions[0]?.recommendation?.length, 200);
+  assert.equal(result.actions[0]?.text.length, 200);
 });

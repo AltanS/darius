@@ -69,6 +69,15 @@ darius owns every tracker verb. Rituals and runs live in the darius store; miles
 - Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
 - A tracker verb with no arguments prints its usage.
 
+## Prose
+
+Applies to worklog entries, findings, handoff and vigil bodies.
+
+- Short sentences. Facts, not narrative. One line per item.
+- Name the thing, its state, the next step. No preamble, no recap.
+- An entry says what changed, what is left, one blocker. At most 8 lines.
+- Findings: at most 4000 characters. The result block holds the items.
+
 ## Exit codes
 
 - 0: done.

@@ -98,18 +98,21 @@ export interface ResultSummary {
 
 /** Texts are clipped to these lengths, in characters. */
 const TEXT_LIMITS = {
-  summary: 500,
+  summary: 240,
   label: 80,
   unit: 20,
   value: 80,
   title: 200,
   group: 80,
   target: 200,
-  detail: 2000,
-  question: 500,
-  recommendation: 500,
-  action: 300,
+  detail: 400,
+  question: 300,
+  recommendation: 200,
+  action: 200,
 } as const;
+
+/** The longest findings markdown `run complete --outcome complete` takes, in characters, the result block cut out. */
+export const FINDINGS_MAX = 4000;
 
 /** The longest handoff note, in characters. */
 export const HANDOFF_MAX = 200;
@@ -356,13 +359,23 @@ export function readSummary(value: JsonValue | undefined): ResultSummary | null 
   return { status, questions, open, fixed };
 }
 
+/** The writing rules the run prompt shows the model, before the Result section. */
+export const STYLE_PROMPT: readonly string[] = [
+  "## Style",
+  "",
+  "Write short sentences. Give facts, not narrative. Use one line per item. Name the thing, its state, and the next step. No preamble, no recap.",
+  "",
+  "The findings markdown holds only what the result block cannot: one H1 title, how you checked, the evidence for the items, and the reason behind each question. Do not list the items again. Do not add an actions table or a summary paragraph. At most 4000 characters.",
+  "",
+];
+
 /** The text the run prompt shows the model: the format, one example, the rules. */
 export const RESULT_PROMPT: readonly string[] = [
   "## Result",
   "",
-  "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it stays for detail.",
+  "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, not-verified), optional `group` (for example the site), `target` (for example the page) and `detail`. `questions` (up to 10) are what the operator must decide: `text`, optional `recommendation`. `actions` (up to 100) are changes you made: `text`, `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, not-verified), optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200). `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",
