@@ -53,7 +53,7 @@ export interface ReconcileResult {
   unchanged: string[];
   retired: string[];
   unmanaged: string[];
-  /** Things the operator should know: a retired repo ritual named again in the marker. */
+  /** Things the operator should know: a retired ritual named again in the marker. */
   warnings: string[];
 }
 
@@ -287,8 +287,8 @@ export function reconcileProject(
     for (const definition of definitions) {
       const { slug } = definition.ritual;
       const existing = project.readItem<Ritual>("ritual", slug);
-      // Architect ruling: a retired repo ritual stays retired. It is not mirrored again.
-      if (existing?.header.source === "repo" && ritualLifecycle(ledger, slug) === "retired") {
+      // Architect ruling: a retired ritual stays retired, repo or store. It is not mirrored again.
+      if (existing !== null && ritualLifecycle(ledger, slug) === "retired") {
         result.warnings.push(`${slug} was retired; use a new slug`);
         continue;
       }

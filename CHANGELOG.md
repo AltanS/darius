@@ -2,6 +2,26 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.54.0] - 2026-10-01
+
+### Added
+
+- A v3 project's rituals come from git. Every run-due batch reconciles each linked v3 checkout into the store: new tables are adopted, changed ones updated, removed ones retired. The item records the definition hash, commit, host, time and whether the marker was dirty. A `ritual.defined` ledger line keeps the history.
+- `darius ritual reconcile [--dry-run] [--json]` does the same by hand.
+- A ritual's `at` time is honoured: run-due starts it at the first tick at or after that time in its zone, not before.
+- The marker's `timeout` replaces `--timeout` for that run. The lease TTL follows it.
+- New skip reasons: `marker-dirty` (the `.darius.toml` file has uncommitted changes), `marker-invalid`, `skill-missing` (no `.claude/skills/<skill>/SKILL.md` in the checkout), `not-in-marker` (a store ritual in a v3 project that the marker does not name).
+- A retired ritual whose slug comes back in the marker stays retired. Reconcile warns: use a new slug.
+
+### Changed
+
+- The run-due timer fires every 15 minutes (`*:05/15`), not hourly. darius decides from the marker what is due. The NixOS module default follows. A host with its own drop-in keeps it until the operator removes it.
+- In a v3 project `ritual add` and `ritual retire` are refused, and `ritual set` accepts only store-owned flags (host, owner, tags, due). A git-owned flag names the file and line to edit.
+- `darius run now` reconciles first. A dirty marker is a warning there, not a skip.
+- `darius init` writes `v = 3` with the host's `tz`.
+- `darius import` refuses a v3 project.
+- `lease-held` is a quiet skip with exit 0.
+
 ## [0.53.0] - 2026-10-01
 
 ### Added

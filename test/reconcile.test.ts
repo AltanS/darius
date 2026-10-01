@@ -10,11 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ritualLifecycle } from "../src/core/due.ts";
-import { readLedger } from "../src/core/ledger.ts";
+import { appendLine, readLedger } from "../src/core/ledger.ts";
 import { definitionHash, readMarker } from "../src/core/marker.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
 import { mirrorHash, reconcileProject, RITUAL_DEFINED } from "../src/core/reconcile.ts";
-import { openProject, readItemText, type Project } from "../src/core/store.ts";
+import { itemRef, openProject, readItemText, type Project } from "../src/core/store.ts";
 import { commitAll, dirty, initRepo, NO_GIT } from "./helpers/git.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-reconcile-"));
@@ -211,6 +211,22 @@ test("retired stays retired: a slug that comes back in the marker is not revived
   assert.equal(ritualLifecycle(readLedger(project), "weekly-audit"), "retired");
   assert.deepEqual(ritual(project, "weekly-audit"), before, "the mirror is not rewritten");
   assert.deepEqual(defined(project).filter((entry) => entry.slug === "weekly-audit").map((entry) => entry.change), ["adopted", "retired"]);
+});
+
+test("retired stays retired: a retired store ritual named in the marker is not adopted, and a warning says so", { skip: NO_GIT }, () => {
+  const { project, dir } = setup({ git: true });
+  project.writeItem({
+    header: {
+      id: "01JBBBBBBBBBBBBBBBBBBBBBBB", kind: "ritual", slug: "daily-report", title: "Old title", created: "2026-01-01T00:00:00.000Z",
+      updated: "2026-01-01T00:00:00.000Z", tags: [], cadence: "1d", anchor: "due", policy: { mode: "off", may: [], hold: [] },
+    },
+    body: "",
+  });
+  appendLine(project, { who: "test", type: "ritual.lifecycle", item: itemRef("ritual", "daily-report"), state: "retired" });
+  const result = reconcileProject(project, dir, HOST, T1);
+  assert.deepEqual(result.warnings, ["daily-report was retired; use a new slug"]);
+  assert.deepEqual(result.adopted, ["weekly-audit"]);
+  assert.equal(ritual(project, "daily-report").title, "Old title", "the store item is not rewritten");
 });
 
 test("unmanaged: a store ritual the marker does not name is listed and never written", { skip: NO_GIT }, () => {
