@@ -330,7 +330,7 @@ function demoSystem(now: number): SystemStatus {
       { project: "project-three", lastSync: null, rituals: 1, vigils: 0, profiles: 0, runs: 9, bytes: 2 * 1024 * 1024 },
       { project: "project-two", lastSync: back(2 * 3600_000), rituals: 2, vigils: 1, profiles: 1, runs: 55, bytes: 16 * 1024 * 1024 },
     ],
-    syncRemote: { endpoint: "https://s3.example.com", bucket: "darius-state" },
+    syncRemote: { endpoint: "https://s3.example.com", bucket: "darius-sync" },
   };
 }
 
