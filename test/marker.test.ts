@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
 import { linksFile, readLinks, writeLink } from "../src/core/links.ts";
-import { definitionHash, findMarker, isAboveCap, readMarker, type RepoRitual } from "../src/core/marker.ts";
+import { definitionHash, findMarker, isAboveCap, readMarker, resolvedLines, resolvedPolicy, type Marker, type RepoRitual } from "../src/core/marker.ts";
 import { resolveProject } from "../src/core/paths.ts";
 import type { Document, LedgerLine, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
@@ -394,6 +394,14 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["policy with hold", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nhold = ['x']\n`), /:12: hold cannot be combined with policy = "p"/u],
   ["policy with notes", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nnotes = "x"\n`), /:12: notes cannot be combined with policy = "p"/u],
   ["policy without mode", v3("[policies.p]\nmay = []\n"), /:5: \[policies\.p\] needs mode/u],
+  ["may_extra with a bad rule", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmay_extra = ["not a rule"]\n`), /:12: may_extra must be a list of Claude Code permission rules .* got "not a rule"/u],
+  ["may_extra not a list", v3(`${RITUAL}may_extra = "Bash"\n`), /:9: may_extra must be a list of strings/u],
+  ["hold_extra that does not compile", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nhold_extra = ['(']\n`), /:12: hold_extra must be a list of regular expressions that compile, got "\("/u],
+  ["hold_extra that needs the u flag", v3(`${RITUAL}hold_extra = ['\\p{Nope}']\n`), /:9: hold_extra must be a list of regular expressions that compile/u],
+  ["hold_extra not a list", v3(`${RITUAL}hold_extra = 'x'\n`), /:9: hold_extra must be a list of regular expressions/u],
+  ["policy missing, with extras", v3(`${RITUAL}policy = "nope"\nmay_extra = ["Read"]\nhold_extra = ['x']\n`), /:9: policy = "nope" names no \[policies\.nope\] table/u],
+  ["may_extra in a policy table", v3('[policies.p]\nmode = "off"\nmay_extra = ["Read"]\n'), /:7: unknown key "may_extra"/u],
+  ["hold_extra in a policy table", v3("[policies.p]\nmode = \"off\"\nhold_extra = ['x']\n"), /:7: unknown key "hold_extra"/u],
   ["mode above max_mode", v3(`${RITUAL}mode = "act"\n`, 'v = 3\nproject = "ws"\nmax_mode = "report"\ntz = "UTC"\n'), /:9: mode "act" is above max_mode "report"/u],
   ["policy mode above max_mode", v3(`[policies.p]\nmode = "act"\n${RITUAL}policy = "p"\n`, 'v = 3\nproject = "ws"\nmax_mode = "report"\ntz = "UTC"\n'), /:11: mode "act" is above max_mode "report"/u],
   ["act with no max_mode", v3(`${RITUAL}mode = "act"\n`, 'v = 3\nproject = "ws"\ntz = "UTC"\n'), /:8: mode "act" needs max_mode = "act"/u],
@@ -433,4 +441,105 @@ test("definitionHash is stable across key order, comments and policy form", () =
   assert.notEqual(definitionHash(first), definitionHash(changed));
   const renamed: RepoRitual = { ...first, line: 99, policyName: "p" };
   assert.equal(definitionHash(first), definitionHash(renamed));
+});
+
+// --- may_extra and hold_extra -----------------------------------------------------
+
+const POLICY_P = `[policies.p]\nmode = "report"\nmay = ["Read", "Bash(date *)"]\nhold = ['\\bdeploy\\b', '--confirm\\b']\n`;
+
+function firstRitual(body: string): RepoRitual {
+  const ritual = readMarker(checkout(v3(body)))?.rituals[0];
+  assert.ok(ritual !== undefined);
+  return ritual;
+}
+
+test("extras add to the named policy: base rules first, in place, then the extras", () => {
+  const ritual = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nmay_extra = ["Grep"]\nhold_extra = ['\\bpush\\b']\n`);
+  assert.deepEqual(ritual.policy, { mode: "report", may: ["Read", "Bash(date *)", "Grep"], hold: ["\\bdeploy\\b", "--confirm\\b", "\\bpush\\b"] });
+  assert.equal(ritual.policyName, "p");
+  assert.deepEqual(ritual.policyExtra, { may: ["Grep"], hold: ["\\bpush\\b"] });
+});
+
+test("extras never remove: empty extras keep the base; every base hold pattern stays", () => {
+  const empty = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nmay_extra = []\nhold_extra = []\n`);
+  assert.deepEqual(empty.policy, { mode: "report", may: ["Read", "Bash(date *)"], hold: ["\\bdeploy\\b", "--confirm\\b"] });
+  const base = ["\\bdeploy\\b", "--confirm\\b"];
+  const added = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nhold_extra = ['--confirm\\b', '\\bpush\\b']\n`);
+  assert.deepEqual(added.policy.hold.slice(0, base.length), base, "the base hold is a prefix of the effective hold");
+  assert.deepEqual(added.policy.hold, ["\\bdeploy\\b", "--confirm\\b", "\\bpush\\b"]);
+});
+
+test("extras drop duplicates and keep the first place", () => {
+  const ritual = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nmay_extra = ["Grep", "Read", "Grep"]\nhold_extra = ['\\bdeploy\\b', '\\bx\\b', '\\bx\\b']\n`);
+  assert.deepEqual(ritual.policy.may, ["Read", "Bash(date *)", "Grep"]);
+  assert.deepEqual(ritual.policy.hold, ["\\bdeploy\\b", "--confirm\\b", "\\bx\\b"]);
+});
+
+test("extras without a policy add to the ritual's own may and hold; mode stays the ritual's", () => {
+  const own = firstRitual(`${RITUAL}mode = "report"\nmay = ["Read"]\nhold = ['a']\nmay_extra = ["Grep"]\nhold_extra = ['b']\n`);
+  assert.deepEqual(own.policy, { mode: "report", may: ["Read", "Grep"], hold: ["a", "b"] });
+  const bare = firstRitual(`${RITUAL}may_extra = ["Grep"]\nhold_extra = ['b']\n`);
+  assert.deepEqual(bare.policy, { mode: "off", may: ["Grep"], hold: ["b"] });
+});
+
+test("a ritual without extras has no policyExtra, and its policy is as before", () => {
+  const ritual = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\n`);
+  assert.equal("policyExtra" in ritual, false);
+  assert.deepEqual(ritual.policy, { mode: "report", may: ["Read", "Bash(date *)"], hold: ["\\bdeploy\\b", "--confirm\\b"] });
+});
+
+test("definitionHash hashes the effective policy: inline and factored forms in the same order hash the same", () => {
+  const inline = firstRitual(`${RITUAL}mode = "report"\nmay = ["Read", "Bash(date *)", "Grep"]\nhold = ['\\bdeploy\\b', '--confirm\\b', '\\bpush\\b']\n`);
+  const factored = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nmay_extra = ["Grep"]\nhold_extra = ['\\bpush\\b']\n`);
+  assert.equal(definitionHash(inline), definitionHash(factored));
+  const reordered = firstRitual(`${RITUAL}mode = "report"\nmay = ["Grep", "Read", "Bash(date *)"]\nhold = ['\\bdeploy\\b', '--confirm\\b', '\\bpush\\b']\n`);
+  assert.notEqual(definitionHash(inline), definitionHash(reordered), "list order counts in the hash");
+  assert.deepEqual(resolvedPolicy(inline), resolvedPolicy(reordered), "the resolved view does not");
+});
+
+function fixtureMarker(name: string): Marker {
+  const marker = readMarker(checkout(readFileSync(join(import.meta.dirname, "fixtures", `marker-policy-${name}.toml`), "utf8")));
+  assert.ok(marker !== null);
+  return marker;
+}
+
+test("fixture pair: every ritual of the inline marker resolves byte for byte like its factored twin", () => {
+  const inline = fixtureMarker("inline");
+  const factored = fixtureMarker("factored");
+  assert.deepEqual(inline.rituals.map((ritual) => ritual.slug), ["daily-report", "link-audit", "fact-check", "content-fix"]);
+  assert.deepEqual(factored.rituals.map((ritual) => ritual.slug), inline.rituals.map((ritual) => ritual.slug));
+  assert.equal(Object.keys(inline.policies).length, 0);
+  assert.deepEqual(Object.keys(factored.policies), ["read-only", "content-write"]);
+  for (const ritual of inline.rituals) {
+    const twin = factored.rituals.find((one) => one.slug === ritual.slug);
+    assert.ok(twin !== undefined, ritual.slug);
+    const left = `${resolvedLines(resolvedPolicy(ritual)).join("\n")}\n`;
+    const right = `${resolvedLines(resolvedPolicy(twin)).join("\n")}\n`;
+    assert.equal(left, right, ritual.slug);
+    assert.equal(ritual.policy.notes, twin.policy.notes, ritual.slug);
+    // The base policy's hold is never cut short by the factored form.
+    const base = factored.policies[twin.policyName ?? ""]?.hold ?? [];
+    assert.ok(base.length > 0 && base.every((pattern) => twin.policy.hold.includes(pattern)), ritual.slug);
+  }
+  // The sorted view carries the differences: one more rule here, one more pattern there.
+  const [, , factCheck, contentFix] = factored.rituals;
+  assert.ok(factCheck !== undefined && contentFix !== undefined);
+  const view = resolvedPolicy(contentFix);
+  assert.equal(view.mode, "act");
+  assert.ok(view.may.includes("Bash(pnpm cli content patch *)"));
+  assert.ok(view.hold.includes("\\bpnpm\\s+cli\\s+content\\s+publish\\b"));
+  assert.equal(resolvedPolicy(factCheck).may.filter((rule) => rule === "Read").length, 1, "a duplicate extra is dropped");
+});
+
+test("resolvedLines: mode, then may, then hold, each sorted, one per line", () => {
+  const ritual = firstRitual(`${POLICY_P}${RITUAL}policy = "p"\nmay_extra = ["Grep"]\nhold_extra = ['\\bpush\\b']\n`);
+  assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), [
+    "mode: report",
+    "may: Bash(date *)",
+    "may: Grep",
+    "may: Read",
+    "hold: --confirm\\b",
+    "hold: \\bdeploy\\b",
+    "hold: \\bpush\\b",
+  ]);
 });

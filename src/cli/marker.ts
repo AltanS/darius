@@ -11,16 +11,23 @@
  *
  * The parser never touches the file system; the skill-file check lives here
  * (and in run-due's preflight).
+ *
+ * `--resolved <slug>` prints the effective policy of one ritual instead: the
+ * policy it names plus its `may_extra` and `hold_extra`, which is what a run
+ * uses. `mode: <mode>`, then one `may: <rule>` line per rule and one
+ * `hold: <pattern>` line per pattern, each list sorted. Two forms of one
+ * policy (inline, or factored into `[policies.*]`) print the same bytes. An
+ * unknown slug is a usage error that names the known ones.
  */
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { findMarker, MARKER_FILE, readMarker, type Marker } from "../core/marker.ts";
+import { findMarker, MARKER_FILE, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const USAGE = "usage: darius marker check [<dir>] [--json]";
+const USAGE = "usage: darius marker check [<dir>] [--resolved <slug>] [--json]";
 
 interface CheckReport {
   ok: boolean;
@@ -90,9 +97,52 @@ function printReport(report: CheckReport): void {
   console.log(`ok: v${String(report.version)}${counts}`);
 }
 
+/** What `--resolved <slug> --json` prints. */
+interface ResolvedReport extends ResolvedView {
+  ok: true;
+  file: string;
+  slug: string;
+  /** The `[policies.*]` name, when the ritual names one. */
+  policy?: string;
+}
+
+/** `--resolved <slug>`: the effective policy of one ritual, sorted, or the parse error. */
+function printResolved(dir: string | undefined, slug: string, isJson: boolean): number {
+  let found: Target;
+  try {
+    found = readTarget(dir);
+  } catch (cause) {
+    const report: CheckReport = { ok: false, errors: [errorMessage(cause)], warnings: [] };
+    if (isJson) console.log(JSON.stringify(report));
+    else printReport(report);
+    return 1;
+  }
+  const { marker } = found;
+  if (marker === null) throw new UsageError(`no ${MARKER_FILE} in ${found.where}`);
+  const ritual = marker.rituals.find((one) => one.slug === slug);
+  if (ritual === undefined) {
+    const known = marker.rituals.map((one) => one.slug);
+    throw new UsageError(`no [rituals.${slug}] in ${marker.file}; known: ${known.length === 0 ? "none" : known.join(", ")}`);
+  }
+  const view = resolvedPolicy(ritual);
+  if (isJson) {
+    const json: ResolvedReport = { ok: true, file: marker.file, slug, ...view };
+    if (ritual.policyName !== undefined) json.policy = ritual.policyName;
+    console.log(JSON.stringify(json));
+  } else {
+    for (const line of resolvedLines(view)) console.log(line);
+  }
+  return 0;
+}
+
 async function runCheck(args: ParsedArgs): Promise<number> {
   const [, dir, ...extra] = args.positional;
   if (extra.length > 0) throw new UsageError(USAGE);
+  const resolved = args.repeated.resolved?.at(-1);
+  if (resolved !== undefined) {
+    if (resolved === "") throw new UsageError(USAGE);
+    return printResolved(dir, resolved, args.json);
+  }
   const report = check(dir);
   if (args.json) console.log(JSON.stringify(report));
   else printReport(report);
@@ -101,9 +151,9 @@ async function runCheck(args: ParsedArgs): Promise<number> {
 
 export const markerCommand: Command = {
   name: "marker",
-  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does and lists warnings",
+  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does and lists warnings; --resolved <slug> prints a ritual's effective policy",
   audience: "session",
-  usage: "marker check [dir]",
+  usage: "marker check [dir] [--resolved <slug>]",
   async run(args: ParsedArgs): Promise<number> {
     if (args.positional[0] === "check") return runCheck(args);
     throw new UsageError(USAGE);

@@ -151,6 +151,8 @@ cadence = "1d"
 at = "07:00"                          # HH:MM in tz; also tz, from, anchor, timeout, profile, model, max_turns
 skill = "daily-report"
 policy = "read-only"                  # or mode, may, hold, notes on the ritual; not both
+may_extra = ["Bash(git log *)"]       # optional: adds to the policy's may, never removes
+hold_extra = ['\bpush\b']             # optional: adds to the policy's hold, never removes
 timeout = "30m"                       # 1m to 12h
 ```
 
@@ -158,8 +160,9 @@ timeout = "30m"                       # 1m to 12h
 - **Schedule.** `cadence` is optional. Without it a ritual is on demand: never due by schedule, only `run now` starts it. `at` and `from` without `cadence` are errors. `cadence`, `at` (one time), `tz`, `from` (grid origin) and `anchor`. A ritual `tz` overrides the root `tz`. Day boundaries of a v3 ritual follow its zone, never the host clock. Root `tz` is required (operator ruling, 2026-10-01): a v3 marker without it is an error at the `v = 3` line.
 - **No body.** The procedure is the skill. A ritual names a skill of the repo; the only tier a ritual may name (see "Djinns").
 - **Strict.** An unknown key or section, a bad `at`, `tz`, `from`, `timeout`, `may` rule or `hold` pattern, a `policy` that names no table, `policy` next to `mode`, `may`, `hold` or `notes`, a mode above `max_mode`, and `mode = "act"` with no `max_mode`, are errors with `file:line`. A `hold` pattern must compile with the `u` flag. The whole marker is refused on any error.
+- **Additive policy keys.** A ritual may add `may_extra` and `hold_extra` to the policy it names, or to its own `may` and `hold`. The effective list is the base list and then the extras, with duplicates dropped and the first place kept. Extras only add: a ritual never has fewer `hold` patterns than its base policy, because `hold` is a safety gate. The mode stays the base mode. The parser resolves this once: the ritual's `policy` holds the effective lists, so `definitionHash`, the store mirror, the run, the web and export all see the same lists. The hash covers the effective lists in order, not how the file writes them; `marker check --resolved <slug>` prints the sorted view, which is the same for an inline and a factored form of one policy.
 - **TOML subset.** Arrays may span lines, with comments and a trailing comma. Single-quoted literal strings keep backslashes, so a regex is written `'\bdeploy\b'`.
-- **Check.** `darius marker check [dir]` runs the same parser and adds warnings (a skill file missing here, an unused policy, a v3 marker with no rituals). The parser never touches the file system.
+- **Check.** `darius marker check [dir]` runs the same parser and adds warnings (a skill file missing here, an unused policy, a v3 marker with no rituals). The parser never touches the file system. `--resolved <slug>` prints the effective policy of one ritual: `mode:`, then `may:` and `hold:` lines, each sorted.
 - **Rollout.** Every host must run 0.53.0 or later before a marker with the new keys is committed: an older host refuses a v3 file and skips the project.
 - **Migration (0.55.0).** `darius ritual export [--project NAME] [--write] [--json]` turns the store rituals of a v2 project (active and paused) into a v3 marker. Without `--write` it prints the marker to stdout. It keeps the root keys, `[profiles.*]` and `[defaults]` of the current marker, bumps `v = 3`, writes `tz` from the host zone, and adds one `[rituals.<slug>]` per ritual with the git-owned fields. A ritual with no `skill` gets `skill = "<slug>"`, and its body becomes `.claude/skills/<slug>/SKILL.md`. `host` is never written (decision 9). With `--write` it writes the files into the linked checkout, and refuses when the marker or a target file has uncommitted changes, when the marker is already v3, or when a skill file exists. It never runs git write commands and never commits. The steps: run export, review, commit and push, pull on each host, run `darius ritual reconcile`. A slug with a dot is refused until renamed. `darius import` is unrelated and stays v2 only.
 - **Web (0.55.0).** The web is read-only for git-owned fields. The ritual page shows `Defined in .darius.toml at commit X, host Y, <when>` (with `(uncommitted changes)` when dirty), the schedule with `at` and zone, the `timeout`, the warnings of `ritual list`, and points edits to git. The off notice for a repo ritual says to set `mode = "report"` in `.darius.toml` and commit. A ritual row shows `git`; an unmanaged ritual shows `not in .darius.toml`. Pause, resume, host pin and due stay store actions. Every fact comes from `ritual list --json` and `ritual show --json`. A stale mirror changes only what the web shows, never what runs.
@@ -272,7 +275,7 @@ darius note add --to <ref> --kind lesson|ruling|incident --stdin
 darius milestone|spec ...               phase 4
 darius sync [--pull-only] | doctor | import <path/.tracker> | export <dir> | setup | compact
 darius link [<dir>] [--force] | --list   record this host's checkout of the project named in .darius.toml
-darius marker check [<dir>]              parse .darius.toml as run-due does; print errors and warnings
+darius marker check [<dir>] [--resolved <slug>]  parse .darius.toml as run-due does; print errors and warnings
 darius run-due --unattended [--dry-run] [--only <slug>]
 darius policy-check [--harness ID] [--preflight]   the gate; used by the harness's pre-tool hook
 darius serve [--bind auto|ADDR,...] [--port N]  this host's read-only status page, loopback and tailnet, port 4747

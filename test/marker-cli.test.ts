@@ -116,6 +116,83 @@ test("marker check: no file is a usage error; a missing verb or extra argument t
   await assert.rejects(runCli(markerCommand, ["check", "a", "b"]), UsageError);
 });
 
+function policyCheckout(name: string): string {
+  const dir = checkout(null);
+  copyFileSync(join(import.meta.dirname, "fixtures", `marker-policy-${name}.toml`), join(dir, ".darius.toml"));
+  return dir;
+}
+
+test("marker check --resolved: mode, then may, then hold, each sorted, one per line", async () => {
+  const run = await runCli(markerCommand, ["check", policyCheckout("factored"), "--resolved", "link-audit"]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(
+    run.stdout,
+    [
+      "mode: report",
+      "may: Bash(cd tools)",
+      "may: Bash(curl -s https://example.com/*)",
+      "may: Bash(date *)",
+      "may: Bash(git diff *)",
+      "may: Bash(git status)",
+      "may: Bash(pnpm cli report *)",
+      "may: Bash(pnpm cli status *)",
+      "may: Glob",
+      "may: Grep",
+      "may: Read",
+      "may: WebFetch",
+      "hold: --confirm\\b",
+      "hold: \\bDROP\\s+TABLE\\b",
+      "hold: \\bdeploy\\b",
+      "hold: \\bgit\\s+push\\b",
+      "hold: \\bpnpm\\s+publish\\b",
+      "hold: \\brm\\s+-rf\\b",
+    ].join("\n"),
+  );
+});
+
+test("marker check --resolved: the inline and the factored fixture print the same bytes for every ritual", async () => {
+  const inline = policyCheckout("inline");
+  const factored = policyCheckout("factored");
+  for (const slug of ["daily-report", "link-audit", "fact-check", "content-fix"]) {
+    const left = await runCli(markerCommand, ["check", inline, "--resolved", slug]);
+    const right = await runCli(markerCommand, ["check", factored, "--resolved", slug]);
+    assert.equal(left.code, 0, left.stderr);
+    assert.equal(right.code, 0, right.stderr);
+    assert.match(left.stdout, /^mode: /u);
+    assert.equal(left.stdout, right.stdout, slug);
+  }
+});
+
+test("marker check --resolved --json: the sorted view, with the policy name when there is one", async () => {
+  const json = JSON.parse((await runCli(markerCommand, ["check", policyCheckout("factored"), "--resolved", "fact-check", "--json"])).stdout);
+  assert.equal(json.ok, true);
+  assert.equal(json.slug, "fact-check");
+  assert.equal(json.policy, "read-only");
+  assert.equal(json.mode, "report");
+  assert.deepEqual(json.may, [...json.may].toSorted());
+  assert.equal(json.may.filter((rule: string) => rule === "Read").length, 1);
+  assert.ok(json.may.includes("Agent"));
+  assert.ok(json.hold.includes("\\bcurl\\b.*-X\\s*(POST|PUT|DELETE)\\b"));
+  const inline = JSON.parse((await runCli(markerCommand, ["check", policyCheckout("inline"), "--resolved", "fact-check", "--json"])).stdout);
+  assert.equal(inline.policy, undefined);
+  assert.deepEqual([inline.mode, inline.may, inline.hold], [json.mode, json.may, json.hold]);
+});
+
+test("marker check --resolved: an unknown slug is a usage error naming the known slugs; a bad file exits 1", async () => {
+  await assert.rejects(
+    runCli(markerCommand, ["check", policyCheckout("factored"), "--resolved", "nope"]),
+    (cause: Error) => cause instanceof UsageError && /no \[rituals\.nope\] in .*known: daily-report, link-audit, fact-check, content-fix$/u.test(cause.message),
+  );
+  await assert.rejects(
+    runCli(markerCommand, ["check", checkout('v = 2\nproject = "acme-web"\n'), "--resolved", "x"]),
+    (cause: Error) => cause instanceof UsageError && cause.message.endsWith("known: none"),
+  );
+  const bad = await runCli(markerCommand, ["check", checkout(`v = 3\nproject = "acme-web"\ntz = "UTC"\n[rituals.a]\ntitle = "A"\nskill = "a"\nhold_extra = ['(']\n`), "--resolved", "a"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /\.darius\.toml:7: hold_extra must be a list of regular expressions that compile/u);
+  assert.throws(() => parseArgs(["check", "--resolved"]), UsageError);
+});
+
 test("link --list adds v3 (N rituals) to the ok line, and only for v3", async () => {
   const v3 = v3Checkout();
   const v2 = checkout('v = 2\nproject = "mc-v2"\n');

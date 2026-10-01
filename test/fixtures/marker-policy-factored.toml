@@ -1,0 +1,86 @@
+# test/fixtures/marker-policy-inline.toml with the shared lists factored into
+# [policies.*] plus may_extra and hold_extra. Each ritual resolves to the
+# same effective policy as its inline twin.
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "UTC"
+
+[policies.read-only]
+mode = "report"
+notes = "Read only."
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(date *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]
+
+[policies.content-write]
+mode = "act"
+notes = "Fix typos only. Hand in a diff."
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(date *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]
+
+[rituals.daily-report]
+title = "Daily report"
+cadence = "1d"
+at = "07:00"
+skill = "daily-report"
+policy = "read-only"
+
+[rituals.link-audit]
+title = "Link audit"
+cadence = "1w"
+skill = "link-audit"
+policy = "read-only"
+may_extra = ["WebFetch"]
+
+# A rule the base already has is dropped: Read appears once.
+[rituals.fact-check]
+title = "Fact check"
+cadence = "1d"
+at = "09:05"
+skill = "fact-check"
+policy = "read-only"
+may_extra = ["Agent", "Read"]
+hold_extra = ['\bcurl\b.*-X\s*(POST|PUT|DELETE)\b', '\bdeploy\b']
+
+[rituals.content-fix]
+title = "Content fix"
+skill = "content-fix"
+policy = "content-write"
+may_extra = ["Bash(pnpm cli content patch *)"]
+hold_extra = ['\bpnpm\s+cli\s+content\s+publish\b']

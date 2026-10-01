@@ -25,6 +25,15 @@
  *   at = "07:00"                       anchor, at, tz, from, timeout, profile,
  *   skill = "daily-report"             model, max_turns, and either `policy`
  *   policy = "read-only"               or mode, may, hold, notes
+ *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
+ *   hold_extra = ['\bpush\b']          adds to the policy's hold (or the own hold)
+ *
+ * `may_extra` and `hold_extra` only add: the effective `may` is the base
+ * `may` and then the extra rules, the effective `hold` the same, each with
+ * duplicates dropped and the first place kept. They can never remove a
+ * rule, so a ritual never has fewer `hold` patterns than its base policy.
+ * The ritual's `policy` holds the effective lists, so reconcile, the hash,
+ * the run, export and the web all read one resolved policy.
  *
  * A file with profiles or defaults must say `v = 2` or `v = 3`. Rituals,
  * policies and `tz` need `v = 3`. An older darius refuses a newer
@@ -67,6 +76,12 @@ export interface MarkerPolicy {
   notes?: string;
 }
 
+/** A ritual's `may_extra` and `hold_extra` as written: rules it adds to its base policy. */
+export interface PolicyExtra {
+  may: string[];
+  hold: string[];
+}
+
 /** One `[rituals.<slug>]` table with its policy inlined and its defaults filled. */
 export interface RepoRitual {
   slug: string;
@@ -84,6 +99,9 @@ export interface RepoRitual {
   maxTurns?: number;
   /** The `[policies.*]` name, for display. */
   policyName?: string;
+  /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
+  policyExtra?: PolicyExtra;
+  /** The effective policy: the base lists plus the extras, deduped. */
   policy: MarkerPolicy;
   /** The `[rituals.<slug>]` header line, for messages. */
   line: number;
@@ -116,7 +134,7 @@ const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort",
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "timeout", "profile", "model", "max_turns",
-  "policy", "mode", "may", "hold", "notes",
+  "policy", "mode", "may", "hold", "notes", "may_extra", "hold_extra",
 ]);
 const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
@@ -235,27 +253,38 @@ interface Rules {
   notes?: string;
 }
 
+type Fail = (key: string, expected: string) => Error;
+
+function failAt(section: string, source: Source): Fail {
+  return (key, expected) => new Error(`${where(source.file, source.lines[`${section}.${key}`])}: ${key} must be ${expected}`);
+}
+
+/** A `may` or `may_extra` value: a list of Claude Code permission rules. */
+function decodeMay(value: TomlValue, key: string, fail: Fail): string[] {
+  if (!isTextList(value)) throw fail(key, `a list of strings: ${key} = ["Bash(date *)"]`);
+  const bad = value.find((rule) => !PERMISSION_RULE_RE.test(rule));
+  if (bad !== undefined) throw fail(key, `a list of Claude Code permission rules ("Tool" or "Tool(pattern)"), got "${bad}"`);
+  return [...value];
+}
+
+/** A `hold` or `hold_extra` value: a list of patterns that compile with the `u` flag. */
+function decodeHold(value: TomlValue, key: string, fail: Fail): string[] {
+  if (!isTextList(value)) throw fail(key, "a list of regular expressions");
+  const bad = value.find((pattern) => !validRegex(pattern));
+  if (bad !== undefined) throw fail(key, `a list of regular expressions that compile, got "${bad}"`);
+  return [...value];
+}
+
 function decodeRules(table: Table, section: string, source: Source): Rules {
-  const fail = (key: string, expected: string): Error =>
-    new Error(`${where(source.file, source.lines[`${section}.${key}`])}: ${key} must be ${expected}`);
+  const fail = failAt(section, source);
   const rules: Rules = {};
   const { mode, may, hold, notes } = table;
   if (mode !== undefined) {
     if (!isMode(mode)) throw fail("mode", '"off", "report" or "act"');
     rules.mode = mode;
   }
-  if (may !== undefined) {
-    if (!isTextList(may)) throw fail("may", 'a list of strings: may = ["Bash(date *)"]');
-    const bad = may.find((rule) => !PERMISSION_RULE_RE.test(rule));
-    if (bad !== undefined) throw fail("may", `a list of Claude Code permission rules ("Tool" or "Tool(pattern)"), got "${bad}"`);
-    rules.may = [...may];
-  }
-  if (hold !== undefined) {
-    if (!isTextList(hold)) throw fail("hold", "a list of regular expressions");
-    const bad = hold.find((pattern) => !validRegex(pattern));
-    if (bad !== undefined) throw fail("hold", `a list of regular expressions that compile, got "${bad}"`);
-    rules.hold = [...hold];
-  }
+  if (may !== undefined) rules.may = decodeMay(may, "may", fail);
+  if (hold !== undefined) rules.hold = decodeHold(hold, "hold", fail);
   if (notes !== undefined) {
     if (!isText(notes)) throw fail("notes", "a string");
     rules.notes = notes;
@@ -303,9 +332,40 @@ function decodeTimeout(table: Table, at: { section: string; source: Source }): n
 interface ResolvedPolicy {
   policy: MarkerPolicy;
   policyName?: string;
+  policyExtra?: PolicyExtra;
 }
 
-/** The policy of a ritual: the named `[policies.*]` table, or its own mode, may, hold and notes. */
+/** `base`, then each entry of `extra` it does not hold yet. Duplicates go; the first place stays. */
+function addRules(base: readonly string[], extra: readonly string[]): string[] {
+  return [...new Set([...base, ...extra])];
+}
+
+/** `may_extra` and `hold_extra` of a ritual table, when either is written. */
+function decodeExtra(table: Table, section: string, source: Source): PolicyExtra | undefined {
+  const { may_extra: mayExtra, hold_extra: holdExtra } = table;
+  if (mayExtra === undefined && holdExtra === undefined) return undefined;
+  const fail = failAt(section, source);
+  return {
+    may: mayExtra === undefined ? [] : decodeMay(mayExtra, "may_extra", fail),
+    hold: holdExtra === undefined ? [] : decodeHold(holdExtra, "hold_extra", fail),
+  };
+}
+
+/**
+ * The effective policy of a ritual: `base` with the extras added. Mode and
+ * notes stay the base's. Every base rule stays, in its place: an extra can
+ * only add, so `hold` never loses a pattern.
+ */
+function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined): ResolvedPolicy {
+  const policy: MarkerPolicy = { mode: base.mode, may: addRules(base.may, extra?.may ?? []), hold: addRules(base.hold, extra?.hold ?? []) };
+  if (base.notes !== undefined) policy.notes = base.notes;
+  return extra === undefined ? { policy } : { policy, policyExtra: { may: [...extra.may], hold: [...extra.hold] } };
+}
+
+/**
+ * The policy of a ritual: the named `[policies.*]` table, or its own mode,
+ * may, hold and notes; then `may_extra` and `hold_extra` added to it.
+ */
 function resolveRitualPolicy(
   table: Table,
   at: { section: string; source: Source; policies: Readonly<Record<string, MarkerPolicy>> },
@@ -313,10 +373,11 @@ function resolveRitualPolicy(
   const { section, source } = at;
   const named = table.policy;
   const own = decodeRules(table, section, source);
+  const extra = decodeExtra(table, section, source);
   if (named === undefined) {
-    const policy: MarkerPolicy = { mode: own.mode ?? "off", may: own.may ?? [], hold: own.hold ?? [] };
-    if (own.notes !== undefined) policy.notes = own.notes;
-    return { policy };
+    const base: MarkerPolicy = { mode: own.mode ?? "off", may: own.may ?? [], hold: own.hold ?? [] };
+    if (own.notes !== undefined) base.notes = own.notes;
+    return withExtra(base, extra);
   }
   const line = source.lines[`${section}.policy`];
   if (!isText(named) || named === "") throw new Error(`${where(source.file, line)}: policy must name a [policies.<name>] table`);
@@ -326,9 +387,7 @@ function resolveRitualPolicy(
   }
   const found = at.policies[named];
   if (found === undefined) throw new Error(`${where(source.file, line)}: policy = "${named}" names no [policies.${named}] table`);
-  const policy: MarkerPolicy = { mode: found.mode, may: [...found.may], hold: [...found.hold] };
-  if (found.notes !== undefined) policy.notes = found.notes;
-  return { policy, policyName: named };
+  return { ...withExtra(found, extra), policyName: named };
 }
 
 /** `mode` against `max_mode`: above the ceiling, or `act` with none, is an error. */
@@ -394,7 +453,7 @@ function decodeRitual(
   if (maxTurns !== undefined && !isPositiveInteger(maxTurns)) {
     throw new Error(`${where(source.file, source.lines[`${section}.max_turns`])}: max_turns must be a positive integer`);
   }
-  const { policy, policyName } = resolveRitualPolicy(table, { section, source, policies: context.policies });
+  const { policy, policyName, policyExtra } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
   if (cadence !== undefined) ritual.cadence = cadence;
   if (hhmm !== undefined) ritual.at = hhmm;
@@ -405,6 +464,7 @@ function decodeRitual(
   if (model !== undefined) ritual.model = model;
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
   if (policyName !== undefined) ritual.policyName = policyName;
+  if (policyExtra !== undefined) ritual.policyExtra = policyExtra;
   checkCeiling(ritual, section, source, context.maxMode);
   return ritual;
 }
@@ -533,19 +593,46 @@ export function isAboveCap(mode: Mode, marker: Marker | null): boolean {
 
 function sortedKeys<T extends object>(value: T): T {
   // SAFETY: the same entries in a new order; the shape is unchanged.
-  return Object.fromEntries(Object.entries(value).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) as T;
+  return Object.fromEntries(Object.entries(value).toSorted(([a], [b]) => byCodeUnit(a, b))) as T;
 }
 
 /**
  * The sha256 hex of a repo ritual's definition: canonical JSON with the keys
- * sorted at both levels, `line` and `policyName` left out. The same content
+ * sorted at both levels, `line`, `policyName` and `policyExtra` left out. It
+ * hashes the effective policy, the one a run uses, not how the file writes
+ * it: a policy inline or factored into `[policies.*]` plus extras gives the
+ * same hash when its lists come out in the same order. The same content
  * gives the same hash on every host and commit, whatever the key order or
- * comments in the file.
+ * comments in the file. List order counts; `resolvedPolicy` is the
+ * order-free view.
  */
 export function definitionHash(ritual: RepoRitual): string {
-  const { line: _line, policyName: _policyName, policy, ...rest } = ritual;
+  const { line: _line, policyName: _policyName, policyExtra: _policyExtra, policy, ...rest } = ritual;
   void _line;
   void _policyName;
+  void _policyExtra;
   const canonical = sortedKeys({ ...rest, policy: sortedKeys({ ...policy }) });
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+/** A ritual's effective policy, sorted: what `marker check --resolved` prints. */
+export interface ResolvedView {
+  mode: Mode;
+  may: string[];
+  hold: string[];
+}
+
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The effective mode, may and hold of `ritual`, each list sorted by code unit. Two forms of one policy give the same view. */
+export function resolvedPolicy(ritual: RepoRitual): ResolvedView {
+  const { mode, may, hold } = ritual.policy;
+  return { mode, may: may.toSorted(byCodeUnit), hold: hold.toSorted(byCodeUnit) };
+}
+
+/** The resolved view as plain lines: `mode: <mode>`, then `may: <rule>` and `hold: <pattern>`, one per line. */
+export function resolvedLines(view: ResolvedView): string[] {
+  return [`mode: ${view.mode}`, ...view.may.map((rule) => `may: ${rule}`), ...view.hold.map((pattern) => `hold: ${pattern}`)];
 }

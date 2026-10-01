@@ -11,9 +11,9 @@ import { join } from "node:path";
 
 import { ritualLifecycle } from "../src/core/due.ts";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
-import { definitionHash, readMarker } from "../src/core/marker.ts";
+import { definitionHash, readMarker, resolvedPolicy } from "../src/core/marker.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
-import { mirrorHash, reconcileProject, RITUAL_DEFINED } from "../src/core/reconcile.ts";
+import { mirrorHash, reconcileProject, RITUAL_DEFINED, skillDirty } from "../src/core/reconcile.ts";
 import { itemRef, openProject, readItemText, type Project } from "../src/core/store.ts";
 import { commitAll, dirty, initRepo, NO_GIT } from "./helpers/git.ts";
 
@@ -337,4 +337,63 @@ test("dirty: only an uncommitted .darius.toml counts; it is recorded and rewrite
   const line = defined(project).findLast((entry) => entry.slug === "daily-report");
   assert.equal(line?.dirty, true);
   assert.deepEqual(reconcileProject(project, dir, HOST, T3).unchanged, ["daily-report", "weekly-audit"]);
+});
+
+// --- may_extra and hold_extra reach the mirror ------------------------------------------
+
+function policyFixture(name: string): string {
+  return readFileSync(join(import.meta.dirname, "fixtures", `marker-policy-${name}.toml`), "utf8");
+}
+
+test("extras: the mirror holds the effective policy; factoring a policy rewrites only what changed order", () => {
+  const { project, dir } = setup({ git: false, marker: policyFixture("inline") });
+  const first = reconcileProject(project, dir, HOST, T1);
+  assert.deepEqual(first.adopted, ["daily-report", "link-audit", "fact-check", "content-fix"]);
+  writeFileSync(join(dir, ".darius.toml"), policyFixture("factored").replace('project = "acme-web"', `project = "${project.name}"`));
+  const second = reconcileProject(project, dir, HOST, T2);
+  assert.deepEqual(second.unchanged, ["daily-report", "link-audit", "content-fix"], "the same lists in the same order hash the same");
+  assert.deepEqual(second.updated, ["fact-check"], "the inline twin lists its rules in another order");
+  const marker = readMarker(dir);
+  assert.ok(marker !== null);
+  for (const def of marker.rituals) {
+    const item = ritual(project, def.slug);
+    assert.deepEqual(item.policy.may, def.policy.may, def.slug);
+    assert.deepEqual(item.policy.hold, def.policy.hold, def.slug);
+    assert.equal(item.policy.mode, def.policy.mode, def.slug);
+    assert.equal(item.def_hash, mirrorHash(marker, def), def.slug);
+    const view = resolvedPolicy(def);
+    assert.deepEqual(item.policy.may.toSorted(), view.may, def.slug);
+    assert.deepEqual(item.policy.hold.toSorted(), view.hold, def.slug);
+  }
+  const content = ritual(project, "content-fix");
+  assert.ok(content.policy.may.includes("Bash(pnpm cli content patch *)"));
+  assert.ok(content.policy.hold.includes("\\bpnpm\\s+cli\\s+content\\s+publish\\b"));
+  assert.equal((readItemText(project, "ritual", "content-fix") ?? "").includes("_extra"), false, "the store item carries the resolved lists only");
+});
+
+// --- skillDirty ------------------------------------------------------------------------
+
+test("skillDirty: a modified or an untracked file in the skill folder counts; other folders do not", { skip: NO_GIT }, () => {
+  const dir = join(SANDBOX, "skill-dirty");
+  mkdirSync(join(dir, ".claude", "skills", "daily"), { recursive: true });
+  mkdirSync(join(dir, ".claude", "skills", "other"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "---\nname: daily\n---\n");
+  writeFileSync(join(dir, ".claude", "skills", "other", "SKILL.md"), "---\nname: other\n---\n");
+  initRepo(dir);
+  commitAll(dir, "init");
+  assert.equal(skillDirty(dir, "daily"), false);
+  dirty(dir, join(".claude", "skills", "daily", "SKILL.md"));
+  assert.equal(skillDirty(dir, "daily"), true, "modified");
+  assert.equal(skillDirty(dir, "other"), false, "only the named folder counts");
+  commitAll(dir, "commit");
+  writeFileSync(join(dir, ".claude", "skills", "daily", "notes.md"), "draft\n");
+  assert.equal(skillDirty(dir, "daily"), true, "untracked");
+  assert.equal(skillDirty(dir, "dailyx"), false, "a folder whose name only starts the same does not count");
+});
+
+test("skillDirty: false outside git, as markerDirty", () => {
+  const dir = join(SANDBOX, "skill-no-git");
+  mkdirSync(join(dir, ".claude", "skills", "daily"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "x\n");
+  assert.equal(skillDirty(dir, "daily"), false);
 });

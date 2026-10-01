@@ -1,0 +1,124 @@
+# Four rituals that each repeat one long policy inline, with small differences.
+# test/fixtures/marker-policy-factored.toml is the same marker with the shared
+# lists factored into [policies.*] plus may_extra and hold_extra. For every
+# ritual, `darius marker check --resolved <slug>` must print the same bytes
+# for both files.
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "UTC"
+
+[rituals.daily-report]
+title = "Daily report"
+cadence = "1d"
+at = "07:00"
+skill = "daily-report"
+mode = "report"
+notes = "Read only."
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(date *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]
+
+[rituals.link-audit]
+title = "Link audit"
+cadence = "1w"
+skill = "link-audit"
+mode = "report"
+notes = "Read only."
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(date *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+  "WebFetch",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]
+
+# The extra rules sit in the middle and the order differs: the sorted view is the same.
+[rituals.fact-check]
+title = "Fact check"
+cadence = "1d"
+at = "09:05"
+skill = "fact-check"
+mode = "report"
+notes = "Read only."
+may = [
+  "Agent",
+  "Bash(cd tools)",
+  "Bash(date *)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bcurl\b.*-X\s*(POST|PUT|DELETE)\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]
+
+[rituals.content-fix]
+title = "Content fix"
+skill = "content-fix"
+mode = "act"
+notes = "Fix typos only. Hand in a diff."
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli report *)",
+  "Bash(pnpm cli status *)",
+  "Bash(date *)",
+  "Bash(git status)",
+  "Bash(git diff *)",
+  "Bash(curl -s https://example.com/*)",
+  "Read",
+  "Grep",
+  "Glob",
+  "Bash(pnpm cli content patch *)",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bpnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+  '\bpnpm\s+cli\s+content\s+publish\b',
+]

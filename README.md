@@ -455,8 +455,14 @@ Root keys:
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
 | `notes` | no | Plain text. |
+| `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
+| `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |
 
 `[policies.<name>]` takes `mode` (required), `may`, `hold` and `notes`, with the same rules.
+`may_extra` and `hold_extra` only add. The effective `may` is the base `may` and then the
+extra rules; `hold` works the same way. A rule that is already there appears once. An extra can
+never remove a rule, so a ritual never has fewer `hold` patterns than its policy. The mode stays
+the base mode. The run, reconcile and the web all use the effective lists.
 Unknown keys and sections are errors that name the file and line.
 
 Check a marker before you commit it:
@@ -464,6 +470,7 @@ Check a marker before you commit it:
 ```bash
 darius marker check          # the marker at or above the working directory
 darius marker check ../repo  # the marker in another checkout
+darius marker check --resolved daily-report  # the effective policy of one ritual
 ```
 
 It prints `ok: v3, 2 rituals, 1 policies`, or the first error as `file:line: message` and exit 1.
@@ -619,7 +626,7 @@ the full reference.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
-- `darius marker check [dir]`: parse a repo's `.darius.toml` as the runner does, and list warnings.
+- `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does, and list warnings. `--resolved` prints the effective policy of one ritual.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.
 - `darius selftest seed|fire|status`: the `darius-selftest` project the acceptance run uses.
 - `darius policy-check`: the PreToolUse hook that unattended runs use. You do not call it.
