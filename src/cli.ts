@@ -126,11 +126,12 @@ async function main(argv: string[]): Promise<number> {
  * A verb darius does not own: the legacy CLI gets the argv as given, and its
  * exit code passes through. When it fails and there is no `.tracker/` here
  * or above, one more stderr line names the fix. It hooks `exit` because a
- * legacy verb may end the process itself.
+ * legacy verb may end the process itself. `delegation` is a pure validator and
+ * needs no `.tracker/`, so it never gets the line.
  */
 async function runLegacyVerb(argv: string[]): Promise<number> {
   process.once("exit", (code) => {
-    if (code !== 0 && findTrackerDir(process.cwd()) === null) {
+    if (code !== 0 && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
       console.error("darius: no .tracker/ here or above. Run darius init in the repo root to create one.");
     }
   });

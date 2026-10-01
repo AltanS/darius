@@ -163,6 +163,8 @@ import {
 import { atomicWriteFileSync } from "../lib/atomic.ts";
 import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
+import { runDelegation } from "../lib/delegation.ts";
+import { runHookDrift, runHookStop } from "../lib/hooks.ts";
 
 /** Runs one tracker command. `argv` excludes the program name. Returns the exit code (verbs that fail call process.exit themselves). */
 export async function main(argv: string[]): Promise<number> {
@@ -279,6 +281,18 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (subcommand === "hook-stop") {
+    return runHookStop();
+  }
+
+  if (subcommand === "hook-drift") {
+    return runHookDrift();
+  }
+
+  if (subcommand === "delegation") {
+    return runDelegation(rawArgs.slice(1));
+  }
+
   if (subcommand === "due") {
     runDue(rawArgs.slice(1));
     return 0;
@@ -323,6 +337,9 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write("  claim --list [--json]\n");
     process.stderr.write("  release <spec-ref> [--session <id>] [--force] [--json]\n");
     process.stderr.write("  loop-check [--json] [--bounce <agent-id>] [--max-bounces N]\n");
+    process.stderr.write("  hook-stop   (Stop hook, reads the hook JSON on stdin)\n");
+    process.stderr.write("  hook-drift  (PostToolUse hook, reads the hook JSON on stdin)\n");
+    process.stderr.write("  delegation <validate|return-validate> '<json>'\n");
     process.stderr.write("  due [--json]\n");
     process.stderr.write("  ritual add --name <name> --slug <slug> [--cadence <7d|2w|1m>] [--due <date>] [--agent <name>] [--owner <email>]\n");
     process.stderr.write("  ritual run <slug> [--date <YYYY-MM-DD>]\n");

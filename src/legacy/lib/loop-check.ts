@@ -157,16 +157,16 @@ function nextAction(threadId: string, stage: WorklogStage): string {
   switch (stage) {
     case "planned":
       return (
-        `Stage 2 — dispatch: \`tracker worklog dispatch ${threadId} --agent <invocable> --reason "…"\` ` +
-        `then Task-delegate per the Delegation Envelope; or park: \`tracker worklog park ${threadId} --reason "…"\``
+        `Stage 2 (dispatch): \`darius worklog dispatch ${threadId} --agent <invocable> --reason "…"\` ` +
+        `then Task-delegate per the Delegation Envelope; or park: \`darius worklog park ${threadId} --reason "…"\``
       );
     case "dispatched":
       return (
-        `Stage 3 — collect the Task result and run /tracker:work-verify for thread ${threadId}; ` +
-        `or park: \`tracker worklog park ${threadId} --reason "…"\``
+        `Stage 3 (verify): collect the Task result and run /darius-work-verify for thread ${threadId}; ` +
+        `or park: \`darius worklog park ${threadId} --reason "…"\``
       );
     case "verified":
-      return `Stage 4 — run /tracker:commit — verified work is a debt; close it before stopping`;
+      return `Stage 4 (commit): run /darius-commit. Verified work is a debt; close it before stopping`;
     case "committed":
       // Not reachable (committed is terminal for gating); exhaustive for the type.
       return "";

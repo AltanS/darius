@@ -76,10 +76,10 @@ describe("loop-check", () => {
     const result = runLoopCheck({ trackerRoot });
     const byId = new Map(result.threads.map((t) => [t.threadId, t]));
 
-    expect(byId.get(planned)?.next).toContain(`tracker worklog dispatch ${planned}`);
-    expect(byId.get(dispatched)?.next).toContain("/tracker:work-verify");
+    expect(byId.get(planned)?.next).toContain(`darius worklog dispatch ${planned}`);
+    expect(byId.get(dispatched)?.next).toContain("/darius-work-verify");
     expect(byId.get(dispatched)?.next).toContain(dispatched);
-    expect(byId.get(verified)?.next).toContain("/tracker:commit");
+    expect(byId.get(verified)?.next).toContain("/darius-commit");
 
     const report = formatLoopCheckReport(result);
     expect(report).toContain("STATUS: stuck");
