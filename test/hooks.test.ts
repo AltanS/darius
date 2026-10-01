@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const EM_DASH = String.fromCodePoint(0x2014);
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const RUNTIMES = ["node", "bun"] as const;
 
@@ -60,7 +61,7 @@ test("hook-stop blocks a Stop with an open planned thread, under both runtimes",
     assert.equal(decision.decision, "block");
     assert.match(decision.reason, /^Work Loop incomplete: finish it or park it before ending the turn\.\nSTATUS: stuck\n/u);
     assert.match(decision.reason, /t-stuck/u);
-    assert.doesNotMatch(result.stdout, /—/u);
+    assert.doesNotMatch(result.stdout, new RegExp(EM_DASH, "u"));
   }
 });
 

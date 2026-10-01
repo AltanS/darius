@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { PROCEDURE_SKILLS, readStamp, skillSourceDir } from "../src/cli/skill.ts";
 import { VERSION } from "../src/version.ts";
 
+const EM_DASH = String.fromCodePoint(0x2014);
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const SKILL_NAMES = ["darius", ...PROCEDURE_SKILLS.map((name) => `darius-${name}`)];
 
@@ -69,7 +70,7 @@ test("the repo holds the static text: 11 skills and the agent, with no em dash a
   for (const name of [...PROCEDURE_SKILLS, "agent-darius"]) {
     const text = readFileSync(join(dir, `${name}.md`), "utf8");
     assert.ok(text.startsWith("---\n"), name);
-    assert.ok(!text.includes("—"), `${name} has an em dash`);
+    assert.ok(!text.includes(EM_DASH), `${name} has an em dash`);
     assert.doesNotMatch(text, /\/tracker:|\btracker:[a-z]|CLAUDE_PLUGIN_ROOT|delegation\.mts/u, name);
     assert.equal(readStamp(text), null, `${name} is unstamped source`);
   }
