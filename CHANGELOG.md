@@ -2,6 +2,15 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.48.0] - 2026-10-01
+
+### Added
+
+- A follow-up button on the run page. When a question lists commands and this host can start the follow-up (checkout, profile with permissions skip, herdr running), the card offers the questions to approve, a note, and `Start follow-up on <host>`. The first press shows every line the run will be granted; the second starts it. Otherwise the card names the reason, such as `gated profile` or `no herdr`, and gives the CLI command.
+- `POST /api/run/follow-up` takes `{project, run, approve, note?}`, never grant lines. Same Origin, JSON and size cap as the other write endpoints. It checks readiness again, starts `darius run follow-up ... --who "web:<who>"` detached with its output in `runs/<run>/follow-up.log`, and answers `{ok: true, pending: true}`.
+- `WebContext.followUp(project, run)` says whether this host can start a follow-up now, from a dry run of the verb. It writes nothing.
+- The run page shows each question's command lines as written, links a follow-up to its parent, and lists a parent's follow-ups. The run data carries `followUpOf` and `followUps`.
+
 ## [0.47.1] - 2026-10-01
 
 ### Fixed

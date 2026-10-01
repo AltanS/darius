@@ -4630,6 +4630,110 @@
     cursor: not-allowed;
   }
 
+  /* --- follow-up (0.48.0) ------------------------------------------------------------- */
+  /* A question's command lines, as written: one box, one line each, never wrapped mid-word by the page. */
+
+  .q-cmds {
+    display: grid;
+    gap: 6px;
+  }
+
+  .q-cmds-label {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .q-cmds pre {
+    margin: 0;
+    padding: 10px 12px 10px 14px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-night);
+    font: 13px/1.55 var(--font-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-parchment);
+  }
+
+  .fu {
+    display: grid;
+    gap: 16px;
+  }
+
+  .fu p {
+    max-width: 72ch;
+    overflow-wrap: anywhere;
+  }
+
+  .fu-picks {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .fu-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .fu-pick input {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    accent-color: var(--color-gold);
+  }
+
+  .fu-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .fu-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .fu-acts .bk-btn-main {
+    width: 100%;
+  }
+
+  @media (min-width: 640px) {
+    .fu-acts .bk-btn-main {
+      width: auto;
+      min-width: 240px;
+    }
+  }
+
+  .fu-ask {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--color-gold);
+  }
+
+  .fu-ask-q {
+    font-weight: 600;
+  }
+
+  .fu-off {
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .fu-links {
+    display: grid;
+    gap: 4px;
+  }
+
   .st-switch:disabled {
     opacity: 0.5;
     cursor: not-allowed;

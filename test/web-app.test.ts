@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FollowUpReadiness, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -188,6 +188,8 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
             { kind: "list", ordered: true, start: 3, items: [[{ kind: "text", text: "third" }]] },
             { kind: "code", text: "echo </pre><script>x</script>" },
           ],
+    followUpOf: null,
+    followUps: [],
   };
 }
 
@@ -255,6 +257,7 @@ const context: WebContext = {
   milestone: (project, milestone) => (project === "demo" && milestone.toUpperCase() === "M7" ? MILESTONE : null),
   system: () => SYSTEM,
   backups: () => BACKUPS,
+  followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
 };
 
 async function get(path: string): Promise<{ status: number; body: string; headers: Headers }> {
@@ -730,6 +733,73 @@ test("a run with a result: the banner, tiles, the question with the ack command,
 
   const calm = await readPage(`/p/demo/runs/${DONE}`, ctx);
   assert.equal(calm.includes('<h2 class="label">Result</h2>'), false, "no result, no panel");
+});
+
+// --- follow-up (0.48.0) -----------------------------------------------------------------
+
+const PARENT = "01KPPPPPPPPPPPPPPPPPPPPPPP";
+const CHILD = "01KQQQQQQQQQQQQQQQQQQQQQQQ";
+const COMMAND = `pnpm -C tools cli fc --post 12 --confirm 'site <b>a</b>'`;
+const WITH_COMMANDS: RunResult = {
+  ...RESULT,
+  questions: [{ text: "Post the fix to site-a?", recommendation: "Yes.", commands: [COMMAND, "git push origin main"] }, { text: "Rename the page?" }],
+};
+
+/** The asks run with a question that lists commands, and the readiness given; `calls` counts the readiness checks. */
+function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: string; followUps?: string[] } = {}): WebContext & { calls: string[] } {
+  const base = asksContext(null);
+  const calls: string[] = [];
+  return {
+    ...base,
+    calls,
+    run: (name, run) => {
+      const detail = base.run(name, run);
+      if (detail === null || run !== ASKS) return detail;
+      return { ...detail, result: WITH_COMMANDS, followUpOf: links.followUpOf ?? null, followUps: links.followUps ?? [] };
+    },
+    followUp: (project, run) => {
+      calls.push(`${project}/${run}`);
+      return Promise.resolve(readiness);
+    },
+  };
+}
+
+test("a question's command lines show as written, and the follow-up card offers a button on this host", async () => {
+  const ctx = followUpContext({ ready: true, host: "host-a", profile: "opus-skip", questions: [{ n: 1, commands: [COMMAND, "git push origin main"] }] });
+  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  assert.deepEqual(ctx.calls, [`demo/${ASKS}`]);
+  assert.ok(page.includes("A yes runs, as written:"));
+  assert.ok(page.includes("pnpm -C tools cli fc --post 12 --confirm &#x27;site &lt;b&gt;a&lt;/b&gt;&#x27;\ngit push origin main"), "the lines verbatim, as text");
+  assert.equal(page.includes("<b>a</b>"), false, "a command line never becomes markup");
+  const section = page.indexOf('<h2 class="label">Follow-up</h2>');
+  const found = page.indexOf('<h2 class="label">What it found</h2>');
+  assert.ok(section !== -1 && section < found, "the card follows the questions");
+  const card = textOf(between(page, section, found));
+  assert.match(card, /Approve the commands ofQuestion 1 \(2 lines\)/u);
+  assert.match(card, /Start follow-up on host-a/u);
+  assert.equal(card.includes("Yes, start it"), false, "the confirm box needs the first press");
+  assert.match(page, /<input type="checkbox" checked=""/u, "one question with commands: picked");
+  assertScriptsCarryNonce(page, "run page with a follow-up card");
+});
+
+test("the follow-up card says why it is off and gives the command; a run without commands asks nothing", async () => {
+  const ctx = followUpContext({ ready: false, host: "host-a", reason: "gated profile: profile x has permissions gated" });
+  const card = textOf(await readPage(`/p/demo/runs/${ASKS}`, ctx));
+  assert.match(card, /off A follow-up cannot start from this page: gated profile: profile x has permissions gated/u);
+  assert.ok(card.includes(`darius run follow-up ${ASKS} --approve 1 --project demo`));
+  assert.equal(card.includes("Start follow-up on"), false);
+  const plain = { ...asksContext(null), followUp: () => assert.fail("no readiness check without commands") };
+  const page = await readPage(`/p/demo/runs/${ASKS}`, plain);
+  assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false);
+});
+
+test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
+  const off: FollowUpReadiness = { ready: false, host: "host-a", reason: "x" };
+  const child = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT }));
+  assert.match(child, new RegExp(`follows up <a[^>]*href="/p/demo/runs/${PARENT}"[^>]*>run ${PARENT.slice(-8)}</a>`, "u"));
+  const parent = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUps: [CHILD] }));
+  assert.match(textOf(parent), new RegExp(`Follow-ups${CHILD.slice(-8)}`, "u"));
+  assert.ok(parent.includes(`href="/p/demo/runs/${CHILD}"`));
 });
 
 test("a result without questions shows no question card and no ack command", async () => {

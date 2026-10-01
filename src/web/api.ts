@@ -488,7 +488,29 @@ export interface RunDetail {
   findings: MdBlock[] | null;
   /** The whole result block; null when the run handed in none. */
   result: RunResult | null;
+  /** The run this one follows up (`darius run follow-up`, 0.47.0); null for any other run. */
+  followUpOf: string | null;
+  /** The runs that follow this one up, oldest first. */
+  followUps: string[];
 }
+
+/** The command lines of one question a follow-up may approve. */
+export interface FollowUpQuestion {
+  /** The question's number in the result, from 1. */
+  n: number;
+  /** Its command lines, as written. */
+  commands: string[];
+}
+
+/**
+ * Whether this host can start a follow-up of a run from the run page
+ * (0.48.0). Ready means the checks of `darius run follow-up` pass here now:
+ * the run, the ritual, the checkout, the profile and herdr. `reason` says
+ * what is off, in one line. The server checks again on the POST.
+ */
+export type FollowUpReadiness =
+  | { ready: true; host: string; profile: string; questions: FollowUpQuestion[] }
+  | { ready: false; host: string; reason: string };
 
 /**
  * One file of a milestone, or one worklog. Read-only from the linked
@@ -559,6 +581,8 @@ export interface WebContext {
   system(): SystemStatus;
   /** The snapshots of this host (0.44.0). */
   backups(): BackupsStatus;
+  /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
+  followUp(project: string, run: string): Promise<FollowUpReadiness>;
 }
 
 /**

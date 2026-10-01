@@ -26,7 +26,9 @@ export interface PostFailed {
 export type PostResult = PostOk | PostFailed;
 
 /** What the endpoints take as a body: JSON values only. */
-export type PostBody = { readonly [key: string]: string | number | boolean | null | { readonly [key: string]: string | number | boolean | null } };
+export type PostBody = {
+  readonly [key: string]: string | number | boolean | null | readonly number[] | { readonly [key: string]: string | number | boolean | null };
+};
 
 function failed(status: number, error: string): PostFailed {
   return { ok: false, status, error };

@@ -264,6 +264,46 @@ test("serve listens on 127.0.0.1 and stops on SIGTERM", async () => {
   }
 });
 
+/** One request to a listening serve on 127.0.0.1: status, content type, body. */
+function call(port: number, options: { method: string; path: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number; type: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, method: options.method, path: options.path, headers: options.headers ?? {} }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"] ?? ""), body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    req.end(options.body ?? "");
+  });
+}
+
+test("serve dispatches POST /api/run/follow-up to the action API; every other write stays 405 and the reads are unchanged (0.48.0)", async () => {
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const serving = serveCommand.run(parseArgs(["--port", "47992", "--bind", "127.0.0.1"]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const body = JSON.stringify({ project: "demo", run: "01JX", approve: [1] });
+    const noOrigin = await call(47_992, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
+    assert.equal(noOrigin.status, 403);
+    assert.match(noOrigin.type, /^application\/json/u);
+    assert.match(noOrigin.body, /the request must come from the darius page/u);
+    const read = await call(47_992, { method: "GET", path: "/api/run/follow-up" });
+    assert.equal(read.status, 405, "the action API takes POST only");
+    for (const path of ["/", "/p/demo/runs/01JX", "/api/status.json", "/api/run"]) {
+      assert.equal((await call(47_992, { method: "POST", path, headers: { "content-type": "application/json" }, body })).status, 405, path);
+    }
+    const status = await call(47_992, { method: "GET", path: "/api/status.json" });
+    assert.equal(status.status, 200);
+    assert.match(status.type, /^application\/json/u);
+    assert.equal((await call(47_992, { method: "GET", path: "/healthz" })).body, "ok\n");
+    process.emit("SIGTERM");
+    assert.equal(await serving, 0);
+  } finally {
+    console.log = log;
+  }
+});
+
 function span(kind: MdSpan["kind"], value: string): MdSpan {
   return { kind, text: value };
 }

@@ -38,7 +38,7 @@ interface QuestionListProps {
   questions: readonly ResultQuestion[];
 }
 
-/** The questions of a result, numbered, each with its recommendation. */
+/** The questions of a result, numbered, each with its recommendation and the command lines a yes runs (0.48.0). */
 export function QuestionList({ questions }: QuestionListProps): React.ReactNode {
   return (
     <ol className="qs">
@@ -49,6 +49,14 @@ export function QuestionList({ questions }: QuestionListProps): React.ReactNode 
             <p className="rec">
               <span className="rec-label">Recommended:</span> {question.recommendation}
             </p>
+          )}
+          {(question.commands ?? []).length === 0 ? null : (
+            <div className="q-cmds">
+              <p className="q-cmds-label">A yes runs, as written:</p>
+              <pre>
+                <code>{(question.commands ?? []).join("\n")}</code>
+              </pre>
+            </div>
           )}
         </li>
       ))}
@@ -189,10 +197,12 @@ interface ResultPanelProps {
   project: string;
   row: RunRow;
   result: RunResult;
+  /** Drawn right after the questions: the follow-up card of the run page (0.48.0). */
+  afterQuestions?: React.ReactNode;
 }
 
 /** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
-export function ResultPanel({ project, row, result }: ResultPanelProps): React.ReactNode {
+export function ResultPanel({ project, row, result, afterQuestions = null }: ResultPanelProps): React.ReactNode {
   const tone = resultTone(result.status);
   const hasQuestions = result.questions.length > 0;
   const tiles = result.metrics.length === 0 ? null : <Tiles metrics={result.metrics} />;
@@ -212,6 +222,7 @@ export function ResultPanel({ project, row, result }: ResultPanelProps): React.R
           <Section title="Questions for you">
             <ResultQuestions project={project} row={row} questions={result.questions} />
           </Section>
+          {afterQuestions}
           {tiles === null ? null : <Section title="Numbers">{tiles}</Section>}
         </>
       ) : null}

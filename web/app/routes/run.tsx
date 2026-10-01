@@ -2,19 +2,20 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/run";
 import { KindWord } from "../components/chip.tsx";
+import { FollowUpCard } from "../components/follow-up.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Crumbs, Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
-import { duration, itemPath, workspacePath } from "../lib/format.ts";
+import { duration, itemPath, runPath, shortRun, workspacePath } from "../lib/format.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
-export function loader({ context, params }: Route.LoaderArgs) {
+export async function loader({ context, params }: Route.LoaderArgs) {
   const run = context.run(params.project, params.run);
   if (run === null) throw data(`No run ${params.run} in project ${params.project}.`, { status: 404 });
   const status = statusOf(context);
@@ -23,13 +24,16 @@ export function loader({ context, params }: Route.LoaderArgs) {
   const failure = runFailure(run.project, run.row, status.utcOffset);
   const next = failure === null ? null : nextStep(failure, { today: status.today, offset: status.utcOffset });
   const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
-  return { run, kind: itemKind(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next };
+  // Only a run whose questions list commands can have a follow-up from this page; the check runs on the server.
+  const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
+  const followUp = hasCommands ? await context.followUp(run.project, run.row.run) : null;
+  return { run, kind: itemKind(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.project} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, next } = loaderData;
+  const { run, kind, manual, label, stuck, next, followUp } = loaderData;
   const { row, project } = run;
   const state = stuck === null ? runState(row) : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -70,6 +74,11 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           </span>
           {took === null ? null : <span>took {took}</span>}
           <span>{row.who === "timer" ? "by timer" : `by ${row.who}`}</span>
+          {run.followUpOf === null ? null : (
+            <span>
+              follows up <Link to={runPath(project, run.followUpOf)}>run {shortRun(run.followUpOf)}</Link>
+            </span>
+          )}
         </p>
         {stuck === null ? null : <p className="page-warn tone-late">{stuckText(stuck)}</p>}
       </header>
@@ -90,7 +99,20 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
             </Section>
           )}
 
-          {run.result === null ? null : <ResultPanel project={project} row={row} result={run.result} />}
+          {run.result === null ? null : (
+            <ResultPanel
+              project={project}
+              row={row}
+              result={run.result}
+              afterQuestions={
+                followUp === null ? null : (
+                  <Section title="Follow-up">
+                    <FollowUpCard project={project} run={row.run} readiness={followUp} questions={run.result.questions} />
+                  </Section>
+                )
+              }
+            />
+          )}
 
           {body !== null ? (
             <Section title="Report">
@@ -113,6 +135,23 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                   { label: "Run", value: <code className="break-all">{row.run}</code> },
                   { label: "Item", value: <code>{row.item}</code> },
                   { label: "Ended", value: row.endedAt === null ? <span className="text-muted">not yet</span> : <Time iso={row.endedAt} /> },
+                  ...(run.followUpOf === null ? [] : [{ label: "Follows up", value: <Link to={runPath(project, run.followUpOf)}><code>{shortRun(run.followUpOf)}</code></Link> }]),
+                  ...(run.followUps.length === 0
+                    ? []
+                    : [
+                        {
+                          label: "Follow-ups",
+                          value: (
+                            <span className="fu-links">
+                              {run.followUps.map((child) => (
+                                <Link key={child} to={runPath(project, child)}>
+                                  <code>{shortRun(child)}</code>
+                                </Link>
+                              ))}
+                            </span>
+                          ),
+                        },
+                      ]),
                 ]}
               />
               {run.events.length === 0 ? null : (

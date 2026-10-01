@@ -40,6 +40,8 @@ import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
 import { failedToday as failedTodayRun, takeRitualLease } from "../src/runner/run-due.ts";
+import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
+import { runDetail } from "../src/web/status.ts";
 import { preflightGate } from "../src/runner/launch.ts";
 import { agentName } from "../src/surface/herdr.ts";
 import { formatReport, type BatchReport, type RitualEntry } from "../src/runner/report.ts";
@@ -1880,6 +1882,46 @@ test("run follow-up --dry-run prints the grants and the tab it would open, and w
   assert.equal(readLedger(openProject(project)).length, before);
   assert.equal(existsSync(runsDir), false, "no run dir");
   assert.deepEqual(herdrCalls().filter((line) => !line.startsWith("status")), [], "no tab");
+});
+
+/** Why a follow-up of `run` cannot start here; fails the test when it can. */
+async function notReady(project: string, run: string): Promise<string> {
+  const answer = await followUpReadiness(project, run);
+  assert.equal(answer.ready, false, JSON.stringify(answer));
+  return answer.ready ? "" : answer.reason;
+}
+
+test("follow-up readiness for the web button: ready with the approvable questions, else the reason, and it writes nothing (0.48.0)", async () => {
+  const parent = await seedParent("fu-ready");
+  const before = readLedger(openProject("fu-ready")).length;
+  const ready = await withFakeHerdr({}, () => followUpReadiness("fu-ready", parent));
+  assert.deepEqual(ready, { ready: true, host: hostId(), profile: "built-in", questions: [{ n: 1, commands: ["git push origin main"] }] });
+  assert.equal(readLedger(openProject("fu-ready")).length, before, "no ledger line");
+  assert.equal(existsSync(join(openProject("fu-ready").root, "runs")), false, "no run dir");
+  assert.deepEqual(herdrCalls().filter((line) => !line.startsWith("status")), [], "no tab");
+
+  assert.match(await notReady("fu-ready", parent), /^no herdr on \S+: a follow-up opens a herdr tab/u);
+  await addProfile("fu-ready-gated", ["--permissions", "gated"]);
+  const gated = await seedParent("fu-ready-gated", { marker: 'v = 2\n[defaults]\nfollow_up = "fu-ready-gated"\n' });
+  assert.match(await notReady("fu-ready-gated", gated), /^gated profile: profile fu-ready-gated has permissions gated/u);
+  const report = await seedParent("fu-ready-report", { mode: "report" });
+  assert.match(await notReady("fu-ready-report", report), /^not-followable: ritual heartbeat is in mode report/u);
+  const unlinked = await seedParent("fu-ready-unlinked", { link: false });
+  assert.match(await withFakeHerdr({}, () => notReady("fu-ready-unlinked", unlinked)), /^no-workdir: a follow-up runs in a checkout/u);
+  assert.match(await notReady("fu-ready", "01NOPE"), /^no run 01NOPE in fu-ready/u);
+  assert.match(await notReady("fu-nope", parent), /^no project fu-nope/u);
+  const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-ready", "--json"])).stdout).run;
+  assert.match(await notReady("fu-ready", open), /no question of this run lists commands; grant lines by hand: darius run follow-up \S+ --grant LINE/u);
+});
+
+test("the run page data links a follow-up and its parent (0.48.0)", async () => {
+  const project = "fu-links";
+  const parent = await seedParent(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless"]));
+  const child: string = JSON.parse(result.stdout).projects[0].rituals[0].run;
+  assert.deepEqual([runDetail(project, parent)?.followUpOf, runDetail(project, parent)?.followUps], [null, [child]]);
+  assert.deepEqual([runDetail(project, child)?.followUpOf, runDetail(project, child)?.followUps], [parent, []]);
 });
 
 test("run follow-up refuses what it cannot run, each with one line, and starts nothing", async () => {

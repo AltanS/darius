@@ -3,7 +3,7 @@
  * (docs/concept.md, "App design" > "Web status page"). It shows the local
  * store, the djinns, rituals, recent runs with their findings, held
  * questions and open vigils, and the machine and its snapshots. The pages only
- * read; the two API prefixes below are the only writes. `setup --systemd` installs it as the user
+ * read; the three API prefixes below are the only writes. `setup --systemd` installs it as the user
  * service `darius-web.service`.
  *
  *   GET /healthz             "ok", without an access check
@@ -12,6 +12,8 @@
  *                            (src/web/push-api.ts)
  *   /api/snapshots/...       the backup controls: run now, settings, key
  *                            pair, bucket check, delete (src/web/snapshot-api.ts)
+ *   POST /api/run/follow-up  the run page's follow-up button (0.48.0,
+ *                            src/web/action-api.ts)
  *   GET <file>               a file of the built app (web/build/client)
  *   GET anything else        the web app (web/, React Router framework
  *                            mode): darius imports its committed server
@@ -43,6 +45,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { errorMessage } from "../runtime.ts";
 import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
+import { ACTION_API_PREFIX, actionApi } from "../web/action-api.ts";
 import type { WebHandler } from "../web/api.ts";
 import { webContext } from "../web/context.ts";
 import { plainPage, renderForbidden } from "../web/html.ts";
@@ -323,6 +326,12 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     if (url.pathname.startsWith(PUSH_API_PREFIX)) {
       const body = await readBody(request);
       const answer = pushApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
+      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      return;
+    }
+    if (url.pathname.startsWith(ACTION_API_PREFIX)) {
+      const body = await readBody(request);
+      const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
       send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }

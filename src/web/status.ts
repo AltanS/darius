@@ -21,6 +21,7 @@ import { projectDir } from "../core/paths.ts";
 import { parseResult, readSummary } from "../core/result.ts";
 import { GLOBAL_PROJECT, getBlobText, listProjects, openProject, type Project } from "../core/store.ts";
 import { localToday, vigilStatus } from "../core/sweep.ts";
+import { followUpOf, followUpsOf } from "../runner/follow-up.ts";
 import { failedToday, viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
@@ -331,7 +332,17 @@ export function runDetail(projectName: string, run: string): RunDetail | null {
   const findings = row.findingsSha === null ? null : getBlobText(project, row.findingsSha);
   const [itemKind = "", itemSlug = ""] = row.item.split("/");
   const result = runResult(project, ledger, run);
-  return { project: projectName, row, itemKind, itemSlug, events, findings: findings === null ? null : parseMarkdown(findings), result };
+  return {
+    project: projectName,
+    row,
+    itemKind,
+    itemSlug,
+    events,
+    findings: findings === null ? null : parseMarkdown(findings),
+    result,
+    followUpOf: followUpOf(ledger, run) ?? null,
+    followUps: followUpsOf(ledger, run),
+  };
 }
 
 /** The run's result block, checked again on the way out: a blob from another host is as untrusted as the model. */

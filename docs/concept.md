@@ -533,7 +533,7 @@ The first unattended ritual on the lead host is `daily-report` in a project: mod
 
 ## Follow-up runs
 
-Status: 2026-10-01, 0.46.0 (grants), 0.47.0 (the verb) and 0.47.1 (Fable rulings R1 to R4). Design: Fable, 2026-10-01.
+Status: 2026-10-01, 0.46.0 (grants), 0.47.0 (the verb), 0.47.1 (Fable rulings R1 to R4) and 0.48.0 (the web button). Design: Fable, 2026-10-01.
 
 A run that asks a question often knows the exact commands a yes would run. A question in the result block may list them in `commands`: up to 20 lines, each one plain command. The operator approves a question, and a follow-up run may then run those lines as written. Nothing else about the policy changes: mode, `may`, `hold` and `max_mode` stay as they are.
 
@@ -547,7 +547,11 @@ A grant passes the gate, not a native allowlist. With Claude Code in gated mode,
 
 A follow-up is attended. It opens a herdr tab and refuses when herdr is not running, unless `--headless`. The idle watcher still holds it. Its profile is `[defaults] follow_up` of the checkout, else the ritual's; a profile with permissions gated is refused, because its allowlist would refuse the granted lines. The prompt gets a `## Follow-up` section after the handoff, built from the parent's result block, not its markdown: the summary, the approved questions, the operator's note, the granted lines, the open items and actions. The rule: run the granted lines as written, then verify; anything else holds as usual; report what changed.
 
-It refuses: a parent that is not a closed, complete ritual run; a ritual not in mode act (a report ritual never writes: set `--mode act`, or run the lines by hand); a mode above `max_mode`; a ritual pinned to another host (the message names it); no linked checkout on this host; an open or held run of the ritual; an open follow-up of the same parent (a closed one may be followed again); a call from inside a run, so a run never grants itself. A person starts it, on a host with the checkout. The web button comes later.
+It refuses: a parent that is not a closed, complete ritual run; a ritual not in mode act (a report ritual never writes: set `--mode act`, or run the lines by hand); a mode above `max_mode`; a ritual pinned to another host (the message names it); no linked checkout on this host; an open or held run of the ritual; an open follow-up of the same parent (a closed one may be followed again); a call from inside a run, so a run never grants itself. A person starts it, on a host with the checkout, from the CLI or the run page.
+
+**The web button (0.48.0).** The run page shows each question's command lines as written. When a question lists commands, the page asks the server whether this host can start a follow-up now (`WebContext.followUp`, read only). The server runs the checks of the verb on its own code path, a dry run that writes nothing and reaches no bucket: the parent, the ritual, the pin, the linked checkout, `max_mode`, the profile and herdr. Ready, the card offers a checkbox per question with commands, an optional note, and `Start follow-up on <host>`. The first press opens a confirm box that lists every line the run will be granted; the second press posts. Not ready, the card names the reason in one line (for example `gated profile` or `no herdr`) and gives the CLI command.
+
+`POST /api/run/follow-up` (src/web/action-api.ts) takes `{project, run, approve: [N], note?}` and nothing else: a body with grant lines, or any other key, is refused. It has the guards of the other write endpoints: same Origin, JSON, a size cap, and the access check of `darius serve` before it. It checks readiness again, then starts `darius run follow-up <run> --approve N ... --who "web:<who>"` as a detached process with its output in `runs/<run>/follow-up.log`, and answers `{ok: true, pending: true}`. The CLI checks everything once more. Every other non-GET request stays 405. The page links a follow-up to its parent and lists a parent's follow-ups.
 
 **Rulings (0.47.1).** A follow-up is out of schedule. Its completion moves no due date, its failure is not "failed today", and it never hands off: the next scheduled run gets the parent's note (`src/core/due.ts`, `src/core/handoff.ts`). An open or held follow-up still blocks a new run. Its result still shows on the pages and in alerts.
 

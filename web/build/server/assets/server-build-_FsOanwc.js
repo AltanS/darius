@@ -9190,6 +9190,10 @@ function momentText(iso, today, offset) {
 	const time = clockTime(iso, offset);
 	return date === today ? time : `${shortDate(date)} ${time}`;
 }
+/** The tail of a run id: ULIDs share their time prefix, the tail tells them apart. */
+function shortRun(run) {
+	return run.length > 10 ? run.slice(-8) : run;
+}
 /** The exact command that answers question `n` (1-based) of a held run. */
 function answerCommand(run, n, project) {
 	return `darius run answer ${run} ${n} "your answer" --project ${project}`;
@@ -11738,21 +11742,31 @@ function Tag({ tag }) {
 function ResultChips({ summary, isAnswered }) {
 	return summaryTags(summary, isAnswered).map((tag) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag }, tag.text));
 }
-/** The questions of a result, numbered, each with its recommendation. */
+/** The questions of a result, numbered, each with its recommendation and the command lines a yes runs (0.48.0). */
 function QuestionList({ questions }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 		className: "qs",
-		children: questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }), question.recommendation === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "rec",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "rec-label",
-					children: "Recommended:"
-				}),
-				" ",
-				question.recommendation
-			]
-		})] }, `${index}`))
+		children: questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }),
+			question.recommendation === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rec",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rec-label",
+						children: "Recommended:"
+					}),
+					" ",
+					question.recommendation
+				]
+			}),
+			(question.commands ?? []).length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "q-cmds",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "q-cmds-label",
+					children: "A yes runs, as written:"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: (question.commands ?? []).join("\n") }) })]
+			})
+		] }, `${index}`))
 	});
 }
 /**
@@ -11885,7 +11899,7 @@ function Actions({ actions }) {
 	});
 }
 /** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
-function ResultPanel({ project, row, result }) {
+function ResultPanel({ project, row, result, afterQuestions = null }) {
 	const tone = resultTone(result.status);
 	const hasQuestions = result.questions.length > 0;
 	const tiles = result.metrics.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tiles, { metrics: result.metrics });
@@ -11910,17 +11924,21 @@ function ResultPanel({ project, row, result }) {
 				]
 			}), hasQuestions ? null : tiles]
 		}),
-		hasQuestions ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-			title: "Questions for you",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultQuestions, {
-				project,
-				row,
-				questions: result.questions
+		hasQuestions ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: "Questions for you",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultQuestions, {
+					project,
+					row,
+					questions: result.questions
+				})
+			}),
+			afterQuestions,
+			tiles === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: "Numbers",
+				children: tiles
 			})
-		}), tiles === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-			title: "Numbers",
-			children: tiles
-		})] }) : null,
+		] }) : null,
 		result.items.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 			title: "What it found",
 			aside: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -16176,6 +16194,189 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 	})] });
 });
 //#endregion
+//#region app/components/follow-up.tsx
+/**
+* The follow-up card of a run page (0.48.0; `darius run follow-up`). When
+* this host can start one, the operator picks the questions to approve,
+* may add a note, and presses "Start follow-up on <host>". A second press
+* on the confirm box, which lists every line the run will be granted, posts
+* to `/api/run/follow-up`. The page sends question numbers only, never a
+* command line. When this host cannot start one, the card says why and
+* gives the command for a host that can.
+*/
+/** The CLI command for the same follow-up, for a host where the button is off. */
+function followUpCommand(run, project, numbers) {
+	return `darius run follow-up ${run} ${numbers.length === 0 ? "--approve N" : numbers.map((n) => `--approve ${n}`).join(" ")} --project ${project}`;
+}
+/** The numbers of the questions that list commands, from 1. */
+function commandQuestions(questions) {
+	return questions.flatMap((question, index) => (question.commands ?? []).length > 0 ? [index + 1] : []);
+}
+/** After the POST the new run appears within seconds: look again twice. */
+var RELOAD_AFTER_MS = [1500, 5e3];
+function FollowUpCard({ project, run, readiness, questions }) {
+	const { revalidate } = useRevalidator();
+	const offered = readiness.ready ? readiness.questions : [];
+	const [picked, setPicked] = (0, import_react.useState)(() => new Set(offered.length === 1 ? offered.map((question) => question.n) : []));
+	const [note, setNote] = (0, import_react.useState)("");
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [notice, setNotice] = (0, import_react.useState)(null);
+	if (!readiness.ready) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "card fu",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "fu-off",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+					tone: "idle",
+					label: "off"
+				}),
+				" A follow-up cannot start from this page: ",
+				readiness.reason
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "next-cmd",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "On a host with the checkout and herdr, run:" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: followUpCommand(run, project, commandQuestions(questions)) })]
+		})]
+	});
+	const chosen = offered.filter((question) => picked.has(question.n));
+	const lines = [...new Set(chosen.flatMap((question) => question.commands))];
+	const toggle = (n) => {
+		const next = new Set(picked);
+		if (next.has(n)) next.delete(n);
+		else next.add(n);
+		setPicked(next);
+		setAsking(false);
+	};
+	const start = async () => {
+		setBusy(true);
+		setNotice(null);
+		const trimmed = note.trim();
+		const approve = chosen.map((question) => question.n);
+		const result = await postJson("/api/run/follow-up", trimmed === "" ? {
+			project,
+			run,
+			approve
+		} : {
+			project,
+			run,
+			approve,
+			note: trimmed
+		});
+		setBusy(false);
+		setAsking(false);
+		if (!result.ok) {
+			setNotice({
+				tone: "bad",
+				text: result.error
+			});
+			return;
+		}
+		setNotice({
+			tone: "ok",
+			text: `Started on ${readiness.host}. The new run opens in a herdr tab there and shows below in a moment.`
+		});
+		for (const delay of RELOAD_AFTER_MS) setTimeout(() => void revalidate(), delay);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "card fu",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+				className: "fu-picks",
+				disabled: busy,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+					className: "fu-label",
+					children: "Approve the commands of"
+				}), offered.map((question) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "fu-pick",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: picked.has(question.n),
+							onChange: () => toggle(question.n)
+						}),
+						"Question ",
+						question.n,
+						" (",
+						question.commands.length === 1 ? "1 line" : `${question.commands.length} lines`,
+						")"
+					]
+				}, question.n))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "fu-label",
+				htmlFor: `fu-note-${run}`,
+				children: "Note for the follow-up (optional)"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: `fu-note-${run}`,
+				className: "bk-input",
+				type: "text",
+				maxLength: 500,
+				value: note,
+				disabled: busy,
+				onChange: (event) => setNote(event.currentTarget.value)
+			})] }),
+			asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fu-ask",
+				role: "group",
+				"aria-label": "Confirm the follow-up",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "fu-ask-q",
+						children: [
+							"Start a new run on ",
+							readiness.host,
+							" (profile ",
+							readiness.profile,
+							") that may run ",
+							lines.length === 1 ? "this line" : `these ${lines.length} lines`,
+							" as written?"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "q-cmds",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: lines.join("\n") }) })
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fu-acts",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bk-btn bk-btn-main",
+							disabled: busy,
+							onClick: () => void start(),
+							children: busy ? "Starting…" : "Yes, start it"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bk-btn bk-btn-quiet",
+							disabled: busy,
+							onClick: () => setAsking(false),
+							children: "No"
+						})]
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fu-acts",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "bk-btn bk-btn-main",
+					disabled: busy || chosen.length === 0,
+					onClick: () => setAsking(true),
+					children: ["Start follow-up on ", readiness.host]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fu-off",
+				children: "Anything else the run tries still holds as usual. The run opens in a herdr tab, attended."
+			}),
+			notice === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: `bk-note tone-${notice.tone}`,
+				role: notice.tone === "bad" ? "alert" : "status",
+				children: notice.text
+			})
+		]
+	});
+}
+//#endregion
 //#region app/routes/run.tsx
 var run_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
@@ -16183,7 +16384,7 @@ var run_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader$1,
 	meta: () => meta$1
 });
-function loader$1({ context, params }) {
+async function loader$1({ context, params }) {
 	const run = context.run(params.project, params.run);
 	if (run === null) throw data(`No run ${params.run} in project ${params.project}.`, { status: 404 });
 	const status = statusOf(context);
@@ -16194,18 +16395,20 @@ function loader$1({ context, params }) {
 		offset: status.utcOffset
 	});
 	const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
+	const followUp = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0) ? await context.followUp(run.project, run.row.run) : null;
 	return {
 		run,
 		kind: itemKind(run.row.item),
 		manual: itemManual(run.row.item, ritual),
 		label: itemLabel(project, run.row.item),
 		stuck: stuckFor(run.row, status.generatedAt),
-		next
+		next,
+		followUp
 	};
 }
 var meta$1 = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.project} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, kind, manual, label, stuck, next } = loaderData;
+	const { run, kind, manual, label, stuck, next, followUp } = loaderData;
 	const { row, project } = run;
 	const state = stuck === null ? runState(row) : {
 		tone: "late",
@@ -16250,7 +16453,11 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["started ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.startedAt })] }),
 					took === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["took ", took] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: row.who === "timer" ? "by timer" : `by ${row.who}` })
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: row.who === "timer" ? "by timer" : `by ${row.who}` }),
+					run.followUpOf === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["follows up ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+						to: runPath(project, run.followUpOf),
+						children: ["run ", shortRun(run.followUpOf)]
+					})] })
 				]
 			}),
 			stuck === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -16280,7 +16487,16 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 				run.result === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultPanel, {
 					project,
 					row,
-					result: run.result
+					result: run.result,
+					afterQuestions: followUp === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+						title: "Follow-up",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FollowUpCard, {
+							project,
+							run: row.run,
+							readiness: followUp,
+							questions: run.result.questions
+						})
+					})
 				}),
 				body !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "Report",
@@ -16317,7 +16533,24 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 								className: "text-muted",
 								children: "not yet"
 							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.endedAt })
-						}
+						},
+						...run.followUpOf === null ? [] : [{
+							label: "Follows up",
+							value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: runPath(project, run.followUpOf),
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: shortRun(run.followUpOf) })
+							})
+						}],
+						...run.followUps.length === 0 ? [] : [{
+							label: "Follow-ups",
+							value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fu-links",
+								children: run.followUps.map((child) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+									to: runPath(project, child),
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: shortRun(child) })
+								}, child))
+							})
+						}]
 					] }), run.events.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 						className: "timeline",
 						children: run.events.map((event, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -16380,17 +16613,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DDvd9ptu.js",
+			"module": "/assets/root-CuGhjvAB.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/agenda-6SwlNSJ1.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/agenda-CrA6sk3Q.js",
 				"/assets/settings-YoGy02pU.js"
 			],
-			"css": ["/assets/root-DX4DWVkf.css"],
+			"css": ["/assets/root-Do5lUa5u.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -16409,19 +16642,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-D2Qdd8jy.js",
+			"module": "/assets/overview-CQjO8-OM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js"
+				"/assets/view-CQdDrwg-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16442,19 +16675,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-D2Qdd8jy.js",
+			"module": "/assets/overview-CQjO8-OM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js"
+				"/assets/view-CQdDrwg-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16475,19 +16708,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-D2Qdd8jy.js",
+			"module": "/assets/overview-CQjO8-OM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js"
+				"/assets/view-CQdDrwg-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16508,19 +16741,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CLgRpaTa.js",
+			"module": "/assets/vigils-Eqyk5nK0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-DsT-EnCP.js",
+				"/assets/section-6Ijv7doM.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/agenda-6SwlNSJ1.js"
+				"/assets/agenda-CrA6sk3Q.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16541,19 +16774,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CLgRpaTa.js",
+			"module": "/assets/vigils-Eqyk5nK0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-DsT-EnCP.js",
+				"/assets/section-6Ijv7doM.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/agenda-6SwlNSJ1.js"
+				"/assets/agenda-CrA6sk3Q.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16574,21 +16807,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DjneIVff.js",
+			"module": "/assets/rituals-dizhqmi1.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-DsT-EnCP.js",
+				"/assets/section-6Ijv7doM.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
+				"/assets/view-CQdDrwg-.js",
 				"/assets/row-CzI7mG7X.js",
-				"/assets/agenda-6SwlNSJ1.js"
+				"/assets/agenda-CrA6sk3Q.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16609,21 +16842,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DjneIVff.js",
+			"module": "/assets/rituals-dizhqmi1.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-DsT-EnCP.js",
+				"/assets/section-6Ijv7doM.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
+				"/assets/view-CQdDrwg-.js",
 				"/assets/row-CzI7mG7X.js",
-				"/assets/agenda-6SwlNSJ1.js"
+				"/assets/agenda-CrA6sk3Q.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16644,14 +16877,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-BzFRODH4.js",
+			"module": "/assets/milestones-B77cYcCR.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-fehpKv1x.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/milestones-D_NpzYJS.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
@@ -16674,14 +16907,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-BzFRODH4.js",
+			"module": "/assets/milestones-B77cYcCR.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-fehpKv1x.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/milestones-D_NpzYJS.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
@@ -16704,19 +16937,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestone-Bzn8Pfh1.js",
+			"module": "/assets/milestone-5lPLgYg2.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-fehpKv1x.js",
+				"/assets/milestones-D_NpzYJS.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js"
+				"/assets/view-CQdDrwg-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16762,14 +16995,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-general-yuxcxw_3.js",
+			"module": "/assets/settings-general-BFtztXl0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/settings-YoGy02pU.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-BleYDEHk.js"
+				"/assets/clock-C06Q4GAu.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16790,13 +17023,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-notifications-BVfp58JE.js",
+			"module": "/assets/settings-notifications-Cs9xIVH8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-BleYDEHk.js"
+				"/assets/clock-C06Q4GAu.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16817,13 +17050,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-BuG8a5nu.js",
+			"module": "/assets/settings-backups-N0SHX5L2.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/ui-DRNhXSeL.js",
-				"/assets/route-error-DMMzp2qt.js"
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/ui-BdOT4Jxx.js",
+				"/assets/route-error-DMMzp2qt.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16844,13 +17078,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-about-BloEGvzK.js",
+			"module": "/assets/settings-about-Jec0VvH5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-BleYDEHk.js"
+				"/assets/clock-C06Q4GAu.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16871,12 +17105,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/status-BqojWBM-.js",
+			"module": "/assets/status-jyc0wUXu.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js"
 			],
 			"css": [],
@@ -16898,18 +17132,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DEuY8C6_.js",
+			"module": "/assets/runs-jj9h33Qy.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/pulse-B4EWshjY.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/pulse-cdrxSqlU.js",
 				"/assets/row-CzI7mG7X.js"
 			],
 			"css": [],
@@ -16952,13 +17186,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/profiles-DZkfJUqB.js",
+			"module": "/assets/profiles-BHFqRtvh.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-BleYDEHk.js"
+				"/assets/clock-C06Q4GAu.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17000,16 +17234,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-ByVjolko.js",
+			"module": "/assets/ritual-Bc6uzJwS.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js"
@@ -17033,18 +17267,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DQc2Wy1b.js",
+			"module": "/assets/run-CTfhJJo8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/clock-BleYDEHk.js",
+				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-WeMGZXf2.js",
-				"/assets/runs-4rfjFtz-.js",
-				"/assets/pulse-B4EWshjY.js",
-				"/assets/ui-DRNhXSeL.js",
+				"/assets/view-CQdDrwg-.js",
+				"/assets/runs-y9QGYFmb.js",
+				"/assets/pulse-cdrxSqlU.js",
+				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
 			"css": [],
@@ -17079,8 +17314,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-8501690e.js",
-	"version": "8501690e",
+	"url": "/assets/manifest-adb8274c.js",
+	"version": "adb8274c",
 	"sri": void 0
 };
 //#endregion

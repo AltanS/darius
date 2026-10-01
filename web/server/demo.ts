@@ -387,5 +387,6 @@ export function demoContext(base: WebContext): WebContext {
     milestone: (name, milestone) => (name === "demo-shop" && milestone.toUpperCase() === "M12" ? demoMilestone(Date.now()) : null),
     system: () => demoSystem(Date.now()),
     backups: () => demoBackups(Date.now()),
+    followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
   };
 }

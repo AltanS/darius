@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 
 import type { WebContext } from "./api.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
+import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { collectBackups } from "./backups.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail } from "./status.ts";
@@ -26,5 +27,6 @@ export function webContext(viewer: string, nonce: string = newNonce()): WebConte
     milestone: (project, milestone) => milestoneDetail(project, milestone),
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),
     backups: () => collectBackups(),
+    followUp: (project, run) => followUpReadiness(project, run),
   };
 }
