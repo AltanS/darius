@@ -159,7 +159,7 @@ test("a project with no marker gets the two required root lines", async () => {
   const { project } = setup({ marker: null });
   const result = await run(project.name, []);
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /^v = 3\nproject = "acme-web-\d+"\ntz = "[^"]+"\n\n\[rituals\.daily-report\]/u);
+  assert.match(result.stdout, /^v = 3\nproject = "acme-web-\d+"\nmax_mode = "report"\ntz = "[^"]+"\n\n\[rituals\.daily-report\]/u);
 });
 
 test("--write writes the marker and the skill file, and never commits", { skip: NO_GIT }, async () => {
@@ -213,4 +213,31 @@ test("slugs with a dot exit 2 and are listed", async () => {
   assert.equal(result.stdout, "");
   const written = await run(project.name, ["--write"]);
   assert.equal(written.code, 2);
+});
+
+test("max_mode: added when a ritual is above off, never when all are off, kept when present", async () => {
+  const none = setup({ marker: null });
+  const noCap = await run(none.project.name, []);
+  assert.match(noCap.stdout, /^v = 3\nproject = "acme-web-\d+"\nmax_mode = "report"\ntz = /u);
+  const target = join(SANDBOX, `cap-${String(counter)}`);
+  mkdirSync(target);
+  writeFileSync(join(target, ".darius.toml"), noCap.stdout);
+  assert.equal(readMarker(target)?.maxMode, "report");
+
+  const copied = setup({ marker: 'v = 2\nproject = "NAME"\n\n[defaults]\nritual = "x"\n' });
+  copied.project.writeItem({ header: ritualHeader("act-one", { policy: { mode: "act", may: [], hold: [] } }), body: "x\n" }, { who: "test" });
+  const out = await run(copied.project.name, []);
+  assert.match(out.stdout, /^v = 3\nproject = "acme-web-\d+"\nmax_mode = "act"\ntz = "[^"]+"\n\n\[defaults\]/u);
+
+  const kept = await run(setup().project.name, []);
+  assert.equal(kept.stdout.match(/max_mode/gu)?.length, 1);
+});
+
+test("a ritual with a skill and a body warns on stderr and in --json", async () => {
+  const { project } = setup();
+  const text = await run(project.name, []);
+  assert.match(text.stderr, /^! weekly-audit: the store body is not exported; the skill audit is the procedure$/mu);
+  const json = await run(project.name, ["--json"]);
+  const parsed: { warnings: string[] } = JSON.parse(json.stdout);
+  assert.deepEqual(parsed.warnings, ["weekly-audit: the store body is not exported; the skill audit is the procedure"]);
 });

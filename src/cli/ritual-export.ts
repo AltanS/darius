@@ -42,6 +42,8 @@ export interface ExportedSkill {
 export interface Export {
   marker: string;
   skills: ExportedSkill[];
+  /** Things the operator should know: a store body that is not exported. */
+  warnings: string[];
 }
 
 function hostZone(): string {
@@ -67,9 +69,12 @@ interface MarkerParts {
  * `tz` line, then everything from the first section on, untouched. No marker
  * gives the two required root lines.
  */
-function markerHead(existing: string | null, project: string, zone: string): MarkerParts {
-  const tzLine = `tz = ${tomlString(zone)}`;
-  if (existing === null) return { head: `v = 3\nproject = ${tomlString(project)}\n${tzLine}\n`, sections: "" };
+function markerHead(existing: string | null, at: { project: string; zone: string; maxMode: string | undefined }): MarkerParts {
+  const tzLine = `tz = ${tomlString(at.zone)}`;
+  const capLine = at.maxMode === undefined ? [] : [`max_mode = ${tomlString(at.maxMode)}`];
+  if (existing === null) {
+    return { head: `v = 3\nproject = ${tomlString(at.project)}\n${[...capLine, tzLine].join("\n")}\n`, sections: "" };
+  }
   const lines = existing.split("\n");
   const firstSection = lines.findIndex((line) => /^\s*\[/u.test(line));
   const split = firstSection === -1 ? lines.length : firstSection;
@@ -78,10 +83,11 @@ function markerHead(existing: string | null, project: string, zone: string): Mar
   const hasVersion = root.some((line) => /^\s*v\s*=/u.test(line));
   const next = root.map((line) => (/^\s*v\s*=/u.test(line) ? "v = 3" : line));
   if (!hasVersion) {
-    const at = next.findIndex((line) => /^\s*project\s*=/u.test(line));
-    next.splice(at === -1 ? 0 : at, 0, "v = 3");
+    const index = next.findIndex((line) => /^\s*project\s*=/u.test(line));
+    next.splice(index === -1 ? 0 : index, 0, "v = 3");
   }
   while (next.length > 0 && next[next.length - 1]?.trim() === "") next.pop();
+  if (!root.some((line) => /^\s*max_mode\s*=/u.test(line))) next.push(...capLine);
   next.push(tzLine);
   return { head: `${next.join("\n")}\n`, sections };
 }
@@ -147,17 +153,23 @@ export function buildExport(project: Project, existing: string | null, zone: str
   const bad = problems(docs);
   if (bad.length > 0) throw new UsageError(`ritual export cannot continue:\n${bad.map((line) => `  ${line}`).join("\n")}`);
   const skills: ExportedSkill[] = [];
+  const warnings: string[] = [];
   const tables = docs.map(({ header, body }) => {
     const named = header.skill !== undefined && header.skill !== "";
+    if (named && body.trim() !== "") {
+      warnings.push(`${header.slug}: the store body is not exported; the skill ${header.skill ?? ""} is the procedure`);
+    }
     if (!named) {
       skills.push({ slug: header.slug, path: join(".claude", "skills", header.slug, "SKILL.md"), content: skillContent(header, body) });
     }
     return ritualTable(header, named ? (header.skill ?? header.slug) : header.slug);
   });
-  const { head, sections } = markerHead(existing, project.name, zone);
+  const rank = { off: 0, report: 1, act: 2 } as const;
+  const top = docs.reduce<"off" | "report" | "act">((high, { header }) => (rank[header.policy.mode] > rank[high] ? header.policy.mode : high), "off");
+  const { head, sections } = markerHead(existing, { project: project.name, zone, maxMode: top === "off" ? undefined : top });
   const middle = sections === "" ? "" : `\n${sections.replace(/\n+$/u, "")}\n`;
   const marker = `${head}${middle}${tables.length === 0 ? "" : `\n${tables.join("\n\n")}\n`}`;
-  return { marker, skills };
+  return { marker, skills, warnings };
 }
 
 function atomicWrite(file: string, text: string): void {
@@ -203,8 +215,9 @@ export function runExport(args: ParsedArgs): number {
   }
   const built = buildExport(project, present && markerFile !== undefined ? readFileSync(markerFile, "utf8") : null, hostZone());
   const isWrite = args.flags.write === true;
+  if (!args.json) for (const warning of built.warnings) console.error(`! ${warning}`);
   if (!isWrite) {
-    if (args.json) console.log(JSON.stringify({ project: project.name, written: false, marker: built.marker, skills: built.skills }));
+    if (args.json) console.log(JSON.stringify({ project: project.name, written: false, marker: built.marker, skills: built.skills, warnings: built.warnings }));
     else process.stdout.write(built.marker);
     return 0;
   }
@@ -214,7 +227,7 @@ export function runExport(args: ParsedArgs): number {
   atomicWrite(join(checkout, MARKER_FILE), built.marker);
   const files = [MARKER_FILE, ...built.skills.map((skill) => skill.path)];
   if (args.json) {
-    console.log(JSON.stringify({ project: project.name, written: true, files }));
+    console.log(JSON.stringify({ project: project.name, written: true, files, warnings: built.warnings }));
     return 0;
   }
   for (const file of files) console.log(`✓ wrote ${join(checkout, file)}`);
