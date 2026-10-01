@@ -269,6 +269,8 @@ export const claudeHarness: HarnessAdapter = {
     if (isJsonText(payload.session_id)) call.sessionId = payload.session_id;
     // Inside a subagent the payload carries agent_id (probed on 2.1.283 and 2.1.285).
     if (isJsonText(payload.agent_id)) call.agentId = payload.agent_id;
+    // The session's current dir: it follows a `cd` in an earlier Bash call.
+    if (isJsonText(payload.cwd) && payload.cwd !== "") call.cwd = payload.cwd;
     const path = isJsonRecord(toolInput) ? (toolInput.file_path ?? toolInput.notebook_path) : undefined;
     if (isJsonText(path)) call.path = path;
     const isolation = isJsonRecord(toolInput) ? toolInput.isolation : undefined;

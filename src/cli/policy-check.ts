@@ -19,6 +19,11 @@
  * check per harness version reads it (src/runner/harness-check.ts). A line
  * that cannot be written never changes the decision.
  *
+ * GRANTS (0.47.1). A policy with grants is trusted only as darius wrote it:
+ * the file must hash to the `policy_sha` of the run's start line, else every
+ * call is denied. Its `cwd` and the payload's are compared with symlinks
+ * resolved (src/harness/gate.ts, isGranted).
+ *
  * `--preflight` is the launcher's check that the gate works at all: it reads
  * the payload and the policy and decides as usual, then always denies and
  * writes nothing. An error (no policy, a bad regex) exits 1 instead of
@@ -30,12 +35,12 @@
  * deny and exits 2. Exit 2 is the hook contract here, not "usage".
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { readLedger } from "../core/ledger.ts";
-import type { JsonValue } from "../core/model.ts";
-import { openProject } from "../core/store.ts";
+import type { JsonValue, LedgerLine } from "../core/model.ts";
+import { openProject, sha256Hex } from "../core/store.ts";
 import { claudeHarness } from "../harness/claude.ts";
 import type { HarnessAdapter, ToolCall } from "../harness/contract.ts";
 import { decide, grantRefusal, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
@@ -76,10 +81,19 @@ const MODES: readonly RunPolicy["mode"][] = ["off", "report", "act"];
 const SCOPES: readonly GateScope[] = ["shell", "full"];
 
 export function readRunPolicy(path: string): RunPolicy {
+  return parseRunPolicy(readPolicyText(path), path);
+}
+
+function readPolicyText(path: string): string {
   if (!existsSync(path)) throw new Error(`run policy ${path} does not exist`);
-  const parsed = parseJsonText(readFileSync(path, "utf8"), path);
+  return readFileSync(path, "utf8");
+}
+
+/** policy.json as text, checked; `path` names it in errors. */
+export function parseRunPolicy(text: string, path: string): RunPolicy {
+  const parsed = parseJsonText(text, path);
   if (!isJsonRecord(parsed)) throw new Error(`${path}: not a JSON object`);
-  const { project, ritual, run, mode, may, hold, gate, result, grants, follow_up_of: followUpOf } = parsed;
+  const { project, ritual, run, mode, may, hold, gate, result, grants, follow_up_of: followUpOf, cwd } = parsed;
   const knownMode = MODES.find((candidate) => candidate === mode);
   if (!isJsonText(project) || !isJsonText(ritual) || !isJsonText(run) || knownMode === undefined) {
     throw new Error(`${path}: needs project, ritual, run and mode`);
@@ -95,6 +109,10 @@ export function readRunPolicy(path: string): RunPolicy {
   if (followUpOf !== undefined) {
     if (!isJsonText(followUpOf) || followUpOf === "") throw new Error(`${path}: follow_up_of must be a run id`);
     policy.follow_up_of = followUpOf;
+  }
+  if (cwd !== undefined) {
+    if (!isJsonText(cwd) || !isAbsolute(cwd)) throw new Error(`${path}: cwd must be an absolute path`);
+    policy.cwd = cwd;
   }
   return policy;
 }
@@ -116,8 +134,34 @@ function readGrants(grants: JsonValue | undefined, path: string): string[] {
 
 // --- ledger -----------------------------------------------------------------------
 
-function isRunHeld(policy: RunPolicy): boolean {
-  return viewRun(readLedger(openProject(policy.project)), policy.run).phase === "held";
+function isRunHeld(policy: RunPolicy, ledger: readonly LedgerLine[]): boolean {
+  return viewRun(ledger, policy.run).phase === "held";
+}
+
+/**
+ * A run with grants trusts its policy.json only as darius wrote it (0.47.1):
+ * the run's latest `run.started` or `run.resumed` line records the sha256 of
+ * the file (`policy_sha`), and the file must still hash to it. Throws
+ * otherwise, so the hook denies every call. A run without grants is not
+ * checked here: an edit there gains no grant (backlog: the full guard).
+ */
+function checkPolicySha(policy: RunPolicy, text: string, ledger: readonly LedgerLine[]): void {
+  if (policy.grants.length === 0) return;
+  const start = ledger.findLast((line) => line.run === policy.run && (line.type === "run.started" || line.type === "run.resumed"));
+  const recorded = start?.policy_sha;
+  if (!isJsonText(recorded) || recorded !== sha256Hex(text)) throw new Error("policy.json changed since the run started");
+}
+
+/**
+ * The dir with its symlinks resolved, so `/home/x` and `/var/home/x` agree;
+ * the path as given when it does not exist. Only a grant reads it.
+ */
+function canonicalDir(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
 }
 
 // --- the command ------------------------------------------------------------------
@@ -171,12 +215,18 @@ function logDecision(policyFile: string, call: ToolCall, decision: GateDecision)
 function check(args: ParsedArgs, harness: HarnessAdapter): number {
   const call = harness.gateInput(parseJsonText(args.stdin ?? readStdin(), "hook input"));
   const policyFile = policyPath(args);
-  const policy = readRunPolicy(policyFile);
+  const text = readPolicyText(policyFile);
+  const policy = parseRunPolicy(text, policyFile);
+  if (policy.cwd !== undefined) policy.cwd = canonicalDir(policy.cwd);
+  if (call.cwd !== undefined) call.cwd = canonicalDir(call.cwd);
+  // The preflight runs before run.started exists, so it cannot check the sha; it denies anyway.
   if (args.flags.preflight === true) {
     decide(call, { policy, isHeld: false });
     return deny(harness, "preflight");
   }
-  const decision = decide(call, { policy, isHeld: isRunHeld(policy) });
+  const ledger = readLedger(openProject(policy.project));
+  checkPolicySha(policy, text, ledger);
+  const decision = decide(call, { policy, isHeld: isRunHeld(policy, ledger) });
   logDecision(policyFile, call, decision);
   if (decision.verdict === "allow") return EXIT_ALLOW;
   if (decision.verdict === "deny") return deny(harness, decision.reason, false);

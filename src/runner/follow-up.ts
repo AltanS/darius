@@ -98,7 +98,12 @@ export function planFollowUp(ledger: readonly LedgerLine[], result: RunResult | 
     if (refused !== undefined) return { usage: `--grant "${line.slice(0, 80)}" is not one plain command: ${refused}` };
     grants.push(line.trim());
   }
-  if (grants.length === 0) return { usage: "nothing to grant: pass --approve N or --grant LINE" };
+  if (grants.length === 0) {
+    const slug = view.item.slice("ritual/".length);
+    return {
+      usage: `nothing to grant: pass --approve N or --grant LINE. A follow-up with nothing granted is run now with a note: darius run ack ${parent} --note TEXT, then darius run now ${slug}`,
+    };
+  }
   const open = followUpsOf(ledger, parent).find((run) => viewRun(ledger, run).phase !== "closed");
   if (open !== undefined) return { refused: `follow-up ${open} of run '${parent}' is still open; finish it first` };
   return { grants: [...new Set(grants)] };
@@ -126,7 +131,15 @@ export function followUpSection(followUp: FollowUp, result: RunResult | null): s
     lines.push(`Approved question ${String(n)}: ${question.text}${rec}`);
   }
   if (followUp.note !== undefined) lines.push(`Operator note: ${followUp.note}`);
-  lines.push("", "Granted lines. The gate passes each exactly as written, for you, not for a subagent:", "", "```bash", ...followUp.grants, "```", "");
+  lines.push(
+    "",
+    "Granted lines. The gate passes each exactly as written, for you, not for a subagent, and only in the dir this run started in. Do not cd: a granted line names its dir with a flag.",
+    "",
+    "```bash",
+    ...followUp.grants,
+    "```",
+    "",
+  );
   const open = (result?.items ?? []).filter((item) => item.state !== "fixed").map((item) => `- ${item.severity} ${item.state}: ${item.title}${item.target === undefined ? "" : ` [${item.target}]`}`);
   if (open.length > 0) lines.push("Open items of that run:", ...clipped(open), "");
   const actions = (result?.actions ?? []).map((action) => `- ${action.state}: ${action.text}${action.target === undefined ? "" : ` [${action.target}]`}`);

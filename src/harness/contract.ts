@@ -38,6 +38,8 @@ export interface ToolCall {
   isolation?: string;
   /** The file a write tool targets, as the harness gave it. */
   path?: string;
+  /** The session's working dir at the call, as the harness gave it (0.47.1): a grant holds only in the run's dir. */
+  cwd?: string;
 }
 
 /** The files one run needs, under `<store>/<project>/runs/<run>/`. */

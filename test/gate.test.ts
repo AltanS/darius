@@ -9,9 +9,21 @@ import assert from "node:assert/strict";
 
 import { allowedTools, claudeHarness, disallowedTools } from "../src/harness/claude.ts";
 import type { ToolCall, ToolClass } from "../src/harness/contract.ts";
-import { decide as gateDecide, grantRefusal, mayAllowsShell, mayRefusal, normalizeGrant, splitShell, type RunPolicy } from "../src/harness/gate.ts";
+import {
+  clearsRunMarker,
+  decide as gateDecide,
+  grantRefusal,
+  mayAllowsShell,
+  mayRefusal,
+  normalizeGrant,
+  splitShell,
+  startsFollowUp,
+  type RunPolicy,
+} from "../src/harness/gate.ts";
 
 const RUN = "01GATERUN";
+/** The run's working dir, in policy.json and in every hook payload here: a grant passes only there (0.47.1). */
+const CWD = "/srv/checkout";
 
 function policy(overrides: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -23,12 +35,13 @@ function policy(overrides: Partial<RunPolicy> = {}): RunPolicy {
     may: ["Bash(pnpm cli fc *)", "Bash(date)", "mcp__db__query", "WebFetch"],
     hold: ["git push", "deploy"],
     grants: [],
+    cwd: CWD,
     ...overrides,
   };
 }
 
-function shell(command: string): ToolCall {
-  return { class: "shell", name: "Bash", command };
+function shell(command: string, cwd = CWD): ToolCall {
+  return { class: "shell", name: "Bash", command, cwd };
 }
 
 function tool(cls: ToolClass, name: string): ToolCall {
@@ -322,7 +335,7 @@ test("a subagent starts only when may names Agent, never from a subagent, never 
 });
 
 function sub(command: string): ToolCall {
-  return { class: "shell", name: "Bash", command, agentId: "sub-1" };
+  return { class: "shell", name: "Bash", command, agentId: "sub-1", cwd: CWD };
 }
 
 test("a subagent's calls meet the same policy; it may hold the run but not complete it", () => {
@@ -423,6 +436,67 @@ test("a line that is not granted is decided as if the run had no grants", () => 
       }
     }
   }
+});
+
+test("a granted line passes only in the run's working dir; elsewhere the hold list decides (0.47.1)", () => {
+  const scoped = policy({ gate: "full", hold: ["--confirm"], grants: [GRANT] });
+  assert.equal(verdict(shell(GRANT), scoped), "allow");
+  assert.match(decide(shell(GRANT, "/srv/other-checkout"), scoped) ?? "", /matches the hold pattern \/--confirm\//u, "another dir: held");
+  assert.equal(verdict(shell(GRANT, "/srv/checkout/tools"), scoped), "hold", "a subdir is another dir");
+  assert.equal(verdict({ class: "shell", name: "Bash", command: GRANT }, scoped), "hold", "a payload without cwd gets no grant");
+  const { cwd: _none, ...noCwd } = scoped;
+  assert.equal(verdict(shell(GRANT), noCwd), "hold", "a policy without cwd grants nothing");
+});
+
+// --- follow-up from inside a run (0.47.1) ----------------------------------------------
+
+test("a run never starts a follow-up, whatever may says, under any prefix", () => {
+  const lines = [
+    "darius run follow-up 01PARENT --approve 1",
+    "env -u DARIUS_RUN darius run follow-up 01PARENT --approve 1",
+    "FOO=1 nohup darius run follow-up 01PARENT --approve 1",
+    "sudo -E darius run follow-up 01PARENT",
+    "setsid darius run follow-up 01PARENT",
+    "/home/u/.local/bin/darius run follow-up 01PARENT",
+    "darius run 'follow-up' 01PARENT",
+    'bash -c "darius run follow-up 01PARENT"',
+    "darius  run\tfollow\\-up 01PARENT",
+    "date && darius run follow-up 01PARENT",
+  ];
+  const darius = ["Bash(darius *)", "Bash(env *)", "Bash(sudo *)", "Bash(setsid *)", "Bash(bash *)", "Bash(date)", "Bash(*)"];
+  for (const scoped of [
+    policy({ may: darius }),
+    policy({ gate: "full", may: darius }),
+    policy({ gate: "full", may: darius, grants: ["darius run follow-up 01PARENT"] }),
+    policy({ mode: "report", may: darius }),
+  ]) {
+    for (const line of lines) {
+      assert.match(decide(shell(line), scoped) ?? "", /a run never starts a follow-up; a person does/u, line);
+      assert.equal(verdict(shell(line), scoped), "deny", `${line}: a deny, not a hold`);
+    }
+    assert.equal(decide(shell("darius run list"), scoped), undefined, "other darius verbs as before");
+  }
+  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nNext: darius run follow-up ${RUN} --approve 1\nEOF`;
+  assert.equal(decide(shell(complete), policy({ gate: "full", may: [] })), undefined, "the protocol's findings may name a follow-up");
+  assert.equal(startsFollowUp("git log --oneline"), false);
+});
+
+test("a run keeps its run markers: unset, env -u, env -i and an assignment are denied", () => {
+  for (const line of [
+    "env -u DARIUS_RUN darius run now heartbeat",
+    "env -uDARIUS_RUN_POLICY date",
+    "env --unset=DARIUS_RUN date",
+    "env -i darius run list",
+    "env - darius run list",
+    "unset DARIUS_RUN",
+    "unset FOO DARIUS_RUN_POLICY",
+    "DARIUS_RUN= darius run list",
+    "export DARIUS_RUN_POLICY=/tmp/p.json",
+  ]) {
+    assert.equal(clearsRunMarker(line), true, line);
+    assert.match(decide(shell(line), policy({ may: ["Bash(*)"] })) ?? "", /a run keeps DARIUS_RUN and DARIUS_RUN_POLICY/u, line);
+  }
+  for (const line of ["echo $DARIUS_RUN", "env FOO=1 date", "printenv DARIUS_RUN", "env -C /tmp date"]) assert.equal(clearsRunMarker(line), false, line);
 });
 
 test("a grant is one plain command on one line", () => {

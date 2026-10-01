@@ -50,6 +50,12 @@ export interface RunPolicy {
   grants: string[];
   /** The run this one follows up, when it is a follow-up. */
   follow_up_of?: string;
+  /**
+   * The run's working dir (0.47.1), written with the grants. A granted
+   * line passes only when the hook payload's cwd is this dir: the line was
+   * approved for one checkout, and a `cd` must not move it elsewhere.
+   */
+  cwd?: string;
 }
 
 export type GateScope = "shell" | "full";
@@ -430,17 +436,54 @@ export function grantRefusal(line: string): string | undefined {
 
 /**
  * True when the main session runs a line an operator granted: the line is
- * one plain command (grantRefusal) and equals a grant once both are
+ * one plain command (grantRefusal), the session's dir is the run's dir
+ * (policy.cwd, 0.47.1), and the line equals a grant once both are
  * normalized (normalizeGrant). A line that holds a grant as one part of a
  * chain is not granted. A subagent never gets a grant: the operator
  * approved what the session they started runs, and the hook tells the two
  * apart by the payload's agent id (src/harness/claude.ts).
  */
-function isGranted(command: string, grants: readonly string[], agentId: string | undefined): boolean {
-  if (grants.length === 0 || agentId !== undefined) return false;
+function isGranted(command: string, policy: RunPolicy, call: { agentId?: string | undefined; cwd?: string | undefined }): boolean {
+  const { grants } = policy;
+  if (grants.length === 0 || call.agentId !== undefined) return false;
+  // 0.47.1: only in the run's working dir. No cwd on either side: no grant.
+  if (policy.cwd === undefined || call.cwd === undefined || call.cwd !== policy.cwd) return false;
   if (grantRefusal(command) !== undefined) return false;
   const line = normalizeGrant(command.trim());
   return grants.some((grant) => normalizeGrant(grant.trim()) === line);
+}
+
+// --- follow-up from inside a run --------------------------------------------------------
+
+/**
+ * True when the line starts a follow-up run (`darius run follow-up ...`)
+ * anywhere in it, under any prefix: `env -u DARIUS_RUN`, `FOO=1`, `sudo`,
+ * `nohup`, `setsid`, a path to the binary, `bash -c "..."`. Quotes and
+ * backslashes are dropped first, so `"run" follow-up` counts too. Broad on
+ * purpose: a run must never grant itself lines, and a false match is only
+ * a deny, never a hold. The CLI refuses inside a run as well (DARIUS_RUN),
+ * but `env -u` clears that, so the gate is the second wall (0.47.1).
+ */
+export function startsFollowUp(command: string): boolean {
+  return /\brun follow-up\b/u.test(plainShell(command));
+}
+
+/** The line without quotes and backslashes, runs of blanks as one space: what the shell would read as words. */
+function plainShell(command: string): string {
+  return command.replaceAll(/["'\\]/gu, "").replaceAll(/\s+/gu, " ");
+}
+
+/**
+ * `DARIUS_RUN=`, `unset DARIUS_RUN`, `env -u DARIUS_RUN`, `env --unset=...`,
+ * `env -i` and `env -`: a line that clears the variables that tell darius it
+ * runs inside a run. With them gone, `darius run follow-up` would not know.
+ */
+const CLEARS_RUN_MARKER =
+  /\bDARIUS_RUN(?:_POLICY)?\s*=|\bunset\b[^;&|\n]*\bDARIUS_RUN|(?:^|\s)(?:-u\s*|--unset[=\s]\s*)DARIUS_RUN|\benv(?:\s+-\S+)*\s+(?:-i\b|--ignore-environment\b|-(?:\s|$))/u;
+
+/** True when the line clears the run's own markers (CLEARS_RUN_MARKER). */
+export function clearsRunMarker(command: string): boolean {
+  return CLEARS_RUN_MARKER.test(plainShell(command));
 }
 
 // --- decision ------------------------------------------------------------------------
@@ -470,15 +513,22 @@ function hold(reason: string): GateDecision {
  * run (fail closed) but not complete it: the main session collects the
  * findings, and the ledger cannot tell the two apart. A granted line
  * (isGranted) passes the hold list, `may` and the report-mode verbs; a run
- * that is held stays held (decide checks that first).
+ * that is held stays held (decide checks that first). A line that starts a
+ * follow-up or clears the run's markers is denied in every run, whatever
+ * `may` says (0.47.1).
  */
-function decideShell(command: string, policy: RunPolicy, scope: GateScope, agentId?: string): GateDecision {
+function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall): GateDecision {
+  const { agentId } = call;
   const protocol = protocolVerb(command, policy.run);
   if (protocol === "complete" && agentId !== undefined) {
     return deny("only the main session completes the run; return your findings to it");
   }
+  // The protocol's heredoc body is text the shell never runs, so it may name a follow-up.
   if (protocol !== undefined) return ALLOW;
-  if (isGranted(command, policy.grants, agentId)) return ALLOW;
+  // Before `may`, hold and grants (0.47.1): `Bash(darius *)` must not let a run start a follow-up.
+  if (startsFollowUp(command)) return deny(`a run never starts a follow-up; a person does, outside the run: ${clip(command)}`);
+  if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
+  if (isGranted(command, policy, call)) return ALLOW;
   const holdPattern = firstMatch(command, policy.hold);
   if (holdPattern !== undefined) return hold(`the command matches the hold pattern /${holdPattern}/: ${clip(command)}`);
   const refusal = scope === "full" ? mayRefusal(command, policy.may) : undefined;
@@ -529,6 +579,6 @@ export function decide(call: ToolCall, context: { policy: RunPolicy; isHeld: boo
   const scope = policy.gate ?? "shell";
   if (scope === "shell" && (call.class !== "shell" || call.command === undefined)) return ALLOW;
   if (context.isHeld) return hold(`run ${policy.run} is held; stop now and wait for an operator`);
-  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call.agentId);
+  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call);
   return decideTool(call, policy);
 }

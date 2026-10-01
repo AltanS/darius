@@ -2,6 +2,16 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.47.1] - 2026-10-01
+
+### Fixed
+
+- A follow-up run no longer moves the ritual's due date when it completes, and its failure no longer counts as failed today. The next scheduled run gets the parent's handoff, not the follow-up's.
+- A granted line passes only in the run's working dir. A follow-up's `policy.json` carries `cwd`, and the gate compares it with the hook payload's `cwd`, symlinks resolved. Elsewhere the hold list applies. The follow-up prompt says not to cd.
+- `run.started` and `run.resumed` record `policy_sha`, the sha256 of `policy.json`. A `policy.json` with grants that no longer matches denies every call: "policy.json changed since the run started".
+- The gate denies `darius run follow-up` in every run, whatever `may` says, under prefixes such as `env -u DARIUS_RUN`, `FOO=1`, `sudo`, `nohup`, `setsid` and `bash -c`. It also denies a line that clears `DARIUS_RUN` or `DARIUS_RUN_POLICY`.
+- `run follow-up` with a gated profile names `permissions = "skip"` and `[defaults] follow_up`. With nothing granted, it says that is `run now` with a note, and gives both commands.
+
 ## [0.47.0] - 2026-10-01
 
 ### Added

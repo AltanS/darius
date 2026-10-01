@@ -57,7 +57,7 @@ import { isAboveCap, type Marker } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
-import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, type Project } from "../core/store.ts";
+import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
 import { localToday } from "../core/sweep.ts";
 import { syncProject } from "../core/sync.ts";
@@ -184,10 +184,14 @@ export function viewRun(ledger: readonly LedgerLine[], runId: string): RunView {
   return view;
 }
 
-/** The run id of the ritual's latest run when it ended failed or abandoned today. */
+/**
+ * The run id of the ritual's latest run when it ended failed or abandoned
+ * today. A follow-up does not count (0.47.1): a person started it by hand,
+ * and its failure must not stop the timer's run of the ritual.
+ */
 export function failedToday(ledger: readonly LedgerLine[], ritual: { slug: string; today: string }): string | undefined {
   const ref = itemRef("ritual", ritual.slug);
-  const latest = ledger.findLast((line) => line.item === ref && line.type === "run.started");
+  const latest = ledger.findLast((line) => line.item === ref && line.type === "run.started" && !isJsonText(line.follow_up_of));
   if (latest === undefined || !isJsonText(latest.run)) return undefined;
   const view = viewRun(ledger, latest.run);
   if (view.phase !== "closed" || view.outcome === "complete" || view.completedAt === undefined) return undefined;
@@ -302,13 +306,13 @@ function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], today: string)
 }
 
 /** Appends run.started under the project lock, or returns the open run that blocks it. */
-function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string }): { run: string } | { blockedBy: string } {
-  const { doc, run } = target;
+function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string; policySha: string }): { run: string } | { blockedBy: string } {
+  const { doc, run, policySha } = target;
   return ctx.project.withLock(() => {
     const state = ritualState(doc, readLedger(ctx.project), ctx.today);
     const open = state.heldRun ?? state.openRun;
     if (open !== undefined) return { blockedBy: open };
-    const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run };
+    const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run, policy_sha: policySha };
     const { followUp } = ctx.options;
     if (followUp !== undefined) {
       line.follow_up_of = followUp.parent;
@@ -398,12 +402,12 @@ function finalizeRun(
 }
 
 /** Appends run.resumed under the project lock while the run is still held and answered, or returns the run that blocks it. */
-function resumeRun(ctx: ProjectContext, target: { run: string; sessionId?: string | undefined }): { run: string } | { blockedBy: string } {
-  const { run, sessionId } = target;
+function resumeRun(ctx: ProjectContext, target: { run: string; sessionId?: string | undefined; policySha: string }): { run: string } | { blockedBy: string } {
+  const { run, sessionId, policySha } = target;
   return ctx.project.withLock(() => {
     const view = viewRun(readLedger(ctx.project), run);
     if (view.phase !== "held" || !view.isAnswered) return { blockedBy: run };
-    const line: LedgerLineInput = { who: ctx.options.who, type: "run.resumed", item: view.item, run };
+    const line: LedgerLineInput = { who: ctx.options.who, type: "run.resumed", item: view.item, run, policy_sha: policySha };
     if (sessionId === undefined) line.fresh = true;
     else line.session_id = sessionId;
     appendLine(ctx.project, line);
@@ -467,6 +471,8 @@ interface PreparedRun {
   env: ChildEnv;
   /** The harness session a resume goes on with; undefined for a new session. */
   sessionId?: string;
+  /** sha256 of policy.json as written, for the run.started or run.resumed line. */
+  policySha: string;
 }
 
 /** A resume's first message, and the session to go on with when this host still has it. */
@@ -527,8 +533,10 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const needsFull = doc.header.skill !== undefined || allowsSubagents(doc.header.policy.may);
   const scope = needsFull ? "full" : harness.gateScope(profile);
   const resume = ctx.options.resume === undefined ? undefined : resumePlan(ctx, target, harness);
-  const granted = followUp === undefined ? undefined : { grants: followUp.grants, followUpOf: followUp.parent };
+  const granted = followUp === undefined ? undefined : { grants: followUp.grants, followUpOf: followUp.parent, cwd: target.cwd };
   const files = writeRunFiles(ctx.project.root, prompt, scope, granted);
+  // run.started (or run.resumed) records it; the gate trusts grants only in this file (0.47.1).
+  const policySha = sha256Hex(readFileSync(files.policy, "utf8"));
   const gate = gateCommand(files, harness);
   const message =
     followUp === undefined
@@ -539,7 +547,7 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const broken = preflightGate(gate, harness, env);
   if (broken !== undefined) return { gateBroken: broken, files };
   const bin = harnessBin(ctx, harness);
-  const prepared: PreparedRun = { files, launch, bin, env };
+  const prepared: PreparedRun = { files, launch, bin, env, policySha };
   if (resume?.sessionId !== undefined) prepared.sessionId = resume.sessionId;
   return prepared;
 }
@@ -678,7 +686,10 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
       discard(prepared.files);
       return skipped(slug, "gate-broken", prepared.gateBroken);
     }
-    const started = resume === undefined ? startRun(ctx, { doc, run }) : resumeRun(ctx, { run, sessionId: prepared.sessionId });
+    const started =
+      resume === undefined
+        ? startRun(ctx, { doc, run, policySha: prepared.policySha })
+        : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha });
     if ("blockedBy" in started) {
       discard(prepared.files);
       return skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`);
@@ -725,7 +736,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     }
     if (followUp !== undefined && resolution.profile.permissions !== "skip") {
       const name = resolution.profile.name ?? "built-in";
-      return skipped(slug, "not-followable", `profile ${name} has permissions gated, and its allowlist would refuse the granted lines; use a profile with permissions skip ([defaults] follow_up)`);
+      return skipped(slug, "not-followable", `profile ${name} has permissions gated, and its allowlist would refuse the granted lines; name a profile with permissions = "skip" in [defaults] follow_up of .darius.toml`);
     }
     const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp);
     if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);

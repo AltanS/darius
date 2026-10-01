@@ -62,10 +62,12 @@ export interface PromptInput {
   followUp?: readonly string[];
 }
 
-/** What a follow-up run's policy.json adds (0.47.0): the granted lines and the parent run. */
+/** What a follow-up run's policy.json adds (0.47.0): the granted lines, the parent run, and the dir the run works in (0.47.1). */
 export interface RunGrants {
   grants: readonly string[];
   followUpOf: string;
+  /** The run's working dir: a grant passes only there (src/harness/gate.ts, isGranted). */
+  cwd: string;
 }
 
 /**
@@ -184,7 +186,10 @@ export function writeRunFiles(projectRoot: string, input: PromptInput, scope: Ga
     hold: [...policy.hold],
     grants: [...(granted?.grants ?? [])],
   };
-  if (granted !== undefined) runPolicy.follow_up_of = granted.followUpOf;
+  if (granted !== undefined) {
+    runPolicy.follow_up_of = granted.followUpOf;
+    runPolicy.cwd = granted.cwd;
+  }
   if (scope !== "shell") runPolicy.gate = scope;
   // Every run darius launches hands in a result (0.22.0); a by-hand run may.
   runPolicy.result = "required";

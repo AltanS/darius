@@ -34,11 +34,12 @@ import { reportScope, runDueCommand } from "../src/cli/run-due.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
 import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
-import { getBlobText, openProject } from "../src/core/store.ts";
+import { getBlobText, openProject, sha256Hex } from "../src/core/store.ts";
+import { localToday } from "../src/core/sweep.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
-import { takeRitualLease } from "../src/runner/run-due.ts";
+import { failedToday as failedTodayRun, takeRitualLease } from "../src/runner/run-due.ts";
 import { preflightGate } from "../src/runner/launch.ts";
 import { agentName } from "../src/surface/herdr.ts";
 import { formatReport, type BatchReport, type RitualEntry } from "../src/runner/report.ts";
@@ -528,8 +529,25 @@ function seedRunningRun(project: string, mode: Policy["mode"]): RunningRun {
   return { policyFile, run };
 }
 
-function bashHook(command: string): string {
-  return JSON.stringify({ session_id: "sess-1", hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+function bashHook(command: string, cwd?: string): string {
+  const payload = { session_id: "sess-1", hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } };
+  return JSON.stringify(cwd === undefined ? payload : { ...payload, cwd });
+}
+
+/**
+ * A running follow-up run as darius starts one: its policy.json carries the
+ * grants and the run's dir, and run.started records the file's sha256.
+ */
+function seedGrantedRun(project: string, mode: Policy["mode"], extra: { grants: string[] }): RunningRun & { cwd: string } {
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, mode } });
+  const run = ulid();
+  const cwd = join(SANDBOX, `${project}-checkout`);
+  mkdirSync(cwd, { recursive: true });
+  const policyFile = join(SANDBOX, `${project}-policy.json`);
+  const text = JSON.stringify({ v: 1, project, ritual: "heartbeat", run, mode, may: HEARTBEAT_POLICY.may, hold: HEARTBEAT_POLICY.hold, follow_up_of: "01PARENT", cwd, ...extra });
+  writeFileSync(policyFile, text);
+  appendLine(openProject(project), { who: "timer", type: "run.started", item: "ritual/heartbeat", run, follow_up_of: "01PARENT", policy_sha: sha256Hex(text) });
+  return { policyFile, run, cwd };
 }
 
 test("policy-check denies a hold-listed git push, appends run.held once, then denies everything", async () => {
@@ -578,12 +596,10 @@ test("policy-check allows plain commands, other tools and the protocol; report m
 
 test("policy-check passes a granted line as written and fails closed on a grant that is not one plain command", async () => {
   const project = "pc-grant";
-  const { policyFile, run } = seedRunningRun(project, "report");
-  const policy = JSON.parse(readFileSync(policyFile, "utf8"));
-  writeFileSync(policyFile, JSON.stringify({ ...policy, grants: ["git push origin main"], follow_up_of: "01PARENT" }));
-  const granted = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git  push origin main"));
+  const { policyFile, run, cwd } = seedGrantedRun(project, "report", { grants: ["git push origin main"] });
+  const granted = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git  push origin main", cwd));
   assert.deepEqual([granted.code, granted.stdout], [0, ""]);
-  const chained = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git push origin main && date"));
+  const chained = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git push origin main && date", cwd));
   assert.equal(chained.code, 2, "a chain holding the grant is held as before");
   assert.equal(linesOf(project, "run.held")[0]?.run, run);
   const other = "pc-grant-bad";
@@ -592,6 +608,58 @@ test("policy-check passes a granted line as written and fails closed on a grant 
   const refused = await runCli(policyCheckCommand, ["--policy", bad.policyFile], bashHook("date"));
   assert.equal(refused.code, 2);
   assert.match(refused.stdout, /grant \\"date && git push\\" is not one plain command/u);
+});
+
+test("policy-check: a granted line in another dir meets the hold list as before (0.47.1)", async () => {
+  const project = "pc-grant-cwd";
+  const { policyFile, run, cwd } = seedGrantedRun(project, "act", { grants: ["git push origin main"] });
+  const other = join(SANDBOX, "pc-grant-cwd-other");
+  mkdirSync(other, { recursive: true });
+  const linked = join(SANDBOX, "pc-grant-cwd-link");
+  symlinkSync(cwd, linked);
+  const viaLink = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git push origin main", linked));
+  assert.deepEqual([viaLink.code, viaLink.stdout], [0, ""], "a symlink to the run's dir is the run's dir");
+  const elsewhere = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git push origin main", other));
+  assert.equal(elsewhere.code, 2);
+  assert.match(elsewhere.stdout, /the command matches the hold pattern \/git push\//u);
+  assert.equal(linesOf(project, "run.held")[0]?.run, run, "held, as without the grant");
+});
+
+test("policy-check: a policy.json with grants edited after the start denies every call (0.47.1)", async () => {
+  const project = "pc-grant-sha";
+  const { policyFile, cwd } = seedGrantedRun(project, "act", { grants: ["git push origin main"] });
+  const before = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("date", cwd));
+  assert.deepEqual([before.code, before.stdout], [0, ""]);
+  const edited = { ...JSON.parse(readFileSync(policyFile, "utf8")), grants: ["git push origin main", "git push --force origin main"] };
+  writeFileSync(policyFile, JSON.stringify(edited));
+  for (const command of ["date", "git push origin main", "git push --force origin main"]) {
+    const after = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook(command, cwd));
+    assert.equal(after.code, 2, command);
+    assert.match(after.stdout, /policy\.json changed since the run started/u, command);
+  }
+  const unsigned = "pc-grant-unsigned";
+  const plain = seedRunningRun(unsigned, "act");
+  writeFileSync(plain.policyFile, JSON.stringify({ ...JSON.parse(readFileSync(plain.policyFile, "utf8")), grants: ["date"], cwd }));
+  const added = await runCli(policyCheckCommand, ["--policy", plain.policyFile], bashHook("date", cwd));
+  assert.match(added.stdout, /policy\.json changed since the run started/u, "grants added to a run started without a sha");
+  assert.equal(linesOf(unsigned, "run.held").length, 0);
+});
+
+test("policy-check: no run starts a follow-up, even with may Bash(darius *) (0.47.1)", async () => {
+  assert.ok(HEARTBEAT_POLICY.may.includes("Bash(darius *)"));
+  for (const gate of [undefined, "full"]) {
+    const project = `pc-no-follow-up-${gate ?? "shell"}`;
+    const { policyFile } = seedRunningRun(project, "act");
+    if (gate !== undefined) writeFileSync(policyFile, JSON.stringify({ ...JSON.parse(readFileSync(policyFile, "utf8")), gate }));
+    for (const command of ["darius run follow-up 01PARENT --approve 1", "env -u DARIUS_RUN darius run follow-up 01PARENT", "FOO=1 nohup darius run follow-up 01PARENT"]) {
+      const result = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook(command));
+      assert.equal(result.code, 2, command);
+      assert.match(result.stdout, /a run never starts a follow-up; a person does, outside the run/u, command);
+    }
+    const list = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("darius run list"));
+    assert.deepEqual([list.code, list.stdout], [0, ""], "other darius verbs pass as before");
+    assert.equal(linesOf(project, "run.held").length, 0, "a deny, not a hold");
+  }
 });
 
 test("policy-check fails closed without a policy", async () => {
@@ -1745,9 +1813,13 @@ test("run follow-up starts a new attended run of the ritual that may run the app
   assert.equal(acks[0]?.run, parent);
   assert.equal(acks[0]?.note, `follow-up ${child}, approved 1`);
 
-  const granted = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push  origin main"));
+  const checkout = join(SANDBOX, `${project}-checkout`);
+  assert.equal(policy.cwd, checkout, "the run's dir, for the grants");
+  assert.equal(started?.policy_sha, sha256Hex(readFileSync(join(runDir, "policy.json"), "utf8")), "run.started records the policy's sha256");
+  assert.match(prompt, /Do not cd: a granted line names its dir with a flag\./u);
+  const granted = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push  origin main", checkout));
   assert.deepEqual([granted.code, granted.stdout], [0, ""], "the granted line passes the hold list");
-  const chained = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push origin main; date"));
+  const chained = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push origin main; date", checkout));
   assert.equal(chained.code, 2, "a chain is decided as before");
 
   const listed = (await runCli(runCommand, ["list", "--project", project])).stdout.split("\n");
@@ -1763,6 +1835,37 @@ test("run follow-up starts a new attended run of the ritual that may run the app
   assert.equal(again.code, 0, "a closed follow-up may be followed again");
   assert.equal(JSON.parse(again.stdout).projects[0].rituals[0].surface, "headless", "--headless runs without a tab");
   assert.equal(linesOf(project, "run.acknowledged").length, 1, "the parent is acknowledged once");
+});
+
+test("a follow-up leaves failed-today and the handoff to the scheduled runs (0.47.1)", async () => {
+  const project = "fu-due";
+  const parent = await seedParent(project);
+  const store = (): ReturnType<typeof openProject> => openProject(project);
+  const slug = { slug: "heartbeat", today: localToday() };
+  process.env.FAKE_CLAUDE_MODE = "silent";
+  const failed = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless"]));
+  const failedRun: string = JSON.parse(failed.stdout).projects[0].rituals[0].run;
+  assert.equal(completedLine(project, failedRun)?.outcome, "failed");
+  assert.equal(failedTodayRun(readLedger(store()), slug), undefined, "a failed follow-up does not stop the timer's run");
+
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  process.env.FAKE_CLAUDE_RESULT = JSON.stringify({ v: 1, status: "ok", summary: "pushed", handoff: "The follow-up note." });
+  try {
+    const done = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless"]));
+    const child: string = JSON.parse(done.stdout).projects[0].rituals[0].run;
+    assert.equal(completedLine(project, child)?.handoff, "The follow-up note.");
+    assert.equal(latestHandoff(store(), readLedger(store()), "heartbeat")?.run, parent, "the handoff stays the parent's");
+    delete process.env.FAKE_CLAUDE_RESULT;
+    const next: string = JSON.parse((await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"])).stdout).projects[0].rituals[0].run;
+    const prompt = readFileSync(join(store().root, "runs", next, "prompt.md"), "utf8");
+    assert.match(prompt, new RegExp(`The previous run of this ritual \\(run ${parent}, completed `, "u"));
+    assert.doesNotMatch(prompt, /The follow-up note\./u);
+  } finally {
+    delete process.env.FAKE_CLAUDE_RESULT;
+  }
+  appendLine(store(), { who: "test", type: "run.started", item: "ritual/heartbeat", run: "01SCHEDULEDFAIL" });
+  appendLine(store(), { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "01SCHEDULEDFAIL", outcome: "failed" });
+  assert.equal(failedTodayRun(readLedger(store()), slug), "01SCHEDULEDFAIL", "a scheduled run that failed still counts");
 });
 
 test("run follow-up --dry-run prints the grants and the tab it would open, and writes nothing", async () => {
@@ -1798,7 +1901,7 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
   await usage("fu-refuse", parent, ["--approve", "x"], /--approve must name a question by its number/u);
   await usage("fu-refuse", parent, ["--grant", "cd tools && pnpm cli x"], /--grant "cd tools && pnpm cli x" is not one plain command: more than one command/u);
   await usage("fu-refuse", parent, ["--grant", "echo $(id)"], /not one plain command/u);
-  await usage("fu-refuse", parent, [], /nothing to grant: pass --approve N or --grant LINE/u);
+  await usage("fu-refuse", parent, [], /nothing to grant: pass --approve N or --grant LINE\. A follow-up with nothing granted is run now with a note: darius run ack \S+ --note TEXT, then darius run now heartbeat/u);
   await usage("fu-refuse", "01NOPE", ["--grant", "date"], /no run '01NOPE'/u);
 
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-refuse", "--json"])).stdout).run;
@@ -1825,7 +1928,7 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
 
   await addProfile("fu-gated", ["--permissions", "gated"]);
   const gated = await seedParent("fu-gated", { marker: 'v = 2\n[defaults]\nfollow_up = "fu-gated"\n' });
-  await refused("fu-gated", gated, ["--approve", "1"], /not-followable: profile fu-gated has permissions gated/u);
+  await refused("fu-gated", gated, ["--approve", "1"], /not-followable: profile fu-gated has permissions gated, .*name a profile with permissions = "skip" in \[defaults\] follow_up of \.darius\.toml/u);
 
   const noHerdr = await seedParent("fu-no-herdr");
   const started = linesOf("fu-no-herdr", "run.started").length;

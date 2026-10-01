@@ -30,6 +30,9 @@ means no cap, so existing setups do not change when it ships.
 - Plain-command rituals: a ritual that runs a shell command, with no model.
 - Approve a held command: an answer that lets the resumed run execute exactly the held command
   once. Today the gate holds it again, and the model hands it to the operator in the findings.
+- The full policy guard: `policy-check` compares `policy.json` with the `policy_sha` of the run's
+  start line for every run, not only for a run with grants (0.47.1). Needs an answer for runs
+  started before 0.47.1, which have no sha.
 
 ## Web
 

@@ -533,7 +533,7 @@ The first unattended ritual on the lead host is `daily-report` in a project: mod
 
 ## Follow-up runs
 
-Status: 2026-10-01, 0.46.0 (grants) and 0.47.0 (the verb). Design: Fable, 2026-10-01.
+Status: 2026-10-01, 0.46.0 (grants), 0.47.0 (the verb) and 0.47.1 (Fable rulings R1 to R4). Design: Fable, 2026-10-01.
 
 A run that asks a question often knows the exact commands a yes would run. A question in the result block may list them in `commands`: up to 20 lines, each one plain command. The operator approves a question, and a follow-up run may then run those lines as written. Nothing else about the policy changes: mode, `may`, `hold` and `max_mode` stay as they are.
 
@@ -548,6 +548,14 @@ A grant passes the gate, not a native allowlist. With Claude Code in gated mode,
 A follow-up is attended. It opens a herdr tab and refuses when herdr is not running, unless `--headless`. The idle watcher still holds it. Its profile is `[defaults] follow_up` of the checkout, else the ritual's; a profile with permissions gated is refused, because its allowlist would refuse the granted lines. The prompt gets a `## Follow-up` section after the handoff, built from the parent's result block, not its markdown: the summary, the approved questions, the operator's note, the granted lines, the open items and actions. The rule: run the granted lines as written, then verify; anything else holds as usual; report what changed.
 
 It refuses: a parent that is not a closed, complete ritual run; a ritual not in mode act (a report ritual never writes: set `--mode act`, or run the lines by hand); a mode above `max_mode`; a ritual pinned to another host (the message names it); no linked checkout on this host; an open or held run of the ritual; an open follow-up of the same parent (a closed one may be followed again); a call from inside a run, so a run never grants itself. A person starts it, on a host with the checkout. The web button comes later.
+
+**Rulings (0.47.1).** A follow-up is out of schedule. Its completion moves no due date, its failure is not "failed today", and it never hands off: the next scheduled run gets the parent's note (`src/core/due.ts`, `src/core/handoff.ts`). An open or held follow-up still blocks a new run. Its result still shows on the pages and in alerts.
+
+A grant holds in one dir. `policy.json` of a follow-up carries `cwd`, the run's working dir, and a granted line passes only when the hook payload's `cwd` is that dir, symlinks resolved. Elsewhere the line is decided as without grants, so the hold list applies. The prompt says: do not cd; a granted line names its dir with a flag.
+
+A grant trusts only the file darius wrote. `run.started` (and `run.resumed`) records `policy_sha`, the sha256 of `policy.json`. When the file holds grants, `policy-check` hashes it first, and a mismatch denies every call: "policy.json changed since the run started". A file without grants is not checked yet; the full guard is in the backlog.
+
+A run never starts a follow-up. The gate denies a shell line that holds `run follow-up` once quotes and backslashes are dropped, after the protocol check and before `may`, the hold list and grants, in every run and scope. So `env -u DARIUS_RUN`, `FOO=1`, `sudo`, `nohup`, `setsid` and `bash -c` change nothing. It also denies a line that clears the run's markers: `DARIUS_RUN=`, `unset DARIUS_RUN`, `env -u`, `env -i`. A deny, not a hold: the model goes on. `Bash(darius *)` in `may` is a bad rule: it lets a run call every darius verb. Name the verbs the procedure needs.
 
 ## Vigil auto-execution
 

@@ -348,3 +348,24 @@ test("a run line without its run id is an error", () => {
 test("a malformed today is an error", () => {
   assert.throws(() => ritualState(ritualDoc(), [], "2026-9-28"), /invalid date/);
 });
+
+test("a follow-up's completion moves no due date (0.47.1)", () => {
+  const { lines, add } = ledgerBuilder();
+  add("2026-09-01", "run.started", { run: "r1" });
+  add("2026-09-01", "run.completed", { run: "r1", outcome: "complete" });
+  add("2026-09-10", "run.started", { run: "r2", follow_up_of: "r1" });
+  add("2026-09-10", "run.completed", { run: "r2", outcome: "complete" });
+  const state = ritualState(ritualDoc(), lines, "2026-09-10");
+  assert.equal(state.nextDue, "2026-09-08", "still due from the scheduled run");
+  assert.equal(state.lastCompleted, "2026-09-01");
+  assert.equal(state.isDue, true);
+  add("2026-09-10", "run.started", { run: "r3" });
+  add("2026-09-10", "run.completed", { run: "r3", outcome: "complete" });
+  assert.equal(ritualState(ritualDoc(), lines, "2026-09-10").nextDue, "2026-09-15", "a scheduled run moves it");
+});
+
+test("an open follow-up still blocks a new run", () => {
+  const { lines, add } = ledgerBuilder();
+  add("2026-09-10", "run.started", { run: "r2", follow_up_of: "r1" });
+  assert.equal(ritualState(ritualDoc(), lines, "2026-09-10").openRun, "r2");
+});

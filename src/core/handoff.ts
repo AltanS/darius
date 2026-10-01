@@ -15,9 +15,12 @@
  * The source is the latest run of the ritual that handed in a result. A run
  * that crashed or ran out of turns hands in none, so the note of the last
  * good run stays. A run whose result has no `handoff` leaves no note: that
- * run decided there was nothing to pass on.
+ * run decided there was nothing to pass on. A follow-up run (0.47.1) is
+ * never the source: it did what the operator approved, out of schedule, so
+ * the next scheduled run gets the note of the run it followed up.
  */
 
+import { followUpRuns } from "./due.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { parseResult, readSummary, type ResultQuestion } from "./result.ts";
 import { getBlobText, itemRef, type Project } from "./store.ts";
@@ -66,7 +69,10 @@ function resultQuestions(project: Project, completed: LedgerLine): ResultQuestio
 /** What the latest run of ritual `slug` with a result hands to the next run; null when there is nothing. */
 export function latestHandoff(project: Project, ledger: readonly LedgerLine[], slug: string): Handoff | null {
   const item = itemRef("ritual", slug);
-  const completed = ledger.findLast((line) => line.type === "run.completed" && line.item === item && isText(line.result_sha));
+  const followUps = followUpRuns(ledger.filter((line) => line.item === item));
+  const completed = ledger.findLast(
+    (line) => line.type === "run.completed" && line.item === item && isText(line.result_sha) && !(isText(line.run) && followUps.has(line.run)),
+  );
   if (completed === undefined || !isText(completed.run)) return null;
   const { run } = completed;
   const note = isText(completed.handoff) && completed.handoff !== "" ? completed.handoff : null;

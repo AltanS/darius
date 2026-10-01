@@ -18,6 +18,9 @@
  * - Only `run.completed` with `outcome: "complete"` counts as a completion.
  *   `failed` and `abandoned` close the run but leave the schedule alone, so
  *   the ritual stays due.
+ * - A follow-up run (its `run.started` carries `follow_up_of`, 0.47.1) is
+ *   never a completion: the operator started it by hand, out of schedule.
+ *   An open or held follow-up still blocks a new run like any other.
  * - `anchor: "completion"`: next due = completion date + cadence, always.
  * - `anchor: "due"`: the schedule is a grid, origin + k * cadence. A
  *   completion on or after the pending due satisfies every grid date up to
@@ -172,8 +175,18 @@ function runPhaseAfter(type: string): RunPhase | undefined {
   return undefined;
 }
 
+/** The ids of the follow-up runs among the lines: their `run.started` carries `follow_up_of`. */
+export function followUpRuns(lines: readonly LedgerLine[]): Set<string> {
+  const runs = new Set<string>();
+  for (const line of lines) {
+    if (line.type === "run.started" && isText(line.follow_up_of) && isText(line.run)) runs.add(line.run);
+  }
+  return runs;
+}
+
 function readSchedule(lines: LedgerLine[], ritual: { anchor: Ritual["anchor"]; cadence: Cadence | undefined }): Schedule {
   let schedule: Schedule = {};
+  const followUps = followUpRuns(lines);
   for (const line of lines) {
     if (line.type === "ritual.rescheduled") {
       const due = requireText(line, "due");
@@ -182,6 +195,7 @@ function readSchedule(lines: LedgerLine[], ritual: { anchor: Ritual["anchor"]; c
       continue;
     }
     if (line.type !== "run.completed") continue;
+    if (isText(line.run) && followUps.has(line.run)) continue;
     const outcome = requireText(line, "outcome");
     if (outcome !== "complete") continue;
     schedule = applyCompletion(schedule, { completed: localDate(line), anchor: ritual.anchor, cadence: ritual.cadence });
