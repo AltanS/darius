@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.59.0] - 2026-10-02
+
+### Added
+
+- `darius marker factor [dir] [--write] [--json]` finds rituals with an inline policy that share most of their rules and moves the shared `may` and `hold` rules into new `[policies.<mode>-base]` tables. Each ritual then names the policy and keeps only its own rules in `may_extra` and `hold_extra`. It prints a summary and a diff and writes nothing, unless you pass `--write`. `--write` never runs git and refuses a dirty or non-v3 marker. The edit is textual: comments, key order and untouched tables stay byte for byte. Before it prints or writes, a proof gate parses the proposed file and compares every ritual with the current one (every field, the mode, the sorted `may` and `hold`, the notes). Any difference exits 1 and writes nothing. A layout it cannot edit safely exits 1 and names the ritual.
+- The web run detail shows the skill hash of a run in a "Skill hash" row (the first 12 characters, the full value on hover). The web API returns `skillHash`, `null` for a run that recorded none.
+
+### Changed
+
+- The overlap rule of the 0.57.0 warning now lives in one shared function that `marker check` and `marker factor` both use.
+- The factored marker can list its `may` and `hold` entries in another order. The definition hash follows the list order, so the next reconcile reports a factored ritual once as updated. `marker check --resolved` prints the same lines before and after.
+
 ## [0.58.0] - 2026-10-01
 
 ### Changed
