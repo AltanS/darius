@@ -1672,3 +1672,175 @@ test("a harness that is not on PATH says how to fix it", async () => {
   const { spawnFailure } = await import("../src/surface/headless.ts");
   assert.match(spawnFailure("/usr/bin/claude", new Error("spawn /usr/bin/claude ENOENT")), /^claude is not on PATH: install Claude Code or set the profile's command$/u);
 });
+
+// --- run follow-up (0.47.0) ---------------------------------------------------------------
+
+// A suite run inside a darius run must not see its own run: follow-up refuses there.
+delete process.env.DARIUS_RUN;
+delete process.env.DARIUS_RUN_POLICY;
+
+const FOLLOW_UP_RESULT = {
+  v: 1,
+  status: "attention",
+  summary: "one push waits",
+  items: [{ title: "Branch not pushed", severity: "medium", state: "needs-decision", target: "main" }],
+  actions: [{ text: "Checked the branch", state: "done" }],
+  questions: [
+    { text: "Push main now?", recommendation: "Yes.", commands: ["git push origin main"] },
+    { text: "Delete the old branch?" },
+  ],
+};
+
+/** A linked act ritual with a complete run whose result asks two questions; the first lists a hold-listed command. */
+async function seedParent(project: string, opts: { marker?: string; mode?: Policy["mode"]; link?: boolean } = {}): Promise<string> {
+  if (opts.link !== false) linkedCheckout(project, opts.marker ?? "");
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, mode: opts.mode ?? "act" } });
+  const run: string = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", project, "--json"])).stdout).run;
+  const findings = `# Check\n\n\`\`\`darius-result\n${JSON.stringify(FOLLOW_UP_RESULT)}\n\`\`\`\n`;
+  const done = await runCli(runCommand, ["complete", run, "--project", project, "--outcome", "complete", "--findings-stdin"], findings);
+  assert.equal(done.code, 0, done.stdout);
+  return run;
+}
+
+function followUp(parent: string, project: string, extra: string[]): Promise<CliRun> {
+  return runCli(runCommand, ["follow-up", parent, "--project", project, "--json", ...extra]);
+}
+
+test("run follow-up starts a new attended run of the ritual that may run the approved lines; the parent is acknowledged and linked", async () => {
+  const project = "fu-happy";
+  const marker = 'v = 2\n[profiles.fu]\nmodel = "opus"\npermissions = "skip"\n[defaults]\nfollow_up = "fu"\n';
+  const parent = await seedParent(project, { marker });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--grant", "date", "--note", "push it"]));
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const entry: ProfiledEntry | undefined = JSON.parse(result.stdout).projects[0].rituals[0];
+  assert.equal(entry?.action, "started");
+  assert.equal(entry?.end, "complete");
+  assert.equal(entry?.surface, "herdr", "attended: a herdr tab");
+  assert.equal(entry?.profile, "fu", "[defaults] follow_up of the checkout");
+  const child = entry?.run ?? "";
+  assert.notEqual(child, parent, "a new run, not the parent");
+  assert.ok(herdrCalls().some((line) => line.startsWith("tab create")));
+
+  const started = linesOf(project, "run.started").find((line) => line.run === child);
+  assert.equal(started?.follow_up_of, parent);
+  assert.deepEqual(started?.approved, [1]);
+  assert.deepEqual(started?.grants, ["git push origin main", "date"]);
+  const runDir = join(openProject(project).root, "runs", child);
+  const policy = JSON.parse(readFileSync(join(runDir, "policy.json"), "utf8"));
+  assert.deepEqual(policy.grants, ["git push origin main", "date"]);
+  assert.equal(policy.follow_up_of, parent);
+  assert.equal(policy.gate, "full");
+  const prompt = readFileSync(join(runDir, "prompt.md"), "utf8");
+  assert.match(prompt, new RegExp(`## Follow-up\n\nThis run follows up run ${parent}\\. Its summary: one push waits`, "u"));
+  assert.match(prompt, /Approved question 1: Push main now\? Recommended: Yes\.\nOperator note: push it/u);
+  assert.match(prompt, /```bash\ngit push origin main\ndate\n```/u);
+  assert.match(prompt, /- medium needs-decision: Branch not pushed \[main\]/u);
+  assert.match(prompt, /- done: Checked the branch/u);
+  assert.match(prompt, /Run the granted lines as written, then verify each result\. Anything else holds as usual\./u);
+  assert.ok(prompt.indexOf("## Follow-up") < prompt.indexOf("## Protocol"));
+
+  const acks = linesOf(project, "run.acknowledged");
+  assert.equal(acks.length, 1);
+  assert.equal(acks[0]?.run, parent);
+  assert.equal(acks[0]?.note, `follow-up ${child}, approved 1`);
+
+  const granted = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push  origin main"));
+  assert.deepEqual([granted.code, granted.stdout], [0, ""], "the granted line passes the hold list");
+  const chained = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push origin main; date"));
+  assert.equal(chained.code, 2, "a chain is decided as before");
+
+  const listed = (await runCli(runCommand, ["list", "--project", project])).stdout.split("\n");
+  assert.match(listed.find((line) => line.startsWith(parent)) ?? "", new RegExp(`followed up by ${child.slice(-6).toLowerCase()}$`, "u"));
+  assert.match(listed.find((line) => line.startsWith(child)) ?? "", new RegExp(`follow-up of ${parent.slice(-6).toLowerCase()}$`, "u"));
+  const shown = await runCli(runCommand, ["show", child, "--project", project]);
+  assert.match(shown.stdout.split("\n")[0] ?? "", new RegExp(`follow-up of ${parent}$`, "u"));
+  const json = JSON.parse((await runCli(runCommand, ["show", parent, "--project", project, "--json"])).stdout);
+  assert.deepEqual(json.followUps, [child]);
+  assert.match((await runCli(runCommand, ["show", parent, "--project", project])).stdout, /question 1: Push main now\? \(recommended: Yes\.\)\n {4}run: git push origin main\n/u);
+
+  const again = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless"]));
+  assert.equal(again.code, 0, "a closed follow-up may be followed again");
+  assert.equal(JSON.parse(again.stdout).projects[0].rituals[0].surface, "headless", "--headless runs without a tab");
+  assert.equal(linesOf(project, "run.acknowledged").length, 1, "the parent is acknowledged once");
+});
+
+test("run follow-up --dry-run prints the grants and the tab it would open, and writes nothing", async () => {
+  const project = "fu-dry";
+  const parent = await seedParent(project);
+  const before = readLedger(openProject(project)).length;
+  const runsDir = join(openProject(project).root, "runs");
+  const result = await withFakeHerdr({}, () => runCli(runCommand, ["follow-up", parent, "--project", project, "--approve", "1", "--dry-run"]));
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, new RegExp(`follow-up of run ${parent}, 1 granted line\\(s\\):\n {2}git push origin main`, "u"));
+  assert.match(result.stdout, new RegExp(`heartbeat: follow-up of ${parent}, would start with claude, built-in profile, herdr, a herdr tab in workspace darius-runs, cwd ${join(SANDBOX, `${project}-checkout`)} \\(dry run\\)`, "u"));
+  assert.equal(readLedger(openProject(project)).length, before);
+  assert.equal(existsSync(runsDir), false, "no run dir");
+  assert.deepEqual(herdrCalls().filter((line) => !line.startsWith("status")), [], "no tab");
+});
+
+test("run follow-up refuses what it cannot run, each with one line, and starts nothing", async () => {
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const usage = async (project: string, parent: string, extra: string[], reason: RegExp): Promise<void> => {
+    await assert.rejects(withFakeHerdr({}, () => followUp(parent, project, extra)), reason);
+  };
+  const refused = async (project: string, parent: string, extra: string[], reason: RegExp): Promise<void> => {
+    const started = linesOf(project, "run.started").length;
+    const result = await withFakeHerdr({}, () => followUp(parent, project, extra));
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(`${result.stdout}\n${result.stderr}`, reason);
+    assert.equal(linesOf(project, "run.started").length, started, "no run started");
+  };
+
+  const parent = await seedParent("fu-refuse");
+  await usage("fu-refuse", parent, ["--approve", "2"], /question 2 lists no commands; use --grant/u);
+  await usage("fu-refuse", parent, ["--approve", "3"], /has 2 question\(s\) in its result; there is no question 3/u);
+  await usage("fu-refuse", parent, ["--approve", "x"], /--approve must name a question by its number/u);
+  await usage("fu-refuse", parent, ["--grant", "cd tools && pnpm cli x"], /--grant "cd tools && pnpm cli x" is not one plain command: more than one command/u);
+  await usage("fu-refuse", parent, ["--grant", "echo $(id)"], /not one plain command/u);
+  await usage("fu-refuse", parent, [], /nothing to grant: pass --approve N or --grant LINE/u);
+  await usage("fu-refuse", "01NOPE", ["--grant", "date"], /no run '01NOPE'/u);
+
+  const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-refuse", "--json"])).stdout).run;
+  await refused("fu-refuse", open, ["--grant", "date"], /is running; a follow-up needs a closed run/u);
+  await refused("fu-refuse", parent, ["--grant", "date"], /open-run: run /u);
+  await runCli(runCommand, ["complete", open, "--project", "fu-refuse", "--outcome", "failed"]);
+  await refused("fu-refuse", open, ["--grant", "date"], /ended failed; a follow-up needs a complete run/u);
+
+  appendLine(openProject("fu-refuse"), { who: "test", type: "run.started", item: "ritual/heartbeat", run: "01OPENFOLLOWUP", follow_up_of: parent });
+  await refused("fu-refuse", parent, ["--grant", "date"], /follow-up 01OPENFOLLOWUP of run '\S+' is still open; finish it first/u);
+
+  const report = await seedParent("fu-report", { mode: "report" });
+  await refused("fu-report", report, ["--approve", "1"], /not-followable: ritual heartbeat is in mode report; set --mode act, or run the lines by hand/u);
+
+  const capped = await seedParent("fu-capped", { marker: 'max_mode = "report"\n' });
+  await refused("fu-capped", capped, ["--approve", "1"], /policy-capped: mode act is above max_mode = "report"/u);
+
+  const unlinked = await seedParent("fu-unlinked", { link: false });
+  await refused("fu-unlinked", unlinked, ["--approve", "1"], /no-workdir: a follow-up runs in a checkout of fu-unlinked, and none is linked on this host/u);
+
+  const pinned = await seedParent("fu-pinned");
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", "fu-pinned", "--host", "host-b"])).code, 0);
+  await refused("fu-pinned", pinned, ["--approve", "1"], /other-host: pinned to host-b/u);
+
+  await addProfile("fu-gated", ["--permissions", "gated"]);
+  const gated = await seedParent("fu-gated", { marker: 'v = 2\n[defaults]\nfollow_up = "fu-gated"\n' });
+  await refused("fu-gated", gated, ["--approve", "1"], /not-followable: profile fu-gated has permissions gated/u);
+
+  const noHerdr = await seedParent("fu-no-herdr");
+  const started = linesOf("fu-no-herdr", "run.started").length;
+  const down = await followUp(noHerdr, "fu-no-herdr", ["--approve", "1"]);
+  assert.equal(down.code, 1);
+  assert.match(down.stderr, /not-followable: a follow-up opens a herdr tab, and .*; start herdr, or pass --headless/u);
+  assert.equal(linesOf("fu-no-herdr", "run.started").length, started);
+
+  process.env.DARIUS_RUN = "01INSIDE";
+  try {
+    await refused("fu-refuse", parent, ["--approve", "1"], /run follow-up is for a person; a run darius started cannot start one/u);
+  } finally {
+    delete process.env.DARIUS_RUN;
+  }
+
+  appendLine(openProject("fu-vigil", { create: true }), { who: "test", type: "run.started", item: "vigil/soak", run: "01VIGILRUN" });
+  await usage("fu-vigil", "01VIGILRUN", ["--grant", "date"], /belongs to vigil\/soak; only a ritual run has follow-ups/u);
+});

@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.47.0] - 2026-10-01
+
+### Added
+
+- `darius run follow-up <run> [--approve N ...] [--grant LINE ...] [--note TEXT] [--headless] [--timeout S] [--dry-run] [--json] [--who W]`. It starts a new run of the ritual of a complete run, in a herdr tab, and the gate passes the command lines of the approved questions and the `--grant` lines as written. It takes the path of `run now`: lease, `max_mode`, profile, preflight, report and alerts.
+- `run.started` of a follow-up carries `follow_up_of`, `approved` and `grants`; its `policy.json` carries `grants` and `follow_up_of`. The prompt gets a `## Follow-up` section after the handoff: the parent's summary, the approved questions, the operator's note, the granted lines, the parent's open items and actions.
+- When the parent waits for the operator's decision, starting the follow-up acknowledges it, with the note `follow-up <run>, approved N`.
+- `[defaults] follow_up` in `.darius.toml` names the profile of a follow-up; without it the ritual's profile applies.
+- `run list` and `run show` mark a follow-up and its parent; the JSON rows carry `followUpOf` and `followUps`.
+- `run follow-up` refuses, each with one line: a parent that is not a closed, complete ritual run; a question with no commands (use `--grant`); a line that is not one plain command; a ritual not in mode act; a mode above `max_mode`; a ritual pinned to another host; no linked checkout on this host; an open or held run of the ritual; an open follow-up of the same parent; a profile with permissions gated; herdr not running (pass `--headless`); a call from inside a run. `--dry-run` prints the grants and the tab it would open, and writes nothing.
+
 ## [0.46.0] - 2026-10-01
 
 ### Added

@@ -533,7 +533,7 @@ The first unattended ritual on the lead host is `daily-report` in a project: mod
 
 ## Follow-up runs
 
-Status: 2026-10-01, 0.46.0. Design: Fable, 2026-10-01.
+Status: 2026-10-01, 0.46.0 (grants) and 0.47.0 (the verb). Design: Fable, 2026-10-01.
 
 A run that asks a question often knows the exact commands a yes would run. A question in the result block may list them in `commands`: up to 20 lines, each one plain command. The operator approves a question, and a follow-up run may then run those lines as written. Nothing else about the policy changes: mode, `may`, `hold` and `max_mode` stay as they are.
 
@@ -542,6 +542,12 @@ A run that asks a question often knows the exact commands a yes would run. A que
 A grant is one plain command, so what the operator read is what runs: one line, at most 300 characters, one part in the shell split, no redirection, no `$` or backticks, no glob, brace or `~` outside quotes, no assignment to a name like `PATH`. A command that needs another dir names it with a flag (`pnpm -C tools cli ...`). `run complete` refuses a result with a line that is not one plain command; `policy-check` denies every call when `policy.json` holds one.
 
 A grant passes the gate, not a native allowlist. With Claude Code in gated mode, the allowlist would still refuse a granted line that `may` does not name.
+
+**The verb (0.47.0).** `darius run follow-up <run> --approve N [--grant LINE] [--note TEXT]` starts a new run of the parent's ritual, with a new run id. `--approve N` grants exactly the commands of question N. `--grant` adds a line the operator typed; it is the only way for a run from before 0.46.0, whose questions list no commands. The run takes the path of `run now`: lease, `max_mode`, profile, gate preflight, report and alerts. Its `run.started` line carries `follow_up_of`, `approved` and `grants`; it is not a new kind. When the parent waits for the operator's decision, starting the follow-up acknowledges it (`follow-up <run>, approved N`). `run list` and `run show` mark both runs.
+
+A follow-up is attended. It opens a herdr tab and refuses when herdr is not running, unless `--headless`. The idle watcher still holds it. Its profile is `[defaults] follow_up` of the checkout, else the ritual's; a profile with permissions gated is refused, because its allowlist would refuse the granted lines. The prompt gets a `## Follow-up` section after the handoff, built from the parent's result block, not its markdown: the summary, the approved questions, the operator's note, the granted lines, the open items and actions. The rule: run the granted lines as written, then verify; anything else holds as usual; report what changed.
+
+It refuses: a parent that is not a closed, complete ritual run; a ritual not in mode act (a report ritual never writes: set `--mode act`, or run the lines by hand); a mode above `max_mode`; a ritual pinned to another host (the message names it); no linked checkout on this host; an open or held run of the ritual; an open follow-up of the same parent (a closed one may be followed again); a call from inside a run, so a run never grants itself. A person starts it, on a host with the checkout. The web button comes later.
 
 ## Vigil auto-execution
 

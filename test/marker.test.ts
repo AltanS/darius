@@ -87,6 +87,7 @@ test("a v2 marker reads profiles and defaults; a v1 marker has none", () => {
         'model = "haiku"',
         "[defaults]",
         'ritual = "cheap"',
+        'follow_up = "opus-skip"',
         "",
       ].join("\n"),
     ),
@@ -96,6 +97,7 @@ test("a v2 marker reads profiles and defaults; a v1 marker has none", () => {
     cheap: { model: "haiku" },
   });
   assert.equal(marker?.defaultRitual, "cheap");
+  assert.equal(marker?.defaultFollowUp, "opus-skip");
   assert.deepEqual(readMarker(checkout('v = 2\nproject = "ws"\n'))?.profiles, {});
   assert.deepEqual(readMarker(checkout('project = "ws"\n'))?.profiles, {});
 });
@@ -111,6 +113,7 @@ test("a v2 marker is strict too: tables need v = 2, and every profile field has 
   assert.throws(() => readMarker(bad('v = 2\n[profiles.Big]\nmodel = "opus"\n')), /a profile name is lowercase/u);
   assert.throws(() => readMarker(bad('v = 2\n[defaults]\nvigil = "x"\n')), /unknown key "vigil"/u);
   assert.throws(() => readMarker(bad('v = 2\nmax_mode = "act"\n[defaults]\nritual = 3\n')), /ritual must name a profile/u);
+  assert.throws(() => readMarker(bad('v = 2\n[defaults]\nfollow_up = "Bad Name"\n')), /:4: follow_up must name a profile/u);
 });
 
 test("findMarker walks up from a subdir, and resolveProject uses it", () => {

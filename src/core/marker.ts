@@ -13,6 +13,7 @@
  *   model = "opus"                     surface, max_turns, args
  *   [defaults]
  *   ritual = "opus-skip"               the profile a ritual uses when it names none
+ *   follow_up = "opus-skip"            the profile of `darius run follow-up` (0.47.0)
  *
  * A file with these tables must say `v = 2`. An older darius refuses a v2
  * file with its "upgrade darius" error, so a host that cannot read the
@@ -51,11 +52,13 @@ export interface Marker {
   profiles: Record<string, ProfileFields>;
   /** `[defaults] ritual`. */
   defaultRitual?: string;
+  /** `[defaults] follow_up`: the profile a follow-up run uses, over the ritual's. */
+  defaultFollowUp?: string;
 }
 
 const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode"]);
 const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args"]);
-const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual"]);
+const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const MODES: readonly Mode[] = ["off", "report", "act"];
 const MAX_SEARCH_DEPTH = 64;
@@ -118,6 +121,14 @@ function decodeProfile(table: Readonly<Record<string, TomlValue>>, at: { file: s
   return fields;
 }
 
+/** `[defaults] <key>` when set: it must name a profile. */
+function profileName(table: Readonly<Record<string, TomlValue>>, key: string, at: { file: string; lines: Lines }): string | undefined {
+  const value = table[key];
+  if (value === undefined) return undefined;
+  if (!isText(value) || !PROFILE_NAME.test(value)) throw new Error(`${where(at.file, at.lines[`defaults.${key}`])}: ${key} must name a profile`);
+  return value;
+}
+
 /** The `[profiles.*]` and `[defaults]` tables into `marker`. Any other section is an error. */
 function decodeSections(document: TomlDocument, file: string, version: TomlValue, marker: Marker): void {
   const { lines } = document;
@@ -133,11 +144,10 @@ function decodeSections(document: TomlDocument, file: string, version: TomlValue
     }
     if (section === "defaults") {
       checkKeys(table, DEFAULTS_KEYS, at);
-      const ritual = table.ritual;
-      if (ritual !== undefined && (!isText(ritual) || !PROFILE_NAME.test(ritual))) {
-        throw new Error(`${where(file, lines["defaults.ritual"])}: ritual must name a profile`);
-      }
+      const ritual = profileName(table, "ritual", { file, lines });
       if (ritual !== undefined) marker.defaultRitual = ritual;
+      const followUp = profileName(table, "follow_up", { file, lines });
+      if (followUp !== undefined) marker.defaultFollowUp = followUp;
       continue;
     }
     const name = section.slice("profiles.".length);

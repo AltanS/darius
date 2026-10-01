@@ -51,13 +51,21 @@ function bulletList(items: readonly string[]): string {
   return items.map((item) => `- \`${item}\``).join("\n");
 }
 
-interface PromptInput {
+export interface PromptInput {
   project: string;
   run: string;
   ritual: Ritual;
   body: string;
   /** What the previous run of the ritual passes on (src/core/handoff.ts); none for the harness check. */
   handoff?: Handoff | null;
+  /** The `## Follow-up` section of a follow-up run (src/runner/follow-up.ts). */
+  followUp?: readonly string[];
+}
+
+/** What a follow-up run's policy.json adds (0.47.0): the granted lines and the parent run. */
+export interface RunGrants {
+  grants: readonly string[];
+  followUpOf: string;
 }
 
 /**
@@ -109,6 +117,7 @@ export function buildPrompt(input: PromptInput): string {
     modeLine,
     "",
     ...handoffSection(input.handoff ?? null),
+    ...(input.followUp ?? []),
     "## Protocol",
     "",
     "1. Do the procedure below. Nobody is watching this session; no one answers questions in the chat.",
@@ -160,7 +169,7 @@ function policyFile(policy: RunPolicy): Omit<RunPolicy, "grants"> & { grants?: s
 }
 
 /** Writes policy.json and prompt.md under `<projectRoot>/runs/<run>/`. `scope` "shell" is left out, as it is the default. */
-export function writeRunFiles(projectRoot: string, input: PromptInput, scope: GateScope = "shell"): RunFiles {
+export function writeRunFiles(projectRoot: string, input: PromptInput, scope: GateScope = "shell", granted?: RunGrants): RunFiles {
   const dir = join(projectRoot, "runs", input.run);
   mkdirSync(dir, { recursive: true });
   const files: RunFiles = { dir, policy: join(dir, "policy.json"), prompt: join(dir, "prompt.md") };
@@ -173,8 +182,9 @@ export function writeRunFiles(projectRoot: string, input: PromptInput, scope: Ga
     mode: policy.mode,
     may: [...policy.may],
     hold: [...policy.hold],
-    grants: [],
+    grants: [...(granted?.grants ?? [])],
   };
+  if (granted !== undefined) runPolicy.follow_up_of = granted.followUpOf;
   if (scope !== "shell") runPolicy.gate = scope;
   // Every run darius launches hands in a result (0.22.0); a by-hand run may.
   runPolicy.result = "required";

@@ -18,6 +18,7 @@
  *   run show <run>             the run's findings and its result block (0.24.0)
  *   run now <ritual> [--profile NAME] [--timeout S] [--dry-run]   (src/cli/run-due.ts)
  *   run resume <run> [--timeout S]                                (src/cli/run-due.ts)
+ *   run follow-up <run> [--approve N] [--grant LINE] [--note T]   (src/cli/run-due.ts)
  *
  * RUN IDENTITY. A run's id is a ULID minted with `ulid()` at `run start` and
  * carried as the `run` payload field on every ledger line about it,
@@ -51,12 +52,13 @@ import { localToday } from "../core/sweep.ts";
 import { cutResult, FINDINGS_MAX, parseResult, readSummary, summarizeResult, type ResultSummary, type RunResult } from "../core/result.ts";
 import { getBlobText, itemRef, openProject, putBlob, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
+import { followUpOf } from "../runner/follow-up.ts";
 import { acknowledgeRun, answerRun } from "../runner/hold.ts";
 import { readStdin } from "./args.ts";
-import { runNow, runResume } from "./run-due.ts";
+import { runFollowUp, runNow, runResume } from "./run-due.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "start | hold | answer | resume | complete | ack | list | show | now";
+const VERBS = "start | hold | answer | resume | complete | ack | list | show | now | follow-up";
 const OUTCOMES = ["complete", "failed", "abandoned"] as const;
 type Outcome = (typeof OUTCOMES)[number];
 type RunPhase = "running" | "held" | "closed";
@@ -381,6 +383,10 @@ interface RunRow {
   startedAt: string;
   /** The counts of the run's result block; absent without one (0.22.0). */
   result?: ResultSummary;
+  /** The run this one follows up (`run follow-up`, 0.47.0). */
+  followUpOf?: string;
+  /** The runs that follow this one up. */
+  followUps?: string[];
 }
 
 function groupByRun(ledger: readonly LedgerLine[]): Map<string, LedgerLine[]> {
@@ -401,6 +407,12 @@ function outcomeField(line: LedgerLine): string | null {
 
 function runRows(ledger: readonly LedgerLine[]): RunRow[] {
   const rows: RunRow[] = [];
+  const children = new Map<string, string[]>();
+  for (const line of ledger) {
+    const child = runIdOf(line);
+    if (line.type !== "run.started" || !isText(line.follow_up_of) || child === undefined) continue;
+    children.set(line.follow_up_of, [...(children.get(line.follow_up_of) ?? []), child]);
+  }
   for (const [run, lines] of groupByRun(ledger)) {
     const item = runItemRef(lines);
     const phase = currentPhase(lines);
@@ -410,6 +422,10 @@ function runRows(ledger: readonly LedgerLine[]): RunRow[] {
     const row: RunRow = { run, item, phase, outcome: completedLine === undefined ? null : outcomeField(completedLine), startedAt: first.at };
     const result = readSummary(completedLine?.result);
     if (result !== null) row.result = result;
+    const parent = followUpOf(lines, run);
+    if (parent !== undefined) row.followUpOf = parent;
+    const followUps = children.get(run);
+    if (followUps !== undefined) row.followUps = followUps;
     rows.push(row);
   }
   return rows.toSorted((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
@@ -426,9 +442,22 @@ function runList(args: ParsedArgs): number {
   if (rows.length === 0) console.log("no runs");
   for (const row of rows) {
     const outcomeText = row.outcome === null ? "" : ` (${row.outcome})`;
-    console.log(`${row.run}  ${row.item}  ${row.phase}${outcomeText}  started ${row.startedAt}`);
+    console.log(`${row.run}  ${row.item}  ${row.phase}${outcomeText}  started ${row.startedAt}${followUpTag(row, short)}`);
   }
   return 0;
+}
+
+/** The last six characters of a run id, as a herdr tab names the run. */
+function short(run: string): string {
+  return run.slice(-6).toLowerCase();
+}
+
+/** `  follow-up of <run>` on a follow-up, `  followed up by <run>` on its parent; empty for any other run. */
+function followUpTag(row: RunRow, name: (run: string) => string): string {
+  const tags: string[] = [];
+  if (row.followUpOf !== undefined) tags.push(`follow-up of ${name(row.followUpOf)}`);
+  if (row.followUps !== undefined) tags.push(`followed up by ${row.followUps.map(name).join(", ")}`);
+  return tags.map((tag) => `  ${tag}`).join("");
 }
 
 // --- show -------------------------------------------------------------------------
@@ -467,8 +496,9 @@ function describeResult(result: RunResult): string[] {
 function runShow(args: ParsedArgs): number {
   const runId = requirePositional(args, 1, "<run> id");
   const project = currentProject(args);
-  const lines = findRunLines(readLedger(project), runId);
-  const row = runRows(lines).find((candidate) => candidate.run === runId);
+  const ledger = readLedger(project);
+  const lines = findRunLines(ledger, runId);
+  const row = runRows(ledger).find((candidate) => candidate.run === runId);
   if (row === undefined) throw new UsageError(`no run '${runId}' in ${project.name}`);
   const completed = lines.findLast((line) => line.type === "run.completed");
   const sha = completed?.findings_sha;
@@ -479,7 +509,7 @@ function runShow(args: ParsedArgs): number {
     return 0;
   }
   const outcome = row.outcome === null ? "" : ` (${row.outcome})`;
-  console.log(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}`);
+  console.log(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
   if (result !== null) for (const line of describeResult(result)) console.log(line);
   console.log(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;
@@ -513,6 +543,8 @@ export const runCommand: Command = {
         return runNow(args);
       case "resume":
         return runResume(args);
+      case "follow-up":
+        return runFollowUp(args);
       default:
         throw new UsageError(`run needs a verb: ${VERBS}`);
     }

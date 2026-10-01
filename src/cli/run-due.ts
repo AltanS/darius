@@ -25,6 +25,7 @@ import { flushAlerts, sendAlerts } from "../core/alerts.ts";
 import { defaultWho, readLedger } from "../core/ledger.ts";
 import { resolveProject, stateDir } from "../core/paths.ts";
 import { openProject } from "../core/store.ts";
+import { parentResult, planFollowUp, type FollowUp } from "../runner/follow-up.ts";
 import { runDue, viewRun, DEFAULT_RUN_TIMEOUT_MS, type RunDueOptions } from "../runner/run-due.ts";
 import { deliverReport, skipAlerts, type BatchReport, type ReportScope } from "../runner/report.ts";
 import { errorMessage } from "../runtime.ts";
@@ -215,5 +216,70 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
   await alertBatch(report, "run resume");
   for (const failure of report.errors) console.error(`darius run resume: ${failure.project}: ${failure.error}`);
+  return runDueExitCode(report);
+}
+
+/** `--approve N` values: whole numbers from 1. */
+function approveFlags(args: ParsedArgs): number[] {
+  return (args.repeated.approve ?? []).map((raw) => {
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n < 1 || String(n) !== raw) throw new UsageError(`--approve must name a question by its number, from 1, got '${raw}'`);
+    return n;
+  });
+}
+
+/**
+ * `darius run follow-up <run> [--project P] [--approve N ...] [--grant LINE ...]
+ * [--note TEXT] [--headless] [--timeout S] [--dry-run] [--json] [--who W]`:
+ * a new run of the ritual of complete run `<run>`, attended in a herdr tab,
+ * that may run the command lines of the approved questions and the
+ * `--grant` lines as written (docs/concept.md, "Follow-up runs";
+ * src/runner/follow-up.ts). The path of `run now`: lease, cap, profile,
+ * preflight, report and alerts. A mistake on the command line exits 2; a
+ * parent or ritual that cannot have a follow-up now exits 1, and so does a
+ * call from inside a run (DARIUS_RUN set): a run never grants itself. `--dry-run`
+ * prints the grants and where the run would open, and writes nothing.
+ */
+export async function runFollowUp(args: ParsedArgs): Promise<number> {
+  // A run must never grant itself lines: the operator starts a follow-up, not a session darius started.
+  const inRun = process.env.DARIUS_RUN ?? process.env.DARIUS_RUN_POLICY;
+  if (inRun !== undefined && inRun !== "") return refuseResume(args, args.positional[1] ?? "", "run follow-up is for a person; a run darius started cannot start one");
+  const parent = args.positional[1];
+  if (parent === undefined || parent === "") throw new UsageError("run follow-up: missing <run>");
+  const project = resolveProject(stringFlag(args, "project"));
+  const store = openProject(project);
+  const ledger = readLedger(store);
+  const approved = [...new Set(approveFlags(args))];
+  const plan = planFollowUp(ledger, parentResult(store, ledger, parent), { parent, approve: approved, grant: args.repeated.grant ?? [] });
+  if ("usage" in plan) throw new UsageError(`run follow-up: ${plan.usage}`);
+  if ("refused" in plan) return refuseResume(args, parent, plan.refused);
+  const followUp: FollowUp = { parent, approved, grants: plan.grants };
+  const note = stringFlag(args, "note");
+  if (note !== undefined && note !== "") followUp.note = note;
+  if (args.flags.headless === true) followUp.headless = true;
+  const isDryRun = args.flags["dry-run"] === true;
+  const slug = (viewRun(ledger, parent).item ?? "").slice(RITUAL_PREFIX.length);
+  if (store.readItem("ritual", slug) === null) throw new UsageError(`run follow-up: no ritual '${slug}' in ${project}`);
+  const options: RunDueOptions = {
+    projects: [project],
+    only: slug,
+    isDryRun,
+    who: stringFlag(args, "who") ?? defaultWho(),
+    timeoutMs: timeoutFlag(args),
+    followUp,
+  };
+  if (isDryRun && !args.json) {
+    console.log(`follow-up of run ${parent}, ${String(plan.grants.length)} granted line(s):`);
+    for (const line of plan.grants) console.log(`  ${line}`);
+  }
+  const { report, cfg } = await runDue(options);
+  await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
+  await alertBatch(report, "run follow-up");
+  for (const failure of report.errors) console.error(`darius run follow-up: ${failure.project}: ${failure.error}`);
+  const entry = report.projects[0]?.rituals[0];
+  if (entry?.action === "skipped") {
+    console.error(`darius run follow-up: ${entry.reason ?? "skipped"}: ${entry.detail ?? ""}`);
+    return EXIT_FAILED;
+  }
   return runDueExitCode(report);
 }

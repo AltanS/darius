@@ -68,10 +68,11 @@ import { allowsSubagents } from "../harness/gate.ts";
 import { resolveProfile, type RepoProfiles, type Resolution } from "../harness/profile.ts";
 import { errorMessage } from "../runtime.ts";
 import { launchHeadless, type ChildEnv, type LaunchResult } from "../surface/headless.ts";
-import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr } from "../surface/herdr.ts";
+import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE } from "../surface/herdr.ts";
+import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
 import { harnessReadiness, type Readiness } from "./harness-check.ts";
-import { recordHold } from "./hold.ts";
-import { buildEnv, gateCommand, preflightGate, writeRunFiles } from "./launch.ts";
+import { acknowledgeRun, recordHold } from "./hold.ts";
+import { buildEnv, gateCommand, preflightGate, writeRunFiles, type PromptInput } from "./launch.ts";
 import { readSessionNote, resumeMessage, writeSessionNote } from "./resume.ts";
 import { missingTools } from "./tools.ts";
 import { FAILING_SKIPS, type BatchReport, type ProjectEntry, type RitualEntry, type RunEnd, type SkipReason } from "./report.ts";
@@ -98,6 +99,13 @@ export interface RunDueOptions {
    * of `now` apply; no new run starts.
    */
   resume?: { run: string };
+  /**
+   * `darius run follow-up`: a new run of ritual `only` that follows up the
+   * complete run `parent` and may run the granted lines (src/runner/follow-up.ts).
+   * The checks of `now` apply, plus: mode act, a linked checkout, a profile
+   * with permissions skip, and a herdr tab unless `headless`.
+   */
+  followUp?: FollowUp;
 }
 
 // --- run view: what the ledger says about one run -----------------------------
@@ -300,9 +308,29 @@ function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: str
     const state = ritualState(doc, readLedger(ctx.project), ctx.today);
     const open = state.heldRun ?? state.openRun;
     if (open !== undefined) return { blockedBy: open };
-    appendLine(ctx.project, { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run });
+    const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run };
+    const { followUp } = ctx.options;
+    if (followUp !== undefined) {
+      line.follow_up_of = followUp.parent;
+      line.approved = [...followUp.approved];
+      line.grants = [...followUp.grants];
+    }
+    appendLine(ctx.project, line);
     return { run };
   });
+}
+
+/**
+ * A parent whose questions wait for the operator is acknowledged once its
+ * follow-up started: starting it is the operator's decision. Any other
+ * parent is left as it is.
+ */
+function ackParent(ctx: ProjectContext, followUp: FollowUp, run: string): void {
+  const view = viewRun(readLedger(ctx.project), followUp.parent);
+  const isWaiting = view.outcome === "complete" && (view.result?.questions ?? 0) > 0 && view.acknowledged === undefined;
+  if (!isWaiting) return;
+  const what = followUp.approved.length > 0 ? `approved ${followUp.approved.join(", ")}` : `granted ${String(followUp.grants.length)} line(s)`;
+  acknowledgeRun(ctx.project, { run: followUp.parent, who: ctx.options.who, note: `follow-up ${run}, ${what}` });
 }
 
 /** The findings `run complete` refused (src/cli/run.ts), clipped, when the run dir has them. */
@@ -401,6 +429,25 @@ async function chooseSurface(profile: ResolvedProfile): Promise<SurfaceChoice> {
   return { surface: "headless", warning: `surface-fallback: ${unavailable}; ran headless` };
 }
 
+/** A follow-up is attended: a herdr tab, never a silent fallback; headless only when asked. */
+async function followUpSurface(followUp: FollowUp): Promise<SurfaceChoice | { refused: string }> {
+  if (followUp.headless === true) return { surface: "headless" };
+  const unavailable = await herdrUnavailable();
+  if (unavailable === null) return { surface: "herdr" };
+  return { refused: `a follow-up opens a herdr tab, and ${unavailable}; start herdr, or pass --headless` };
+}
+
+/**
+ * Why ritual `doc` cannot have a follow-up here, before its profile is
+ * known: the ritual must be in mode act. A report ritual never runs a
+ * write, granted or not.
+ */
+function followUpBlocker(doc: Document<Ritual>): RitualEntry | undefined {
+  const { slug, policy } = doc.header;
+  if (policy.mode === "act") return undefined;
+  return skipped(slug, "not-followable", `ritual ${slug} is in mode ${policy.mode}; set --mode act, or run the lines by hand`);
+}
+
 /** One ritual about to run: its item, run id, working dir, resolved profile and surface. */
 interface RunTarget {
   doc: Document<Ritual>;
@@ -469,17 +516,25 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const { doc, run } = target;
   const { profile, harness } = target.resolution;
   const project = ctx.project.name;
-  const handoff = latestHandoff(ctx.project, readLedger(ctx.project), doc.header.slug);
-  const prompt = { project, run, ritual: doc.header, body: doc.body, handoff };
+  const ledger = readLedger(ctx.project);
+  const handoff = latestHandoff(ctx.project, ledger, doc.header.slug);
+  const { followUp } = ctx.options;
+  const prompt: PromptInput = { project, run, ritual: doc.header, body: doc.body, handoff };
+  if (followUp !== undefined) prompt.followUp = followUpSection(followUp, parentResult(ctx.project, ledger, followUp.parent));
   // A skill can grant tools of its own (`allowed-tools`), so a ritual that
   // names one gets the full gate, which enforces `may` itself. So does one
   // that may start subagents: the gate must see each of their calls.
   const needsFull = doc.header.skill !== undefined || allowsSubagents(doc.header.policy.may);
   const scope = needsFull ? "full" : harness.gateScope(profile);
   const resume = ctx.options.resume === undefined ? undefined : resumePlan(ctx, target, harness);
-  const files = writeRunFiles(ctx.project.root, prompt, scope);
+  const granted = followUp === undefined ? undefined : { grants: followUp.grants, followUpOf: followUp.parent };
+  const files = writeRunFiles(ctx.project.root, prompt, scope, granted);
   const gate = gateCommand(files, harness);
-  const launch = harness.prepare({ ritual: doc.header, run, files, profile, scope, gate, ...resume });
+  const message =
+    followUp === undefined
+      ? {}
+      : { message: `Follow up run ${followUp.parent} of ritual ${doc.header.slug} now. Run id ${run}. Follow the protocol and the Follow-up section in your system prompt.` };
+  const launch = harness.prepare({ ritual: doc.header, run, files, profile, scope, gate, ...message, ...resume });
   const env = buildEnv({ project, run, files, harness });
   const broken = preflightGate(gate, harness, env);
   if (broken !== undefined) return { gateBroken: broken, files };
@@ -557,6 +612,7 @@ async function launchRun(ctx: ProjectContext, target: RunTarget, prepared: Prepa
     durationMs: launch.durationMs,
   };
   if (ctx.options.resume !== undefined) entry.resumed = true;
+  if (ctx.options.followUp !== undefined) entry.followUpOf = ctx.options.followUp.parent;
   if (questions.length > 0) entry.questions = questions;
   if (result !== undefined) entry.result = result;
   if (facts.sessionId !== undefined) entry.sessionId = facts.sessionId;
@@ -627,6 +683,7 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
       discard(prepared.files);
       return skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`);
     }
+    if (ctx.options.followUp !== undefined) ackParent(ctx, ctx.options.followUp, started.run);
     return await launchRun(ctx, { ...target, run: started.run }, prepared);
   } finally {
     await lease.handle.release();
@@ -637,14 +694,17 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
   const doc = ctx.project.readItem<Ritual>("ritual", slug);
   if (doc === null) return null;
   const ledger = readLedger(ctx.project);
-  const { now, resume } = ctx.options;
-  const isByHand = now !== undefined || resume !== undefined;
+  const { now, resume, followUp } = ctx.options;
+  const isByHand = now !== undefined || resume !== undefined || followUp !== undefined;
   if (!isByHand && !isCandidate(doc, ledger, ctx.today)) return null;
-  const blocked = blocker(doc, ledger, { today: ctx.today, host: ctx.host, isNow: isByHand, resuming: resume?.run });
+  const blocked = blocker(doc, ledger, { today: ctx.today, host: ctx.host, isNow: isByHand, resuming: resume?.run }) ?? (followUp === undefined ? undefined : followUpBlocker(doc));
   if (blocked !== undefined) return blocked;
   try {
     const where = projectWorkdir(ctx.project, ledger);
     if ("missing" in where) return skipped(slug, "no-workdir", where.detail);
+    if (followUp !== undefined && where.from === "store") {
+      return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
+    }
     const { mode, may } = doc.header.policy;
     const missing = missingTools(may, process.env.PATH ?? "");
     if (missing.length > 0) {
@@ -656,17 +716,30 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     }
     let resolution: Resolution;
     try {
-      const policy = now?.profile === undefined ? doc.header.policy : { ...doc.header.policy, profile: now.profile };
+      // A follow-up uses `[defaults] follow_up` of the checkout when set, else the ritual's profile.
+      const named = followUp === undefined ? now?.profile : where.marker?.defaultFollowUp;
+      const policy = named === undefined ? doc.header.policy : { ...doc.header.policy, profile: named };
       resolution = resolveProfile({ policy, repo: repoProfiles(where.marker), global: globalProfile(ctx) });
     } catch (cause) {
       return skipped(slug, "profile-invalid", errorMessage(cause));
     }
-    const surface = await chooseSurface(resolution.profile);
+    if (followUp !== undefined && resolution.profile.permissions !== "skip") {
+      const name = resolution.profile.name ?? "built-in";
+      return skipped(slug, "not-followable", `profile ${name} has permissions gated, and its allowlist would refuse the granted lines; use a profile with permissions skip ([defaults] follow_up)`);
+    }
+    const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp);
+    if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);
+    const surface = chosen;
     const ready = await readiness(ctx, resolution.harness);
     if (!ready.ready) return skipped(slug, "harness-unchecked", ready.detail);
     if (ctx.options.isDryRun) {
       const warnings = ready.pending === undefined ? [] : [ready.pending];
-      return { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
+      const entry: RitualEntry = { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
+      if (followUp !== undefined) {
+        entry.followUpOf = followUp.parent;
+        entry.detail = surface.surface === "herdr" ? `a herdr tab in workspace ${RUNS_WORKSPACE}, cwd ${where.dir}` : `headless, cwd ${where.dir}`;
+      }
+      return entry;
     }
     const proven = withSubagentProof(doc, ready, resolution.harness);
     if (proven === null) {

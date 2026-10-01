@@ -38,6 +38,7 @@ export type SkipReason =
   | "profile-invalid"
   | "not-active"
   | "not-resumable"
+  | "not-followable"
   | "error";
 
 /** How a started run ended, read back from the ledger after `claude` exited. */
@@ -51,6 +52,8 @@ export interface RitualEntry {
   run?: string;
   /** The run was held and went on (`darius run resume`), with the same run id. */
   resumed?: boolean;
+  /** The run follows up this complete run (`darius run follow-up`, 0.47.0). */
+  followUpOf?: string;
   end?: RunEnd;
   questions?: string[];
   sessionId?: string;
@@ -181,13 +184,17 @@ function describeLaunch(entry: RitualEntry): string {
 
 function describeEntry(entry: RitualEntry, project: string): string {
   const warnings = (entry.warnings ?? []).map((warning) => `; warning: ${warning}`).join("");
-  if (entry.action === "would-start") return `· ${entry.slug}: due, would start with ${describeLaunch(entry)} (dry run)${warnings}`;
+  if (entry.action === "would-start") {
+    const why = entry.followUpOf === undefined ? "due" : `follow-up of ${entry.followUpOf}`;
+    const where = entry.detail === undefined ? "" : `, ${entry.detail}`;
+    return `· ${entry.slug}: ${why}, would start with ${describeLaunch(entry)}${where} (dry run)${warnings}`;
+  }
   if (entry.action === "skipped") {
     const detail = entry.detail === undefined ? "" : `, ${entry.detail}`;
     return `· ${entry.slug}: skipped, ${entry.reason ?? "unknown"}${detail}`;
   }
   const mark = entry.end === "complete" ? "✓" : "!";
-  const resumed = entry.resumed === true ? "resumed, " : "";
+  const resumed = entry.resumed === true ? "resumed, " : entry.followUpOf === undefined ? "" : `follow-up of ${entry.followUpOf}, `;
   return `${mark} ${entry.slug}: ${resumed}${describeEnd(entry, project)}${warnings}`;
 }
 

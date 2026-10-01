@@ -95,6 +95,7 @@ function trackerVerbs(): string {
 
 const TAIL = `
 \`run now\` starts a ritual unattended in its own session and refuses a ritual with mode off. For that one, run \`run start\`, do the work, then \`run complete\`.
+\`run follow-up <run> --approve N\` is for a person: a new attended run that may run the command lines of question N as written.
 
 ## Examples
 
