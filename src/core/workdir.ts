@@ -57,6 +57,18 @@ function linkedElsewhere(ledger: readonly LedgerLine[]): LedgerLine | undefined 
   return ledger.findLast((one) => one.type === LINKED_LINE && isText(one.path));
 }
 
+/**
+ * The checkout dir of `project` on this host (a link, else an import's repo)
+ * that exists, or undefined. It never reads the marker, so a broken
+ * `.darius.toml` still finds its dir (reconcile, 0.54.0).
+ */
+export function checkoutDir(project: Project, ledger: readonly LedgerLine[]): string | undefined {
+  const linked = linkedDir(project.name);
+  if (linked !== undefined) return existsSync(linked) ? linked : undefined;
+  const imported = importedRepo(ledger);
+  return imported !== undefined && existsSync(imported) ? imported : undefined;
+}
+
 export function projectWorkdir(project: Project, ledger: readonly LedgerLine[]): Workdir {
   const linked = linkedDir(project.name);
   if (linked !== undefined) {

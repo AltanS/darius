@@ -46,6 +46,9 @@ function targetProject(args: ParsedArgs, source: string): string {
   if (marker !== null && marker.project !== project) {
     throw new UsageError(`${marker.file} says project = "${marker.project}", but the import targets "${project}"`);
   }
+  if (marker !== null && marker.version >= 3) {
+    throw new UsageError(`rituals come from ${marker.file} in a v3 project; import reads a legacy .tracker/ into a v2 project only`);
+  }
   return project;
 }
 

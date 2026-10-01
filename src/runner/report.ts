@@ -8,7 +8,7 @@
  * stdout, which under the systemd timer is the journal. The timer's text form
  * leaves out rituals skipped for `policy.mode: off`, rituals whose working
  * dir is on another host, and rituals pinned to another host: all three are
- * skipped by design and would repeat every hour. A person's `run now` names
+ * skipped by design and would repeat every 15 minutes. A person's `run now` names
  * every skip, these included.
  */
 
@@ -36,6 +36,10 @@ export type SkipReason =
   | "subagents-unproven"
   | "tool-missing"
   | "profile-invalid"
+  | "marker-invalid"
+  | "marker-dirty"
+  | "not-in-marker"
+  | "skill-missing"
   | "not-active"
   | "not-resumable"
   | "not-followable"
@@ -77,6 +81,8 @@ export interface ProjectEntry {
   syncBefore: string;
   syncAfter: string;
   rituals: RitualEntry[];
+  /** What reconcile says about the marker: a retired repo ritual named again (0.54.0). */
+  warnings?: string[];
 }
 
 export interface BatchReport {
@@ -99,8 +105,8 @@ export interface BatchReport {
  * `digest`: the first unattended batch of a local day lists every notable
  * entry, held runs and `failed-today` included, and says "all quiet" when
  * there is none, so a dead timer shows as a missing digest. `news`: every
- * later batch of that day lists only started runs and failures, so an
- * hourly timer does not repeat the same held run 23 times. `all`: every
+ * later batch of that day lists only started runs and failures, so the
+ * 15-minute timer does not repeat the same held run all day. `all`: every
  * entry, skips by design included, never "all quiet" (`run now`,
  * `run resume`, `--dry-run`): a person asked, so a skip is the answer.
  */
@@ -114,6 +120,9 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
   "profile-invalid",
   "subagents-unproven",
   "tool-missing",
+  "marker-invalid",
+  "marker-dirty",
+  "skill-missing",
 ]);
 
 /**
@@ -121,12 +130,20 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
  * a stderr tail or an exception text, and an alert never carries those: they
  * can hold environment text.
  */
-const OWN_DETAILS: ReadonlySet<string> = new Set(["harness-unchecked", "profile-invalid", "subagents-unproven", "tool-missing"]);
+const OWN_DETAILS: ReadonlySet<string> = new Set([
+  "harness-unchecked",
+  "profile-invalid",
+  "subagents-unproven",
+  "tool-missing",
+  "marker-invalid",
+  "marker-dirty",
+  "skill-missing",
+]);
 
 /**
  * The failing skips of one project in a batch, as alerts (src/core/alerts.ts,
  * 0.29.0). One per host, ritual, reason and day: every host's timer fires
- * each hour, and the key keeps each from repeating it. Skips that only mean
+ * every 15 minutes, and the key keeps each from repeating it. Skips that only mean
  * "not now" are no alerts.
  */
 export function skipAlerts(entry: ProjectEntry, batch: { date: string; host: string }): Alert[] {
@@ -143,7 +160,7 @@ export function skipAlerts(entry: ProjectEntry, batch: { date: string; host: str
 }
 
 /** Skips by design: the timer meets them on every batch, so its report leaves them out. */
-const QUIET_SKIPS: ReadonlySet<string> = new Set(["policy-off", "no-workdir", "other-host"]);
+const QUIET_SKIPS: ReadonlySet<string> = new Set(["policy-off", "no-workdir", "other-host", "not-in-marker", "lease-held"]);
 
 /** True when the entry is worth a line in the text report. In scope `all` every entry is. */
 function isNotable(entry: RitualEntry, scope: ReportScope): boolean {
@@ -215,6 +232,10 @@ export function formatReport(report: BatchReport, scope: ReportScope = "all"): s
     if (notable.length === 0) continue;
     lines.push(`darius run-due on ${report.host}, ${report.date}, project ${project.project}:`);
     for (const entry of notable) lines.push(`  ${describeEntry(entry, project.project)}`);
+  }
+  // The same warning would come every 15 minutes, so the news scope leaves it out.
+  for (const project of scope === "news" ? [] : report.projects) {
+    for (const warning of project.warnings ?? []) lines.push(`! ${project.project}: ${warning}`);
   }
   for (const check of report.harnessChecks ?? []) lines.push(describeCheck(check, report.host));
   for (const failure of report.errors) lines.push(`! ${failure.project}: ${failure.error}`);

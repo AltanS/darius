@@ -30,7 +30,7 @@ import { runCommand } from "../src/cli/run.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
 import { forwardsRun, isProtocolCommand, REPORT_MODE_WRITE_VERBS } from "../src/harness/gate.ts";
 import type { Command } from "../src/cli/registry.ts";
-import { reportScope, runDueCommand, verbArgv } from "../src/cli/run-due.ts";
+import { reportScope, runDueCommand, runDueExitCode, verbArgv } from "../src/cli/run-due.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
 import type { JsonValue, LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
@@ -39,7 +39,7 @@ import { localToday } from "../src/core/sweep.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
-import { failedToday as failedTodayRun, takeRitualLease } from "../src/runner/run-due.ts";
+import { failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
 import { planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
@@ -50,6 +50,7 @@ import { harnessCommand } from "../src/cli/harness.ts";
 import { readSummary, type RunResult } from "../src/core/result.ts";
 import { latestHandoff } from "../src/core/handoff.ts";
 import { missingTools, namedTools } from "../src/runner/tools.ts";
+import { commitAll, dirty as dirtyFile, initRepo, NO_GIT } from "./helpers/git.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-runner-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -107,6 +108,7 @@ if [ "$DARIUS_PROJECT" = _global ]; then
   printf '{"type":"result","is_error":false,"session_id":"fake-check","total_cost_usd":0.0004,"result":"checked"}\\n'
   exit 0
 fi
+[ -z "\${FAKE_LEASE_FILE:-}" ] || cp "$FAKE_LEASE_FILE" "$log/lease" 2>/dev/null || true
 case "\${FAKE_CLAUDE_MODE:-complete}" in
   complete)
     result="\${FAKE_CLAUDE_RESULT:-}"
@@ -427,7 +429,7 @@ test("run-due without --unattended or --dry-run is a usage error", async () => {
   await assert.rejects(runCli(runDueCommand, ["--project", "rd-off"]), /--unattended/);
 });
 
-test("a fresh local ritual lease blocks the run and exits 3; an expired one is taken over", async () => {
+test("a fresh local ritual lease blocks the run and exits 0 (quiet skip); an expired one is taken over", async () => {
   const project = "rd-lease";
   seedRitual(project);
   process.env.FAKE_CLAUDE_MODE = "complete";
@@ -438,7 +440,7 @@ test("a fresh local ritual lease blocks the run and exits 3; an expired one is t
   writeFileSync(leaseFile, JSON.stringify(fresh));
 
   const blocked = await runDueJson(project);
-  assert.equal(blocked.code, 3);
+  assert.equal(blocked.code, 0);
   assert.equal(ritualsOf(blocked.report)[0]?.reason, "lease-held");
   assert.equal(linesOf(project, "run.started").length, 0);
 
@@ -767,6 +769,162 @@ test("a mode above the checkout's max_mode is skipped as policy-capped, before a
 
   const dry = await runDueJson(project, ["--dry-run"]);
   assert.equal(ritualsOf(dry.report)[0]?.reason, "policy-capped");
+});
+
+// --- v3 marker: reconcile, schedule, skips (0.54.0) -------------------------------------------
+
+/** A v3 checkout of `project` with one ritual `daily` at 07:00 UTC from 2026-10-02, linked on this host. */
+function v3Checkout(project: string, opts: { skill?: boolean; git?: boolean; extra?: string } = {}): string {
+  const dir = join(SANDBOX, `${project}-checkout`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".darius.toml"), v3Marker(project, opts.extra ?? ""));
+  if (opts.skill !== false) {
+    mkdirSync(join(dir, ".claude", "skills", "daily"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "---\nname: daily\ndescription: daily\n---\nDo it.\n");
+  }
+  if (opts.git === true) {
+    initRepo(dir);
+    commitAll(dir, "init");
+  }
+  openProject(project, { create: true });
+  writeLink(project, dir);
+  return dir;
+}
+
+function v3Marker(project: string, extra: string): string {
+  return [
+    "v = 3",
+    `project = "${project}"`,
+    'max_mode = "act"',
+    'tz = "UTC"',
+    "",
+    "[rituals.daily]",
+    'title = "Daily"',
+    'cadence = "1d"',
+    'from = "2026-10-02"',
+    'at = "07:00"',
+    'skill = "daily"',
+    'mode = "report"',
+    'may = ["Bash(date)"]',
+    'timeout = "30m"',
+    extra,
+    "",
+  ].join("\n");
+}
+
+const BEFORE_AT = new Date("2026-10-02T06:50:00.000Z");
+const AFTER_AT = new Date("2026-10-02T07:05:00.000Z");
+
+async function batchAt(project: string, clock: Date, extra: Partial<RunDueOptions> = {}): Promise<{ code: number; report: RunDueJson & BatchReport }> {
+  const { report } = await runDue({ projects: [project], isDryRun: false, who: "timer", timeoutMs: 20 * 60_000, clock, ...extra });
+  return { code: runDueExitCode(report), report: { ...report, ...JSON.parse(JSON.stringify(report)) } };
+}
+
+test("a v3 checkout runs its ritual at `at`, not before; the run uses the mirror", async () => {
+  const project = "rd-v3-at";
+  v3Checkout(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const early = await batchAt(project, BEFORE_AT);
+  assert.equal(early.code, 0, JSON.stringify(early.report));
+  assert.deepEqual(ritualsOf(early.report), [], "not due before 07:00");
+  assert.equal(openProject(project).readItem<Ritual>("ritual", "daily")?.header.source, "repo", "reconcile ran first");
+  const dry = await batchAt(project, AFTER_AT, { isDryRun: true });
+  assert.equal(ritualsOf(dry.report)[0]?.action, "would-start");
+  assert.equal(linesOf(project, "run.started").length, 0);
+  const late = await batchAt(project, AFTER_AT);
+  assert.equal(late.code, 0, JSON.stringify(late.report));
+  assert.equal(ritualsOf(late.report)[0]?.end, "complete", JSON.stringify(late.report));
+  assert.equal(linesOf(project, "run.started").length, 1);
+});
+
+test("the ritual's timeout from git sets the lease TTL, not the unit's --timeout", async () => {
+  const project = "rd-v3-timeout";
+  v3Checkout(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const leaseFile = join(openProject(project).root, "leases", "ritual-daily.lock");
+  process.env.FAKE_LEASE_FILE = leaseFile;
+  try {
+    const started = Date.now();
+    const { report } = await batchAt(project, AFTER_AT);
+    const run = ritualsOf(report)[0]?.run ?? "";
+    const lease = JSON.parse(readFileSync(join(FAKE_LOG, run, "lease"), "utf8"));
+    const ttlMin = (Date.parse(lease.expires) - started) / 60_000;
+    assert.ok(ttlMin > 34.9 && ttlMin < 35.5, `30m from git plus 5m, not 20m plus 5m: ${String(ttlMin)}`);
+  } finally {
+    delete process.env.FAKE_LEASE_FILE;
+  }
+});
+
+test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch; by hand it warns and runs", { skip: NO_GIT }, async () => {
+  const project = "rd-v3-dirty";
+  const dir = v3Checkout(project, { git: true });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  await batchAt(project, BEFORE_AT);
+  dirtyFile(dir, ".darius.toml");
+  const timer = await batchAt(project, AFTER_AT);
+  const entry = ritualsOf(timer.report)[0];
+  assert.deepEqual([entry?.action, entry?.reason], ["skipped", "marker-dirty"], JSON.stringify(timer.report));
+  assert.equal(timer.code, 1);
+  assert.equal(linesOf(project, "run.started").length, 0);
+  const hand = await batchAt(project, AFTER_AT, { only: "daily", now: {} });
+  const ran = ritualsOf(hand.report)[0];
+  assert.equal(ran?.end, "complete", JSON.stringify(hand.report));
+  assert.ok((ran?.warnings ?? []).some((warning) => /\.darius\.toml has uncommitted changes; this run uses them/u.test(warning)));
+});
+
+test("a marker that does not parse skips every ritual as marker-invalid, with file:line, and fails the batch", async () => {
+  const project = "rd-v3-invalid";
+  const dir = v3Checkout(project);
+  await batchAt(project, BEFORE_AT);
+  writeFileSync(join(dir, ".darius.toml"), `${v3Marker(project, "")}bogus = 1\n`);
+  const { code, report } = await batchAt(project, AFTER_AT);
+  const entry = ritualsOf(report)[0];
+  assert.deepEqual([entry?.action, entry?.reason], ["skipped", "marker-invalid"], JSON.stringify(report));
+  assert.match(entry?.detail ?? "", /\.darius\.toml:\d+/u);
+  assert.equal(code, 1);
+  assert.equal(linesOf(project, "run.started").length, 0);
+});
+
+test("a ritual whose skill file is not in the checkout skips as skill-missing; with the file it runs", async () => {
+  const project = "rd-v3-skill";
+  const dir = v3Checkout(project, { skill: false });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const missing = await batchAt(project, AFTER_AT);
+  const entry = ritualsOf(missing.report)[0];
+  assert.deepEqual([entry?.action, entry?.reason], ["skipped", "skill-missing"], JSON.stringify(missing.report));
+  assert.match(entry?.detail ?? "", /\.claude\/skills\/daily\/SKILL\.md/u);
+  assert.equal(missing.code, 1);
+  assert.equal(linesOf(project, "run.started").length, 0);
+  mkdirSync(join(dir, ".claude", "skills", "daily"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md"), "---\nname: daily\ndescription: d\n---\n");
+  const found = await batchAt(project, AFTER_AT);
+  assert.equal(ritualsOf(found.report)[0]?.end, "complete", JSON.stringify(found.report));
+});
+
+test("a store ritual that a v3 marker does not name is skipped as not-in-marker, quietly, exit 0", async () => {
+  const project = "rd-v3-unmanaged";
+  v3Checkout(project);
+  seedRitual(project, { slug: "stray" });
+  const { code, report } = await batchAt(project, AFTER_AT);
+  const stray = ritualsOf(report).find((entry) => entry.slug === "stray");
+  assert.deepEqual([stray?.action, stray?.reason], ["skipped", "not-in-marker"], JSON.stringify(report));
+  assert.equal(code, 0, "a quiet skip");
+  assert.equal(linesOf(project, "run.started").length, 1, "the repo ritual still runs");
+});
+
+test("a retired repo ritual named again is not revived; run-due reports the warning in JSON and text", async () => {
+  const project = "rd-v3-revive";
+  const dir = v3Checkout(project);
+  await batchAt(project, BEFORE_AT);
+  const full = readFileSync(join(dir, ".darius.toml"), "utf8");
+  writeFileSync(join(dir, ".darius.toml"), full.slice(0, full.indexOf("[rituals.daily]")));
+  const gone = await batchAt(project, BEFORE_AT);
+  assert.deepEqual(gone.report.projects[0]?.warnings, undefined);
+  writeFileSync(join(dir, ".darius.toml"), full);
+  const back = await batchAt(project, AFTER_AT);
+  assert.deepEqual(back.report.projects[0]?.warnings, ["daily was retired; use a new slug"]);
+  assert.deepEqual(ritualsOf(back.report), [], "a retired ritual does not run");
+  assert.match(formatReport(back.report, "digest").join("\n"), /! rd-v3-revive: daily was retired; use a new slug/u);
 });
 
 // --- gate preflight ------------------------------------------------------------------
@@ -1268,7 +1426,7 @@ test("report scopes: the digest lists held and failed-today and says all quiet; 
   const digest = formatReport(batch([held, failedToday, off]), "digest").join("\n");
   assert.match(digest, /a: skipped, held/u);
   assert.match(digest, /b: skipped, failed-today/u);
-  assert.equal(formatReport(batch([held, failedToday]), "news").length, 0, "no hourly repeat of a held run");
+  assert.equal(formatReport(batch([held, failedToday]), "news").length, 0, "no repeat of a held run in the news");
   assert.match(formatReport(batch([held, missing]), "news").join("\n"), /c: skipped, tool-missing/u);
   assert.deepEqual(formatReport(batch([off]), "digest"), ["darius run-due on host-a, 2026-09-29: all quiet, 1 project(s), nothing due, held or failed"]);
   assert.match(formatReport(batch([off]), "all").join("\n"), /d: skipped, policy-off/u, "a person who asked hears every skip");

@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,6 +35,8 @@ import { readLedger } from "../src/core/ledger.ts";
 import { UsageError } from "../src/core/model.ts";
 import type { Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
+import { writeLink } from "../src/core/links.ts";
+import { commitAll, initRepo, NO_GIT } from "./helpers/git.ts";
 
 // Paths are read from the environment on every call, so setting them here,
 // after the imports, still keeps every write inside this throwaway dir.
@@ -699,3 +701,144 @@ test(
     assert.equal(completedLines.length, 1);
   },
 );
+
+// --- v3 projects (0.54.0): rituals live in .darius.toml --------------------------
+
+const V3_MARKER = (project: string): string =>
+  [
+    "v = 3",
+    `project = "${project}"`,
+    'tz = "UTC"',
+    "",
+    "[rituals.daily]",
+    'title = "Daily"',
+    'cadence = "1d"',
+    'at = "07:00"',
+    'skill = "daily"',
+    'mode = "report"',
+    "",
+  ].join("\n");
+
+/** A linked v3 checkout (git when `git` is set), and the store project. */
+function v3Project(project: string, opts: { git?: boolean } = {}): string {
+  const dir = join(SANDBOX, `${project}-checkout`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".darius.toml"), V3_MARKER(project));
+  if (opts.git === true) {
+    initRepo(dir);
+    commitAll(dir, "init");
+  }
+  openProject(project, { create: true });
+  writeLink(project, dir);
+  return dir;
+}
+
+test("ritual add is refused in a v3 project and names the table to add", async () => {
+  const project = "rc-v3-add";
+  v3Project(project);
+  await assert.rejects(
+    runCli(ritualCommand, project, ["add", "nightly", "--title", "Nightly", "--cadence", "1d"]),
+    { name: "UsageError", message: /rc-v3-add defines rituals in \.darius\.toml \(v = 3\); add \[rituals\.nightly\] there and commit/u },
+  );
+  assert.equal(openProject(project).readItem("ritual", "nightly"), null);
+});
+
+test("ritual reconcile mirrors the marker; list and show say repo; --dry-run writes nothing; --json carries the result", async () => {
+  const project = "rc-v3-reconcile";
+  v3Project(project);
+  const dry = await runCli(ritualCommand, project, ["reconcile", "--dry-run"]);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /would reconcile rc-v3-reconcile.*1 adopted, 0 updated, 0 unchanged, 0 retired/u);
+  assert.equal(openProject(project).readItem("ritual", "daily"), null, "a dry run writes nothing");
+  const real = await runCli(ritualCommand, project, ["reconcile"]);
+  assert.match(real.stdout, /reconciled rc-v3-reconcile.*1 adopted/u);
+  assert.equal(readRitual(project, "daily").source, "repo");
+  const list = await runCli(ritualCommand, project, ["list"]);
+  assert.match(list.stdout, /daily .*at=07:00 UTC .* repo /u);
+  const show = await runCli(ritualCommand, project, ["show", "daily"]);
+  assert.match(show.stdout, /source: repo \(no commit, host .*\)/u);
+  assert.match(show.stdout, /nextDue: \d{4}-\d{2}-\d{2} 07:00 UTC/u);
+  const json = JSON.parse((await runCli(ritualCommand, project, ["reconcile", "--json"])).stdout);
+  assert.deepEqual([json.ok, json.marker, json.unchanged, json.adopted], [true, "v3", ["daily"], []]);
+});
+
+test("ritual reconcile exits 2 for a v2 marker, a missing marker and a project with no checkout here; 1 for an invalid marker", async () => {
+  const none = "rc-v3-nocheckout";
+  openProject(none, { create: true });
+  await assert.rejects(runCli(ritualCommand, none, ["reconcile"]), /no checkout of rc-v3-nocheckout on this host/u);
+
+  const v2 = "rc-v2-reconcile";
+  const dir = v3Project(v2);
+  writeFileSync(join(dir, ".darius.toml"), `v = 2\nproject = "${v2}"\n`);
+  await assert.rejects(runCli(ritualCommand, v2, ["reconcile"]), { name: "UsageError", message: /not a v3 project/u });
+
+  const bad = "rc-v3-bad";
+  const badDir = v3Project(bad);
+  writeFileSync(join(badDir, ".darius.toml"), `${V3_MARKER(bad)}bogus = 1\n`);
+  const result = await runCli(ritualCommand, bad, ["reconcile"]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /\.darius\.toml:\d+/u);
+});
+
+test("ritual set on a repo ritual takes store flags and refuses git flags with file:line", async () => {
+  const project = "rc-v3-set";
+  const dir = v3Project(project);
+  await runCli(ritualCommand, project, ["reconcile"]);
+  const ok = await runCli(ritualCommand, project, ["set", "daily", "--owner", "ops", "--tag", "x", "--due", "2026-10-09", "--host", "host-b"]);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.deepEqual([readRitual(project, "daily").owner, readRitual(project, "daily").host], ["ops", "host-b"]);
+  const line = readFileSync(join(dir, ".darius.toml"), "utf8").split("\n").findIndex((row) => row === "[rituals.daily]") + 1;
+  for (const flag of [["--title", "x"], ["--cadence", "2d"], ["--mode", "act"], ["--may", "Read"], ["--model", "opus"], ["--max-turns", "3"], ["--skill", "s"]]) {
+    await assert.rejects(
+      runCli(ritualCommand, project, ["set", "daily", ...flag]),
+      { name: "UsageError", message: `${flag[0]} is defined in ${dir}/.darius.toml:${String(line)} ([rituals.daily]); edit the file and commit` },
+      flag[0],
+    );
+  }
+  await assert.rejects(runCli(ritualCommand, project, ["set", "daily"], "new body\n"), /--stdin is defined in .*\.darius\.toml:\d+ \(\[rituals\.daily\]\)/u);
+  assert.equal(readRitual(project, "daily").title, "Daily");
+});
+
+test("ritual set on an unmanaged ritual works as in v2 and warns; retire is refused for a repo ritual only", async () => {
+  const project = "rc-v3-unmanaged";
+  v3Project(project);
+  await runCli(ritualCommand, project, ["reconcile"]);
+  const stray = openProject(project);
+  stray.writeItem(
+    { header: { id: "01JAAAAAAAAAAAAAAAAAAAAAAB", kind: "ritual", slug: "stray", title: "Stray", created: "2026-10-01T00:00:00.000Z", updated: "2026-10-01T00:00:00.000Z", tags: [], cadence: "1d", anchor: "due", policy: { mode: "off", may: [], hold: [] } }, body: "x\n" },
+    { who: "test" },
+  );
+  const set = await runCli(ritualCommand, project, ["set", "stray", "--title", "Stray 2"]);
+  assert.equal(set.code, 0, set.stderr);
+  assert.match(set.stderr, /unmanaged: not in \.darius\.toml; it never runs unattended/u);
+  assert.equal(readRitual(project, "stray").title, "Stray 2");
+  const list = await runCli(ritualCommand, project, ["list", "--json"]);
+  assert.equal(JSON.parse(list.stdout).rituals.find((entry: { slug: string }) => entry.slug === "stray").source, "unmanaged");
+
+  await assert.rejects(
+    runCli(ritualCommand, project, ["retire", "daily"]),
+    { name: "UsageError", message: "remove [rituals.daily] from .darius.toml and commit; the next reconcile retires it" },
+  );
+  assert.equal((await runCli(ritualCommand, project, ["pause", "daily"])).code, 0, "pause stays a store verb");
+  assert.equal((await runCli(ritualCommand, project, ["retire", "stray"])).code, 0, "an unmanaged ritual retires as today");
+});
+
+test("ritual list warns when the mirror differs from this checkout, and when a retired slug is named again", { skip: NO_GIT }, async () => {
+  const project = "rc-v3-stale";
+  const dir = v3Project(project, { git: true });
+  await runCli(ritualCommand, project, ["reconcile"]);
+  const doc = openProject(project).readItem<Ritual>("ritual", "daily");
+  assert.ok(doc !== null);
+  openProject(project).writeItem({ header: { ...doc.header, def_hash: "0".repeat(64), def_host: "host-b", def_commit: "abc123" }, body: "" }, { who: "test" });
+  const list = await runCli(ritualCommand, project, ["list"]);
+  assert.match(list.stdout, /! mirror is from host-b \(commit abc123\), this checkout differs: darius ritual reconcile/u);
+
+  const full = readFileSync(join(dir, ".darius.toml"), "utf8");
+  writeFileSync(join(dir, ".darius.toml"), full.slice(0, full.indexOf("[rituals.daily]")));
+  await runCli(ritualCommand, project, ["reconcile"]);
+  writeFileSync(join(dir, ".darius.toml"), full);
+  const again = await runCli(ritualCommand, project, ["reconcile"]);
+  assert.match(again.stdout, /! daily was retired; use a new slug/u);
+  assert.match((await runCli(ritualCommand, project, ["list"])).stdout, /! daily was retired; use a new slug/u);
+  assert.deepEqual(JSON.parse((await runCli(ritualCommand, project, ["reconcile", "--json"])).stdout).warnings, ["daily was retired; use a new slug"]);
+});

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { projectNameFrom } from "../src/cli/init.ts";
+import { isZone } from "../src/core/zone.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const FIXTURE = join(import.meta.dirname, "fixtures", "tracker-mini");
@@ -95,7 +96,7 @@ function argvOf(line: string): string[] {
   return words.slice(1);
 }
 
-test("the done check: from nothing to darius next and run now --dry-run with the printed lines alone", () => {
+test("the done check: from nothing to darius next with the printed lines alone; a v3 repo points rituals at .darius.toml", () => {
   for (const runtime of ["node", "bun"]) {
     const at = host();
     const dir = repo(at, "my-app");
@@ -108,7 +109,7 @@ test("the done check: from nothing to darius next and run now --dry-run with the
       .map((line) => line.trim());
     assert.deepEqual(
       commands.map((line) => argvOf(line).slice(0, 2).join(" ")),
-      ["add milestone", "add spec", "next", "ritual add", "run now"],
+      ["add milestone", "add spec", "next"],
       init.stdout,
     );
     let last: CliResult | undefined;
@@ -117,7 +118,8 @@ test("the done check: from nothing to darius next and run now --dry-run with the
       assert.equal(last.code, 0, `${line}: ${last.stderr}`);
       if (line === "darius next") assert.match(last.stdout, /^\[ \] /u, "next names the first open task");
     }
-    assert.match(last?.stdout ?? "", /weekly-review: due, would start/u);
+    assert.match(init.stdout, /Rituals live in \.darius\.toml \(v = 3\): add \[rituals\.<slug>\]/u);
+    assert.doesNotMatch(init.stdout, /ritual add/u);
   }
 });
 
@@ -134,7 +136,11 @@ test("a fresh repo: marker, link, .tracker/ and the commit line; the root is the
     "✓ created .tracker/00-INDEX.md",
     'Commit .darius.toml and .tracker: git add .darius.toml .tracker && git commit -m "darius init"',
   ]);
-  assert.match(readFileSync(join(dir, ".darius.toml"), "utf8"), /^v = 2\nproject = "fresh"\n$/mu);
+  const marker = readFileSync(join(dir, ".darius.toml"), "utf8");
+  assert.match(marker, /^v = 3\nproject = "fresh"\ntz = "[^"]+"\n$/mu);
+  const zone = /tz = "([^"]+)"/u.exec(marker)?.[1] ?? "";
+  assert.equal(zone, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  assert.equal(isZone(zone), true);
   assert.ok(existsSync(join(dir, ".tracker", "00-INDEX.md")));
   const links = readFileSync(join(at.env.DARIUS_CONFIG_DIR ?? "", "links.toml"), "utf8");
   assert.match(links, new RegExp(`fresh = "${dir}"`, "u"));

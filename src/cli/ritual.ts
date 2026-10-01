@@ -1,5 +1,5 @@
 /**
- * `darius ritual add|list|show|set|pause|resume|retire`: item-file CRUD and
+ * `darius ritual add|list|show|set|pause|resume|retire|reconcile`: item-file CRUD and
  * lifecycle for rituals (docs/plan-tonight.md, T6b). Status (next due, held
  * runs) is never stored here: it is computed by `src/core/due.ts` (T6a) from
  * the ledger, the same way `list`/`show` read it for display.
@@ -24,6 +24,15 @@
  *   other host skip it as `other-host` (docs/concept.md, "Host pin"). NAME is
  *   the host id, `host` in that host's config.toml. `--host ""` clears it.
  *   ritual pause|resume|retire <slug> [--who W]
+ *   ritual reconcile [--project P] [--dry-run] [--json]
+ *
+ * v3 projects (0.54.0; docs/architecture/marker-v3.md, section 2): a project
+ * whose `.darius.toml` says `v = 3` defines its rituals there. `add` is refused
+ * (exit 2) and names the table to add. `set` accepts only the store-owned flags
+ * (`--host --owner --agent --tag --due --who`) on a repo ritual and names the
+ * file and line for any other. `retire` is refused for a repo ritual: remove
+ * the table and commit. `reconcile` mirrors the checkout's marker into the
+ * store by hand (run-due does it on every batch); `--dry-run` writes nothing.
  *
  * `--may`/`--hold` are repeatable (docs/concept.md, "Domain model"'s policy
  * YAML): giving the flag at all REPLACES the ritual's existing list, in the
@@ -40,19 +49,23 @@
  * refuses to append a further lifecycle change once one is read back.
  */
 
-import { appendLine, defaultWho, isHostId, readLedger } from "../core/ledger.ts";
-import { parseDate, ritualState, rollCadence, type RitualState } from "../core/due.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { appendLine, defaultWho, hostId, isHostId, readLedger } from "../core/ledger.ts";
+import { parseDate, ritualLifecycle, ritualState, rollCadence, type RitualState } from "../core/due.ts";
 import { handoffLines, latestHandoff } from "../core/handoff.ts";
-import { findMarker, isAboveCap, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
-import type { Policy, Ritual } from "../core/model.ts";
+import { findMarker, isAboveCap, MARKER_FILE, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
+import { mirrorHash, reconcileProject, type ReconcileResult } from "../core/reconcile.ts";
+import type { Document, Policy, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
-import { projectWorkdir } from "../core/workdir.ts";
+import { checkoutDir, projectWorkdir } from "../core/workdir.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "add | list | show | set | pause | resume | retire";
+const VERBS = "add | list | show | set | pause | resume | retire | reconcile";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -187,12 +200,52 @@ function assertUnderCap(args: ParsedArgs, project: Project, mode: Policy["mode"]
   );
 }
 
+// --- v3 projects: rituals live in .darius.toml ------------------------------------------
+
+/** A v3 marker on this host for `project`, else null. A marker that does not parse counts as none here. */
+function v3Marker(project: Project): Marker | null {
+  try {
+    const marker = projectMarker(project);
+    return marker !== null && marker.version >= 3 ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when a v3 marker names the slug, or reconcile already mirrored it (`source: "repo"`). */
+function isRepoRitual(doc: Document<Ritual> | null, slug: string, marker: Marker | null): boolean {
+  return doc?.header.source === "repo" || (marker?.rituals.some((ritual) => ritual.slug === slug) ?? false);
+}
+
+/** `<checkout>/.darius.toml:<line> ([rituals.<slug>])`, or the bare table name when no marker is on this host. */
+function definedAt(slug: string, marker: Marker | null): string {
+  const line = marker?.rituals.find((ritual) => ritual.slug === slug)?.line;
+  const where = marker === null ? MARKER_FILE : line === undefined ? marker.file : `${marker.file}:${String(line)}`;
+  return `${where} ([rituals.${slug}])`;
+}
+
+/** The `set` flags whose values live in git for a repo ritual. `--stdin` is the body, which a repo ritual does not have. */
+const GIT_FLAGS: readonly string[] = ["title", "cadence", "anchor", "skill", "mode", "may", "hold", "notes", "model", "max-turns", "profile", "stdin"];
+
+function givenGitFlag(args: ParsedArgs): string | undefined {
+  return GIT_FLAGS.find((name) => {
+    if (name === "stdin") return args.stdin !== undefined || args.flags.stdin !== undefined;
+    return (args.flags[name] !== undefined && args.flags[name] !== false) || args.repeated[name] !== undefined;
+  });
+}
+
 function formatPolicy(policy: Policy): string {
   const parts = [`mode=${policy.mode}`];
   if (policy.model !== undefined) parts.push(`model=${policy.model}`);
   if (policy.max_turns !== undefined) parts.push(`max_turns=${String(policy.max_turns)}`);
   if (policy.profile !== undefined) parts.push(`profile=${policy.profile}`);
   return parts.join(" ");
+}
+
+/** A v3 marker here, or a ritual that reconcile mirrored from one. */
+function isV3Project(project: Project): boolean {
+  if (v3Marker(project) !== null) return true;
+  return project.listItems("ritual").some((slug) => project.readItem<Ritual>("ritual", slug)?.header.source === "repo");
 }
 
 // --- add --------------------------------------------------------------------
@@ -208,6 +261,9 @@ function runAdd(args: ParsedArgs): number {
   const host = hostFlag(args);
   const policy = policyFromArgs(args, { mode: "off", may: [], hold: [] });
   const project = currentProject(args, { create: true });
+  if (isV3Project(project)) {
+    throw new UsageError(`${project.name} defines rituals in ${MARKER_FILE} (v = 3); add [rituals.${slug}] there and commit`);
+  }
   if (project.readItem("ritual", slug) !== null) {
     throw new UsageError(`ritual '${slug}' already exists in ${project.name}`);
   }
@@ -246,11 +302,29 @@ interface ListedRitual {
   lifecycle: RitualState["lifecycle"];
   /** The host the ritual is pinned to; absent when any host may run it. */
   host?: string;
+  /** `repo`: defined in `.darius.toml` (v3). `unmanaged`: a store ritual a v3 marker does not name. */
+  source?: "repo" | "unmanaged";
+  at?: string;
+  tz?: string;
+  /** What the operator should see: a stale mirror, a retired slug named again. */
+  warnings?: string[];
+}
+
+/** Warnings from comparing the local v3 marker with a store item (section 4.3 and the retired-stays-retired ruling). */
+function listWarnings(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, marker: Marker | null): string[] {
+  const { slug } = doc.header;
+  const defined = marker?.rituals.find((ritual) => ritual.slug === slug);
+  if (marker === null || defined === undefined || doc.header.source !== "repo") return [];
+  if (ritualLifecycle(ledger, slug) === "retired") return [`${slug} was retired; use a new slug`];
+  if (doc.header.def_hash === mirrorHash(marker, defined)) return [];
+  const commit = doc.header.def_commit === undefined ? "" : ` (commit ${doc.header.def_commit})`;
+  return [`mirror is from ${doc.header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
 }
 
 function listRituals(project: Project): ListedRitual[] {
   const ledger = readLedger(project);
   const now = new Date();
+  const marker = v3Marker(project);
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
@@ -263,6 +337,12 @@ function listRituals(project: Project): ListedRitual[] {
     };
     if (doc.header.cadence !== undefined) listed.cadence = doc.header.cadence;
     if (doc.header.host !== undefined) listed.host = doc.header.host;
+    if (doc.header.source === "repo") listed.source = "repo";
+    else if (marker !== null && !isRepoRitual(doc, slug, marker) && state.lifecycle !== "retired") listed.source = "unmanaged";
+    if (doc.header.at !== undefined) listed.at = doc.header.at;
+    if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
+    const warnings = listWarnings(doc, ledger, marker);
+    if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
   });
 }
@@ -277,11 +357,26 @@ function runList(args: ParsedArgs): number {
   if (rituals.length === 0) console.log(`no rituals in ${project.name}`);
   for (const ritual of rituals) {
     const host = ritual.host === undefined ? "" : ` host=${ritual.host}`;
+    const at = ritual.at === undefined ? "" : ` at=${ritual.at}${ritual.tz === undefined ? "" : ` ${ritual.tz}`}`;
+    const source = ritual.source === undefined ? "" : ` ${ritual.source}`;
     console.log(
-      `${ritual.slug.padEnd(28)} ${ritual.lifecycle.padEnd(8)} cadence=${ritual.cadence ?? "-"} anchor=${ritual.anchor}${host}  ${ritual.title}`,
+      `${ritual.slug.padEnd(28)} ${ritual.lifecycle.padEnd(8)} cadence=${ritual.cadence ?? "-"}${at} anchor=${ritual.anchor}${host}${source}  ${ritual.title}`,
     );
+    for (const warning of ritual.warnings ?? []) console.log(`! ${warning}`);
   }
   return 0;
+}
+
+/** `repo (commit X, host Y, <date>)`, `unmanaged` (v3 project, not in the marker) or `store`. */
+function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, marker: Marker | null): string {
+  const { header } = doc;
+  if (header.source === "repo") {
+    const commit = header.def_commit === undefined ? "no commit" : `commit ${header.def_commit}`;
+    const dirty = header.def_dirty === true ? ", uncommitted changes" : "";
+    const warnings = listWarnings(doc, ledger, marker).map((warning) => `\n  ! ${warning}`).join("");
+    return `repo (${commit}, host ${header.def_host ?? "?"}, ${header.def_at ?? "?"}${dirty})${warnings}`;
+  }
+  return marker !== null && !isRepoRitual(doc, header.slug, marker) ? "unmanaged (not in .darius.toml; it never runs unattended)" : "store";
 }
 
 function runShow(args: ParsedArgs): number {
@@ -298,10 +393,13 @@ function runShow(args: ParsedArgs): number {
   }
   console.log(`${doc.header.title} (${slug})`);
   console.log(`lifecycle: ${state.lifecycle}  cadence: ${doc.header.cadence ?? "-"}  anchor: ${doc.header.anchor}`);
-  console.log(`nextDue: ${state.nextDue ?? "-"}  isDue: ${String(state.isDue)}  overdueDays: ${String(state.overdueDays)}`);
+  const when = state.nextDue === undefined || doc.header.at === undefined ? "" : ` ${doc.header.at} ${doc.header.tz ?? "local"}`;
+  console.log(`nextDue: ${state.nextDue ?? "-"}${when}  isDue: ${String(state.isDue)}  overdueDays: ${String(state.overdueDays)}`);
   if (state.heldRun !== undefined) console.log(`held run: ${state.heldRun}`);
   if (state.openRun !== undefined) console.log(`open run: ${state.openRun}`);
   if (doc.header.skill !== undefined) console.log(`skill: ${doc.header.skill}`);
+  if (doc.header.timeout !== undefined) console.log(`timeout: ${doc.header.timeout}`);
+  console.log(`source: ${showSource(doc, ledger, v3Marker(project))}`);
   if (doc.header.host !== undefined) console.log(`host: ${doc.header.host} (other hosts skip it)`);
   console.log(`policy: ${formatPolicy(doc.header.policy)}`);
   if (doc.header.policy.may.length > 0) console.log(`  may: ${doc.header.policy.may.join(", ")}`);
@@ -327,6 +425,13 @@ function runSet(args: ParsedArgs): number {
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
   if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
+  const marker = v3Marker(project);
+  if (isRepoRitual(doc, slug, marker)) {
+    const flag = givenGitFlag(args);
+    if (flag !== undefined) throw new UsageError(`--${flag} is defined in ${definedAt(slug, marker)}; edit the file and commit`);
+  } else if (marker !== null) {
+    console.error("unmanaged: not in .darius.toml; it never runs unattended");
+  }
   const cadence = stringFlag(args, "cadence");
   if (cadence !== undefined) assertCadence(cadence);
   const due = stringFlag(args, "due");
@@ -375,6 +480,9 @@ function setLifecycle(args: ParsedArgs, state: "active" | "paused" | "retired"):
   if (current.lifecycle === "retired") {
     throw new UsageError(`ritual '${slug}' is retired (terminal); its lifecycle cannot change`);
   }
+  if (state === "retired" && isRepoRitual(doc, slug, v3Marker(project))) {
+    throw new UsageError(`remove [rituals.${slug}] from ${MARKER_FILE} and commit; the next reconcile retires it`);
+  }
   const who = stringFlag(args, "who") ?? defaultWho();
   appendLine(project, { who, type: "ritual.lifecycle", item: itemRef("ritual", slug), state });
   if (args.json) printJson({ ok: true, project: project.name, ritual: slug, lifecycle: state });
@@ -382,13 +490,47 @@ function setLifecycle(args: ParsedArgs, state: "active" | "paused" | "retired"):
   return 0;
 }
 
+// --- reconcile ------------------------------------------------------------------------
+
+function reconcileLines(project: string, result: ReconcileResult, isDry: boolean): string[] {
+  const where = result.commit === undefined ? "" : ` at commit ${result.commit}`;
+  const counts = [
+    `${String(result.adopted.length)} adopted`,
+    `${String(result.updated.length)} updated`,
+    `${String(result.unchanged.length)} unchanged`,
+    `${String(result.retired.length)} retired`,
+  ].join(", ");
+  const lines = [`${isDry ? "·" : "✓"} ${isDry ? "would reconcile" : "reconciled"} ${project}${where} on ${hostId()}: ${counts}`];
+  if (result.unmanaged.length > 0) lines.push(`  unmanaged: ${result.unmanaged.join(", ")} (not in ${MARKER_FILE}; they never run unattended)`);
+  if (result.dirty) lines.push(`! ${MARKER_FILE} has uncommitted changes; unattended runs skip this project's rituals until you commit them`);
+  for (const warning of result.warnings) lines.push(`! ${warning}`);
+  return lines;
+}
+
+function runReconcile(args: ParsedArgs): number {
+  const isDry = args.flags["dry-run"] === true;
+  const project = currentProject(args, { create: !isDry });
+  const checkout = checkoutDir(project, readLedger(project));
+  if (checkout === undefined) {
+    throw new UsageError(`no checkout of ${project.name} on this host: run darius link inside one`);
+  }
+  if (!existsSync(join(checkout, MARKER_FILE))) throw new UsageError(`not a v3 project: ${checkout} has no ${MARKER_FILE}`);
+  const result = reconcileProject(project, checkout, hostId(), new Date(), { dryRun: isDry });
+  if (result.marker === "v2") throw new UsageError(`not a v3 project: ${join(checkout, MARKER_FILE)} is below v = 3`);
+  if (args.json) printJson({ project: project.name, dryRun: isDry, ...result });
+  else if (!result.ok) console.error(`! ${result.error ?? "the marker does not parse"}`);
+  else for (const line of reconcileLines(project.name, result, isDry)) console.log(line);
+  return result.ok ? 0 : 1;
+}
+
 // --- dispatch ---------------------------------------------------------------------
 
 export const ritualCommand: Command = {
   name: "ritual",
-  summary: "add, list, show, edit and change lifecycle of rituals",
+  summary: "add, list, show, edit and change lifecycle of rituals; reconcile mirrors a v3 .darius.toml into the store",
   audience: "session",
-  usage: `ritual ${VERBS.replaceAll(" | ", "|")}`,
+  // In a v3 project add and retire are refused for repo rituals, and set takes host, owner, agent, tag and due only.
+  usage: `ritual ${VERBS.replaceAll(" | ", "|")} (v3 project: add refused; set host|owner|agent|tag|due only; retire refused)`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {
@@ -406,6 +548,8 @@ export const ritualCommand: Command = {
         return setLifecycle(args, "active");
       case "retire":
         return setLifecycle(args, "retired");
+      case "reconcile":
+        return runReconcile(args);
       default:
         throw new UsageError(`ritual needs a verb: ${VERBS}`);
     }

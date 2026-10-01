@@ -388,6 +388,43 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl --no-pager -o cat _UID=1001 _SYSTEMD_USER_UNIT=darius-vigil-sweep.service")
         assert '"project":"vm-ws","reason":"swept-today"' in journal, journal
 
+    with subtest("bob: a v3 marker is reconciled; its ritual is due at `at`, not before (0.54.0)"):
+        def write_v3(slug, when):
+            # `when` is a date(1) -d phrase. The grid starts on that instant's UTC date,
+            # so the occurrence is exactly that instant, whatever time the VM clock shows.
+            skill = f"---\nname: {slug}\ndescription: test\n---\nDo it.\n"
+            marker = (
+                'v = 3\nproject = "vm-v3"\nmax_mode = "report"\ntz = "UTC"\n\n'
+                f'[rituals.{slug}]\ntitle = "V3 test"\ncadence = "1d"\n'
+                f"from = \"$(date -u -d '{when}' +%F)\"\nat = \"$(date -u -d '{when}' +%H:%M)\"\n"
+                f'skill = "{slug}"\nmode = "report"\nmay = ["Bash(date)"]\n'
+            )
+            as_user("bob", f"mkdir -p ~/ws3/.claude/skills/{slug} && cat > ~/ws3/.claude/skills/{slug}/SKILL.md <<'EOF'\n{skill}EOF")
+            # An unquoted heredoc, so $(date ...) expands.
+            as_user("bob", f"cat > ~/ws3/.darius.toml <<EOF\n{marker}EOF")
+
+        def due_entries():
+            report = json.loads(as_user("bob", "~/.local/bin/darius run-due --dry-run --project vm-v3 --json"))
+            return report["projects"][0]["rituals"]
+
+        as_user("bob", "mkdir -p ~/ws3")
+        write_v3("soon", "1 minute ago")
+        print(as_user("bob", "cd ~/ws3 && ~/.local/bin/darius link"))
+        out = as_user("bob", "cd ~/ws3 && ~/.local/bin/darius ritual reconcile")
+        print(out)
+        assert "1 adopted" in out, out
+        entries = due_entries()
+        print(entries)
+        assert [(e["slug"], e["action"]) for e in entries] == [("soon", "would-start")], entries
+        # The marker now holds a ritual due in an hour. The old one left the file and is retired.
+        write_v3("later", "1 hour")
+        out = as_user("bob", "cd ~/ws3 && ~/.local/bin/darius ritual reconcile")
+        print(out)
+        assert "1 adopted" in out and "1 retired" in out, out
+        entries = due_entries()
+        print(entries)
+        assert entries == [], entries
+
     with subtest("bob: a second setup --systemd changes nothing"):
         out = as_user("bob", "XDG_RUNTIME_DIR=/run/user/1001 ~/darius/bin/darius setup --systemd")
         print(out)

@@ -195,6 +195,24 @@ test("retire: a repo ritual that left the marker is retired once, with a note", 
   assert.deepEqual(again.unmanaged, []);
 });
 
+test("retired stays retired: a slug that comes back in the marker is not revived, and a warning says so", { skip: NO_GIT }, () => {
+  const { project, dir } = setup({ git: true });
+  reconcileProject(project, dir, HOST, T1);
+  const full = readFileSync(join(dir, ".darius.toml"), "utf8");
+  writeFileSync(join(dir, ".darius.toml"), withoutWeekly(full));
+  commitAll(dir, "drop weekly");
+  reconcileProject(project, dir, HOST, T2);
+  const before = ritual(project, "weekly-audit");
+  writeFileSync(join(dir, ".darius.toml"), full.replace('title = "Weekly audit"', 'title = "Weekly audit, back"'));
+  commitAll(dir, "bring weekly back");
+  const again = reconcileProject(project, dir, HOST, T3);
+  assert.deepEqual(again.warnings, ["weekly-audit was retired; use a new slug"]);
+  assert.deepEqual([again.adopted, again.updated, again.retired], [[], ["daily-report"], []], "only the other ritual follows the new commit");
+  assert.equal(ritualLifecycle(readLedger(project), "weekly-audit"), "retired");
+  assert.deepEqual(ritual(project, "weekly-audit"), before, "the mirror is not rewritten");
+  assert.deepEqual(defined(project).filter((entry) => entry.slug === "weekly-audit").map((entry) => entry.change), ["adopted", "retired"]);
+});
+
 test("unmanaged: a store ritual the marker does not name is listed and never written", { skip: NO_GIT }, () => {
   const { project, dir } = setup({ git: true });
   project.writeItem({
@@ -250,7 +268,7 @@ test("v2: a v1 or v2 marker is a no-op", { skip: NO_GIT }, () => {
   });
   const ledgerBefore = readLedger(project).length;
   const result = reconcileProject(project, dir, HOST, T1);
-  assert.deepEqual(result, { ok: true, marker: "v2", dirty: false, adopted: [], updated: [], unchanged: [], retired: [], unmanaged: [] });
+  assert.deepEqual(result, { ok: true, marker: "v2", dirty: false, adopted: [], updated: [], unchanged: [], retired: [], unmanaged: [], warnings: [] });
   assert.equal(readLedger(project).length, ledgerBefore);
 });
 

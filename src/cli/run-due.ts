@@ -14,8 +14,9 @@
  *
  * Exit codes (probe contract): 0 every started run completed or held and no
  * project failed; 1 a run failed, a project errored, or the webhook post
- * failed; 3 nothing failed but a ritual was skipped because its lease was
- * held elsewhere or the bucket was unreachable; 2 usage.
+ * failed; 3 nothing failed but the bucket was unreachable for a lease; 2 usage.
+ * A lease held by another host is a quiet skip, exit 0 (0.54.0): with a
+ * 15-minute tick it happens on most batches of two linked hosts.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -84,9 +85,7 @@ export function parseRunDueOptions(args: ParsedArgs): RunDueOptions {
 
 export function runDueExitCode(report: BatchReport): number {
   if (!report.ok) return EXIT_FAILED;
-  const isLeaseSkip = report.projects.some((project) =>
-    project.rituals.some((ritual) => ritual.reason === "lease-held" || ritual.reason === "lease-offline"),
-  );
+  const isLeaseSkip = report.projects.some((project) => project.rituals.some((ritual) => ritual.reason === "lease-offline"));
   return isLeaseSkip ? EXIT_INCONCLUSIVE : EXIT_OK;
 }
 

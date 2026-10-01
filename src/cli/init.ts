@@ -40,7 +40,7 @@ import { importTracker, type ImportReport } from "../core/import.ts";
 import { scaffoldTracker } from "../core/legacy-entry.ts";
 import { defaultWho } from "../core/ledger.ts";
 import { readLinks } from "../core/links.ts";
-import { findMarker, MARKER_FILE, MARKER_VERSION } from "../core/marker.ts";
+import { findMarker, MARKER_FILE, MARKER_VERSION, readMarker } from "../core/marker.ts";
 import { findTrackerDir, projectDir } from "../core/paths.ts";
 import { isProjectName, openProject } from "../core/store.ts";
 import { tomlString } from "../core/toml.ts";
@@ -148,6 +148,8 @@ function markerText(project: string): string {
     "# darius: this repo's project. Commit this file; each host links its checkout with darius init.",
     `v = ${String(MARKER_VERSION)}`,
     `project = ${tomlString(project)}`,
+    // A v3 marker needs a root zone: the host's, which the operator may change.
+    `tz = ${tomlString(Intl.DateTimeFormat().resolvedOptions().timeZone)}`,
     "",
   ].join("\n");
 }
@@ -196,6 +198,15 @@ interface NextSteps {
   commands: string[];
 }
 
+/** True when the repo's marker is v3: rituals are defined there, and `ritual add` is refused. */
+function isV3(root: string): boolean {
+  try {
+    return (readMarker(root)?.version ?? 0) >= 3;
+  } catch {
+    return false;
+  }
+}
+
 /** The lines after the ✓ lines: what to run next. */
 function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracker: boolean }): NextSteps {
   const lines: string[] = [];
@@ -224,7 +235,11 @@ function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracke
     lines.push("See the next open task in .tracker/: darius next");
     commands.push("darius next");
   }
-  if (storedRituals(project) === 0) {
+  if (isV3(repo.root)) {
+    lines.push(
+      "Rituals live in .darius.toml (v = 3): add [rituals.<slug>] with title, cadence, skill and mode, commit it, then run darius ritual reconcile.",
+    );
+  } else if (storedRituals(project) === 0) {
     lines.push("Add a recurring ritual, then see what an unattended run would do:", ...ritual.map((line) => `  ${line}`));
     commands.push(...ritual);
   } else {

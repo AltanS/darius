@@ -50,8 +50,8 @@ import { parseToml, type TomlDocument, type TomlValue } from "./toml.ts";
 import { isZone } from "./zone.ts";
 
 export const MARKER_FILE = ".darius.toml";
-/** The `v` `darius init` writes. */
-export const MARKER_VERSION = 2;
+/** The `v` `darius init` writes (from 0.54.0: 3, with the host's `tz`). */
+export const MARKER_VERSION = 3;
 /** The newest `v` this darius reads. 1, 2 and 3 are all read. */
 export const MARKER_MAX_VERSION = 3;
 const PROFILES_VERSION = 2;

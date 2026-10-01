@@ -354,8 +354,9 @@ A repo defines its project in one committed file at its root. The bucket holds a
 
 ```toml
 # .darius.toml
-v = 2                               # format version
+v = 3                               # format version; darius init writes 3
 project = "acme-web"                 # the project this repo belongs to
+tz = "Europe/Berlin"                # required in v3; init writes this host's zone
 max_mode = "report"                 # optional: the highest ritual mode the timer may run here
 ```
 
@@ -457,6 +458,35 @@ It prints `ok: v3, 2 rituals, 1 policies`, or the first error as `file:line: mes
 Warnings do not change the exit code: a skill file missing in this checkout, a policy no ritual
 uses, a v3 marker with no rituals. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
 
+### How a v3 marker runs
+
+The timer fires every 15 minutes at `*:05/15` (:05, :20, :35, :50). A ritual with `at = "07:00"`
+starts at the first tick after 07:00 in its zone. A host that was off starts it at its first tick
+after boot. Before it judges a project, `run-due` reconciles the checkout's marker into the store:
+each `[rituals.<slug>]` becomes a store item that mirrors git. You can do the same by hand:
+
+```bash
+darius ritual reconcile             # mirror this checkout's marker into the store
+darius ritual reconcile --dry-run   # say what would change, write nothing
+```
+
+In a v3 project the file owns the ritual. `ritual add` is refused. `ritual set` changes only
+`--host`, `--owner`, `--agent`, `--tag` and `--due`. For any other flag it names the file and line
+to edit. `ritual retire` is refused for a repo ritual: remove the table and commit, and the next
+reconcile retires it. A retired slug stays retired. Use a new slug if you want it back.
+A store ritual that the marker does not name is `unmanaged`: it never runs from the timer.
+
+A ritual's `timeout` replaces the unit's `--timeout` for that run, and the lease follows it.
+`run-due` skips a ritual, and says why in its report:
+
+| Skip | Meaning | Fails the batch |
+|---|---|---|
+| `marker-invalid` | `.darius.toml` does not parse. Every ritual of the project skips. | yes |
+| `marker-dirty` | `.darius.toml` has uncommitted changes. `run now` warns and runs instead. | yes |
+| `skill-missing` | `.claude/skills/<skill>/SKILL.md` is not in the checkout. | yes |
+| `not-in-marker` | A store ritual that a v3 marker does not name. | no |
+| `lease-held` | Another host holds the ritual lease. Exit 0. | no |
+
 `darius init` links through `darius link`, which you can also run by hand:
 
 ```bash
@@ -539,7 +569,7 @@ the full reference.
 
 - `darius setup [--systemd] [--remote]`: link the CLI, write the config, install the timers, create the bucket.
 - `darius update [vX.Y.Z] [--check] [--major] [--hosts h1,h2]`: move this host, or other hosts, to a release.
-- `darius ritual add|list|show|set|pause|resume|retire`: recurring work with a cadence and a policy.
+- `darius ritual add|list|show|set|pause|resume|retire|reconcile`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, or print its SessionStart hook.

@@ -7,6 +7,8 @@
  *
  *   1. Sync when `[remote]` is configured. Offline or a held project lease is
  *      not an error: the pull half already ran or the local state is used.
+ *      Then reconcile the checkout's v3 marker into the store
+ *      (src/core/reconcile.ts; a dry run classifies and writes nothing).
  *   2. For each ritual that is active and due, skip it when its policy mode
  *      is `off`, it is pinned to another host (`other-host`: its `host`
  *      field names a host other than `hostId()`), its latest run is held,
@@ -19,13 +21,19 @@
  *      Then find the project's working dir on this host (src/core/workdir.ts):
  *      none here skips it as `no-workdir`, and a mode above the checkout's
  *      `.darius.toml` `max_mode` skips it as `policy-capped`. Both are decided
- *      before a run starts, so neither leaves an open run behind.
+ *      before a run starts, so neither leaves an open run behind. A v3 project
+ *      adds four more skips (docs/architecture/marker-v3.md, 4.6):
+ *      `marker-invalid` (the marker does not parse), `marker-dirty` (unattended
+ *      only: `.darius.toml` has uncommitted changes; by hand it is a warning),
+ *      `not-in-marker` (a store ritual the marker does not name) and
+ *      `skill-missing` (the ritual's skill file is not in the checkout).
  *   3. Take the ritual lease (src/core/lease.ts): S3
  *      `<project>/leases/ritual-<slug>.json` when a remote is configured, else
  *      an O_EXCL file `<store>/<project>/leases/ritual-<slug>.lock`. A lease
- *      expires after the run timeout plus 5 minutes; a lease held by a dead
+ *      expires after the run timeout (the ritual's git `timeout`, else the
+ *      unit's `--timeout`) plus 5 minutes; a lease held by a dead
  *      process on this host is stale at once. When the lease cannot be taken
- *      the ritual is skipped and the report says so.
+ *      the ritual is skipped (`lease-held`, quiet, exit 0) and the report says so.
  *   4. Write the run files, let the harness adapter (src/harness/) wire the
  *      gate, and run the gate preflight: a gate that does not deny a
  *      synthetic call skips the ritual as `gate-broken` before any run
@@ -44,7 +52,7 @@
  * (src/runner/resume.ts).
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadConfigIfPresent, type Config } from "../core/config.ts";
@@ -53,16 +61,17 @@ import { ritualState } from "../core/due.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { takeLease, type LeaseOutcome } from "../core/lease.ts";
-import { isAboveCap, type Marker } from "../core/marker.ts";
+import { isAboveCap, MARKER_FILE, type Marker } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
+import { reconcileProject } from "../core/reconcile.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
 import { localToday } from "../core/sweep.ts";
 import { syncProject } from "../core/sync.ts";
 import { ulid } from "../core/ulid.ts";
-import { projectWorkdir } from "../core/workdir.ts";
+import { checkoutDir, projectWorkdir } from "../core/workdir.ts";
 import type { HarnessAdapter, HarnessLaunch, ResolvedProfile, ResultFacts, RunFiles } from "../harness/contract.ts";
 import { allowsSubagents } from "../harness/gate.ts";
 import { resolveProfile, type RepoProfiles, type Resolution } from "../harness/profile.ts";
@@ -87,6 +96,8 @@ export interface RunDueOptions {
   isDryRun: boolean;
   who: string;
   timeoutMs: number;
+  /** The batch start; tests fix it. Absent means the real time. */
+  clock?: Date;
   /**
    * `darius run now`: start `only` whether it is due or not, and whatever
    * failed today. A held or open run still blocks it, and `max_mode` still
@@ -248,8 +259,23 @@ interface ProjectContext {
   now: Date;
   today: string;
   options: RunDueOptions;
+  /** What the checkout's marker said at the start of this project's batch. Absent without a checkout here. */
+  repo?: RepoState;
   /** Shared by every project of the batch: one version check per harness, and the report that lists the checks. */
   batch: { readiness: Map<string, Readiness>; report: BatchReport };
+}
+
+/** The checkout's marker as this batch sees it. */
+interface RepoState {
+  checkout: string;
+  /** The marker's version; undefined when it does not parse. */
+  version?: number;
+  /** The parse error with `file:line`, when it does not parse. */
+  error?: string;
+  /** `.darius.toml` has uncommitted changes. */
+  dirty: boolean;
+  /** The marker's own ritual names, when it is v3. */
+  named: ReadonlySet<string>;
 }
 
 function skipped(slug: string, reason: SkipReason, detail?: string | undefined): RitualEntry {
@@ -298,6 +324,43 @@ function resumeBlocker(slug: string, view: RunView, run: string): RitualEntry | 
   if (view.phase !== "held") return skipped(slug, "not-resumable", `run ${run} is not held (phase: ${view.phase ?? "unknown"})`);
   if (!view.isAnswered) return skipped(slug, "not-resumable", `run ${run} has no answer since it was held`);
   return undefined;
+}
+
+/**
+ * The v3 skips (section 4.6), decided before the working dir is read, so a
+ * broken marker never reaches `projectWorkdir`. By hand a dirty marker is no
+ * skip: the caller adds the warning.
+ */
+function repoBlocker(ctx: ProjectContext, doc: Document<Ritual>, isByHand: boolean): RitualEntry | undefined {
+  const { repo } = ctx;
+  if (repo === undefined) return undefined;
+  const { slug } = doc.header;
+  if (repo.error !== undefined) return skipped(slug, "marker-invalid", repo.error);
+  if (repo.version === undefined || repo.version < 3) return undefined;
+  if (doc.header.source !== "repo" && !repo.named.has(slug)) {
+    return isByHand ? undefined : skipped(slug, "not-in-marker", `not in ${MARKER_FILE}; it never runs unattended`);
+  }
+  if (repo.dirty && !isByHand) return skipped(slug, "marker-dirty", `${MARKER_FILE} has uncommitted changes: commit or revert them`);
+  return undefined;
+}
+
+/** The warning a by-hand run of a v3 ritual carries when its marker is dirty. */
+function dirtyWarnings(ctx: ProjectContext, isByHand: boolean): string[] {
+  const dirty = isByHand && ctx.repo?.dirty === true && (ctx.repo.version ?? 0) >= 3;
+  return dirty ? [`${MARKER_FILE} has uncommitted changes; this run uses them`] : [];
+}
+
+/** The skill file of a ritual, relative to the checkout. */
+function skillFile(skill: string): string {
+  return join(".claude", "skills", skill, "SKILL.md");
+}
+
+function hasSkillFile(dir: string, skill: string): boolean {
+  try {
+    return statSync(join(dir, skillFile(skill))).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** True when the ritual is active and due today, whatever its policy says. */
@@ -463,6 +526,8 @@ interface RunTarget {
   surface: SurfaceChoice;
   /** What the report should say about this run that did not stop it. */
   warnings: string[];
+  /** The run budget: the ritual's git `timeout`, else the unit's. The lease follows it. */
+  timeoutMs: number;
 }
 
 /** A run ready to launch on either surface. */
@@ -580,8 +645,7 @@ function envNumber(name: string, fallback: number): number {
 }
 
 function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): Promise<LaunchResult> {
-  const { run, cwd, doc } = target;
-  const { timeoutMs } = ctx.options;
+  const { run, cwd, doc, timeoutMs } = target;
   if (target.surface.surface === "headless") {
     return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs });
   }
@@ -679,7 +743,7 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
     if (resume === undefined) rmSync(files.dir, { recursive: true, force: true });
   };
   const lease = await takeRitualLease(
-    { project: ctx.project, slug, run, s3: ctx.s3, ttlMs: ctx.options.timeoutMs + LEASE_MARGIN_MS },
+    { project: ctx.project, slug, run, s3: ctx.s3, ttlMs: target.timeoutMs + LEASE_MARGIN_MS },
     ctx.host,
   );
   if ("blocked" in lease) return skipped(slug, lease.blocked === "lease-offline" ? "lease-offline" : "lease-held", lease.detail);
@@ -713,9 +777,17 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
   if (!isByHand && !isCandidate(doc, ledger, ctx.now)) return null;
   const blocked = blocker(doc, ledger, { now: ctx.now, today: ctx.today, host: ctx.host, isNow: isByHand, resuming: resume?.run }) ?? (followUp === undefined ? undefined : followUpBlocker(doc));
   if (blocked !== undefined) return blocked;
+  const repoSkip = repoBlocker(ctx, doc, isByHand);
+  if (repoSkip !== undefined) return repoSkip;
   try {
     const where = projectWorkdir(ctx.project, ledger);
     if ("missing" in where) return skipped(slug, "no-workdir", where.detail);
+    const { skill } = doc.header;
+    if (skill !== undefined && where.from !== "store" && !hasSkillFile(where.dir, skill)) {
+      return skipped(slug, "skill-missing", `${skillFile(skill)} is not in ${where.dir}`);
+    }
+    const timeoutMs = where.marker?.rituals.find((ritual) => ritual.slug === slug)?.timeoutMs ?? ctx.options.timeoutMs;
+    const markerWarnings = dirtyWarnings(ctx, isByHand);
     if (followUp !== undefined && where.from === "store") {
       return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
     }
@@ -747,7 +819,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     const ready = await readiness(ctx, resolution.harness);
     if (!ready.ready) return skipped(slug, "harness-unchecked", ready.detail);
     if (ctx.options.isDryRun) {
-      const warnings = ready.pending === undefined ? [] : [ready.pending];
+      const warnings = [...markerWarnings, ...(ready.pending === undefined ? [] : [ready.pending])];
       const entry: RitualEntry = { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
       if (followUp !== undefined) {
         entry.followUpOf = followUp.parent;
@@ -760,13 +832,33 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       const retry = `darius harness check ${resolution.harness.id}`;
       return skipped(slug, "subagents-unproven", `an act ritual with subagents needs the gate check of ${resolution.harness.id} ${ready.version} to prove them on this host; run ${retry}`);
     }
-    return await runRitual(ctx, { doc: proven.doc, cwd: where.dir, resolution, surface, warnings: proven.warnings });
+    return await runRitual(ctx, { doc: proven.doc, cwd: where.dir, resolution, surface, warnings: [...markerWarnings, ...proven.warnings], timeoutMs });
   } catch (cause) {
     return skipped(slug, "error", errorMessage(cause));
   }
 }
 
 // --- projects -------------------------------------------------------------------------
+
+/**
+ * Reads the checkout's marker for this batch and mirrors a v3 marker into
+ * the store before any ritual is judged (section 4.1). A dry run classifies
+ * the same way and writes nothing. A store error is the project's error line.
+ */
+function reconcileStep(ctx: ProjectContext, entry: ProjectEntry): void {
+  const checkout = checkoutDir(ctx.project, readLedger(ctx.project));
+  if (checkout === undefined) return;
+  const repo: RepoState = { checkout, dirty: false, named: new Set() };
+  const result = reconcileProject(ctx.project, checkout, ctx.host, ctx.now, { dryRun: ctx.options.isDryRun });
+  repo.dirty = result.dirty;
+  if (!result.ok) repo.error = result.error ?? `${checkout}: ${MARKER_FILE} does not parse`;
+  else {
+    repo.version = result.marker === "v3" ? 3 : 2;
+    repo.named = new Set([...result.adopted, ...result.updated, ...result.unchanged]);
+  }
+  if (result.warnings.length > 0) entry.warnings = result.warnings;
+  ctx.repo = repo;
+}
 
 async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<ProjectEntry> {
   const remote = { s3: ctx.s3, cfg };
@@ -775,6 +867,7 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
     entry.syncBefore = await syncStep(ctx.project, remote);
     await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
   }
+  reconcileStep(ctx, entry);
   const slugs = ctx.project.listItems("ritual").filter((slug) => ctx.options.only === undefined || slug === ctx.options.only);
   for (const slug of slugs) {
     const ritual = await handleRitual(ctx, slug);
@@ -792,7 +885,7 @@ export async function runDue(options: RunDueOptions): Promise<{ report: BatchRep
   const cfg = loadConfigIfPresent();
   const s3 = remoteClient(cfg);
   const host = hostId();
-  const now = new Date();
+  const now = options.clock ?? new Date();
   const today = localToday(now);
   const report: BatchReport = { ok: true, date: today, host, dryRun: options.isDryRun, projects: [], errors: [] };
   const global = await openGlobal({ s3, cfg }, options.isDryRun, report);

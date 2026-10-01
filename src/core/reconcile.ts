@@ -53,6 +53,8 @@ export interface ReconcileResult {
   unchanged: string[];
   retired: string[];
   unmanaged: string[];
+  /** Things the operator should know: a retired repo ritual named again in the marker. */
+  warnings: string[];
 }
 
 /** The `change` of a `ritual.defined` ledger line. */
@@ -207,6 +209,7 @@ function emptyResult(marker: ReconcileResult["marker"], at: { commit?: string; d
     unchanged: [],
     retired: [],
     unmanaged: [],
+    warnings: [],
   };
   if (at.commit !== undefined) result.commit = at.commit;
   return result;
@@ -247,8 +250,17 @@ function reconcileOne(existing: Document<Ritual> | null, definition: Definition,
  * Mirrors the v3 marker in `checkout` into `project`'s store (section 4.2).
  * `host` is the reconciling host (`hostId()` in production); `now` stamps
  * `updated`, `def_at` and the ledger lines. Store I/O errors throw.
+ * `dryRun` classifies and reports the same way and writes nothing
+ * (`darius ritual reconcile --dry-run`, run-due's dry run).
  */
-export function reconcileProject(project: Project, checkout: string, host: string, now: Date): ReconcileResult {
+export function reconcileProject(
+  project: Project,
+  checkout: string,
+  host: string,
+  now: Date,
+  options: { dryRun?: boolean } = {},
+): ReconcileResult {
+  const isDry = options.dryRun === true;
   const read = readCheckoutMarker(checkout, project);
   if ("error" in read) {
     const result = emptyResult("invalid", { dirty: false });
@@ -271,18 +283,24 @@ export function reconcileProject(project: Project, checkout: string, host: strin
   project.withLock(() => {
     const lines: LedgerLineInput[] = [];
     const named = new Set(definitions.map((definition) => definition.ritual.slug));
+    const ledger = readLedger(project);
     for (const definition of definitions) {
       const { slug } = definition.ritual;
-      const step = reconcileOne(project.readItem<Ritual>("ritual", slug), definition, at);
+      const existing = project.readItem<Ritual>("ritual", slug);
+      // Architect ruling: a retired repo ritual stays retired. It is not mirrored again.
+      if (existing?.header.source === "repo" && ritualLifecycle(ledger, slug) === "retired") {
+        result.warnings.push(`${slug} was retired; use a new slug`);
+        continue;
+      }
+      const step = reconcileOne(existing, definition, at);
       if (step.change === null) {
         result.unchanged.push(slug);
         continue;
       }
-      project.writeItem(step.doc, { who: defaultWho() });
+      if (!isDry) project.writeItem(step.doc, { who: defaultWho() });
       result[step.change].push(slug);
       lines.push(definedLine(slug, step.change, { hash: definition.hash, at }));
     }
-    const ledger = readLedger(project);
     for (const slug of project.listItems("ritual")) {
       if (named.has(slug)) continue;
       const doc = project.readItem<Ritual>("ritual", slug);
@@ -296,7 +314,7 @@ export function reconcileProject(project: Project, checkout: string, host: strin
       lines.push(definedLine(slug, "retired", { hash: doc.header.def_hash, at }));
       result.retired.push(slug);
     }
-    appendLines(project, lines);
+    if (!isDry) appendLines(project, lines);
   });
   return result;
 }

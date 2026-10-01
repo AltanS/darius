@@ -288,3 +288,15 @@ test("the command prints one JSON object with --json and refuses a missing path"
 
   await assert.rejects(importCommand.run({ positional: [], flags: { project: name }, json: false, repeated: {} }), UsageError);
 });
+
+test("import refuses a v3 project: rituals come from .darius.toml", async () => {
+  const name = freshProject();
+  const repo = join(sandbox, `${name}-repo`);
+  cpSync(FIXTURE, join(repo, ".tracker"), { recursive: true });
+  writeFileSync(join(repo, ".darius.toml"), `v = 3\nproject = "${name}"\ntz = "UTC"\n`);
+  await assert.rejects(
+    importCommand.run({ positional: [join(repo, ".tracker")], flags: {}, json: false, repeated: {} }),
+    { name: "UsageError", message: /rituals come from .*\.darius\.toml in a v3 project/u },
+  );
+  assert.equal(existsSync(join(sandbox, "state", name)), false, "nothing was written");
+});
