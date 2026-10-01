@@ -297,7 +297,7 @@ interface SelftestStatusReport {
 function ritualStatus(project: Project, ledger: LedgerLine[]): SelftestRitualStatus | undefined {
   const doc = project.readItem<Ritual>("ritual", HEARTBEAT.slug);
   if (doc === null) return undefined;
-  const state = ritualState(doc, ledger, localToday());
+  const state = ritualState(doc, ledger, { now: new Date() });
   const status: SelftestRitualStatus = { slug: HEARTBEAT.slug, lifecycle: state.lifecycle, isDue: state.isDue };
   if (state.nextDue !== undefined) status.nextDue = state.nextDue;
   return status;

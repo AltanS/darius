@@ -1,14 +1,22 @@
 /**
  * Ritual status, computed from facts: the ritual's header plus its ledger
  * lines. Nothing here is stored (docs/concept.md, "Domain model": "Store
- * facts, compute status"). Pure: no fs, no clock. `today` comes in.
+ * facts, compute status"). Pure: no fs. The clock comes in (`Clock`).
  *
- * DATES. Every date here is a calendar date, YYYY-MM-DD, in the operator's
- * LOCAL timezone. A ledger `at` is a UTC instant; its date is taken with the
- * local getters, never `toISOString().slice(0, 10)`, which is the UTC date and
+ * DATES AND INSTANTS (docs/architecture/marker-v3.md, section 3). Every date
+ * here is a calendar date, YYYY-MM-DD, in the ritual's zone: its `tz`, else
+ * the clock's `hostTz`, else the host's local zone. Only v1 and v2 store
+ * rituals have no `tz`. A ledger `at` is a UTC instant; its date is taken in
+ * that zone, never with `toISOString().slice(0, 10)`, which is the UTC date and
  * lands on the wrong day for runs completed near midnight. Calendar arithmetic
  * (`rollCadence`, day counts) runs on UTC midnight, where no day is 23 or 25
  * hours long. YYYY-MM-DD compares chronologically as a plain string.
+ *
+ * Every grid date has an occurrence instant: the date at `at` in the zone, or
+ * at 00:00 when `at` is absent (`occurrenceAt`). A ritual is due from that
+ * instant on. A completion instant satisfies every occurrence at or before
+ * it. For a date-only ritual this is the date rule: a completion on date D
+ * satisfies the occurrence of D, because D 00:00 is not after it.
  *
  * SEMANTICS (docs/plan-tonight.md, "Due computation", made precise):
  *
@@ -21,16 +29,20 @@
  * - A follow-up run (its `run.started` carries `follow_up_of`, 0.47.1) is
  *   never a completion: the operator started it by hand, out of schedule.
  *   An open or held follow-up still blocks a new run like any other.
- * - `anchor: "completion"`: next due = completion date + cadence, always.
+ * - `anchor: "completion"`: next due = completion date (in the zone) +
+ *   cadence, always. Before the first completion, `from` is the first due.
  * - `anchor: "due"`: the schedule is a grid, origin + k * cadence. A
- *   completion on or after the pending due satisfies every grid date up to
- *   and including its own date; next due is the first grid date after it. So
- *   a late run does not push the schedule back, and a ritual missed for
- *   several periods is due ONCE, with `overdueDays` counted from the oldest
- *   missed date (next due is never rolled toward today). A completion BEFORE
- *   the pending due is an extra run: it moves nothing. Two runs on one day
- *   therefore never skip a period.
- *   The grid starts at the first completion's date. A reschedule that
+ *   completion at or after the pending occurrence satisfies every occurrence
+ *   up to and including its own instant; next due is the first occurrence
+ *   after it. So a late run does not push the schedule back, and a ritual
+ *   missed for several periods is due ONCE, with `overdueDays` counted from
+ *   the oldest missed date (next due is never rolled toward today). A
+ *   completion BEFORE the pending occurrence is an extra run: it moves
+ *   nothing. Two runs on one day therefore never skip a period. A ritual at
+ *   23:00 that completes at 00:10 the next day satisfies the 23:00 before it
+ *   only; the next day's 23:00 stays due.
+ *   The grid starts at `from` when set, else at the first completion's date
+ *   (its first occurrence after the completion is the next due). A reschedule that
  *   becomes the pending due moves the grid origin to that date once a run
  *   satisfies it. Month steps count from the origin (Jan 31 + 1m = Feb 28,
  *   + 2m = Mar 31), so clamping does not drift the day of month.
@@ -39,24 +51,49 @@
  *   early one does not). The latest pending line wins against earlier ones,
  *   then nextDue = max(rolled date, rescheduled due), per the plan. A
  *   reschedule can therefore push a due date out, never pull it in.
- * - Never completed, no reschedule: due today when the ritual has a cadence,
- *   never due without one.
+ * - Never completed, no reschedule, no `from`: due today (at `at`) when the
+ *   ritual has a cadence, never due without one. `from` needs a cadence.
  * - Completed, no cadence, no later reschedule: dormant, never due again.
  * - Runs: the latest run (by its first line) in state `held` sets `heldRun`
  *   and forces `isDue: false`. A run started or resumed and not yet held or
  *   completed is `openRun`; it does not change `isDue`, the runner decides.
- * - `overdueDays` = days from `nextDue` to `today` when the ritual is active
- *   and `today` is past `nextDue`, else 0. It is kept for a held run, so a
+ * - `isDue`: no held run, and the clock is at or past `nextDueAt`.
+ * - `overdueDays` = days from `nextDue` to today (in the zone) when the
+ *   ritual is active and today is past `nextDue`, else 0. It is kept for a held run, so a
  *   display can say "held, 3 days overdue".
  */
 
 import type { Document, JsonValue, LedgerLine, Ritual } from "./model.ts";
+import { dateIn, parseHhmm, zoned } from "./zone.ts";
+
+/** The instant a computation judges by. `hostTz` undefined = the host's local zone. */
+export interface Clock {
+  now: Date;
+  hostTz?: string;
+}
+
+/** The schedule fields of a ritual (docs/architecture/marker-v3.md, section 3.1). */
+export interface Schedule {
+  cadence?: string;
+  anchor: "due" | "completion";
+  /** `HH:MM`, the wall time of every occurrence; 00:00 when absent. */
+  at?: string;
+  /** IANA zone name; the host's zone when absent (v1 and v2 rituals only). */
+  tz?: string;
+  /** YYYY-MM-DD, the grid origin. */
+  from?: string;
+}
 
 export interface RitualState {
   slug: string;
   lifecycle: "active" | "paused" | "retired";
   lastCompleted?: string;
+  /** The pending occurrence's date in the ritual's zone. */
   nextDue?: string;
+  /** The pending occurrence's instant, ISO. */
+  nextDueAt?: string;
+  /** The ritual's `tz`, or "local". */
+  zone: string;
   isDue: boolean;
   overdueDays: number;
   heldRun?: string;
@@ -84,7 +121,13 @@ interface RunSummary {
   openRun?: string;
 }
 
-interface Schedule {
+/** Where occurrences fall: `at` (00:00 when absent) in `tz` (host local when undefined). */
+interface When {
+  at: string | undefined;
+  tz: string | undefined;
+}
+
+interface Progress {
   grid?: Grid;
   rescheduled?: string;
   lastCompleted?: string;
@@ -94,6 +137,7 @@ const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const CADENCE = /^(\d+)([dwm])?$/;
 const DAY_MS = 86_400_000;
 const DAYS_PER_WEEK = 7;
+const MIDNIGHT = "00:00";
 /** A daily ritual caught up across 270 years. Past this the input is corrupt. */
 const MAX_GRID_STEPS = 100_000;
 const LIFECYCLES: readonly Lifecycle[] = ["active", "paused", "retired"];
@@ -109,31 +153,50 @@ export function rollCadence(from: string, cadence: string): string {
   return shiftDate(from, parseCadence(cadence), 1);
 }
 
-export function ritualState(doc: Document<Ritual>, ledger: LedgerLine[], today: string): RitualState {
+export function ritualState(doc: Document<Ritual & Schedule>, ledger: LedgerLine[], clock: Clock): RitualState {
   const ritual = doc.header;
-  parseDate(today);
+  const { now } = clock;
+  if (Number.isNaN(now.getTime())) throw new Error("invalid clock (now is not a date)");
+  if (ritual.from !== undefined) parseDate(ritual.from);
+  if (ritual.at !== undefined) parseHhmm(ritual.at);
+  const when: When = { at: ritual.at, tz: ritual.tz ?? clock.hostTz };
   const lines = ledger
     .filter((line) => line.item === `ritual/${ritual.slug}`)
     .toSorted((left, right) => compareText(left.id, right.id));
   const cadence = ritual.cadence === undefined || ritual.cadence === "" ? undefined : parseCadence(ritual.cadence);
   const lifecycle = readLifecycle(lines);
   const runs = readRuns(lines);
-  const base: RitualState = { slug: ritual.slug, lifecycle, isDue: false, overdueDays: 0 };
-  const schedule = readSchedule(lines, { anchor: ritual.anchor, cadence });
-  if (schedule.lastCompleted !== undefined) base.lastCompleted = schedule.lastCompleted;
+  const base: RitualState = { slug: ritual.slug, lifecycle, zone: ritual.tz ?? "local", isDue: false, overdueDays: 0 };
+  const progress = readProgress(lines, { anchor: ritual.anchor, cadence, from: ritual.from, when });
+  if (progress.lastCompleted !== undefined) base.lastCompleted = progress.lastCompleted;
   if (runs.heldRun !== undefined) base.heldRun = runs.heldRun;
   if (runs.openRun !== undefined) base.openRun = runs.openRun;
   if (lifecycle !== "active") return base;
 
-  const nextDue = pendingDue(schedule, cadence) ?? firstDue(schedule, { cadence, today });
+  const today = dateIn(now, when.tz);
+  const nextDue = pendingDue(progress, cadence) ?? firstDue(progress, { cadence, today });
   if (nextDue === undefined) return base;
+  const nextDueAt = occurrenceAt(nextDue, when.at, when.tz);
   const overdueDays = Math.max(0, daysBetween(nextDue, today));
-  return { ...base, nextDue, isDue: runs.heldRun === undefined && today >= nextDue, overdueDays };
+  const isDue = runs.heldRun === undefined && now.getTime() >= nextDueAt.getTime();
+  return { ...base, nextDue, nextDueAt: nextDueAt.toISOString(), isDue, overdueDays };
 }
 
-/** Never completed and never rescheduled: due today if there is a cadence at all. */
-function firstDue(schedule: Schedule, context: { cadence: Cadence | undefined; today: string }): string | undefined {
-  if (schedule.lastCompleted !== undefined) return undefined;
+/**
+ * The instant of the occurrence on `date`: `at` (00:00 when absent) in `tz`,
+ * in the host's local zone when `tz` is undefined (v1 and v2 rituals only).
+ */
+export function occurrenceAt(date: string, at: string | undefined, tz: string | undefined): Date {
+  const hhmm = at ?? MIDNIGHT;
+  if (tz !== undefined) return zoned(date, hhmm, tz);
+  const [year, month, day] = parseDate(date);
+  const [hour, minute] = parseHhmm(hhmm);
+  return new Date(year, month - 1, day, hour, minute);
+}
+
+/** Never completed, never rescheduled, no `from`: due today if there is a cadence at all. */
+function firstDue(progress: Progress, context: { cadence: Cadence | undefined; today: string }): string | undefined {
+  if (progress.lastCompleted !== undefined) return undefined;
   if (context.cadence === undefined) return undefined;
   return context.today;
 }
@@ -184,67 +247,84 @@ export function followUpRuns(lines: readonly LedgerLine[]): Set<string> {
   return runs;
 }
 
-function readSchedule(lines: LedgerLine[], ritual: { anchor: Ritual["anchor"]; cadence: Cadence | undefined }): Schedule {
-  let schedule: Schedule = {};
+function readProgress(
+  lines: LedgerLine[],
+  ritual: { anchor: Ritual["anchor"]; cadence: Cadence | undefined; from: string | undefined; when: When },
+): Progress {
+  const { cadence, from, when } = ritual;
+  let progress: Progress = from === undefined || cadence === undefined ? {} : { grid: { origin: from, steps: 0 } };
   const followUps = followUpRuns(lines);
   for (const line of lines) {
     if (line.type === "ritual.rescheduled") {
       const due = requireText(line, "due");
       parseDate(due);
-      schedule.rescheduled = due;
+      progress.rescheduled = due;
       continue;
     }
     if (line.type !== "run.completed") continue;
     if (isText(line.run) && followUps.has(line.run)) continue;
     const outcome = requireText(line, "outcome");
     if (outcome !== "complete") continue;
-    schedule = applyCompletion(schedule, { completed: localDate(line), anchor: ritual.anchor, cadence: ritual.cadence });
+    progress = applyCompletion(progress, { completedAt: instantOf(line), anchor: ritual.anchor, cadence, when });
   }
-  return schedule;
+  return progress;
 }
 
 function applyCompletion(
-  schedule: Schedule,
-  event: { completed: string; anchor: Ritual["anchor"]; cadence: Cadence | undefined },
-): Schedule {
-  const { completed, cadence } = event;
+  progress: Progress,
+  event: { completedAt: Date; anchor: Ritual["anchor"]; cadence: Cadence | undefined; when: When },
+): Progress {
+  const { completedAt, cadence, when } = event;
+  const completed = dateIn(completedAt, when.tz);
   if (cadence === undefined) return { lastCompleted: completed };
   if (event.anchor === "completion") return { grid: { origin: completed, steps: 1 }, lastCompleted: completed };
 
-  const pending = pendingDue(schedule, cadence);
-  if (pending === undefined) return { grid: { origin: completed, steps: 1 }, lastCompleted: completed };
-  if (pending > completed) return { ...schedule, lastCompleted: completed };
-  const grid = pendingGrid(schedule, cadence);
-  return { grid: advancePast({ grid, cadence, date: completed }), lastCompleted: completed };
+  const pending = pendingDue(progress, cadence);
+  if (pending === undefined) {
+    const grid = firstAfter({ grid: { origin: completed, steps: 0 }, cadence, when, instant: completedAt });
+    return { grid, lastCompleted: completed };
+  }
+  if (occurrenceAt(pending, when.at, when.tz).getTime() > completedAt.getTime()) {
+    return { ...progress, lastCompleted: completed };
+  }
+  const satisfied = pendingGrid(progress, cadence);
+  const grid = firstAfter({
+    grid: { origin: satisfied.origin, steps: satisfied.steps + 1 },
+    cadence,
+    when,
+    instant: completedAt,
+  });
+  return { grid, lastCompleted: completed };
 }
 
 /** The grid whose current step IS the pending due: a reschedule that won becomes the new origin. */
-function pendingGrid(schedule: Schedule, cadence: Cadence): Grid {
-  const rolled = schedule.grid === undefined ? undefined : gridDate(schedule.grid, cadence);
-  const { rescheduled } = schedule;
+function pendingGrid(progress: Progress, cadence: Cadence): Grid {
+  const rolled = progress.grid === undefined ? undefined : gridDate(progress.grid, cadence);
+  const { rescheduled } = progress;
   if (rescheduled !== undefined && (rolled === undefined || rescheduled > rolled)) {
     return { origin: rescheduled, steps: 0 };
   }
-  if (schedule.grid === undefined) throw new Error("no pending due to advance from");
-  return schedule.grid;
+  if (progress.grid === undefined) throw new Error("no pending due to advance from");
+  return progress.grid;
 }
 
 /** The pending due: max(grid date, latest reschedule since the last completion). */
-function pendingDue(schedule: Schedule, cadence: Cadence | undefined): string | undefined {
-  const rolled = schedule.grid === undefined || cadence === undefined ? undefined : gridDate(schedule.grid, cadence);
-  const { rescheduled } = schedule;
+function pendingDue(progress: Progress, cadence: Cadence | undefined): string | undefined {
+  const rolled = progress.grid === undefined || cadence === undefined ? undefined : gridDate(progress.grid, cadence);
+  const { rescheduled } = progress;
   if (rolled === undefined) return rescheduled;
   if (rescheduled === undefined) return rolled;
   return rescheduled > rolled ? rescheduled : rolled;
 }
 
-function advancePast(context: { grid: Grid; cadence: Cadence; date: string }): Grid {
-  const { grid, cadence, date } = context;
-  for (let steps = grid.steps + 1; steps <= grid.steps + MAX_GRID_STEPS; steps += 1) {
+/** The first step at or after `grid.steps` whose occurrence instant is after `instant`. */
+function firstAfter(context: { grid: Grid; cadence: Cadence; when: When; instant: Date }): Grid {
+  const { grid, cadence, when, instant } = context;
+  for (let steps = grid.steps; steps <= grid.steps + MAX_GRID_STEPS; steps += 1) {
     const next = { origin: grid.origin, steps };
-    if (gridDate(next, cadence) > date) return next;
+    if (occurrenceAt(gridDate(next, cadence), when.at, when.tz).getTime() > instant.getTime()) return next;
   }
-  throw new Error(`cadence grid from ${grid.origin} did not pass ${date} within ${MAX_GRID_STEPS} steps`);
+  throw new Error(`cadence grid from ${grid.origin} did not pass ${instant.toISOString()} within ${MAX_GRID_STEPS} steps`);
 }
 
 function gridDate(grid: Grid, cadence: Cadence): string {
@@ -293,11 +373,11 @@ function daysBetween(from: string, to: string): number {
   return Math.round((Date.UTC(toYear, toMonth - 1, toDay) - Date.UTC(fromYear, fromMonth - 1, fromDay)) / DAY_MS);
 }
 
-/** The operator's local calendar date of a ledger line's instant. */
-function localDate(line: LedgerLine): string {
+/** The instant of a ledger line. */
+function instantOf(line: LedgerLine): Date {
   const instant = new Date(line.at);
   if (Number.isNaN(instant.getTime())) throw new Error(`ledger line ${line.id}: invalid at "${line.at}"`);
-  return formatDate([instant.getFullYear(), instant.getMonth() + 1, instant.getDate()]);
+  return instant;
 }
 
 function formatUtcDate(date: Date): string {

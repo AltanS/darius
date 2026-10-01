@@ -161,7 +161,7 @@ test("the imported facts give the due state the legacy tracker had", () => {
   const state = (slug: string): ReturnType<typeof ritualState> => {
     const doc = project.readItem<Ritual>("ritual", slug);
     assert.ok(doc !== null);
-    return ritualState(doc, ledger, TODAY);
+    return ritualState(doc, ledger, { now: new Date(`${TODAY}T12:00:00`) });
   };
   assert.deepEqual(
     [state("weekly-check").nextDue, state("weekly-check").isDue, state("weekly-check").lastCompleted],

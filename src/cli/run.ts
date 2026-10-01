@@ -55,7 +55,6 @@ import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { signoffBanner, type SignoffInput } from "../core/signoff.ts";
-import { localToday } from "../core/sweep.ts";
 import { cutResult, FINDINGS_MAX, parseResult, readSummary, summarizeResult, type ResultSummary, type RunResult } from "../core/result.ts";
 import { getBlobText, itemRef, openProject, putBlob, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
@@ -131,7 +130,7 @@ function runStart(args: ParsedArgs): number {
 
   const result = project.withLock((): StartResult => {
     const ledger = readLedger(project);
-    const state = ritualState(doc, ledger, localToday());
+    const state = ritualState(doc, ledger, { now: new Date() });
     const openRun = state.heldRun ?? state.openRun;
     if (openRun !== undefined) return { started: false, openRun };
     const runId = ulid();

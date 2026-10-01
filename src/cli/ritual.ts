@@ -46,7 +46,6 @@ import { handoffLines, latestHandoff } from "../core/handoff.ts";
 import { findMarker, isAboveCap, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
 import type { Policy, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
-import { localToday } from "../core/sweep.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { projectWorkdir } from "../core/workdir.ts";
@@ -251,11 +250,11 @@ interface ListedRitual {
 
 function listRituals(project: Project): ListedRitual[] {
   const ledger = readLedger(project);
-  const today = localToday();
+  const now = new Date();
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
-    const state = ritualState(doc, ledger, today);
+    const state = ritualState(doc, ledger, { now });
     const listed: ListedRitual = {
       slug,
       title: doc.header.title,
@@ -291,7 +290,7 @@ function runShow(args: ParsedArgs): number {
   const doc = project.readItem<Ritual>("ritual", slug);
   if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
   const ledger = readLedger(project);
-  const state = ritualState(doc, ledger, localToday());
+  const state = ritualState(doc, ledger, { now: new Date() });
   const handoff = latestHandoff(project, ledger, slug);
   if (args.json) {
     printJson({ project: project.name, header: doc.header, body: doc.body, status: state, handoff });
@@ -372,7 +371,7 @@ function setLifecycle(args: ParsedArgs, state: "active" | "paused" | "retired"):
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
   if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
-  const current = ritualState(doc, readLedger(project), localToday());
+  const current = ritualState(doc, readLedger(project), { now: new Date() });
   if (current.lifecycle === "retired") {
     throw new UsageError(`ritual '${slug}' is retired (terminal); its lifecycle cannot change`);
   }

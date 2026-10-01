@@ -281,13 +281,13 @@ test("ritual set --due re-arms a ritual without a cadence, and refuses a day tha
     assert.ok(found !== null);
     return found;
   };
-  assert.equal(ritualState(doc(), readLedger(openProject(project)), "2026-10-01").nextDue, undefined, "never due without a cadence");
+  assert.equal(ritualState(doc(), readLedger(openProject(project)), { now: new Date("2026-10-01T12:00:00") }).nextDue, undefined, "never due without a cadence");
 
   const set = await runCli(ritualCommand, project, ["set", "on-demand", "--due", "2026-10-05"]);
   assert.equal(set.code, 0, set.stderr);
   const lines = readLedger(openProject(project)).filter((line) => line.type === "ritual.rescheduled");
   assert.deepEqual(lines.map((line) => [line.item, line.due]), [["ritual/on-demand", "2026-10-05"]]);
-  const state = ritualState(doc(), readLedger(openProject(project)), "2026-10-06");
+  const state = ritualState(doc(), readLedger(openProject(project)), { now: new Date("2026-10-06T12:00:00") });
   assert.equal(state.nextDue, "2026-10-05");
   assert.equal(state.isDue, true);
 
