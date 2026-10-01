@@ -135,6 +135,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                   { label: "Run", value: <code className="break-all">{row.run}</code> },
                   { label: "Item", value: <code>{row.item}</code> },
                   { label: "Ended", value: row.endedAt === null ? <span className="text-muted">not yet</span> : <Time iso={row.endedAt} /> },
+                  ...(run.skillHash === null ? [] : [{ label: "Skill hash", value: <code title={run.skillHash}>{run.skillHash.slice(0, 12)}</code> }]),
                   ...(run.followUpOf === null ? [] : [{ label: "Follows up", value: <Link to={runPath(project, run.followUpOf)}><code>{shortRun(run.followUpOf)}</code></Link> }]),
                   ...(run.followUps.length === 0
                     ? []

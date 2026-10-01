@@ -16746,6 +16746,13 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 								children: "not yet"
 							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.endedAt })
 						},
+						...run.skillHash === null ? [] : [{
+							label: "Skill hash",
+							value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+								title: run.skillHash,
+								children: run.skillHash.slice(0, 12)
+							})
+						}],
 						...run.followUpOf === null ? [] : [{
 							label: "Follows up",
 							value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
@@ -17479,7 +17486,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-C_A_VKmV.js",
+			"module": "/assets/run-Cp4kdUqT.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17526,8 +17533,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-adfdd411.js",
-	"version": "adfdd411",
+	"url": "/assets/manifest-1da18de3.js",
+	"version": "1da18de3",
 	"sri": void 0
 };
 //#endregion

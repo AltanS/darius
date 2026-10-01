@@ -201,6 +201,7 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
           ],
     followUpOf: null,
     followUps: [],
+    skillHash: null,
   };
 }
 
@@ -839,6 +840,16 @@ test("a follow-up links its parent, and the parent lists its follow-ups", async 
   const parent = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUps: [CHILD] }));
   assert.match(textOf(parent), new RegExp(`Follow-ups${CHILD.slice(-8)}`, "u"));
   assert.ok(parent.includes(`href="/p/demo/runs/${CHILD}"`));
+});
+
+test("the run page shows the skill hash, 12 characters with the full value in the title, and no row without one", async () => {
+  const hash = "0123456789abcdef".repeat(4);
+  const withHash: WebContext = { ...context, run: (name, run) => (name === "demo" && run === DONE ? { ...runDetail(RUNS[2]!), skillHash: hash } : null) };
+  const shown = await readPage(`/p/demo/runs/${DONE}`, withHash);
+  assert.ok(shown.includes(`<code title="${hash}">${hash.slice(0, 12)}</code>`), "short code, full title");
+  assert.match(textOf(shown), /Skill hash0123456789ab/u);
+  const bare: WebContext = { ...context, run: (name, run) => (name === "demo" && run === DONE ? runDetail(RUNS[2]!) : null) };
+  assert.equal((await readPage(`/p/demo/runs/${DONE}`, bare)).includes("Skill hash"), false);
 });
 
 test("a result without questions shows no question card and no ack command", async () => {

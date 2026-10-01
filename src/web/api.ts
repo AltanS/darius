@@ -515,6 +515,8 @@ export interface RunDetail {
   followUpOf: string | null;
   /** The runs that follow this one up, oldest first. */
   followUps: string[];
+  /** The sha256 hex of the ritual skill's SKILL.md at launch (0.56.0); null for a run that recorded none. */
+  skillHash: string | null;
 }
 
 /** The command lines of one question a follow-up may approve. */

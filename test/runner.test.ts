@@ -924,6 +924,13 @@ test("run.started records skill_hash, the sha256 of SKILL.md; run show prints it
   assert.match(shown.stdout, new RegExp(`^skill hash ${expected.slice(0, 12)}$`, "mu"));
   const json = JSON.parse((await runCli(runCommand, ["show", String(started?.run), "--project", project, "--json"])).stdout);
   assert.equal(json.skill_hash, expected);
+  assert.equal(runDetail(project, String(started?.run))?.skillHash, expected, "the web API carries the full value");
+});
+
+test("the web run detail has no skill hash for a run that recorded none", () => {
+  const project = "rd-no-skill-hash";
+  const { run } = seedRunningRun(project, "report");
+  assert.equal(runDetail(project, run)?.skillHash, null);
 });
 
 test("a run whose skill file cannot be read still starts, with no skill_hash", { skip: process.getuid?.() === 0 }, async () => {

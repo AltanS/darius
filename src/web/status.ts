@@ -373,6 +373,7 @@ export function runDetail(projectName: string, run: string): RunDetail | null {
     result,
     followUpOf: followUpOf(ledger, run) ?? null,
     followUps: followUpsOf(ledger, run),
+    skillHash: text(ledger.find((line) => line.run === run && line.type === "run.started")?.skill_hash),
   };
 }
 
