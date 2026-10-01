@@ -330,3 +330,14 @@ test("tomlText writes the multi-line form for a newline and round-trips every va
   }
   assert.equal(parseToml(`k = ${tomlMultiline("plain")}\n`, "x.toml").root.k, "plain");
 });
+
+test("layout: every header and key in file order, a key spanning its whole value", () => {
+  const text = 'v = 3\n# a comment\n[rituals.a]\nmay = [\n  "Read",\n]\nnotes = """\none\n[not.a.header]\n"""\ntitle = "t"\n';
+  assert.deepEqual(parseToml(text, "x.toml").layout, [
+    { kind: "key", section: "", key: "v", start: 1, end: 1 },
+    { kind: "header", section: "rituals.a", start: 3, end: 3 },
+    { kind: "key", section: "rituals.a", key: "may", start: 4, end: 6 },
+    { kind: "key", section: "rituals.a", key: "notes", start: 7, end: 10 },
+    { kind: "key", section: "rituals.a", key: "title", start: 11, end: 11 },
+  ]);
+});

@@ -44,6 +44,24 @@ export interface TomlDocument {
   lines: Record<string, number>;
   /** The line each section header was first written on, by full section name. */
   sectionLines: Record<string, number>;
+  /**
+   * Every header and key in file order, with the lines it spans. A key's
+   * span runs from its line to the last line of its value (an array or a
+   * `"""` string may span lines). Comment and blank lines are not entries.
+   * `marker factor` edits the text by these spans.
+   */
+  layout: TomlEntry[];
+}
+
+/** One header or key of a TOML file and the lines it covers, 1-based and inclusive. */
+export interface TomlEntry {
+  kind: "header" | "key";
+  /** The full section name; `""` for a root key. */
+  section: string;
+  /** The key, for a key entry. */
+  key?: string;
+  start: number;
+  end: number;
 }
 
 const SECTION_HEADER = /^\[(.+)\]$/u;
@@ -310,6 +328,7 @@ export function parseToml(text: string, file: string): TomlDocument {
   const sections: Record<string, Record<string, TomlValue>> = {};
   const lines: Record<string, number> = {};
   const sectionLines: Record<string, number> = {};
+  const layout: TomlEntry[] = [];
   let current = root;
   let prefix = "";
 
@@ -335,6 +354,7 @@ export function parseToml(text: string, file: string): TomlDocument {
       const table = sections[name] ?? {};
       sections[name] = table;
       sectionLines[name] ??= lineNumber;
+      layout.push({ kind: "header", section: name, start: lineNumber, end: lineNumber });
       current = table;
       prefix = `${name}.`;
       continue;
@@ -365,9 +385,10 @@ export function parseToml(text: string, file: string): TomlDocument {
       current[key] = parseTomlValue(rawValue, file, lineNumber);
     }
     lines[`${prefix}${key}`] = lineNumber;
+    layout.push({ kind: "key", section: prefix.slice(0, -1), key, start: lineNumber, end: index + 1 });
   }
 
-  return { root, sections, lines, sectionLines };
+  return { root, sections, lines, sectionLines, layout };
 }
 
 /** A key as TOML writes it: bare when it can be, quoted otherwise. */

@@ -130,6 +130,35 @@ Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_ex
 or later before it uses `args` or a `"""` string: an older host refuses an unknown ritual key,
 and it cannot read a mirrored item that has `args` or a note with a newline.
 
+## Factor shared rules
+
+`darius marker factor` shows the fix for the overlap warning:
+
+```bash
+darius marker factor          # print a summary and a diff; write nothing
+darius marker factor --write  # write .darius.toml; never runs git
+```
+
+It groups rituals with an inline policy (no `policy = "<name>"`) that have the same mode and
+pass the overlap rule above. A group is every ritual linked to another by that rule, in file
+order, with at least 2 rituals. The shared `may` and `hold` rules (the ones every member has) go
+into a new `[policies.<mode>-base]` table, placed right before the first member's table. Each
+member then names that policy and keeps only its own rules in `may_extra` and `hold_extra`. Its
+`mode` line goes, because the policy holds the mode. Its `notes` stay on the ritual. Rituals
+that already name a policy are never touched. The names are placeholders (`report-base`,
+`report-base-2`, ...): rename them by hand. Comments, key order, blank lines and every other table
+stay byte for byte.
+
+Before it prints anything, it parses the proposed file and compares every ritual with the
+current one: every field, the mode, the sorted `may` and `hold`, and the notes. Any difference
+exits 1 and writes nothing. It also exits 1, naming the ritual, for a layout it does not edit: a
+table written in two places, a key set twice, or a comment inside or after a moved value. Nothing
+to group prints `nothing to factor`. `--write` refuses (exit 2) a marker that is not v3, fails
+`marker check`, or has uncommitted changes. After a write, check each ritual with
+`darius marker check --resolved <slug>` and commit. The resolved lists keep their entries but may
+change order, so the next reconcile can report a factored ritual once as updated.
+`--json` prints `{ ok, groups: [{ policy, rituals, may, hold }], proposed, diff, written, file }`.
+
 ## One skill, many rituals
 
 Keep the procedure in the skill and the differences in the ritual:

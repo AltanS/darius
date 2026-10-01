@@ -187,7 +187,8 @@ export function buildExport(project: Project, existing: string | null, zone: str
   return { marker, skills, warnings };
 }
 
-function atomicWrite(file: string, text: string): void {
+/** Writes `text` to `file` through a tmp file and a rename, so a reader never sees half a file. */
+export function atomicWrite(file: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.tmp-${String(process.pid)}`;
   writeFileSync(temp, text);

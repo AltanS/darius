@@ -73,11 +73,12 @@ test("the skill stays under 6144 bytes, and its stamp names this version and has
   }
 });
 
-test("the skill names may_extra, hold_extra and marker check --resolved", () => {
+test("the skill names may_extra, hold_extra, marker check --resolved and marker factor", () => {
   const { env } = sandbox();
   const text = darius(env, ["skill"]).stdout;
   assert.match(text, /`may_extra` and `hold_extra`/u);
   assert.match(text, /`marker check --resolved <slug>`/u);
+  assert.match(text, /; marker factor \[--write\] moves rules that rituals share into \[policies\.\*\] \|/u);
   assert.match(text, /input to the skill with `args`/u);
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });

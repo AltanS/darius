@@ -22,16 +22,29 @@
  * `hold: <pattern>` line per pattern, each list sorted. Two forms of one
  * policy (inline, or factored into `[policies.*]`) print the same bytes. An
  * unknown slug is a usage error that names the known ones.
+ *
+ * `darius marker factor [<dir>] [--write] [--json]` proposes moving the
+ * `may` and `hold` rules that inline rituals share into new
+ * `[policies.<name>]` tables (src/core/marker-factor.ts). It prints a summary
+ * and a unified diff, or `nothing to factor`. The proposal is parsed and
+ * checked ritual by ritual before anything is printed; a difference exits 1.
+ * `--write` writes `.darius.toml` (tmp file and rename). It refuses (exit 2)
+ * a marker that is not v3, that `marker check` fails, or that has
+ * uncommitted changes. It never runs a git write command and never commits.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { findMarker, MARKER_FILE, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
+import { findMarker, holdOverlap, MARKER_FILE, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
+import { planFactor, type FactorGroup } from "../core/marker-factor.ts";
+import { markerDirty } from "../core/reconcile.ts";
+import { unifiedDiff } from "../core/text-diff.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { atomicWrite } from "./ritual-export.ts";
 
-const USAGE = "usage: darius marker check [<dir>] [--resolved <slug>] [--json]";
+const USAGE = "usage: darius marker check [<dir>] [--resolved <slug>] [--json] | darius marker factor [<dir>] [--write] [--json]";
 
 interface CheckReport {
   ok: boolean;
@@ -56,10 +69,6 @@ function skillErrorsFor(marker: Marker): string[] {
   return errors;
 }
 
-/** A pair shares enough `hold` patterns to warn when the shorter list has this many entries or more. */
-const OVERLAP_MIN_PATTERNS = 5;
-/** ... and this share of the shorter list is in the other one. */
-const OVERLAP_MIN_SHARE = 0.8;
 /** A `notes` text longer than this many characters is a warning. */
 const NOTES_MAX_LENGTH = 300;
 
@@ -70,13 +79,10 @@ function overlapWarnings(marker: Marker): string[] {
   rituals.forEach((first, index) => {
     for (const second of rituals.slice(index + 1)) {
       if (first.policyName !== undefined && first.policyName === second.policyName) continue;
-      const left = new Set(first.policy.hold);
-      const right = new Set(second.policy.hold);
-      const smaller = Math.min(left.size, right.size);
-      const shared = [...left].filter((pattern) => right.has(pattern)).length;
-      if (smaller < OVERLAP_MIN_PATTERNS || shared < smaller * OVERLAP_MIN_SHARE) continue;
+      const overlap = holdOverlap(first.policy.hold, second.policy.hold);
+      if (overlap === undefined) continue;
       warnings.push(
-        `[rituals.${first.slug}] and [rituals.${second.slug}] share ${String(shared)} of ${String(smaller)} hold patterns: factor into [policies.<name>] with hold_extra`,
+        `[rituals.${first.slug}] and [rituals.${second.slug}] share ${String(overlap.shared)} of ${String(overlap.smaller)} hold patterns: factor into [policies.<name>] with hold_extra`,
       );
     }
   });
@@ -202,13 +208,98 @@ async function runCheck(args: ParsedArgs): Promise<number> {
   return report.ok ? 0 : 1;
 }
 
+/** What `marker factor --json` prints per group. */
+interface GroupJson {
+  policy: string;
+  rituals: string[];
+  may: string[];
+  hold: string[];
+}
+
+function groupJson(group: FactorGroup): GroupJson {
+  return { policy: group.policy, rituals: group.members.map((member) => member.slug), may: group.may, hold: group.hold };
+}
+
+function lineCount(text: string): number {
+  return text === "" ? 0 : text.replace(/\n$/u, "").split("\n").length;
+}
+
+/** The `--write` refusals, before anything is read for the proposal. */
+function assertFactorWritable(marker: Marker): void {
+  const [error] = skillErrorsFor(marker);
+  if (error !== undefined) throw new UsageError(`${marker.file} fails marker check: ${error}; fix it first`);
+  if (markerDirty(marker.dir)) throw new UsageError(`${marker.file} has uncommitted changes; commit or discard them first`);
+}
+
+function printProposal(file: string, groups: readonly FactorGroup[], text: { before: string; after: string; diff: string }): void {
+  console.log(`${String(groups.length)} ${groups.length === 1 ? "group" : "groups"} to factor in ${file}:`);
+  for (const group of groups) {
+    const slugs = group.members.map((member) => member.slug).join(", ");
+    console.log(`  [policies.${group.policy}] mode ${group.mode}, ${String(group.may.length)} may, ${String(group.hold.length)} hold: ${slugs}`);
+  }
+  console.log(`lines: ${String(lineCount(text.before))} before, ${String(lineCount(text.after))} after`);
+  console.log("The policy names are placeholders: rename each [policies.<name>] and its policy = \"<name>\" lines by hand.");
+  console.log(text.diff.replace(/\n$/u, ""));
+}
+
+async function runFactor(args: ParsedArgs): Promise<number> {
+  const [, dir, ...extra] = args.positional;
+  if (extra.length > 0) throw new UsageError(USAGE);
+  const isWrite = args.flags.write === true;
+  let found: Target;
+  try {
+    found = readTarget(dir);
+  } catch (cause) {
+    const error = errorMessage(cause);
+    if (args.json) console.log(JSON.stringify({ ok: false, error }));
+    else console.error(`error: ${error}`);
+    return 1;
+  }
+  const { marker } = found;
+  if (marker === null) throw new UsageError(`no ${MARKER_FILE} in ${found.where}`);
+  if (marker.version !== 3) throw new UsageError(`${marker.file} is v = ${String(marker.version)}; marker factor needs v = 3 (ritual export moves a project to it)`);
+  if (isWrite) assertFactorWritable(marker);
+  const before = readFileSync(marker.file, "utf8");
+  const plan = planFactor(before, marker.file);
+  if (!plan.ok) {
+    if (args.json) console.log(JSON.stringify({ ok: false, error: plan.error }));
+    else console.error(`error: ${plan.error}; nothing written`);
+    return 1;
+  }
+  const { groups, proposed } = plan;
+  const diff = unifiedDiff(before, proposed, MARKER_FILE);
+  const written = isWrite && groups.length > 0;
+  if (written) atomicWrite(marker.file, proposed);
+  if (args.json) {
+    console.log(JSON.stringify({ ok: true, groups: groups.map(groupJson), proposed, diff, written, file: marker.file }));
+    return 0;
+  }
+  if (groups.length === 0) {
+    console.log("nothing to factor");
+    return 0;
+  }
+  printProposal(marker.file, groups, { before, after: proposed, diff });
+  if (!written) {
+    console.log("Nothing written. Run with --write to write it; darius never runs git.");
+    return 0;
+  }
+  console.log(`✓ wrote ${marker.file}`);
+  for (const group of groups) {
+    for (const member of group.members) console.log(`Check: darius marker check --resolved ${member.slug}`);
+  }
+  console.log("Then review the diff and commit. darius did not run git.");
+  return 0;
+}
+
 export const markerCommand: Command = {
   name: "marker",
-  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings (unused policy, overlapping hold lists, long notes); --resolved <slug> prints a ritual's effective policy",
+  summary:
+    "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings (unused policy, overlapping hold lists, long notes); --resolved <slug> prints a ritual's effective policy; marker factor [--write] moves rules that rituals share into [policies.*]",
   audience: "session",
   usage: "marker check [dir] [--resolved <slug>]",
   async run(args: ParsedArgs): Promise<number> {
     if (args.positional[0] === "check") return runCheck(args);
+    if (args.positional[0] === "factor") return runFactor(args);
     throw new UsageError(USAGE);
   },
 };

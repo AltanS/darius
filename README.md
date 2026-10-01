@@ -416,6 +416,7 @@ the full reference.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does. A missing skill file is an error; other findings are warnings. `--resolved` prints the effective policy of one ritual.
+- `darius marker factor [dir] [--write]`: move the `may` and `hold` rules that inline rituals share into new `[policies.*]` tables. Prints a diff; `--write` writes the file and never runs git.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.
 - `darius selftest seed|fire|status`: the `darius-selftest` project the acceptance run uses.
 - `darius policy-check`: the PreToolUse hook that unattended runs use. You do not call it.

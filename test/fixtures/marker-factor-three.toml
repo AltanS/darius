@@ -1,0 +1,69 @@
+# Three report rituals that repeat one long hold list with small differences.
+# `darius marker factor` moves the shared rules into [policies.report-base];
+# each ritual must resolve to the same policy and keep every other field.
+v = 3
+project = "acme-web"
+max_mode = "report"
+tz = "Europe/Berlin"
+
+[profiles.light]
+model = "sonnet"
+max_turns = 20
+
+[rituals.nightly-scan]
+title = "Nightly scan"
+cadence = "1d"
+anchor = "completion"
+at = "02:30"
+tz = "UTC"
+from = "2026-10-05"
+skill = "nightly-scan"
+args = "--depth 2"
+timeout = "45m"
+profile = "light"
+model = "sonnet"
+max_turns = 30
+mode = "report"
+may = ["Read", "Grep", "Glob", "Bash(date *)"]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+  '\bkubectl\s+apply\b',
+]
+
+[rituals.weekly-digest]
+title = "Weekly digest"
+cadence = "1w"
+skill = "weekly-digest"
+timeout = "2h"
+mode = "report"
+may = ["Read", "Grep", "Glob", "WebFetch"]
+hold = [
+  '--confirm\b',
+  '\bdeploy\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+  '\bcurl\b.*-X\s*POST\b',
+]
+hold_extra = ['\bssh\b']
+
+[rituals.link-check]
+title = "Link check"
+skill = "link-check"
+mode = "report"
+notes = "Report broken links only."
+may = ["Read", "Grep", "Glob", "Bash(date *)", "Bash(curl -sI *)"]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bnpm\s+publish\b',
+  '\bDROP\s+TABLE\b',
+]

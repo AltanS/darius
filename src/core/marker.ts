@@ -561,7 +561,8 @@ function checkedName(section: string, prefix: string, file: string, line: number
   return name;
 }
 
-function decodeMarker(text: string, file: string): Marker {
+/** Parses marker `text` as if it were the file `file`. `readMarker` reads the file; `marker factor` checks a proposed text with this. */
+export function decodeMarker(text: string, file: string): Marker {
   const document = parseToml(text, file);
   const { root, lines } = document;
   checkKeys(root, KEYS, { file, lines, prefix: "" });
@@ -663,7 +664,33 @@ export interface ResolvedView {
   hold: string[];
 }
 
-function byCodeUnit(a: string, b: string): number {
+/** Two `hold` lists overlap when the shorter one has at least this many patterns ... */
+export const OVERLAP_MIN_PATTERNS = 5;
+/** ... and at least this share of it is in the other one. */
+export const OVERLAP_MIN_SHARE = 0.8;
+
+/** How two `hold` lists overlap: the shared patterns and the size of the shorter list, each counted without duplicates. */
+export interface HoldOverlap {
+  shared: number;
+  smaller: number;
+}
+
+/**
+ * The overlap of two `hold` lists when it is large enough to factor: the
+ * shorter list has at least 5 patterns and at least 80 percent of them are in
+ * the other. Undefined below that. `marker check` warns with this rule, and
+ * `marker factor` groups rituals with it.
+ */
+export function holdOverlap(first: readonly string[], second: readonly string[]): HoldOverlap | undefined {
+  const left = new Set(first);
+  const right = new Set(second);
+  const smaller = Math.min(left.size, right.size);
+  const shared = [...left].filter((pattern) => right.has(pattern)).length;
+  if (smaller < OVERLAP_MIN_PATTERNS || shared < smaller * OVERLAP_MIN_SHARE) return undefined;
+  return { shared, smaller };
+}
+
+export function byCodeUnit(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 

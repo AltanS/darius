@@ -1,0 +1,68 @@
+# A marker with comments, a """ notes value, args, a ritual that already
+# names a policy, and a ritual of another mode. `darius marker factor` must
+# group only the two inline report rituals and keep the rest byte for byte.
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "UTC"
+
+[policies.read-only]
+mode = "report"
+may = ["Read"]
+hold = ['\bdeploy\b']
+
+# Names a policy: never touched.
+[rituals.status-page]
+title = "Status page"
+cadence = "1d"
+skill = "status-page"
+policy = "read-only"
+notes = "Own notes stay."
+
+# The first member. This comment sits on its header.
+[rituals.daily-report]
+title = "Daily report"
+cadence = "1d"
+at = "07:00"
+skill = "daily-report"
+args = "--site acme --format short"
+mode = "report"
+notes = """
+Read only.
+Say "done" at the end."""
+# The rules below are the same for every report.
+may = [
+  "Read",
+  "Grep",
+  "Bash(git log *)",
+]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bnpm\s+publish\b',
+]
+
+# Another mode: not grouped, even with the same hold list.
+[rituals.content-fix]
+title = "Content fix"
+skill = "content-fix"
+mode = "act"
+may = ["Read", "Edit"]
+hold = [
+  '\bdeploy\b',
+  '--confirm\b',
+  '\bgit\s+push\b',
+  '\brm\s+-rf\b',
+  '\bnpm\s+publish\b',
+]
+
+[rituals.audit]
+title = "Audit"
+cadence = "1w"
+skill = "audit"
+mode = "report"
+may = ["Read", "Grep"]
+hold = ['\bdeploy\b', '--confirm\b', '\bgit\s+push\b', '\brm\s+-rf\b', '\bnpm\s+publish\b', '\bssh\b']
+# Trailing comment of the audit table.

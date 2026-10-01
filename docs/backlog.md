@@ -50,7 +50,6 @@ Left out of the v3 design on purpose (design section 14).
 - A due window that expires a missed occurrence. Today nothing expires.
 - Store policies and a policy library across repos.
 - `.mcp.json` forwarding and phase 3 vigils.
-- `darius marker factor`: a helper that reads a marker, finds rituals that share `hold` or `may` patterns, and prints a proposed `[policies.*]` rewrite with `hold_extra` and `may_extra` as a diff. It writes nothing. `marker check` already warns about the overlap; this would show the fix.
 - The web shows the policy name of a repo ritual. The store keeps only the resolved policy, so this needs the name mirrored by reconcile.
 
 ## Architecture
