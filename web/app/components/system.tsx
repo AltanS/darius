@@ -4,6 +4,8 @@
  * projects with their last sync. Read-only. Every row is a line, not a tile.
  */
 
+import { Link } from "react-router";
+
 import type { BackupsStatus, SystemDisk, SystemHost, SystemProject, SystemStatus } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { byteSize, momentText, relativeTime, uptimeText } from "../lib/format.ts";
@@ -18,16 +20,24 @@ interface FactPillProps {
   /** One word, or two, after it. */
   label: string;
   tone: Tone;
+  /** Makes the pill a link to the page that holds the fact. */
+  to?: string;
 }
 
 /** One fact of the strip: the same square, number and word as the `Pill` of a project page, with text for a value. */
-function FactPill({ value, label, tone }: FactPillProps): React.ReactNode {
-  return (
-    <div className={`pill tone-${tone}`}>
+function FactPill({ value, label, tone, to }: FactPillProps): React.ReactNode {
+  const inner = (
+    <>
       <span className="pill-dot" aria-hidden="true" />
       <span className="pill-n">{value}</span>
       <span className="pill-l">{label}</span>
-    </div>
+    </>
+  );
+  if (to === undefined) return <div className={`pill tone-${tone}`}>{inner}</div>;
+  return (
+    <Link to={to} className={`pill tone-${tone}`}>
+      {inner}
+    </Link>
   );
 }
 
@@ -73,7 +83,7 @@ export function StatusStrip({ system, backups }: StripProps): React.ReactNode {
       <FactPill value={String(system.store.runs)} label="runs" tone="gold" />
       <FactPill value={byteSize(system.store.bytes)} label="store" tone="gold" />
       <FactPill value={sync === null ? "never" : since(sync, now)} label={sync === null ? "synced" : "since sync"} tone={syncTone} />
-      <FactPill value={backup.value} label={backup.label} tone={backup.tone} />
+      <FactPill value={backup.value} label={backup.label} tone={backup.tone} to="/settings/backups" />
     </nav>
   );
 }

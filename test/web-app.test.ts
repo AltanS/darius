@@ -313,7 +313,10 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/w/demo/rituals", ["Rituals", "/p/demo/rituals/daily-report", "/runs?project=demo"]],
   ["/milestones", ["Milestones"]],
   ["/w/demo/milestones", ["Milestones"]],
-  ["/settings", ["Settings"]],
+  ["/settings", ["Settings", "Appearance"]],
+  ["/settings/notifications", ["Settings", "Notifications"]],
+  ["/settings/backups", ["Settings", "Backups", "Back up now"]],
+  ["/settings/about", ["Settings", "About", "testhost"]],
   ["/p/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
   [`/p/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
   [`/p/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
@@ -949,12 +952,59 @@ test("defaultWorkspace decides what / opens; /all is always all workspaces", asy
   assert.match(ghost.body, /<span class="sw-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
 });
 
-test("the status page: strip, backups, an env-locked field, no secret, the way in", async () => {
+test("the status page: strip, machine, hosts, a link to the backups, and no backup controls", async () => {
   const page = await get("/status");
   assert.equal(page.status, 200);
   const body = page.body;
-  for (const text of ["Status", "Backups", "Back up now", "Snapshots", "on this host", "in the bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "set by environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs"]) {
+  for (const text of ["Status", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs", "since backup"]) {
     assert.ok(body.includes(text), `the status page shows: ${text}`);
+  }
+  for (const text of ["Back up now", "Snapshots", "Test the bucket", "Delete in bucket", "bk-secret", "DARIUS_SNAPSHOT_ENDPOINT"]) {
+    assert.equal(body.includes(text), false, `the status page leaves out: ${text}`);
+  }
+  assert.ok(linkTo(body, "/settings/backups") !== null, "the pill and the notice link to the backups");
+  assert.match(body, /<a\b[^>]*href="\/settings\/backups"[^>]*>(?:(?!<\/a>).)*since backup/u, "the since backup pill is a link");
+  assert.ok(body.includes("One thing blocks backups."), "the backup problem shows as a one line notice");
+  assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
+  assert.equal(body.includes(SECRET), false, "no secret on the page");
+  assert.ok(linkTo(body, "/status")?.includes('aria-current="page"'), "the status link of the top bar is lit");
+  assert.ok(linkTo(await get("/settings").then((reply) => reply.body), "/status") !== undefined, "the status link is on every page");
+  assertScriptsCarryNonce(body, "/status");
+});
+
+/** The opening tag of the link in the settings tab row that goes to an address, or null. */
+function settingsTab(body: string, href: string): string | null {
+  const from = body.indexOf('aria-label="Settings sections"');
+  if (from === -1) return null;
+  return linkTo(body.slice(from, body.indexOf("</nav>", from)), href);
+}
+
+test("the settings tabs: a row of four, one lit, the other tabs' content not drawn", async () => {
+  const general = (await get("/settings")).body;
+  const hrefs = [...general.slice(general.indexOf('aria-label="Settings sections"')).matchAll(/href="([^"]+)"/gu)].slice(0, 4).map((match) => match[1]);
+  assert.deepEqual(hrefs, ["/settings", "/settings/notifications", "/settings/backups", "/settings/about"], "the four tabs in order");
+  assert.ok(settingsTab(general, "/settings")?.includes('aria-current="page"'), "General is lit on /settings");
+  assert.equal(settingsTab(general, "/settings/backups")?.includes("aria-current"), false, "Backups is not lit on /settings");
+  for (const text of ["Appearance", "Default workspace"]) assert.ok(general.includes(text), `General shows: ${text}`);
+  for (const text of ["Back up now", "Test the bucket", "Seen by"]) assert.equal(general.includes(text), false, `General leaves out: ${text}`);
+
+  const backups = (await get("/settings/backups")).body;
+  assert.ok(settingsTab(backups, "/settings/backups")?.includes('aria-current="page"'), "Backups is lit on /settings/backups");
+  assert.equal(settingsTab(backups, "/settings")?.includes("aria-current"), false, "General is not lit under it");
+  assert.ok(linkTo(backups, "/settings")?.includes('class="gear on"'), "the gear is lit on a settings tab");
+  for (const text of ["Appearance", "Default workspace", "Seen by"]) assert.equal(backups.includes(text), false, `Backups leaves out: ${text}`);
+
+  const notifications = (await get("/settings/notifications")).body;
+  assert.ok(settingsTab(notifications, "/settings/notifications")?.includes('aria-current="page"'), "Notifications is lit");
+  assert.equal(notifications.includes("Back up now"), false, "the backup controls stay on their own tab");
+});
+
+test("the backups tab: an env-locked field, no secret, the controls", async () => {
+  const page = await get("/settings/backups");
+  assert.equal(page.status, 200);
+  const body = page.body;
+  for (const text of ["Backups", "Back up now", "Snapshots", "on this host", "in the bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "set by environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf"]) {
+    assert.ok(body.includes(text), `the backups tab shows: ${text}`);
   }
   const input = (id: string): string => [...body.matchAll(/<input\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(`id="${id}"`)) ?? "";
   assert.match(input("bk-set-endpoint"), /\bdisabled\b/u, "the endpoint is set by the environment, so its field is disabled");
@@ -966,7 +1016,5 @@ test("the status page: strip, backups, an env-locked field, no secret, the way i
   assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
   assert.ok(body.includes("the folder is not writable &lt;script&gt;alert(1)&lt;/script&gt;"), "a problem shows, escaped");
   assert.match(body, /<button(?![^>]*\bdisabled\b)[^>]*>Back up now<\/button>/u, "the Back up now button is on while nothing runs");
-  assert.ok(linkTo(body, "/status")?.includes('aria-current="page"'), "the status link of the top bar is lit");
-  assert.ok(linkTo(await get("/settings").then((reply) => reply.body), "/status") !== undefined, "the status link is on every page");
-  assertScriptsCarryNonce(body, "/status");
+  assertScriptsCarryNonce(body, "/settings/backups");
 });

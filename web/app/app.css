@@ -4008,6 +4008,76 @@
     max-width: 640px;
   }
 
+  /* The settings tabs: a row under the title, the look of the workspace tabs. It scrolls sideways when it does not fit. */
+
+  .st-tabs {
+    display: flex;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--color-sand);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .st-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .st-tab {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 16px;
+    font-size: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .st-tab:first-child {
+    padding-left: 0;
+  }
+
+  .st-tab:hover {
+    color: var(--color-parchment);
+    text-decoration: none;
+  }
+
+  .st-tab.on {
+    color: var(--color-gold);
+  }
+
+  .st-tab.on::after {
+    content: "";
+    position: absolute;
+    inset: auto 16px 0;
+    height: 3px;
+    background: var(--gold-bar, var(--color-gold));
+  }
+
+  .st-tab:first-child.on::after {
+    left: 0;
+  }
+
+  /* On a phone the four tabs fit in 390 px; a narrower screen scrolls the row. */
+
+  @media (max-width: 639px) {
+    .st-tab {
+      padding: 0 10px;
+      font-size: 15px;
+    }
+
+    .st-tab.on::after {
+      inset-inline: 10px;
+    }
+
+    .st-tab:first-child.on::after {
+      left: 0;
+    }
+  }
+
   .st-field {
     margin-top: 16px;
   }

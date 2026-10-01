@@ -177,6 +177,8 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   const overview = overviewOf(workspace);
   const scopeTo = (name: string | null): string => (place.section === null ? overviewOf(name) : sectionPath(name, place.section));
   const selectedTab = (section: Section): boolean => place.section === section;
+  // The gear stays lit on every settings tab: `/settings` and `/settings/...`.
+  const inSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
   return (
     <div className="app">
       <header className="bar">
@@ -189,7 +191,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
           <Link to="/status" className={location.pathname === "/status" ? "gear on" : "gear"} aria-label="Status" aria-current={location.pathname === "/status" ? "page" : undefined}>
             <NavIcon name="status" size={22} />
           </Link>
-          <Link to="/settings" className={location.pathname === "/settings" ? "gear on" : "gear"} aria-label="Settings" aria-current={location.pathname === "/settings" ? "page" : undefined}>
+          <Link to="/settings" className={inSettings ? "gear on" : "gear"} aria-label="Settings" aria-current={inSettings ? "page" : undefined}>
             <NavIcon name="gear" size={22} />
           </Link>
         </div>

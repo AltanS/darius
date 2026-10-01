@@ -79,11 +79,11 @@ test("the system theme names both colour schemes and both theme colours", async 
   assert.match(body, /<meta name="theme-color" content="#15100b" media="\(prefers-color-scheme: dark\)"/u);
 });
 
-test("the settings page shows its sections and the host facts", async () => {
-  const body = (await page("/settings", null)).replaceAll("<!-- -->", "");
-  for (const text of ["Appearance", "Workspaces", "Motion", "Notifications", "About", "testhost", "darius 9.9.9", "owner on phone", "Self-test workspace".toLowerCase()]) {
-    assert.ok(body.toLowerCase().includes(text.toLowerCase()), text);
-  }
+test("the settings tabs show their own sections and the host facts", async () => {
+  const general = (await page("/settings", null)).replaceAll("<!-- -->", "");
+  for (const text of ["Appearance", "Workspaces", "Motion", "Self-test workspace"]) assert.ok(general.toLowerCase().includes(text.toLowerCase()), text);
+  const about = (await page("/settings/about", null)).replaceAll("<!-- -->", "");
+  for (const text of ["About", "testhost", "darius 9.9.9", "owner on phone"]) assert.ok(about.includes(text), text);
 });
 
 test("a cookie that is not valid changes nothing", async () => {
