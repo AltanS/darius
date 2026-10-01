@@ -216,3 +216,88 @@ test("link --list adds v3 (N rituals) to the ok line, and only for v3", async ()
   assert.deepEqual(links.find((one) => one.project === "acme-web"), { project: "acme-web", dir: v3, state: "ok", marker: "v3 (2 rituals)" });
   assert.equal(links.find((one) => one.project === "mc-v2")?.marker, undefined);
 });
+
+// --- warnings: overlapping hold lists and long notes ------------------------------------
+
+const HOLDS = ["\\bpush\\b", "\\bdeploy\\b", "--force\\b", "\\brm\\b", "\\bsudo\\b", "\\bcurl\\b"];
+const ROOT = 'v = 3\nproject = "acme-web"\ntz = "UTC"\n';
+
+function holdList(items: readonly string[]): string {
+  return `hold = [${items.map((item) => `'${item}'`).join(", ")}]`;
+}
+
+function inlineRitual(slug: string, holds: readonly string[], extra = ""): string {
+  return `[rituals.${slug}]\ntitle = "${slug}"\nskill = "${slug}"\nmode = "report"\n${holdList(holds)}\n${extra}`;
+}
+
+function withSkills(text: string, slugs: readonly string[]): string {
+  const dir = checkout(text);
+  for (const slug of slugs) addSkill(dir, slug);
+  return dir;
+}
+
+test("marker check warns about two rituals that share most of their hold patterns, once per pair, and exits 0", async () => {
+  const dir = withSkills(`${ROOT}${inlineRitual("a", HOLDS)}${inlineRitual("b", [...HOLDS.slice(0, 5), "\\bother\\b"])}${inlineRitual("c", ["\\bunique\\b"])}`, ["a", "b", "c"]);
+  const run = await runCli(markerCommand, ["check", dir]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /^warning: \[rituals\.a\] and \[rituals\.b\] share 5 of 6 hold patterns: factor into \[policies\.<name>\] with hold_extra$/mu);
+  assert.equal(run.stdout.split("\n").filter((line) => line.includes("share")).length, 1);
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout);
+  assert.equal(json.ok, true);
+  assert.equal(json.warnings.length, 1);
+  assert.match(json.warnings[0], /share 5 of 6 hold patterns/u);
+});
+
+test("marker check: the overlap warning counts the shorter list, and stays silent below 5 patterns or 80 percent", async () => {
+  const text = (...rituals: string[]): string => `${ROOT}${rituals.join("")}`;
+  const slugs = ["a", "b"];
+  // The shorter list (5) is fully inside the longer (6): 5 of 5.
+  const inside = await runCli(markerCommand, ["check", withSkills(text(inlineRitual("a", HOLDS), inlineRitual("b", HOLDS.slice(0, 5))), slugs)]);
+  assert.match(inside.stdout, /share 5 of 5 hold patterns/u);
+  // Four shared patterns: below the 5-entry floor.
+  const few = await runCli(markerCommand, ["check", withSkills(text(inlineRitual("a", HOLDS.slice(0, 4)), inlineRitual("b", HOLDS.slice(0, 4))), slugs)]);
+  assert.doesNotMatch(few.stdout, /share/u);
+  // 5 of 6 is 83 percent: warns. 4 of 6 would not, and neither would 5 of 7.
+  const seven = [...HOLDS, "\\bseventh\\b"];
+  const low = await runCli(markerCommand, ["check", withSkills(text(inlineRitual("a", seven), inlineRitual("b", [...HOLDS.slice(0, 5), "\\bx\\b", "\\by\\b"])), slugs)]);
+  assert.doesNotMatch(low.stdout, /share/u, "5 of 7 is 71 percent");
+  const exact = await runCli(markerCommand, ["check", withSkills(text(inlineRitual("a", HOLDS.slice(0, 5)), inlineRitual("b", [...HOLDS.slice(0, 4), "\\bx\\b"])), slugs)]);
+  assert.match(exact.stdout, /share 4 of 5 hold patterns/u, "80 percent of the shorter list is enough, once it has 5 entries");
+});
+
+function named(slug: string): string {
+  return `[rituals.${slug}]\ntitle = "${slug}"\nskill = "${slug}"\npolicy = "guarded"\nhold_extra = ['\\b${slug}\\b']\n`;
+}
+
+test("marker check: rituals that name the same policy are not reported, even with extras", async () => {
+  const policy = `[policies.guarded]\nmode = "report"\n${holdList(HOLDS)}\n`;
+  const dir = withSkills(`${ROOT}${policy}${named("a")}${named("b")}`, ["a", "b"]);
+  const run = await runCli(markerCommand, ["check", dir]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.doesNotMatch(run.stdout, /share/u);
+  // A ritual on the policy and an inline twin of it are still a pair.
+  const mixed = withSkills(`${ROOT}${policy}${named("a")}${inlineRitual("b", HOLDS)}`, ["a", "b"]);
+  assert.match((await runCli(markerCommand, ["check", mixed])).stdout, /\[rituals\.a\] and \[rituals\.b\] share 6 of 6/u);
+});
+
+test("marker check warns about notes over 300 characters in a ritual and in a policy, and not at 300", async () => {
+  const long = "x".repeat(301);
+  const dir = withSkills(
+    `${ROOT}[policies.spare]\nmode = "off"\nnotes = "${long}"\n${inlineRitual("a", [], `notes = "${"y".repeat(300)}"\n`)}${inlineRitual("b", [], `notes = """\n${"z".repeat(350)}\n"""\n`)}[rituals.c]\ntitle = "c"\nskill = "c"\npolicy = "spare"\n`,
+    ["a", "b", "c"],
+  );
+  const run = await runCli(markerCommand, ["check", dir]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /^warning: \[policies\.spare\] notes is 301 characters: procedure belongs in the skill, rules in hold$/mu);
+  assert.match(run.stdout, /^warning: \[rituals\.b\] notes is 351 characters: procedure belongs in the skill, rules in hold$/mu);
+  assert.doesNotMatch(run.stdout, /rituals\.a\] notes/u, "300 characters is allowed");
+  assert.doesNotMatch(run.stdout, /rituals\.c\] notes/u, "a policy's notes are reported once, on the policy");
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout);
+  assert.equal(json.warnings.length, 2);
+});
+
+test("marker check: short notes and unrelated hold lists give no warning", async () => {
+  const dir = withSkills(`${ROOT}${inlineRitual("a", HOLDS, 'notes = "Never push."\n')}${inlineRitual("b", HOLDS.map((item) => `${item}2`))}`, ["a", "b"]);
+  const run = await runCli(markerCommand, ["check", dir]);
+  assert.equal(run.stdout, "ok: v3, 2 rituals, 0 policies");
+});

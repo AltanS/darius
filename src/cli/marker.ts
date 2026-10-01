@@ -8,7 +8,10 @@
  * error as `file:line: message` when it does not, 2 when there is no file.
  * A ritual whose skill file is missing in this checkout is an error too
  * (exit 1): run-due would skip it as `skill-missing`. Warnings never change
- * the exit code: a policy no ritual names, a v3 marker with no rituals.
+ * the exit code: a policy no ritual names, a v3 marker with no rituals, two
+ * rituals whose resolved `hold` lists mostly overlap (factor them into a
+ * `[policies.<name>]` with `hold_extra`), and a `notes` text over 300
+ * characters (procedure belongs in the skill, rules in `hold`).
  *
  * The parser never touches the file system; the skill-file check lives here
  * (and in run-due's preflight).
@@ -53,6 +56,46 @@ function skillErrorsFor(marker: Marker): string[] {
   return errors;
 }
 
+/** A pair shares enough `hold` patterns to warn when the shorter list has this many entries or more. */
+const OVERLAP_MIN_PATTERNS = 5;
+/** ... and this share of the shorter list is in the other one. */
+const OVERLAP_MIN_SHARE = 0.8;
+/** A `notes` text longer than this many characters is a warning. */
+const NOTES_MAX_LENGTH = 300;
+
+/** One warning per pair of rituals whose resolved `hold` lists overlap. A pair that names the same policy is skipped. */
+function overlapWarnings(marker: Marker): string[] {
+  const warnings: string[] = [];
+  const { rituals } = marker;
+  rituals.forEach((first, index) => {
+    for (const second of rituals.slice(index + 1)) {
+      if (first.policyName !== undefined && first.policyName === second.policyName) continue;
+      const left = new Set(first.policy.hold);
+      const right = new Set(second.policy.hold);
+      const smaller = Math.min(left.size, right.size);
+      const shared = [...left].filter((pattern) => right.has(pattern)).length;
+      if (smaller < OVERLAP_MIN_PATTERNS || shared < smaller * OVERLAP_MIN_SHARE) continue;
+      warnings.push(
+        `[rituals.${first.slug}] and [rituals.${second.slug}] share ${String(shared)} of ${String(smaller)} hold patterns: factor into [policies.<name>] with hold_extra`,
+      );
+    }
+  });
+  return warnings;
+}
+
+/** A warning for each policy `notes` and each ritual's own `notes` over 300 characters. */
+function notesWarnings(marker: Marker): string[] {
+  const warnings: string[] = [];
+  const tell = (section: string, notes: string | undefined): void => {
+    if (notes === undefined || notes.length <= NOTES_MAX_LENGTH) return;
+    warnings.push(`[${section}] notes is ${String(notes.length)} characters: procedure belongs in the skill, rules in hold`);
+  };
+  for (const [name, policy] of Object.entries(marker.policies)) tell(`policies.${name}`, policy.notes);
+  // A ritual that names a policy carries that policy's notes, which are reported once above.
+  for (const ritual of marker.rituals) if (ritual.policyName === undefined) tell(`rituals.${ritual.slug}`, ritual.policy.notes);
+  return warnings;
+}
+
 /** The warnings for a parsed marker. */
 function warningsFor(marker: Marker): string[] {
   const warnings: string[] = [];
@@ -62,7 +105,7 @@ function warningsFor(marker: Marker): string[] {
   for (const name of Object.keys(marker.policies)) {
     if (!used.has(name)) warnings.push(`[policies.${name}] is not used by any ritual`);
   }
-  return warnings;
+  return [...warnings, ...overlapWarnings(marker), ...notesWarnings(marker)];
 }
 
 interface Target {
@@ -161,7 +204,7 @@ async function runCheck(args: ParsedArgs): Promise<number> {
 
 export const markerCommand: Command = {
   name: "marker",
-  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings; --resolved <slug> prints a ritual's effective policy",
+  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings (unused policy, overlapping hold lists, long notes); --resolved <slug> prints a ritual's effective policy",
   audience: "session",
   usage: "marker check [dir] [--resolved <slug>]",
   async run(args: ParsedArgs): Promise<number> {
