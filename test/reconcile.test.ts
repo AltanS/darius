@@ -143,6 +143,24 @@ test("adopt: a store ritual of the same slug keeps its store-owned fields; git f
   assert.equal(header.updated, T1.toISOString());
 });
 
+test("a repo ritual without cadence mirrors with no cadence, and dropping the cadence clears the store cadence", { skip: NO_GIT }, () => {
+  const { project, dir } = setup({ git: true });
+  reconcileProject(project, dir, HOST, T1);
+  assert.equal(ritual(project, "weekly-audit").cadence, "1w");
+  const marker = join(dir, ".darius.toml");
+  const text = readFileSync(marker, "utf8");
+  const start = text.indexOf("[rituals.weekly-audit]");
+  const table = text.slice(start).split("\n").filter((line) => !/^(cadence|at|from)\s*=/u.test(line)).join("\n");
+  writeFileSync(marker, text.slice(0, start) + table);
+  commitAll(dir, "weekly on demand");
+  const result = reconcileProject(project, dir, HOST, T2);
+  assert.ok(result.updated.includes("weekly-audit"));
+  const weekly = ritual(project, "weekly-audit");
+  assert.equal("cadence" in weekly, false);
+  assert.deepEqual([weekly.at, weekly.from], [undefined, undefined]);
+  assert.equal(ritual(project, "daily-report").cadence, "1d");
+});
+
 test("unchanged: the same hash, commit and dirty flag write nothing", { skip: NO_GIT }, () => {
   const { project, dir } = setup({ git: true });
   reconcileProject(project, dir, HOST, T1);

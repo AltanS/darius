@@ -21,7 +21,7 @@
  *
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
  *   [policies.read-only]               mode, may, hold, notes
- *   [rituals.daily-report]             title, cadence, skill, and optionally
+ *   [rituals.daily-report]             title, skill, and optionally cadence,
  *   at = "07:00"                       anchor, at, tz, from, timeout, profile,
  *   skill = "daily-report"             model, max_turns, and either `policy`
  *   policy = "read-only"               or mode, may, hold, notes
@@ -71,7 +71,8 @@ export interface MarkerPolicy {
 export interface RepoRitual {
   slug: string;
   title: string;
-  cadence: string;
+  /** Absent means on demand: never due by schedule. */
+  cadence?: string;
   anchor: "due" | "completion";
   at?: string;
   tz?: string;
@@ -361,8 +362,7 @@ function decodeRitual(
   const title = ritualText(table, "title", at);
   if (title === undefined) throw missing('title = "<text>"');
   const cadence = ritualText(table, "cadence", at, { pattern: CADENCE_TEXT, expected: 'like "1d", "2w" or "1m"' });
-  if (cadence === undefined) throw missing('cadence = "1d"');
-  if (Number.parseInt(cadence, 10) <= 0) {
+  if (cadence !== undefined && Number.parseInt(cadence, 10) <= 0) {
     throw new Error(`${where(source.file, source.lines[`${section}.cadence`])}: cadence must be above zero, got "${cadence}"`);
   }
   const skill = ritualText(table, "skill", at, { pattern: SKILL_NAME, expected: "a skill name: lowercase letters, digits, '.', '_' or '-'" });
@@ -380,6 +380,13 @@ function decodeRitual(
   if (from !== undefined && !isRealDate(from)) {
     throw new Error(`${where(source.file, source.lines[`${section}.from`])}: from must be a date "YYYY-MM-DD", got "${from}"`);
   }
+  if (cadence === undefined) {
+    for (const key of ["at", "from"] as const) {
+      if (table[key] !== undefined) {
+        throw new Error(`${where(source.file, source.lines[`${section}.${key}`])}: ${key} needs cadence; a ritual without cadence is on demand`);
+      }
+    }
+  }
   const timeoutMs = decodeTimeout(table, at);
   const profile = ritualText(table, "profile", at, { pattern: PROFILE_NAME, expected: "a profile name" });
   const model = ritualText(table, "model", at);
@@ -388,7 +395,8 @@ function decodeRitual(
     throw new Error(`${where(source.file, source.lines[`${section}.max_turns`])}: max_turns must be a positive integer`);
   }
   const { policy, policyName } = resolveRitualPolicy(table, { section, source, policies: context.policies });
-  const ritual: RepoRitual = { slug, title, cadence, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
+  const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
+  if (cadence !== undefined) ritual.cadence = cadence;
   if (hhmm !== undefined) ritual.at = hhmm;
   if (zone !== undefined) ritual.tz = zone;
   if (from !== undefined) ritual.from = from;

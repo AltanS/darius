@@ -430,7 +430,7 @@ Root keys:
 | Key | Required | Rule |
 |---|---|---|
 | `title` | yes | Non-empty text. |
-| `cadence` | yes | `Nd`, `Nw` or `Nm`, such as `1d` or `2w`. |
+| `cadence` | no | `Nd`, `Nw` or `Nm`, such as `1d` or `2w`. Without it the ritual is on demand: only `run now` starts it. `at` and `from` need it. |
 | `skill` | yes | The name of a skill in `.claude/skills/<skill>/SKILL.md`. The procedure is the skill; git holds no body. |
 | `anchor` | no | `due` (default) or `completion`. |
 | `at` | no | `HH:MM`, 24 hour. In the ritual's `tz`, else the root `tz`. |
@@ -491,7 +491,7 @@ ritual. It leaves out retired rituals and never writes `host`. A ritual with no 
 `skill = "<slug>"`, and its body becomes `.claude/skills/<slug>/SKILL.md`. Policies are written
 inline; you can move them into `[policies.<name>]` by hand.
 
-Export stops with exit 2 when a slug has a dot or is not a v3 slug, when a ritual has no cadence,
+Export stops with exit 2 when a slug has a dot or is not a v3 slug,
 or when a `may` or `hold` value would not pass `marker check`. `--write` also stops when
 `.darius.toml` or a target skill file has uncommitted changes, when the marker is already v3, or
 when a target skill file exists.

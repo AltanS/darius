@@ -146,7 +146,7 @@ may = ["Bash(date *)"]
 hold = ['\bdeploy\b']
 
 [rituals.daily-report]                # slug: lowercase letters, digits, - and _, no dots
-title = "Daily site report"           # required: title, cadence, skill
+title = "Daily site report"           # required: title, skill; cadence is optional
 cadence = "1d"
 at = "07:00"                          # HH:MM in tz; also tz, from, anchor, timeout, profile, model, max_turns
 skill = "daily-report"
@@ -155,7 +155,7 @@ timeout = "30m"                       # 1m to 12h
 ```
 
 - **Who owns rituals.** A project with `v = 3` defines its rituals in git only. A project with `v <= 2` keeps store rituals. Both kinds coexist in one store. v1 and v2 stay readable and unchanged.
-- **Schedule.** `cadence`, `at` (one time), `tz`, `from` (grid origin) and `anchor`. A ritual `tz` overrides the root `tz`. Day boundaries of a v3 ritual follow its zone, never the host clock. Root `tz` is required (operator ruling, 2026-10-01): a v3 marker without it is an error at the `v = 3` line.
+- **Schedule.** `cadence` is optional. Without it a ritual is on demand: never due by schedule, only `run now` starts it. `at` and `from` without `cadence` are errors. `cadence`, `at` (one time), `tz`, `from` (grid origin) and `anchor`. A ritual `tz` overrides the root `tz`. Day boundaries of a v3 ritual follow its zone, never the host clock. Root `tz` is required (operator ruling, 2026-10-01): a v3 marker without it is an error at the `v = 3` line.
 - **No body.** The procedure is the skill. A ritual names a skill of the repo; the only tier a ritual may name (see "Djinns").
 - **Strict.** An unknown key or section, a bad `at`, `tz`, `from`, `timeout`, `may` rule or `hold` pattern, a `policy` that names no table, `policy` next to `mode`, `may`, `hold` or `notes`, a mode above `max_mode`, and `mode = "act"` with no `max_mode`, are errors with `file:line`. A `hold` pattern must compile with the `u` flag. The whole marker is refused on any error.
 - **TOML subset.** Arrays may span lines, with comments and a trailing comma. Single-quoted literal strings keep backslashes, so a regex is written `'\bdeploy\b'`.

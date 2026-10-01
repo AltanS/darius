@@ -325,6 +325,19 @@ test("a v3 ritual with only the required keys gets defaults: anchor due, mode of
   assert.deepEqual(ritual, { slug: "daily", title: "Daily", cadence: "1d", anchor: "due", skill: "daily", policy: { mode: "off", may: [], hold: [] }, line: 5 });
 });
 
+test("a v3 ritual without cadence is on demand and keeps its other defaults", () => {
+  const ritual = readMarker(checkout(v3('[rituals.manual]\ntitle = "Manual"\nskill = "manual"\n')))?.rituals[0];
+  assert.deepEqual(ritual, { slug: "manual", title: "Manual", anchor: "due", skill: "manual", policy: { mode: "off", may: [], hold: [] }, line: 5 });
+  assert.equal("cadence" in (ritual ?? {}), false);
+});
+
+test("a v3 ritual without cadence hashes without a cadence key", () => {
+  const marker = readMarker(checkout(v3('[rituals.manual]\ntitle = "Manual"\nskill = "manual"\n')));
+  const ritual = marker?.rituals[0];
+  assert.ok(ritual !== undefined);
+  assert.match(definitionHash(ritual), /^[0-9a-f]{64}$/u);
+});
+
 test("a v1 or v2 marker has no tz, rituals or policies", () => {
   const v2 = readMarker(checkout('v = 2\nproject = "ws"\n'));
   assert.equal(v2?.version, 2);
@@ -349,7 +362,8 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["policy name with a bad shape", v3('[policies.Bad]\nmode = "off"\n'), /:6: \[policies\.Bad\]: a policy name is/u],
   ["missing title", v3('[rituals.a]\ncadence = "1d"\nskill = "a"\n'), /:5: \[rituals\.a\] needs title/u],
   ["empty title", v3(`${RITUAL.replace('"Daily"', '""')}`), /:6: title must be a non-empty string/u],
-  ["missing cadence", v3('[rituals.a]\ntitle = "A"\nskill = "a"\n'), /:5: \[rituals\.a\] needs cadence/u],
+  ["at without cadence", v3('[rituals.a]\ntitle = "A"\nskill = "a"\nat = "07:00"\n'), /:8: at needs cadence/u],
+  ["from without cadence", v3('[rituals.a]\ntitle = "A"\nskill = "a"\nfrom = "2026-10-05"\n'), /:8: from needs cadence/u],
   ["cadence without a unit", v3(RITUAL.replace('"1d"', '"7"')), /:7: cadence must be like "1d"/u],
   ["cadence zero", v3(RITUAL.replace('"1d"', '"0d"')), /:7: cadence must be above zero/u],
   ["missing skill", v3('[rituals.a]\ntitle = "A"\ncadence = "1d"\n'), /:5: \[rituals\.a\] needs skill/u],

@@ -100,11 +100,8 @@ function listLines(key: string, items: readonly string[], quote: (value: string)
 
 function ritualTable(ritual: Ritual, skill: string): string {
   const { policy } = ritual;
-  const lines = [
-    `[rituals.${ritual.slug}]`,
-    `title = ${tomlString(ritual.title)}`,
-    `cadence = ${tomlString(ritual.cadence ?? "")}`,
-  ];
+  const lines = [`[rituals.${ritual.slug}]`, `title = ${tomlString(ritual.title)}`];
+  if (ritual.cadence !== undefined && ritual.cadence !== "") lines.push(`cadence = ${tomlString(ritual.cadence)}`);
   if (ritual.anchor === "completion") lines.push('anchor = "completion"');
   lines.push(`skill = ${tomlString(skill)}`);
   if (policy.profile !== undefined) lines.push(`profile = ${tomlString(policy.profile)}`);
@@ -133,7 +130,6 @@ function problems(docs: readonly { header: Ritual }[]): string[] {
     if (!REPO_SLUG.test(slug)) {
       found.push(`${slug}: not a v3 slug (lowercase letters, digits, '-' or '_', at most 64, no dots); rename it first`);
     }
-    if (header.cadence === undefined) found.push(`${slug}: no cadence; a v3 ritual needs one`);
     const badRule = policy.may.find((rule) => !PERMISSION_RULE_RE.test(rule));
     if (badRule !== undefined) found.push(`${slug}: may rule "${badRule}" is not a permission rule`);
     const badHold = policy.hold.find((pattern) => !validHold(pattern));

@@ -9,6 +9,7 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `darius ritual export [--write] [--json]` moves a v2 project to v3. It prints a v3 marker from the store, or with `--write` writes `.darius.toml` and a `.claude/skills/<slug>/SKILL.md` for each ritual that had a body and no skill. It copies the existing root keys, profiles and defaults, sets `v = 3`, adds `tz` from the host, and adds `max_mode` when a ritual needs it. It never writes `host` and never commits. It refuses a dirty marker, an existing skill file, a marker that is already v3, and rituals that would fail `marker check`.
 - The web shows where a ritual is defined: "Defined in .darius.toml at commit X, host Y", with a note when the marker had uncommitted changes, or "Not in .darius.toml" for an unmanaged ritual. A Schedule section shows the cadence, `at` with its zone, the next due time and the timeout. Rows say `git` or `not in .darius.toml`. The web stays read-only for git-owned fields and points to the file.
 - The web shows the same warnings as `ritual list`: a stale mirror and a retired slug named again.
+- In a v3 marker `cadence` is optional. A ritual without it is on demand: only `run now` starts it.
 
 ### Changed
 

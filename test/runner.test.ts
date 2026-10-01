@@ -1293,6 +1293,24 @@ test("run now starts a ritual that is not due and one that failed today; a held 
   await assert.rejects(runCli(runCommand, ["now", "ghost", "--project", off]), /no ritual 'ghost'/u);
 });
 
+test("a ritual without cadence is never due by schedule, and run now starts it", async () => {
+  const project = "rd-ondemand";
+  seedRitual(project);
+  const store = openProject(project);
+  const doc = store.readItem<Ritual>("ritual", "heartbeat");
+  assert.ok(doc !== null);
+  const { cadence: _cadence, ...header } = doc.header;
+  void _cadence;
+  store.writeItem({ header, body: doc.body }, { who: "test" });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  assert.deepEqual(ritualsOf((await runDueJson(project)).report), [], "no cadence, never a candidate");
+  assert.equal(linesOf(project, "run.started").length, 0);
+  const now = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+  assert.equal(now.code, 0, now.stdout);
+  assert.equal(JSON.parse(now.stdout).projects[0].rituals[0].end, "complete");
+  assert.deepEqual(ritualsOf((await runDueJson(project)).report), [], "still not due after a run");
+});
+
 test("run now --profile overrides the ritual's profile for that run only", async () => {
   await addProfile("rd-now-effort", ["--effort", "max"]);
   const project = "rd-now-profile";

@@ -155,6 +155,29 @@ test("stdout form parses as v3 and reconciles to the same def_hash", async () =>
   assert.equal(existsSync(join(dir, ".claude")), false, "stdout form writes nothing");
 });
 
+test("a store ritual without cadence exports without a cadence line and round-trips to the same mirrorHash", async () => {
+  const { project } = setup();
+  const header = ritualHeader("on-demand", { skill: "manual" });
+  delete header.cadence;
+  project.writeItem({ header, body: "ignored\n" }, { who: "test" });
+  const result = await run(project.name, []);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /\[rituals\.on-demand\]\ntitle = "Title of on-demand"\nskill = "manual"\n/u);
+  const target = join(SANDBOX, `check-nocadence-${String(counter)}`);
+  mkdirSync(target);
+  const freshName = `acme-web-nocad-${String(counter)}`;
+  writeFileSync(join(target, ".darius.toml"), result.stdout.replace(`project = "${project.name}"`, `project = "${freshName}"`));
+  const marker = readMarker(target);
+  const ritual = marker?.rituals.find((item) => item.slug === "on-demand");
+  assert.ok(marker !== null && ritual !== undefined);
+  assert.equal(ritual.cadence, undefined);
+  const fresh = openProject(freshName, { create: true });
+  reconcileProject(fresh, target, "host-a", new Date("2026-10-01T06:00:00.000Z"));
+  const mirrored = fresh.readItem<Ritual>("ritual", "on-demand")?.header;
+  assert.equal(mirrored?.cadence, undefined);
+  assert.equal(mirrored?.def_hash, mirrorHash(marker, ritual));
+});
+
 test("a project with no marker gets the two required root lines", async () => {
   const { project } = setup({ marker: null });
   const result = await run(project.name, []);
