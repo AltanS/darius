@@ -120,14 +120,17 @@ test("skill status: exit 1 and the fix with no skill, exit 0 for a user-level or
   writeFileSync(join(root, "claude", "plugins", "installed_plugins.json"), JSON.stringify(listed));
   const fromPlugin = darius(env, ["skill", "status", "--json"], { runtime: "bun" });
   assert.equal(fromPlugin.code, 0, fromPlugin.stderr);
-  assert.deepEqual(JSON.parse(fromPlugin.stdout), { ok: true, source: "plugin", path: join(plugin, "skills", "darius", "SKILL.md") });
+  const [generated, ...others] = JSON.parse(fromPlugin.stdout);
+  assert.deepEqual(generated, { name: "darius", path: join(plugin, "skills", "darius", "SKILL.md"), state: "ok", version: VERSION, source: "plugin" });
+  assert.equal(others.length, 12);
+  assert.ok(others.every((entry: { state: string; source: string }) => entry.state === "missing" && entry.source === "user"));
   const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
   assert.match(step.detail, /a plugin teaches/u);
   assert.doesNotMatch(step.detail, /skill install/u);
 
   assert.equal(darius(env, ["skill", "install"]).code, 0);
-  assert.equal(JSON.parse(darius(env, ["skill", "status", "--json"]).stdout).source, "user");
+  assert.equal(JSON.parse(darius(env, ["skill", "status", "--json"]).stdout)[0].source, "user");
 });
 
 test("setup names darius skill install when no skill teaches darius", () => {
@@ -164,11 +167,12 @@ test("install writes the file and prints its path; a second install writes nothi
   const file = join(root, "claude", "skills", "darius", "SKILL.md");
   const first = darius(env, ["skill", "install"]);
   assert.equal(first.code, 0, first.stderr);
-  assert.equal(first.stdout.trim(), file);
+  assert.equal(first.stdout.trim().split("\n")[0], file, "the generated skill comes first, then the other 12 paths");
   assert.equal(readFileSync(file, "utf8"), darius(env, ["skill"]).stdout);
   const second = darius(env, ["skill", "install", "--json"], { runtime: "bun" });
   assert.equal(second.code, 0, second.stderr);
   assert.equal(JSON.parse(second.stdout).result, "unchanged");
+  assert.ok(JSON.parse(second.stdout).files.every((entry: { result: string }) => entry.result === "unchanged"));
 });
 
 test("install refuses a file without a darius stamp, exit 1, and leaves it alone", () => {
@@ -209,13 +213,18 @@ test("setup refreshes a stamped skill file and installs none", () => {
   assert.equal(readFileSync(file, "utf8"), darius(env, ["skill"]).stdout);
 });
 
-test("the hook snippet is valid JSON: one SessionStart command with a 5 s timeout", () => {
+test("the hook snippet is valid JSON: SessionStart (5 s), Stop (15 s) and PostToolUse on Edit|Write|MultiEdit (10 s)", () => {
   const { env } = sandbox();
   const parsed = JSON.parse(darius(env, ["skill", "hook"]).stdout);
+  assert.deepEqual(Object.keys(parsed.hooks), ["SessionStart", "Stop", "PostToolUse"]);
   const hook = parsed.hooks.SessionStart[0].hooks[0];
   assert.equal(hook.type, "command");
   assert.equal(hook.command, "command -v darius >/dev/null 2>&1 && darius due --brief || true");
   assert.equal(hook.timeout, 5);
+  assert.equal(parsed.hooks.Stop[0].matcher, undefined);
+  assert.deepEqual(parsed.hooks.Stop[0].hooks, [{ type: "command", command: "command -v darius >/dev/null 2>&1 && darius hook-stop || true", timeout: 15 }]);
+  assert.equal(parsed.hooks.PostToolUse[0].matcher, "Edit|Write|MultiEdit");
+  assert.deepEqual(parsed.hooks.PostToolUse[0].hooks, [{ type: "command", command: "command -v darius >/dev/null 2>&1 && darius hook-drift || true", timeout: 10 }]);
 });
 
 test("due --brief is silent outside a project, exit 0", () => {

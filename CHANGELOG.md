@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.60.0] - 2026-10-01
+
+### Added
+
+- `darius skill install` now writes 13 stamped files under the Claude config dir: the generated `skills/darius/SKILL.md`, the 11 procedure skills of the tracker plugin as `skills/darius-<name>/SKILL.md` (work, work-plan, work-verify, commit, sync, archive, wrap-up, enrich, dream, worklog, structural-review), and `agents/darius.md`. Their static text lives in `skills/` of this repo. A skill is called `/darius-<name>` now, not `/tracker:<name>`.
+- `darius hook-stop`: the Work Loop exit gate, ported from the plugin's `loop-gate.sh`. It reads the Stop hook JSON on stdin, asks `loop-check` in process, prints the block decision (or the budget-spent notice), and exits 0 with no output on any failure. `TRACKER_LOOP_DEBUG` and `TRACKER_LOOP_DEBUG_FILE` work as before.
+- `darius hook-drift`: the PostToolUse check, ported from `drift-check.sh`. It appends an edited file that a spec names to `.tracker/.pending-sync` once, and writes nothing else. It also fails open.
+- `darius delegation validate|return-validate '<json>'`: the plugin's `delegation.mts`, now in `src/legacy/lib/delegation.ts`. Same output and exit codes (0 valid, 1 invalid, 2 usage).
+- The new verbs are legacy verbs and have a "Hooks" line in the generated skill.
+
+### Changed
+
+- `darius skill status` prints one line per file (`ok`, `outdated`, `edited`, `unstamped` or `missing`). `--json` prints an array of `{name, path, state, version, source}` where it printed one object. The exit code is unchanged: 0 when the generated skill teaches sessions here.
+- `darius skill install` and `uninstall` act on all 13 files. An unstamped file is refused (install) or left alone (uninstall), exit 1, and the others are still handled. `--json` keeps `ok`, `path` and `result` for the generated skill and adds `files`. `uninstall` never removes the `agents` dir.
+- `darius setup` refreshes every stamped file of the set and installs nothing new.
+- `darius skill hook` prints three hooks: SessionStart (`darius due --brief`), Stop (`darius hook-stop`, 15 s) and PostToolUse on `Edit|Write|MultiEdit` (`darius hook-drift`, 10 s).
+- The next-action lines of `loop-check` name `darius worklog ...`, `/darius-work-verify` and `/darius-commit`, and have no em dash.
+- The Nix package ships `skills/`.
+
 ## [0.59.0] - 2026-10-02
 
 ### Added

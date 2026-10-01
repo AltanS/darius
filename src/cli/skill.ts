@@ -1,30 +1,42 @@
 /**
- * `darius skill [install|uninstall|hook]`: teach a Claude Code session darius
- * with one generated skill file (docs/concept.md, "Claude Code sessions and
- * skills").
+ * `darius skill [install|uninstall|status|hook]`: teach a Claude Code session
+ * darius with one generated skill file, 11 static procedure skills and the
+ * darius agent (docs/concept.md, "Claude Code sessions and skills").
  *
- *   darius skill              print the SKILL.md text (also `darius --skill`)
- *   darius skill install      write <claude>/skills/darius/SKILL.md and print its path.
- *                             <claude> is $CLAUDE_CONFIG_DIR, else ~/.claude.
- *                             No write when the text is the same. A file there
- *                             without a darius stamp is refused (exit 1).
- *   darius skill uninstall    remove a stamped file and its dir, when empty
- *   darius skill status       exit 0 and print the path when a stamped skill
- *                             teaches sessions here (user-level, or an installed
- *                             plugin's skills/darius/SKILL.md), else exit 1
- *   darius skill hook         print the SessionStart hook for settings.json;
- *                             the operator pastes it, darius never writes it
+ *   darius skill              print the generated SKILL.md text (also `darius --skill`)
+ *   darius skill install      write 13 stamped files under <claude>, which is
+ *                             $CLAUDE_CONFIG_DIR, else ~/.claude:
+ *                               skills/darius/SKILL.md          generated
+ *                               skills/darius-<name>/SKILL.md   11 procedure skills
+ *                               agents/darius.md                the darius agent
+ *                             The static text lives in `skills/` of this repo
+ *                             (see skills/README.md). No write when a file is
+ *                             the same. A file there without a darius stamp is
+ *                             refused (exit 1); the others are still written.
+ *   darius skill uninstall    remove every stamped file, and its dir when empty
+ *                             (never the `agents` dir)
+ *   darius skill status       one line per file: ok, outdated (older stamped
+ *                             text), edited (the body no longer matches its
+ *                             stamp), unstamped or missing. Exit 0 when the
+ *                             generated skill teaches sessions here (user-level,
+ *                             or an installed plugin's skills/darius/SKILL.md),
+ *                             else exit 1. --json prints an array.
+ *   darius skill hook         print the SessionStart, Stop and PostToolUse hooks
+ *                             for settings.json; the operator pastes them,
+ *                             darius never writes settings.json
  *
- * The rules are static text; the verb table comes from the registry, only
- * commands marked `audience: "session"`. The last line is a stamp: the
- * version and the first 12 hex digits of the sha256 of everything above it.
- * `darius setup` refreshes a stamped file (`refreshSkill`), so `darius
- * update` keeps every host current. The text is capped at 6144 bytes.
+ * The generated rules are static text; the verb table comes from the registry,
+ * only commands marked `audience: "session"`. The last line of every file is a
+ * stamp: the version and the first 12 hex digits of the sha256 of everything
+ * above it. `darius setup` refreshes every stamped file of the set
+ * (`refreshSkillFiles`) and installs nothing new, so `darius update` keeps
+ * every host current. Only the generated text is capped, at 6144 bytes.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { JsonValue } from "../core/model.ts";
 import { claudeDir } from "../core/paths.ts";
@@ -48,6 +60,7 @@ export const TRACKER_VERB_GROUPS: readonly (readonly [string, string])[] = [
   ["Worklogs", "`worklog open|append|close|list|set-stage|dispatch|park|distill|index`"],
   ["Sessions", "`claim`, `release`, `loop-check`, `counsel-gate`, `agents`"],
   ["Vigils", "`vigil add|list|set-body|close`"],
+  ["Hooks", "`hook-stop`, `hook-drift`, `delegation validate|return-validate <json>`"],
   ["Health", "`doctor [--fix]`, `migrate`, `scan artifacts|stubs <path>`"],
 ];
 
@@ -147,6 +160,12 @@ function stampLine(body: string, version: string): string {
   return `<!-- darius-skill ${version} ${hash} -->`;
 }
 
+/** `body` with its stamp as the last line. A body without a final newline gets one first. */
+export function stampText(body: string, version: string = VERSION): string {
+  const text = body.endsWith("\n") ? body : `${body}\n`;
+  return `${text}${stampLine(text, version)}\n`;
+}
+
 /** The stamp of a skill file's text, or null when it has none. */
 export function readStamp(text: string): { version: string; hash: string } | null {
   const match = STAMP.exec(text);
@@ -156,9 +175,80 @@ export function readStamp(text: string): { version: string; hash: string } | nul
   return { version, hash };
 }
 
+/** True when the hash in the stamp is the hash of the text above it. False for an unstamped text. */
+export function stampMatchesBody(text: string): boolean {
+  const match = STAMP.exec(text);
+  const hash = match?.[2];
+  if (match === null || hash === undefined) return false;
+  return createHash("sha256").update(text.slice(0, match.index)).digest("hex").slice(0, 12) === hash;
+}
+
 /** `<claude>/skills/darius/SKILL.md`. */
 export function skillPath(dir: string = claudeDir()): string {
   return join(dir, "skills", "darius", "SKILL.md");
+}
+
+/** The 11 procedure skills of the tracker plugin. Each is `skills/<name>.md` in this repo. */
+export const PROCEDURE_SKILLS: readonly string[] = [
+  "work",
+  "work-plan",
+  "work-verify",
+  "commit",
+  "sync",
+  "archive",
+  "wrap-up",
+  "enrich",
+  "dream",
+  "worklog",
+  "structural-review",
+];
+
+/** The agent's static text is `skills/agent-darius.md`. */
+const AGENT_SOURCE = "agent-darius";
+
+/** The static skill text: `skills/` at the root of this checkout or install, found from this module. */
+export function skillSourceDir(): string {
+  return fileURLToPath(new URL("../../skills/", import.meta.url));
+}
+
+/** One file darius keeps under `<claude>`: its name, where it goes and the stamped text it should hold. */
+export interface ManagedFile {
+  /** `darius`, `darius-work`, ..., or `agent darius`. */
+  name: string;
+  path: string;
+  text: string;
+  /** False for the agent, whose parent dir is Claude Code's own and never removed. */
+  ownsDir: boolean;
+}
+
+/**
+ * The 13 files of the set, in order: the generated skill, the 11 procedure
+ * skills, the agent. Throws when a static source file is missing.
+ */
+export function managedFiles(
+  commands: readonly SkillVerb[] = listCommands(),
+  dir: string = claudeDir(),
+  version: string = VERSION,
+  sourceDir: string = skillSourceDir(),
+): ManagedFile[] {
+  const files: ManagedFile[] = [
+    { name: "darius", path: skillPath(dir), text: renderSkill(commands, version), ownsDir: true },
+  ];
+  for (const slug of PROCEDURE_SKILLS) {
+    files.push({
+      name: `darius-${slug}`,
+      path: join(dir, "skills", `darius-${slug}`, "SKILL.md"),
+      text: stampText(readFileSync(join(sourceDir, `${slug}.md`), "utf8"), version),
+      ownsDir: true,
+    });
+  }
+  files.push({
+    name: "agent darius",
+    path: join(dir, "agents", "darius.md"),
+    text: stampText(readFileSync(join(sourceDir, `${AGENT_SOURCE}.md`), "utf8"), version),
+    ownsDir: false,
+  });
+  return files;
 }
 
 export type InstallResult = "written" | "unchanged" | "refused";
@@ -177,13 +267,13 @@ export function installSkill(text: string, file: string): InstallResult {
 
 export type UninstallResult = "removed" | "absent" | "refused";
 
-/** Removes a stamped skill file, and its dir when that is then empty. */
-export function uninstallSkill(file: string): UninstallResult {
+/** Removes a stamped skill file, and its dir when that is then empty (`removeDir`, on by default). */
+export function uninstallSkill(file: string, removeDir: boolean = true): UninstallResult {
   if (!existsSync(file)) return "absent";
   if (readStamp(readFileSync(file, "utf8")) === null) return "refused";
   unlinkSync(file);
   const dir = dirname(file);
-  if (readdirSync(dir).length === 0) rmdirSync(dir);
+  if (removeDir && readdirSync(dir).length === 0) rmdirSync(dir);
   return "removed";
 }
 
@@ -259,11 +349,43 @@ export function refreshSkill(text: string, file: string, plugin: string | null =
     : { ok: true, skipped: true, detail: `${file} is current` };
 }
 
-export const HOOK_COMMAND = "command -v darius >/dev/null 2>&1 && darius due --brief || true";
+/**
+ * What `darius setup` does with the whole set: refresh every stamped file
+ * whose text changed, install nothing new, leave an unstamped file alone. The
+ * generated skill keeps its own messages (not installed, a plugin teaches it,
+ * no stamp). When any static file was rewritten, the detail lists the paths.
+ */
+export function refreshSkillFiles(files: readonly ManagedFile[], plugin: string | null = null): RefreshResult {
+  const [generated, ...rest] = files;
+  if (generated === undefined) return { ok: true, skipped: true, detail: "no skill files" };
+  const first = refreshSkill(generated.text, generated.path, plugin);
+  const written: string[] = first.skipped ? [] : [generated.path];
+  const notes: string[] = [];
+  for (const file of rest) {
+    if (!existsSync(file.path)) continue;
+    if (readStamp(readFileSync(file.path, "utf8")) === null) {
+      notes.push(`${file.path} has no darius stamp; left alone`);
+      continue;
+    }
+    if (installSkill(file.text, file.path) === "written") written.push(file.path);
+  }
+  if (written.length === 0) return notes.length === 0 ? first : { ...first, detail: `${first.detail}; ${notes.join("; ")}` };
+  return { ok: true, skipped: false, detail: `refreshed ${written.join(", ")}${notes.length === 0 ? "" : `; ${notes.join("; ")}`}` };
+}
 
-/** The SessionStart snippet for Claude Code's settings.json. */
+export const HOOK_COMMAND = "command -v darius >/dev/null 2>&1 && darius due --brief || true";
+export const HOOK_STOP_COMMAND = "command -v darius >/dev/null 2>&1 && darius hook-stop || true";
+export const HOOK_DRIFT_COMMAND = "command -v darius >/dev/null 2>&1 && darius hook-drift || true";
+
+/** The SessionStart, Stop and PostToolUse snippet for Claude Code's settings.json. */
 export function hookSnippet(): string {
-  const snippet = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 5 }] }] } };
+  const snippet = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 5 }] }],
+      Stop: [{ hooks: [{ type: "command", command: HOOK_STOP_COMMAND, timeout: 15 }] }],
+      PostToolUse: [{ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: HOOK_DRIFT_COMMAND, timeout: 10 }] }],
+    },
+  };
   return JSON.stringify(snippet, null, 2);
 }
 
@@ -272,47 +394,96 @@ function currentSkill(): string {
 }
 
 function install(args: ParsedArgs): number {
-  const file = skillPath();
-  const result = installSkill(currentSkill(), file);
+  const files = managedFiles();
+  const results = files.map((file) => ({ name: file.name, path: file.path, result: installSkill(file.text, file.path) }));
+  const refused = results.filter((entry) => entry.result === "refused");
+  const generated = results[0];
   if (args.json) {
-    console.log(JSON.stringify({ ok: result !== "refused", path: file, result }));
-  } else if (result === "refused") {
-    console.error(`darius: ${file} exists and has no darius stamp; move it away first`);
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results }));
   } else {
-    console.log(file);
+    for (const entry of refused) console.error(`darius: ${entry.path} exists and has no darius stamp; move it away first`);
+    for (const entry of results) if (entry.result !== "refused") console.log(entry.path);
   }
-  return result === "refused" ? 1 : 0;
+  return refused.length === 0 ? 0 : 1;
 }
 
-/** `darius skill status`: exit 0 and the path when a session learns darius here, else exit 1 and the fix. */
-function status(args: ParsedArgs): number {
-  const source = skillSource();
-  if (args.json) {
-    console.log(JSON.stringify({ ok: source !== null, source: source?.kind ?? null, path: source?.path ?? null }));
-  } else if (source === null) {
-    console.log("no darius skill on this host. To teach Claude Code sessions darius: darius skill install");
-  } else {
-    console.log(`${source.kind === "user" ? "installed" : "from a plugin"}: ${source.path}`);
+/** The state of one file against the text it should hold. */
+export type FileState = "ok" | "outdated" | "edited" | "unstamped" | "missing";
+
+/** `ok` when the file is the current text, `outdated` for older stamped text, `edited` when its body no longer matches its stamp. */
+export function fileState(file: string, expected: string): FileState {
+  if (!existsSync(file)) return "missing";
+  const text = readFileSync(file, "utf8");
+  if (readStamp(text) === null) return "unstamped";
+  if (text === expected) return "ok";
+  return stampMatchesBody(text) ? "outdated" : "edited";
+}
+
+/** One line of `darius skill status`. */
+export interface StatusEntry {
+  name: string;
+  path: string;
+  state: FileState;
+  version: string | null;
+  /** `plugin` for a generated skill that an installed plugin teaches, else `user`. */
+  source: "user" | "plugin";
+}
+
+/** The status of every file of the set. Exit 0 in `status` when the generated skill teaches sessions here. */
+export function skillStatus(files: readonly ManagedFile[] = managedFiles(), dir: string = claudeDir()): StatusEntry[] {
+  const entries: StatusEntry[] = [];
+  for (const file of files) {
+    let path = file.path;
+    let source: "user" | "plugin" = "user";
+    if (file === files[0]) {
+      const found = skillSource(dir);
+      if (found !== null) {
+        path = found.path;
+        source = found.kind;
+      }
+    }
+    const stamp = existsSync(path) ? readStamp(readFileSync(path, "utf8")) : null;
+    entries.push({ name: file.name, path, state: fileState(path, file.text), version: stamp?.version ?? null, source });
   }
-  return source === null ? 1 : 0;
+  return entries;
+}
+
+/** `darius skill status`: one line per file; exit 0 when a session learns darius here, else exit 1 and the fix. */
+function status(args: ParsedArgs): number {
+  const entries = skillStatus();
+  const taught = skillSource() !== null;
+  if (args.json) {
+    console.log(JSON.stringify(entries));
+  } else {
+    if (!taught) console.log("no darius skill on this host. To teach Claude Code sessions darius: darius skill install");
+    for (const entry of entries) {
+      const where = entry.source === "plugin" ? `${entry.path} (from a plugin)` : entry.path;
+      console.log(`${entry.state.padEnd(9)} ${entry.name.padEnd(24)} ${where}`);
+    }
+  }
+  return taught ? 0 : 1;
 }
 
 function uninstall(args: ParsedArgs): number {
-  const file = skillPath();
-  const result = uninstallSkill(file);
+  const files = managedFiles();
+  const results = files.map((file) => ({ name: file.name, path: file.path, result: uninstallSkill(file.path, file.ownsDir) }));
+  const refused = results.filter((entry) => entry.result === "refused");
+  const generated = results[0];
   if (args.json) {
-    console.log(JSON.stringify({ ok: result !== "refused", path: file, result }));
-  } else if (result === "refused") {
-    console.error(`darius: ${file} has no darius stamp; left alone`);
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results }));
   } else {
-    console.log(result === "removed" ? `removed ${file}` : `no skill at ${file}`);
+    for (const entry of refused) console.error(`darius: ${entry.path} has no darius stamp; left alone`);
+    const removed = results.filter((entry) => entry.result === "removed");
+    for (const entry of removed) console.log(`removed ${entry.path}`);
+    if (removed.length === 0 && refused.length === 0) console.log(`no skill at ${generated?.path ?? skillPath()}`);
   }
-  return result === "refused" ? 1 : 0;
+  return refused.length === 0 ? 0 : 1;
 }
 
 export const skillCommand: Command = {
   name: "skill",
-  summary: "print the Claude Code skill for darius; install | uninstall it; status says where sessions learn it; hook prints a SessionStart hook",
+  summary:
+    "print the Claude Code skill for darius; install | uninstall the skill, 11 procedure skills and the agent; status lists them; hook prints the SessionStart, Stop and PostToolUse hooks",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

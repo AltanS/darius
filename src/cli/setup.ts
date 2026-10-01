@@ -70,7 +70,7 @@ import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-p
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
-import { findPluginSkill, refreshSkill, renderSkill, skillPath } from "./skill.ts";
+import { findPluginSkill, managedFiles, refreshSkillFiles } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -592,15 +592,16 @@ export function defaultDeps(): SetupDeps {
 // --- step: refresh the Claude Code skill --------------------------------------------
 
 /**
- * Rewrites `<claude>/skills/darius/SKILL.md` when it carries a darius stamp
- * and differs from this version's text, so `darius update` (which runs
- * setup) keeps every host's skill current. Installs nothing new: that is
- * `darius skill install`. An unstamped file is the operator's; left alone.
+ * Rewrites every file of the skill set under `<claude>` (the generated skill,
+ * the 11 procedure skills, the agent) that carries a darius stamp and differs
+ * from this version's text, so `darius update` (which runs setup) keeps every
+ * host current. Installs nothing new: that is `darius skill install`. An
+ * unstamped file is the operator's; left alone.
  */
 function refreshSkillStep(home: string): Step {
   try {
     const dir = claudeDir(home);
-    return { what: "skill", ...refreshSkill(renderSkill(listCommands()), skillPath(dir), findPluginSkill(dir)) };
+    return { what: "skill", ...refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir)) };
   } catch (cause) {
     return { ok: false, what: "skill", detail: errorMessage(cause) };
   }
