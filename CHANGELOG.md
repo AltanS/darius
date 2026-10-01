@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.53.0] - 2026-10-01
+
+### Added
+
+- Marker v3 can be read. A `.darius.toml` with `v = 3` may hold `[rituals.<slug>]` and `[policies.<name>]` tables and a required root `tz` (an IANA zone). A ritual names a skill, a cadence, and optionally `at = "HH:MM"`, its own `tz`, `from` (the start date of its grid), `timeout`, a profile, a model, `max_turns`, and either `policy = "<name>"` or its own `mode`, `may`, `hold` and `notes`. Hosts do not act on these tables yet; 0.54.0 does.
+- `darius marker check [dir] [--json]` validates the marker and names the file and line of an error.
+- `darius link --list` adds `v3 (N rituals)` to the ok line of a v3 checkout.
+- The TOML reader takes arrays over several lines and single-quoted literal strings, so `hold` regexes need no escapes.
+- Due math knows instants: an occurrence is the grid date at `at` in the ritual's zone. A completion satisfies every occurrence at or before it. Clock changes follow the usual rule: in an overlap the earlier instant wins, in a gap the time moves forward. v1 and v2 rituals behave as before.
+- Store ritual items accept the new keys (`source`, `at`, `tz`, `from`, `timeout`, `def_*`). Every host must run 0.53.0 or later before 0.54.0 writes them.
+
 ## [0.52.0] - 2026-10-01
 
 ### Added
