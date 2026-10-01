@@ -292,6 +292,8 @@ pkgs.testers.runNixOSTest {
         unit = user_ctl("alice", "cat darius-run-due.service")
         assert "/etc/profiles/per-user/alice/bin" in unit, unit
         assert "/run/current-system/sw/bin" in unit, unit
+        timer = user_ctl("alice", "cat darius-run-due.timer")
+        assert "OnCalendar=*:05/15" in timer, timer
 
     with subtest("alice: home-manager also declares darius-web.service, and it answers healthz"):
         machine.wait_until_succeeds(
@@ -349,6 +351,8 @@ pkgs.testers.runNixOSTest {
         assert "@PATH@" not in unit and "@DARIUS@" not in unit, unit
         assert "/etc/profiles/per-user/bob/bin" in unit, unit
         assert "/run/current-system/sw/bin" in unit, unit
+        timer = machine.succeed("cat /home/bob/.config/systemd/user/darius-run-due.timer")
+        assert "OnCalendar=*:05/15" in timer, timer
         for t in TIMERS:
             user_ctl("bob", f"is-active {t}.timer")
 

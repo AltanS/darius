@@ -12,7 +12,7 @@
  *      field names a host other than `hostId()`), its latest run is held,
  *      it has an open run, or its latest
  *      run ended `failed` or `abandoned` TODAY. That last rule is the retry
- *      cap: a failed run keeps a ritual due (src/core/due.ts), and the hourly
+ *      cap: a failed run keeps a ritual due (src/core/due.ts), and the 15-minute
  *      timer must not relaunch it until the next due date or an operator.
  *      An acknowledgement (`darius run ack`) changes only what the report
  *      says: the timer does not retry an acknowledged failure either.

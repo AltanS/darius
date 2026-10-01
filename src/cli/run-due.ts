@@ -2,7 +2,7 @@
  * `darius run-due --unattended [--project P | --all-projects] [--only slug]
  *                 [--dry-run] [--who W] [--timeout SECONDS] [--json]`
  *
- * What the hourly systemd timer calls. Starts every due ritual whose policy
+ * What the 15-minute systemd timer calls. Starts every due ritual whose policy
  * mode is `report` or `act`, one `claude -p` session each; the work is in
  * src/runner/run-due.ts. `--dry-run` syncs nothing, starts nothing and
  * writes nothing: it lists what would start. Without `--project` (and

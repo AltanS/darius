@@ -242,7 +242,7 @@ in
 
     snapshot = timerOptions "snapshot create" "04:00";
 
-    runDue = timerOptions "run-due --unattended" "*:05" // {
+    runDue = timerOptions "run-due --unattended" "*:05/15" // {
       slice = mkOption {
         type = types.nullOr types.str;
         default = null;
@@ -357,7 +357,7 @@ in
             };
           })
           (mkIf cfg.runDue.enable {
-            darius-run-due = timer "Run darius run-due once an hour" {
+            darius-run-due = timer "Run darius run-due every 15 minutes" {
               OnCalendar = cfg.runDue.onCalendar;
               Persistent = true;
               AccuracySec = "1min";

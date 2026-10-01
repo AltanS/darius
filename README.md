@@ -27,7 +27,7 @@ symlink `current` names the live one. `~/.local/bin/darius` points to `current/b
 1. Install the newest release. `scripts/install.sh` clones it, links `~/.local/bin/darius`,
    writes a config skeleton to `~/.config/darius/config.toml`, creates the store dir
    `~/.local/share/darius`, and enables the units: sync every 15 minutes, the vigil sweep daily
-   at 06:30, run-due hourly at :05, and the web page. Its last lines say what to do next:
+   at 06:30, run-due every 15 minutes at :05/15, and the web page. Its last lines say what to do next:
    `darius init` in each repo, and `darius skill install` when no Claude Code plugin teaches
    darius yet.
 
@@ -520,6 +520,8 @@ inputs.darius = {
   `config.toml` unmanaged. `package = darius.packages.${system}.darius-node` selects Node instead
   of Bun. `settings.runner.claude` sets a Claude Code wrapper for run-due, and `runDue.slice`
   assigns the process to a systemd slice.
+- The run-due timer fires every 15 minutes by default (`runDue.onCalendar = "*:05/15"`: :05, :20, :35, :50),
+  offset from the sync timer. Set `runDue.onCalendar` to change it.
 - Timers require systemd lingering to fire without an active login: `users.users.<name>.linger = true`.
 - Vigil `Command:` lines run in a login shell, where `/etc/profile` resets PATH on NixOS.
   Checks search your login PATH first, matching interactive shells, then the unit directories; `darius`

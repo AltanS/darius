@@ -438,6 +438,7 @@ test("--systemd renders the real templates from a checkout: no placeholder left,
   for (const name of ["darius-sync.timer", "darius-vigil-sweep.timer", "darius-run-due.timer"]) {
     assert.equal(readFileSync(join(unitDir, name), "utf8"), readFileSync(join(REPO_SYSTEMD, name), "utf8"));
   }
+  assert.match(readFileSync(join(unitDir, "darius-run-due.timer"), "utf8"), /^OnCalendar=\*:05\/15$/mu);
 });
 
 // --- running from the Nix store --------------------------------------------------
