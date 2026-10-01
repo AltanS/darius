@@ -1,6 +1,7 @@
 /**
  * The icons of the frame: the brand gem, the settings gear, the status pulse, the chevron and
- * check of the switcher, the two marks of its scopes and the milestone flag.
+ * check of the switcher, the two marks of its scopes, the milestone flag and the lock of a
+ * setting the environment sets.
  * The eye and the two arrows of the vigil and ritual tabs are in `kind.tsx`.
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
  * from the text colour around them.
@@ -17,6 +18,7 @@ const PATHS = {
   all: ["M8 2L14.4 5.4L8 8.8L1.6 5.4Z", "M1.6 8.4L8 11.8L14.4 8.4", "M1.6 11.2L8 14.6L14.4 11.2"],
   status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],
   overview: ["M1.8 7.6L8 2.3L14.2 7.6", "M3.6 6.6V13.7H12.4V6.6", "M6.6 13.7V9.6H9.4V13.7"],
+  lock: ["M3.4 7.2H12.6V14.2H3.4Z", "M5.4 7.2V4.9A2.6 2.6 0 0 1 10.6 4.9V7.2"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type NavIconName = keyof typeof PATHS;

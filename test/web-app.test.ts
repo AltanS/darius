@@ -1084,7 +1084,7 @@ test("the backups tab: an env-locked field, no secret, the controls", async () =
   const page = await get("/settings/backups");
   assert.equal(page.status, 200);
   const body = page.body;
-  for (const text of ["Backups", "Back up now", "Snapshots", "on this host", "in the bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "set by environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf"]) {
+  for (const text of ["Backups", "Back up now", "Snapshots", "this host", "not on this host", "bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "Set by the environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf", "Copies go to bucket"]) {
     assert.ok(body.includes(text), `the backups tab shows: ${text}`);
   }
   const input = (id: string): string => [...body.matchAll(/<input\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(`id="${id}"`)) ?? "";
@@ -1097,5 +1097,45 @@ test("the backups tab: an env-locked field, no secret, the controls", async () =
   assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
   assert.ok(body.includes("the folder is not writable &lt;script&gt;alert(1)&lt;/script&gt;"), "a problem shows, escaped");
   assert.match(body, /<button(?![^>]*\bdisabled\b)[^>]*>Back up now<\/button>/u, "the Back up now button is on while nothing runs");
+  const secretAt = body.indexOf('id="bk-secret"');
+  assert.ok(secretAt !== -1 && body.lastIndexOf("<form", secretAt) === -1, "the key pair sits in no form, so an early Enter cannot send the secret in a URL");
   assertScriptsCarryNonce(body, "/settings/backups");
+});
+
+/** The settings row around the control with this id: from its opening tag to the next row. */
+function settingRow(body: string, id: string): string {
+  const at = body.indexOf(`id="${id}"`);
+  const starts = [...body.matchAll(/<div class="st-row(?: st-row-inline)?">/gu)].map((match) => match.index);
+  const start = starts.findLast((index) => index < at) ?? 0;
+  const end = starts.find((index) => index > at);
+  return body.slice(start, end);
+}
+
+test("the backups tab: a marker only where a value is not the default", async () => {
+  const body = (await get("/settings/backups")).body.replaceAll("<!-- -->", "");
+  for (const id of ["bk-set-region", "bk-set-keep", "bk-set-dir", "bk-set-prefix"]) {
+    const row = settingRow(body, id);
+    assert.ok(row.includes(`id="${id}"`), `${id}: the row is found`);
+    assert.equal(row.includes("st-mark"), false, `${id}: a default value carries no marker`);
+    assert.equal(/\bdefault\b/iu.test(row.replace(/Reset to default/gu, "")), false, `${id}: no "default" badge`);
+  }
+  const bucket = settingRow(body, "bk-set-bucket");
+  assert.ok(bucket.includes("Saved here") && bucket.includes("Reset to default"), "a value saved here says so and can be reset");
+  const endpoint = settingRow(body, "bk-set-endpoint");
+  assert.ok(endpoint.includes("Set by the environment") && endpoint.includes("DARIUS_SNAPSHOT_ENDPOINT"), "an environment value names its variable");
+  assert.equal(endpoint.includes("Reset to default"), false, "an environment value cannot be reset here");
+});
+
+test("the backups tab: the remote copy says at once whether there is one", async () => {
+  const set = (await get("/settings/backups")).body.replaceAll("<!-- -->", "");
+  assert.ok(set.includes("Copies go to bucket"), "a remote copy shows its bucket in the summary");
+  assert.match(set, /<div id="[^"]+" hidden="">/u, "the remote fields start folded");
+  assert.match(set, /aria-expanded="false"[^>]*>Change<\/button>/u, "one button opens them");
+
+  const none: BackupsStatus = { ...BACKUPS, remoteConfigured: false, remote: null, settings: { ...BACKUPS.settings, endpoint: { value: "", source: "default" }, bucket: { value: "", source: "default" } } };
+  const response = await handler(new Request("http://darius.test/settings/backups"), { ...context, backups: () => none });
+  const body = (await response.text()).replaceAll("<!-- -->", "");
+  assert.ok(body.includes("No remote copy set up. Snapshots stay on this host only."), "no remote copy is said plainly");
+  assert.match(body, /aria-expanded="false"[^>]*>Set up a remote copy<\/button>/u, "the button offers to set one up");
+  assert.equal(body.includes(">Test the bucket</button>"), false, "no bucket test without a bucket");
 });

@@ -8996,7 +8996,8 @@ var PATHS = {
 		"M1.8 7.6L8 2.3L14.2 7.6",
 		"M3.6 6.6V13.7H12.4V6.6",
 		"M6.6 13.7V9.6H9.4V13.7"
-	]
+	],
+	lock: ["M3.4 7.2H12.6V14.2H3.4Z", "M5.4 7.2V4.9A2.6 2.6 0 0 1 10.6 4.9V7.2"]
 };
 function NavIcon({ name, size = 16, className }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
@@ -13944,6 +13945,97 @@ var settings_default = withComponentProps(function SettingsLayout() {
 	});
 });
 //#endregion
+//#region app/components/settings-ui.tsx
+/**
+* The parts every settings tab is made of: a titled card, and rows inside it.
+* A row has its label and a one-line help on the left and the control on the
+* right; on a phone the control drops under the text. A switch row keeps its
+* switch on the right at every width.
+*/
+/** A group of related rows under one title. */
+function SettingsCard({ title, intro, action, id, children }) {
+	const titleId = (0, import_react.useId)();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id,
+		className: "st-card",
+		"aria-labelledby": titleId,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+			className: "st-card-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "st-card-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: titleId,
+					className: "st-card-title",
+					children: title
+				}), intro === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "st-card-intro",
+					children: intro
+				})]
+			}), action === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "st-card-action",
+				children: action
+			})]
+		}), children]
+	});
+}
+/** One setting: what it is on the left, the control on the right. */
+function SettingRow({ label, htmlFor, labelId, help, marker, inline = false, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: inline ? "st-row st-row-inline" : "st-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "st-row-text",
+			children: [
+				htmlFor === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					id: labelId,
+					className: "st-label",
+					children: label
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					id: labelId,
+					htmlFor,
+					className: "st-label",
+					children: label
+				}),
+				help === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "st-help",
+					children: help
+				}),
+				marker
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "st-row-control",
+			children
+		})]
+	});
+}
+/** An on and off switch, square like the rest of the frame. */
+function Switch({ on, labelledBy, disabled = false, onFlip }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		role: "switch",
+		"aria-checked": on,
+		"aria-labelledby": labelledBy,
+		disabled,
+		className: "st-switch",
+		onClick: onFlip
+	});
+}
+/** One choice of a few words: a row of buttons, one pressed. */
+function Choice({ labelledBy, value, options, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "st-seg",
+		role: "radiogroup",
+		"aria-labelledby": labelledBy,
+		children: options.map(([option, text]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			role: "radio",
+			"aria-checked": option === value,
+			className: option === value ? "on" : void 0,
+			onClick: () => onPick(option),
+			children: text
+		}, option))
+	});
+}
+//#endregion
 //#region app/routes/settings-general.tsx
 /**
 * Settings, General: how this browser shows darius. Theme, density, the
@@ -13977,38 +14069,6 @@ function paint(settings) {
 	root.dataset.density = settings.density;
 	root.dataset.motion = settings.motion;
 }
-/** One choice of a few words: a row of buttons, one pressed. */
-function Choice({ label, value, options, onPick }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "st-seg",
-		role: "radiogroup",
-		"aria-label": label,
-		children: options.map(([option, text]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			role: "radio",
-			"aria-checked": option === value,
-			className: option === value ? "on" : void 0,
-			onClick: () => onPick(option),
-			children: text
-		}, option))
-	});
-}
-function Field({ label, hint, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "st-field",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "st-label",
-				children: label
-			}),
-			children,
-			hint === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "st-hint",
-				children: hint
-			})
-		]
-	});
-}
 var THEMES = [
 	["dark", "Dark"],
 	["light", "Light"],
@@ -14019,6 +14079,7 @@ var MOTIONS = [["system", "System"], ["reduce", "Always"]];
 var settings_general_default = withComponentProps(function SettingsGeneral({ loaderData }) {
 	const root = useRouteLoaderData("root");
 	const { revalidate } = useRevalidator();
+	const ids = (0, import_react.useId)();
 	const [settings, setSettings] = (0, import_react.useState)(root?.settings ?? DEFAULT_SETTINGS);
 	const change = (patch) => {
 		const next = {
@@ -14034,38 +14095,41 @@ var settings_general_default = withComponentProps(function SettingsGeneral({ loa
 	const saved = settings.defaultWorkspace;
 	const names = saved !== null && !listed.some((workspace) => workspace.name === saved) ? [...listed.map((workspace) => workspace.name), saved] : listed.map((workspace) => workspace.name);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "st-body stack",
+		className: "st-body",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
 				title: "Appearance",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Field, {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
 					label: "Theme",
-					hint: "Dark is the default. System follows your device.",
+					labelId: `${ids}-theme`,
+					help: "Dark is the default. System follows your device.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Choice, {
-						label: "Theme",
+						labelledBy: `${ids}-theme`,
 						value: settings.theme,
 						options: THEMES,
 						onPick: (theme) => change({ theme })
 					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Field, {
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
 					label: "Density",
-					hint: "Compact puts more rows on the screen.",
+					labelId: `${ids}-density`,
+					help: "Compact puts more rows on the screen.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Choice, {
-						label: "Density",
+						labelledBy: `${ids}-density`,
 						value: settings.density,
 						options: DENSITIES,
 						onPick: (density) => change({ density })
 					})
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
 				title: "Workspaces",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Field, {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
 					label: "Default workspace",
-					hint: "The workspace that the home address opens.",
+					htmlFor: `${ids}-workspace`,
+					help: "The workspace that the home address opens.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: `${ids}-workspace`,
 						className: "st-select",
-						"aria-label": "Default workspace",
 						value: saved ?? ALL_WORKSPACES,
 						onChange: (event) => change({ defaultWorkspace: event.currentTarget.value === ALL_WORKSPACES ? null : event.currentTarget.value }),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
@@ -14076,35 +14140,26 @@ var settings_general_default = withComponentProps(function SettingsGeneral({ loa
 							children: name
 						}, name))]
 					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "st-toggle",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "st-toggle-text",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							id: "st-selftest",
-							className: "st-label",
-							children: "Show the self-test workspace"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "st-hint",
-							children: "darius-selftest, used to prove an install. Hidden unless you turn this on."
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						role: "switch",
-						"aria-checked": settings.showSelftest,
-						"aria-labelledby": "st-selftest",
-						className: "st-switch",
-						onClick: () => change({ showSelftest: !settings.showSelftest })
-					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Show the self-test workspace",
+					labelId: `${ids}-selftest`,
+					help: "darius-selftest proves an install. It stays hidden unless you turn this on.",
+					inline: true,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Switch, {
+						on: settings.showSelftest,
+						labelledBy: `${ids}-selftest`,
+						onFlip: () => change({ showSelftest: !settings.showSelftest })
+					})
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCard, {
 				title: "Motion",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Field, {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
 					label: "Reduce motion",
-					hint: "System follows the setting of your device.",
+					labelId: `${ids}-motion`,
+					help: "System follows the setting of your device.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Choice, {
-						label: "Reduce motion",
+						labelledBy: `${ids}-motion`,
 						value: settings.motion,
 						options: MOTIONS,
 						onPick: (motion) => change({ motion })
@@ -14117,7 +14172,7 @@ var settings_general_default = withComponentProps(function SettingsGeneral({ loa
 //#endregion
 //#region app/components/push.tsx
 /**
-* The notification switch (0.32.0), on the settings page since the IA work (it sat in the footer). It registers the service
+* The notification switch (0.32.0), a row on the Notifications tab of the settings. It registers the service
 * worker (web/public/sw.js), asks the host for its VAPID key, and subscribes
 * this browser with `darius serve`'s push endpoints (src/web/push-api.ts):
 * GET /api/push/key, POST /api/push/subscribe, POST /api/push/unsubscribe.
@@ -14223,6 +14278,18 @@ function failure(cause) {
 		text: `Notifications failed: ${cause.message}`
 	};
 }
+/** The one row of the switch: its state on the left, the button on the right. */
+function PushRow({ state, tone, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+		label: "Push notifications",
+		help: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			role: "status",
+			className: tone === "bad" ? "ink-bad" : void 0,
+			children: state
+		}),
+		children
+	});
+}
 function PushSwitch() {
 	const [state, setState] = (0, import_react.useState)({ kind: "checking" });
 	(0, import_react.useEffect)(() => {
@@ -14236,54 +14303,42 @@ function PushSwitch() {
 		action().then(setState, (cause) => setState(failure(cause)));
 	}, []);
 	switch (state.kind) {
-		case "checking": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "push push-note",
-			children: "Checking this device…"
-		});
-		case "unavailable": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "push push-note",
-			children: state.text
-		});
-		case "busy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "push push-note",
-			children: state.text
-		});
-		case "failed": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "push push-note ink-bad",
-			children: [
-				state.text,
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "push-btn",
-					onClick: () => run("Checking…", check),
-					children: "Try again"
-				})
-			]
-		});
-		case "off": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "push",
+		case "checking": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, { state: "Checking this device…" });
+		case "unavailable": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, { state: state.text });
+		case "busy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, { state: state.text });
+		case "failed": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, {
+			state: state.text,
+			tone: "bad",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
-				className: "push-btn",
+				className: "st-btn",
+				onClick: () => run("Checking…", check),
+				children: "Try again"
+			})
+		});
+		case "off": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, {
+			state: "Off for this device.",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "st-btn st-btn-main",
 				onClick: () => run("Turning notifications on…", () => turnOn(state.key)),
 				children: "Turn on notifications"
 			})
 		});
-		case "on": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "push",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		case "on": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushRow, {
+			state: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "push-on",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "status-dot",
 					"aria-hidden": "true"
-				}), "Notifications on for this device"]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				}), "On for this device."]
+			}),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
-				className: "push-btn",
+				className: "st-btn",
 				onClick: () => run("Turning notifications off…", turnOff),
 				children: "Turn off"
-			})]
+			})
 		});
 	}
 }
@@ -14297,13 +14352,11 @@ var settings_notifications_exports = /* @__PURE__ */ __exportAll({
 var meta$8 = () => [{ title: "Notifications | Settings | darius" }];
 var settings_notifications_default = withComponentProps(function SettingsNotifications() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "st-body stack",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-			title: "Notifications",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "st-push",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushSwitch, {})
-			})
+		className: "st-body",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCard, {
+			title: "Alerts",
+			intro: "darius alerts you to held runs, questions and failures. Turn alerts on for each device you use.",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PushSwitch, {})
 		})
 	});
 });
@@ -14315,21 +14368,24 @@ var LOCAL_FIELDS = [
 		wire: "enabled",
 		kind: "toggle",
 		label: "Make snapshots",
-		hint: "Off stops the timer from making new ones."
+		hint: "Off stops the timer from making new ones.",
+		width: "short"
 	},
 	{
 		key: "dir",
 		wire: "dir",
 		kind: "text",
 		label: "Folder",
-		hint: "Where this host keeps its snapshots. A leading ~ is the home folder."
+		hint: "Where this host keeps its snapshots. A leading ~ is the home folder.",
+		width: "long"
 	},
 	{
 		key: "keep",
 		wire: "keep",
 		kind: "number",
 		label: "Keep on this host",
-		hint: "The newest snapshots stay. Older ones go."
+		hint: "How many of the newest snapshots stay here.",
+		width: "short"
 	}
 ];
 var REMOTE_FIELDS = [
@@ -14338,56 +14394,64 @@ var REMOTE_FIELDS = [
 		wire: "endpoint",
 		kind: "text",
 		label: "Endpoint",
-		hint: "The address of the S3 service, for example https://s3.example.com."
+		hint: "The address of the S3 service, for example https://s3.example.com.",
+		width: "long"
 	},
 	{
 		key: "bucket",
 		wire: "bucket",
 		kind: "text",
 		label: "Bucket",
-		hint: "An empty endpoint and an empty bucket mean no remote copy."
+		hint: "An empty endpoint and an empty bucket mean no remote copy.",
+		width: "medium"
 	},
 	{
 		key: "region",
 		wire: "region",
 		kind: "text",
 		label: "Region",
-		hint: "The region name the service expects."
+		hint: "The region name the service expects.",
+		width: "medium"
 	},
 	{
 		key: "prefix",
 		wire: "prefix",
 		kind: "text",
 		label: "Prefix",
-		hint: "A folder inside the bucket. Empty uses the top."
+		hint: "A folder inside the bucket. Empty uses the top.",
+		width: "medium"
 	},
 	{
 		key: "pathStyle",
 		wire: "path_style",
 		kind: "toggle",
 		label: "Path style",
-		hint: "Put the bucket in the path, not in the host name."
+		hint: "Put the bucket in the path, not in the host name.",
+		width: "short"
 	},
 	{
 		key: "allowHttp",
 		wire: "allow_http",
 		kind: "toggle",
 		label: "Allow plain http",
-		hint: "Only for a service on a trusted network."
+		hint: "Only for a service on a trusted network.",
+		width: "short"
 	},
 	{
 		key: "sse",
 		wire: "sse",
 		kind: "toggle",
 		label: "Server side encryption",
-		hint: "Ask the service to encrypt each object."
+		hint: "Ask the service to encrypt each object.",
+		width: "short"
 	},
 	{
 		key: "keepRemote",
 		wire: "keep_remote",
 		kind: "number",
 		label: "Keep in the bucket",
-		hint: "The newest snapshots stay. Older ones go."
+		hint: "How many of the newest snapshots stay in the bucket.",
+		width: "short"
 	}
 ];
 var ALL_FIELDS = [...LOCAL_FIELDS, ...REMOTE_FIELDS];
@@ -14398,10 +14462,10 @@ function envName(wire) {
 var ENV_KEY_ID = "DARIUS_SNAPSHOT_ACCESS_KEY_ID";
 var ENV_SECRET = "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY";
 var SOURCE_WORDS = {
-	env: "set by environment",
-	file: "saved here",
-	config: "config.toml",
-	default: "default"
+	env: "Set by the environment",
+	file: "Saved here",
+	config: "From config.toml",
+	default: "Default"
 };
 function sourceWord(source) {
 	return SOURCE_WORDS[source];
@@ -14468,16 +14532,19 @@ async function postJson(path, body) {
 //#endregion
 //#region app/components/backups.tsx
 /**
-* The backups of one host (0.44.0): the state of the last run, the snapshot
-* list with its delete control, the settings, the key pair of the bucket and
-* a test of the bucket. Everything the person types goes out through
-* `postJson` to the `/api/snapshots/...` endpoints of `darius serve`; the page
-* reads the answer from the loader again after each write. There is no
-* restore button on purpose: a restore overwrites the store, so the page
-* shows the `tar` line and the person runs it by hand.
+* The backups of one host (0.44.0), on the Backups tab of the settings. The
+* order follows what a reader needs first: what blocks backups, the status
+* with Back up now, the snapshot list, then the settings in three cards
+* (local, the remote copy, the key pair) and the environment help, folded.
+* Everything the person types goes out through `postJson` to the
+* `/api/snapshots/...` endpoints of `darius serve`; the page reads the answer
+* from the loader again after each write. There is no restore button on
+* purpose: a restore overwrites the store, so the page shows the `tar` line
+* and the person runs it by hand.
 *
 * The key pair is write-only. Its inputs start empty, are cleared after a
-* save, and the page never receives the secret.
+* save, and the page never receives the secret. They sit in no <form>, so an
+* early Enter cannot send the secret anywhere but the JSON endpoint.
 */
 var POLL_MS = 3e3;
 var GIVE_UP_MS = 12e4;
@@ -14500,7 +14567,7 @@ function Problems({ problems }) {
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: problems.map((problem) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: problem }, problem)) })]
 	});
 }
-/** Three lines: the last run, whether one runs now, and the bucket. */
+/** Three lines: the last run, whether one runs now, and the remote copy. */
 function StateLines({ backups }) {
 	const { today, offset } = useClock();
 	const { last, running, remote, remoteConfigured } = backups;
@@ -14516,10 +14583,10 @@ function StateLines({ backups }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: last.at }),
 				", ",
 				momentText(last.at, today, offset),
-				last.name === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+				last.name === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
 					className: "bk-file",
 					children: last.name
-				})] }),
+				}),
 				last.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "bk-err ink-bad",
 					children: last.error
@@ -14533,7 +14600,7 @@ function StateLines({ backups }) {
 				" since ",
 				momentText(running.startedAt, today, offset)
 			] }) })] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Bucket" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: !remoteConfigured ? "No remote copy set up." : remote === null ? "Not contacted yet." : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Remote copy" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: !remoteConfigured ? "No remote copy set up." : remote === null ? "Not contacted yet." : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
 					tone: remote.ok ? "ok" : "bad",
 					label: remote.ok ? "ok" : "error"
@@ -14605,13 +14672,14 @@ function RunButton({ backups }) {
 		className: "bk-run",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
-			className: "bk-btn bk-btn-main",
+			className: "st-btn st-btn-main",
 			disabled: busy,
 			onClick: () => void press(),
 			children: label
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })]
 	});
 }
+/** Where a copy is: a square in the state colour and a word. Never a kind colour. */
 function Mark({ on, yes, no }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: on ? "bk-mark tone-ok" : "bk-mark bk-mark-off tone-idle",
@@ -14643,72 +14711,69 @@ function SnapshotRow({ row, remoteConfigured }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "bk-snap",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "bk-snap-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
-						dateTime: row.at,
-						title: row.at,
-						className: "bk-when",
-						children: momentText(row.at, today, offset)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bk-size",
-						children: byteSize(row.bytes)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bk-files",
-						children: row.files === null ? "files not known" : `${row.files} ${row.files === 1 ? "file" : "files"}`
-					})
-				]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
+				dateTime: row.at,
+				title: row.at,
+				className: "bk-when",
+				children: hostDate(row.at, offset) === today ? `Today ${momentText(row.at, today, offset)}` : momentText(row.at, today, offset)
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "bk-marks",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "bk-size",
+				children: byteSize(row.bytes)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "bk-files",
+				children: row.files === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bk-none",
+					children: "files not known"
+				}) : `${row.files} ${row.files === 1 ? "file" : "files"}`
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "bk-where",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, {
 					on: row.local,
-					yes: "on this host",
+					yes: "this host",
 					no: "not on this host"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, {
+				}), row.remote || remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mark, {
 					on: row.remote,
-					yes: "in the bucket",
+					yes: "bucket",
 					no: "not in the bucket"
-				})]
+				}) : null]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bk-name",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.name })
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bk-sha",
-				children: row.sha256 === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "text-muted",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "bk-meta",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+					className: "bk-name",
+					children: row.name
+				}), row.sha256 === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bk-none",
 					children: "No checksum on record."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bk-sha-label",
-						children: "sha256"
-					}),
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bk-sha-btn",
-						"aria-expanded": showSha,
-						onClick: () => setShowSha(!showSha),
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: showSha ? row.sha256 : `${shortSha(row.sha256)}…` })
-					})
-				] })
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "bk-sha",
+					children: [
+						"sha256",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bk-sha-btn",
+							"aria-expanded": showSha,
+							onClick: () => setShowSha(!showSha),
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: showSha ? row.sha256 : `${shortSha(row.sha256)}…` })
+						})
+					]
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "bk-acts",
 				children: ask === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [row.local ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "bk-btn bk-btn-quiet",
+					className: "st-btn st-btn-small",
 					disabled: busy,
 					onClick: () => setAsk("local"),
 					children: "Delete here"
 				}) : null, row.remote && remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "bk-btn bk-btn-quiet",
+					className: "st-btn st-btn-small",
 					disabled: busy,
 					onClick: () => setAsk("remote"),
 					children: "Delete in bucket"
@@ -14723,14 +14788,14 @@ function SnapshotRow({ row, remoteConfigured }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "bk-btn bk-btn-danger",
+							className: "st-btn st-btn-small st-btn-danger",
 							disabled: busy,
 							onClick: () => void remove(ask),
 							children: "Yes"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "bk-btn bk-btn-quiet",
+							className: "st-btn st-btn-small",
 							disabled: busy,
 							onClick: () => setAsk(null),
 							children: "No"
@@ -14744,25 +14809,29 @@ function SnapshotRow({ row, remoteConfigured }) {
 }
 function SnapshotList({ backups }) {
 	const { snapshots, remoteConfigured, storePath, localBytes } = backups;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bk-block",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-				className: "bk-h",
-				children: "Snapshots"
-			}),
-			snapshots.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "panel-empty bk-empty",
-				children: "No snapshot yet. Press Back up now."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "bk-sum",
+	const intro = snapshots.length === 0 ? void 0 : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds ${byteSize(localBytes)}.`;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
+		title: "Snapshots",
+		intro,
+		children: [snapshots.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "bk-empty",
+			children: "No snapshot yet. Press Back up now."
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "bk-table",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "bk-thead",
+				"aria-hidden": "true",
 				children: [
-					snapshots.length,
-					" ",
-					snapshots.length === 1 ? "snapshot" : "snapshots",
-					", newest first. This host holds ",
-					byteSize(localBytes),
-					"."
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Made" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "bk-num",
+						children: "Size"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "bk-num",
+						children: "Files"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Where" })
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "bk-list",
@@ -14770,24 +14839,23 @@ function SnapshotList({ backups }) {
 					row,
 					remoteConfigured
 				}, row.name))
-			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "bk-restore",
-				children: [
-					"To restore by hand, stop the web service and the timers first. Then run ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
-						className: "inline-code",
-						children: [
-							"tar -xzf ",
-							"<file>",
-							" -C ",
-							storePath
-						]
-					}),
-					". There is no restore button on purpose: a restore overwrites the store."
-				]
-			})
-		]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "bk-restore",
+			children: [
+				"To restore by hand, stop the web service and the timers first. Then run ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
+					className: "inline-code",
+					children: [
+						"tar -xzf ",
+						"<file>",
+						" -C ",
+						storePath
+					]
+				}),
+				". There is no restore button on purpose: a restore overwrites the store."
+			]
+		})]
 	});
 }
 /** The value of a field as the page shows it: a boolean for a toggle, text otherwise. */
@@ -14795,93 +14863,92 @@ function shown(backups, field) {
 	const value = backups.settings[field.key].value;
 	return field.kind === "toggle" ? value === true : String(value);
 }
-function Source({ field, backups, busy, onReset }) {
-	const { source } = backups.settings[field.key];
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "st-hint bk-src",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: `bk-source bk-source-${source}`,
-				children: sourceWord(source)
-			}),
-			source === "env" ? ` by ${envName(field.wire)}. Change it where the service starts.` : "",
-			source === "file" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "bk-link",
-				disabled: busy,
-				onClick: () => onReset(field),
-				children: "Reset to default"
-			})] }) : null
-		]
+/** Where a value came from, only when that is news: a default gets no marker. */
+function SourceMark({ field, source, changed, busy, onReset }) {
+	if (changed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "st-mark st-mark-draft",
+		children: "Changed, not saved yet."
 	});
+	switch (source) {
+		case "default": return null;
+		case "env": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "st-mark st-mark-env",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
+				name: "lock",
+				size: 14,
+				className: "st-mark-icon"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				sourceWord(source),
+				": ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: envName(field.wire) }),
+				". Change it where the service starts."
+			] })]
+		});
+		case "config": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "st-mark st-mark-config",
+			children: [sourceWord(source), "."]
+		});
+		case "file": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "st-mark st-mark-file",
+			children: [
+				sourceWord(source),
+				".",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-link",
+					disabled: busy,
+					onClick: () => onReset(field),
+					children: "Reset to default"
+				})
+			]
+		});
+	}
 }
 function SettingField({ field, backups, draft, busy, onChange, onReset }) {
-	const locked = backups.settings[field.key].source === "env";
+	const { source } = backups.settings[field.key];
+	const locked = source === "env";
 	const value = draft.get(field.key) ?? shown(backups, field);
 	const id = `bk-set-${field.wire}`;
-	if (field.kind === "toggle") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "st-field bk-field",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "st-toggle",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "st-toggle-text",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					id,
-					className: "st-label",
-					children: field.label
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "st-hint",
-					children: field.hint
-				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				role: "switch",
-				"aria-checked": value === true,
-				"aria-labelledby": id,
-				disabled: locked,
-				className: "st-switch",
-				onClick: () => onChange(field, value !== true)
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Source, {
-			field,
-			backups,
-			busy,
-			onReset
-		})]
+	const marker = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourceMark, {
+		field,
+		source,
+		changed: draft.has(field.key),
+		busy,
+		onReset
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "st-field bk-field",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-				htmlFor: id,
-				className: "st-label",
-				children: field.label
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id,
-				className: "bk-input",
-				type: field.kind === "number" ? "number" : "text",
-				inputMode: field.kind === "number" ? "numeric" : void 0,
-				min: field.kind === "number" ? 1 : void 0,
-				step: field.kind === "number" ? 1 : void 0,
-				autoComplete: "off",
-				autoCapitalize: "off",
-				spellCheck: false,
-				disabled: locked,
-				value: String(value),
-				onChange: (event) => onChange(field, event.currentTarget.value)
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "st-hint",
-				children: field.hint
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Source, {
-				field,
-				backups,
-				busy,
-				onReset
-			})
-		]
+	if (field.kind === "toggle") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+		label: field.label,
+		labelId: id,
+		help: field.hint,
+		marker,
+		inline: true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Switch, {
+			on: value === true,
+			labelledBy: id,
+			disabled: locked,
+			onFlip: () => onChange(field, value !== true)
+		})
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+		label: field.label,
+		htmlFor: id,
+		help: field.hint,
+		marker,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			id,
+			className: `st-input st-input-${field.width}`,
+			type: field.kind === "number" ? "number" : "text",
+			inputMode: field.kind === "number" ? "numeric" : void 0,
+			min: field.kind === "number" ? 1 : void 0,
+			step: field.kind === "number" ? 1 : void 0,
+			autoComplete: "off",
+			autoCapitalize: "off",
+			spellCheck: false,
+			disabled: locked,
+			value: String(value),
+			onChange: (event) => onChange(field, event.currentTarget.value)
+		})
 	});
 }
 /** The request value of a changed field, or the sentence that says why it cannot go. */
@@ -14905,11 +14972,39 @@ function requestValue(field, value) {
 		value: number
 	};
 }
+/** The saved remote copy in one line, so a first look tells whether there is one. */
+function RemoteSummary({ backups }) {
+	const { settings, remoteConfigured } = backups;
+	if (!remoteConfigured) return "No remote copy set up. Snapshots stay on this host only.";
+	const prefix = settings.prefix.value;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"Copies go to bucket ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+			className: "bk-strong",
+			children: settings.bucket.value
+		}),
+		" at ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			className: "bk-code",
+			children: settings.endpoint.value
+		}),
+		prefix === "" ? "." : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			", in the folder ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+				className: "bk-code",
+				children: prefix
+			}),
+			"."
+		] })
+	] });
+}
 function SettingsForm({ backups }) {
 	const { revalidate } = useRevalidator();
 	const [draft, setDraft] = (0, import_react.useState)(/* @__PURE__ */ new Map());
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [note, setNote] = (0, import_react.useState)(null);
+	const [remoteOpen, setRemoteOpen] = (0, import_react.useState)(false);
+	const remoteId = (0, import_react.useId)();
 	const change = (field, value) => {
 		const next = new Map(draft);
 		if (value === shown(backups, field)) next.delete(field.key);
@@ -14970,46 +15065,77 @@ function SettingsForm({ backups }) {
 		setDraft(/* @__PURE__ */ new Map());
 		finish("Saved.");
 	};
-	const group = (title, fields) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
-		className: "bk-group",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
-			className: "bk-legend",
-			children: title
-		}), fields.map((field) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-			field,
-			backups,
-			draft,
-			busy,
-			onChange: change,
-			onReset: (target) => void reset(target)
-		}, field.key))]
+	const discard = () => {
+		setDraft(/* @__PURE__ */ new Map());
+		setNote(null);
+	};
+	const rows = (fields) => fields.map((field) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+		field,
+		backups,
+		draft,
+		busy,
+		onChange: change,
+		onReset: (target) => void reset(target)
+	}, field.key));
+	const unsaved = ALL_FIELDS.filter((field) => draft.has(field.key)).map((field) => field.label);
+	const remoteButton = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: backups.remoteConfigured ? "st-btn" : "st-btn st-btn-main",
+		"aria-expanded": remoteOpen,
+		"aria-controls": remoteId,
+		onClick: () => setRemoteOpen(!remoteOpen),
+		children: remoteOpen ? "Hide the settings" : backups.remoteConfigured ? "Change" : "Set up a remote copy"
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bk-block",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "bk-h",
-			children: "Settings"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "panel panel-pad bk-panel",
-			children: [
-				group("Local", LOCAL_FIELDS),
-				group("Remote copy (S3 bucket)", REMOTE_FIELDS),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bk-save",
+		className: "bk-settings",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCard, {
+				title: "Local",
+				children: rows(LOCAL_FIELDS)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
+				title: "Remote copy (S3 bucket)",
+				intro: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemoteSummary, { backups }),
+				action: remoteButton,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: remoteId,
+					hidden: !remoteOpen,
+					children: rows(REMOTE_FIELDS)
+				}), backups.remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BucketTest, {}) : null]
+			}),
+			unsaved.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bk-savebar",
+				role: "region",
+				"aria-label": "Unsaved settings",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bk-savebar-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "bk-savebar-head",
+						children: [
+							unsaved.length === 1 ? "1 change is not saved yet:" : `${unsaved.length} changes are not saved yet:`,
+							" ",
+							unsaved.join(", "),
+							"."
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bk-savebar-acts",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "bk-btn bk-btn-main",
-						disabled: busy || draft.size === 0,
+						className: "st-btn",
+						disabled: busy,
+						onClick: discard,
+						children: "Discard"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn st-btn-main",
+						disabled: busy,
 						onClick: () => void save(),
 						children: "Save settings"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "st-hint",
-						children: draft.size === 0 ? "Nothing changed." : `${draft.size} ${draft.size === 1 ? "change" : "changes"} to save.`
 					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })
-			]
-		})]
+				})]
+			})
+		]
 	});
 }
 function Credentials({ backups }) {
@@ -15052,104 +15178,93 @@ function Credentials({ backups }) {
 			secretAccessKey: secret
 		}, "The key pair is saved on this host.");
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bk-block",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "bk-h",
-			children: "Key pair for the bucket"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "panel panel-pad bk-panel",
+	const intro = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"The key pair is ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+			className: "bk-strong",
+			children: credentialsWord(credentials)
+		}),
+		"."
+	] });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
+		title: "Key pair for the bucket",
+		intro,
+		children: [credentials === "env" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "st-card-note",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "bk-cred-line",
-					children: [
-						"The key pair is ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: credentialsWord(credentials) }),
-						"."
-					]
+				"The environment sets it, through ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+					className: "bk-code",
+					children: ENV_KEY_ID
 				}),
-				credentials === "env" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "st-hint",
-					children: [
-						"The environment sets it, through ",
-						ENV_KEY_ID,
-						" and ",
-						ENV_SECRET,
-						". This page cannot change it."
-					]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bk-cred",
-					role: "group",
-					"aria-label": "Save a key pair",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "st-field bk-field",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-								htmlFor: "bk-key-id",
-								className: "st-label",
-								children: "Access key id"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								id: "bk-key-id",
-								className: "bk-input",
-								type: "text",
-								autoComplete: "off",
-								autoCapitalize: "off",
-								spellCheck: false,
-								value: keyId,
-								onChange: (event) => setKeyId(event.currentTarget.value)
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "st-field bk-field",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-									htmlFor: "bk-secret",
-									className: "st-label",
-									children: "Secret key"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									id: "bk-secret",
-									className: "bk-input",
-									type: "password",
-									autoComplete: "off",
-									autoCapitalize: "off",
-									spellCheck: false,
-									value: secret,
-									onChange: (event) => setSecret(event.currentTarget.value),
-									onKeyDown: (event) => {
-										if (event.key === "Enter") store();
-									}
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "st-hint",
-									children: "The page writes the pair to this host and never shows it again."
-								})
-							]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "bk-save",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "bk-btn bk-btn-main",
-								disabled: busy,
-								onClick: store,
-								children: "Save the key pair"
-							}), credentials === "file" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "bk-btn bk-btn-quiet",
-								disabled: busy,
-								onClick: () => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed."),
-								children: "Remove the saved key"
-							}) : null]
-						})
-					]
+				" and ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+					className: "bk-code",
+					children: ENV_SECRET
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })
+				". This page cannot change it."
 			]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			role: "group",
+			"aria-label": "Save a key pair",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Access key id",
+					htmlFor: "bk-key-id",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "bk-key-id",
+						className: "st-input st-input-long",
+						type: "text",
+						autoComplete: "off",
+						autoCapitalize: "off",
+						spellCheck: false,
+						value: keyId,
+						onChange: (event) => setKeyId(event.currentTarget.value)
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Secret key",
+					htmlFor: "bk-secret",
+					help: "The page writes the pair to this host and never shows it again.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "bk-secret",
+						className: "st-input st-input-long",
+						type: "password",
+						autoComplete: "off",
+						autoCapitalize: "off",
+						spellCheck: false,
+						value: secret,
+						onChange: (event) => setSecret(event.currentTarget.value),
+						onKeyDown: (event) => {
+							if (event.key === "Enter") store();
+						}
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "st-card-foot",
+					children: [credentials === "file" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn",
+						disabled: busy,
+						onClick: () => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed."),
+						children: "Remove the saved key"
+					}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn st-btn-main",
+						disabled: busy,
+						onClick: store,
+						children: "Save the key pair"
+					})]
+				})
+			]
+		}), note === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "st-card-foot",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })
 		})]
 	});
 }
-function BucketTest({ backups }) {
+/** The bucket check, a row at the end of the remote card. It needs a remote copy set up. */
+function BucketTest() {
 	const { revalidate } = useRevalidator();
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [note, setNote] = (0, import_react.useState)(null);
@@ -15171,41 +15286,24 @@ function BucketTest({ backups }) {
 			text: result.count === null ? "The bucket works." : `The bucket works. It lists ${result.count} ${result.count === 1 ? "object" : "objects"}.`
 		});
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bk-block",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "bk-h",
-			children: "Test the bucket"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "panel panel-pad bk-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "st-hint",
-					children: "Lists the bucket, then writes and deletes one small test object. It uses the saved settings."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bk-save",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bk-btn bk-btn-quiet",
-						disabled: busy || !backups.remoteConfigured,
-						onClick: () => void test(),
-						children: busy ? "Testing…" : "Test the bucket"
-					}), backups.remoteConfigured ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "st-hint",
-						children: "Set the endpoint and the bucket first."
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note })
-			]
-		})]
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+		label: "Bucket test",
+		help: "Lists the bucket, then writes and deletes one small test object. It uses the saved settings.",
+		marker: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note }),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "st-btn",
+			disabled: busy,
+			onClick: () => void test(),
+			children: busy ? "Testing…" : "Test the bucket"
+		})
 	});
 }
 function EnvHelp({ backups }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
 		summary: "Set these with environment variables",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "st-hint",
+			className: "bk-env-lede",
 			children: [
 				"Put the lines in ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
@@ -15225,36 +15323,20 @@ function EnvHelp({ backups }) {
 	});
 }
 function Backups({ backups }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-		title: "Backups",
-		id: "backups",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "bk",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Problems, { problems: backups.problems }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bk-grid",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bk-col",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "bk-block",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-								className: "bk-h",
-								children: "State"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "panel panel-pad bk-panel",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateLines, { backups }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunButton, { backups })]
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnapshotList, { backups }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BucketTest, { backups }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EnvHelp, { backups })
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bk-col",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsForm, { backups }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Credentials, { backups })]
-				})]
-			})]
-		})
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "st-body bk",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Problems, { problems: backups.problems }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCard, {
+				title: "Status",
+				action: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunButton, { backups }),
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateLines, { backups })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnapshotList, { backups }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsForm, { backups }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Credentials, { backups }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EnvHelp, { backups })
+		]
 	});
 }
 //#endregion
@@ -15287,23 +15369,46 @@ function loader$8({ context }) {
 var meta$6 = () => [{ title: "About | Settings | darius" }];
 var settings_about_default = withComponentProps(function SettingsAbout({ loaderData }) {
 	const root = useRouteLoaderData("root");
+	const profiles = loaderData.profiles;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "st-body stack",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-			title: "About",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
-				className: "st-about",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Host" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: root?.host })] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Version" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { children: ["darius ", root?.version] })] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Seen by" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: root?.viewer })] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Profiles" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+		className: "st-body",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
+			title: "This host",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Host",
+					help: "The machine that serves this page.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "st-value",
+						children: root?.host
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Version",
+					help: "The darius release on this host.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "st-value",
+						children: ["darius ", root?.version]
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Seen by",
+					help: "Who this host thinks you are.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "st-value",
+						children: root?.viewer
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
+					label: "Profiles",
+					help: "Named presets for starting an agent harness.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
 						to: "/profiles",
-						className: "st-about-link",
-						children: loaderData.profiles === 0 ? "None yet" : `${loaderData.profiles} ${loaderData.profiles === 1 ? "profile" : "profiles"}`
-					}) })] })
-				]
-			})
+						className: "st-value st-value-link",
+						children: profiles === 0 ? "None yet" : `${profiles} ${profiles === 1 ? "profile" : "profiles"}`
+					})
+				})
+			]
 		})
 	});
 });
@@ -16330,7 +16435,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 				children: "Note for the follow-up (optional)"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				id: `fu-note-${run}`,
-				className: "bk-input",
+				className: "st-input",
 				type: "text",
 				maxLength: 500,
 				value: note,
@@ -16362,13 +16467,13 @@ function FollowUpCard({ project, run, readiness, questions }) {
 						className: "fu-acts",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "bk-btn bk-btn-main",
+							className: "st-btn st-btn-main",
 							disabled: busy,
 							onClick: () => void start(),
 							children: busy ? "Starting…" : "Yes, start it"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "bk-btn bk-btn-quiet",
+							className: "st-btn",
 							disabled: busy,
 							onClick: () => setAsking(false),
 							children: "No"
@@ -16379,7 +16484,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 				className: "fu-acts",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
-					className: "bk-btn bk-btn-main",
+					className: "st-btn st-btn-main",
 					disabled: busy || chosen.length === 0,
 					onClick: () => setAsking(true),
 					children: ["Start follow-up on ", readiness.host]
@@ -16634,17 +16739,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CuGhjvAB.js",
+			"module": "/assets/root-DbupbONk.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/kind-CbYiwFqF.js",
+				"/assets/nav-icons-CVNBfdLd.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/view-CQdDrwg-.js",
 				"/assets/agenda-CrA6sk3Q.js",
 				"/assets/settings-YoGy02pU.js"
 			],
-			"css": ["/assets/root-Do5lUa5u.css"],
+			"css": ["/assets/root-BozdA5F6.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -17016,14 +17122,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-general-BFtztXl0.js",
+			"module": "/assets/settings-general-C9kx2Oao.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/settings-YoGy02pU.js",
-				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-C06Q4GAu.js"
+				"/assets/settings-ui-ChNT_lIl.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17044,13 +17149,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-notifications-Cs9xIVH8.js",
+			"module": "/assets/settings-notifications-DSU7mnYx.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-C06Q4GAu.js"
+				"/assets/settings-ui-ChNT_lIl.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17071,13 +17175,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-BAeNEeTd.js",
+			"module": "/assets/settings-backups-BCHHnW6U.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/nav-icons-CVNBfdLd.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
+				"/assets/settings-ui-ChNT_lIl.js",
 				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
@@ -17099,13 +17205,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-about-Jec0VvH5.js",
+			"module": "/assets/settings-about-BC88vbrV.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/clock-C06Q4GAu.js"
+				"/assets/settings-ui-ChNT_lIl.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17288,7 +17393,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-fBFNCXm4.js",
+			"module": "/assets/run-CoP-ABhv.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17335,8 +17440,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-cf9f11f2.js",
-	"version": "cf9f11f2",
+	"url": "/assets/manifest-25a17a95.js",
+	"version": "25a17a95",
 	"sri": void 0
 };
 //#endregion

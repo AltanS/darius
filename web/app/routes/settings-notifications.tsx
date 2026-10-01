@@ -2,7 +2,7 @@
 
 import type { Route } from "./+types/settings-notifications";
 import { PushSwitch } from "../components/push.tsx";
-import { Section } from "../components/ui.tsx";
+import { SettingsCard } from "../components/settings-ui.tsx";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -10,12 +10,10 @@ export const meta: Route.MetaFunction = () => [{ title: "Notifications | Setting
 
 export default function SettingsNotifications(): React.ReactNode {
   return (
-    <div className="st-body stack">
-      <Section title="Notifications">
-        <div className="st-push">
-          <PushSwitch />
-        </div>
-      </Section>
+    <div className="st-body">
+      <SettingsCard title="Alerts" intro="darius alerts you to held runs, questions and failures. Turn alerts on for each device you use.">
+        <PushSwitch />
+      </SettingsCard>
     </div>
   );
 }

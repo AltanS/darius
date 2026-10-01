@@ -6,12 +6,12 @@
  * asks for the data again; nothing reaches the store.
  */
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useRevalidator, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/settings-general";
 import type { loader as rootLoader } from "../root.tsx";
-import { Section } from "../components/ui.tsx";
+import { Choice, SettingRow, SettingsCard, Switch } from "../components/settings-ui.tsx";
 import { isSelftest } from "../lib/home.ts";
 import { DEFAULT_SETTINGS, SETTINGS_COOKIE, SETTINGS_MAX_AGE, settingsValue, type Density, type Motion, type Settings, type Theme } from "../lib/settings.ts";
 import { statusOf } from "../lib/status.ts";
@@ -43,42 +43,6 @@ function paint(settings: Settings): void {
   root.dataset.motion = settings.motion;
 }
 
-interface ChoiceProps<T extends string> {
-  label: string;
-  value: T;
-  options: ReadonlyArray<readonly [T, string]>;
-  onPick: (value: T) => void;
-}
-
-/** One choice of a few words: a row of buttons, one pressed. */
-function Choice<T extends string>({ label, value, options, onPick }: ChoiceProps<T>): React.ReactNode {
-  return (
-    <div className="st-seg" role="radiogroup" aria-label={label}>
-      {options.map(([option, text]) => (
-        <button key={option} type="button" role="radio" aria-checked={option === value} className={option === value ? "on" : undefined} onClick={() => onPick(option)}>
-          {text}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-interface FieldProps {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}
-
-function Field({ label, hint, children }: FieldProps): React.ReactNode {
-  return (
-    <div className="st-field">
-      <div className="st-label">{label}</div>
-      {children}
-      {hint === undefined ? null : <p className="st-hint">{hint}</p>}
-    </div>
-  );
-}
-
 const THEMES: ReadonlyArray<readonly [Theme, string]> = [
   ["dark", "Dark"],
   ["light", "Light"],
@@ -96,6 +60,7 @@ const MOTIONS: ReadonlyArray<readonly [Motion, string]> = [
 export default function SettingsGeneral({ loaderData }: Route.ComponentProps): React.ReactNode {
   const root = useRouteLoaderData<typeof rootLoader>("root");
   const { revalidate } = useRevalidator();
+  const ids = useId();
   // This page is the one writer of the cookie, so its own copy stays true after each change.
   const [settings, setSettings] = useState<Settings>(root?.settings ?? DEFAULT_SETTINGS);
 
@@ -113,20 +78,20 @@ export default function SettingsGeneral({ loaderData }: Route.ComponentProps): R
   const names = saved !== null && !listed.some((workspace) => workspace.name === saved) ? [...listed.map((workspace) => workspace.name), saved] : listed.map((workspace) => workspace.name);
 
   return (
-    <div className="st-body stack">
-      <Section title="Appearance">
-        <Field label="Theme" hint="Dark is the default. System follows your device.">
-          <Choice label="Theme" value={settings.theme} options={THEMES} onPick={(theme) => change({ theme })} />
-        </Field>
-        <Field label="Density" hint="Compact puts more rows on the screen.">
-          <Choice label="Density" value={settings.density} options={DENSITIES} onPick={(density) => change({ density })} />
-        </Field>
-      </Section>
-      <Section title="Workspaces">
-        <Field label="Default workspace" hint="The workspace that the home address opens.">
+    <div className="st-body">
+      <SettingsCard title="Appearance">
+        <SettingRow label="Theme" labelId={`${ids}-theme`} help="Dark is the default. System follows your device.">
+          <Choice labelledBy={`${ids}-theme`} value={settings.theme} options={THEMES} onPick={(theme) => change({ theme })} />
+        </SettingRow>
+        <SettingRow label="Density" labelId={`${ids}-density`} help="Compact puts more rows on the screen.">
+          <Choice labelledBy={`${ids}-density`} value={settings.density} options={DENSITIES} onPick={(density) => change({ density })} />
+        </SettingRow>
+      </SettingsCard>
+      <SettingsCard title="Workspaces">
+        <SettingRow label="Default workspace" htmlFor={`${ids}-workspace`} help="The workspace that the home address opens.">
           <select
+            id={`${ids}-workspace`}
             className="st-select"
-            aria-label="Default workspace"
             value={saved ?? ALL_WORKSPACES}
             onChange={(event) => change({ defaultWorkspace: event.currentTarget.value === ALL_WORKSPACES ? null : event.currentTarget.value })}
           >
@@ -137,22 +102,16 @@ export default function SettingsGeneral({ loaderData }: Route.ComponentProps): R
               </option>
             ))}
           </select>
-        </Field>
-        <div className="st-toggle">
-          <div className="st-toggle-text">
-            <span id="st-selftest" className="st-label">
-              Show the self-test workspace
-            </span>
-            <span className="st-hint">darius-selftest, used to prove an install. Hidden unless you turn this on.</span>
-          </div>
-          <button type="button" role="switch" aria-checked={settings.showSelftest} aria-labelledby="st-selftest" className="st-switch" onClick={() => change({ showSelftest: !settings.showSelftest })} />
-        </div>
-      </Section>
-      <Section title="Motion">
-        <Field label="Reduce motion" hint="System follows the setting of your device.">
-          <Choice label="Reduce motion" value={settings.motion} options={MOTIONS} onPick={(motion) => change({ motion })} />
-        </Field>
-      </Section>
+        </SettingRow>
+        <SettingRow label="Show the self-test workspace" labelId={`${ids}-selftest`} help="darius-selftest proves an install. It stays hidden unless you turn this on." inline>
+          <Switch on={settings.showSelftest} labelledBy={`${ids}-selftest`} onFlip={() => change({ showSelftest: !settings.showSelftest })} />
+        </SettingRow>
+      </SettingsCard>
+      <SettingsCard title="Motion">
+        <SettingRow label="Reduce motion" labelId={`${ids}-motion`} help="System follows the setting of your device.">
+          <Choice labelledBy={`${ids}-motion`} value={settings.motion} options={MOTIONS} onPick={(motion) => change({ motion })} />
+        </SettingRow>
+      </SettingsCard>
     </div>
   );
 }

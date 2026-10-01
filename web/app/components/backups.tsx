@@ -1,25 +1,30 @@
 /**
- * The backups of one host (0.44.0): the state of the last run, the snapshot
- * list with its delete control, the settings, the key pair of the bucket and
- * a test of the bucket. Everything the person types goes out through
- * `postJson` to the `/api/snapshots/...` endpoints of `darius serve`; the page
- * reads the answer from the loader again after each write. There is no
- * restore button on purpose: a restore overwrites the store, so the page
- * shows the `tar` line and the person runs it by hand.
+ * The backups of one host (0.44.0), on the Backups tab of the settings. The
+ * order follows what a reader needs first: what blocks backups, the status
+ * with Back up now, the snapshot list, then the settings in three cards
+ * (local, the remote copy, the key pair) and the environment help, folded.
+ * Everything the person types goes out through `postJson` to the
+ * `/api/snapshots/...` endpoints of `darius serve`; the page reads the answer
+ * from the loader again after each write. There is no restore button on
+ * purpose: a restore overwrites the store, so the page shows the `tar` line
+ * and the person runs it by hand.
  *
  * The key pair is write-only. Its inputs start empty, are cleared after a
- * save, and the page never receives the secret.
+ * save, and the page never receives the secret. They sit in no <form>, so an
+ * early Enter cannot send the secret anywhere but the JSON endpoint.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useRevalidator } from "react-router";
 
-import type { BackupRow, BackupsStatus } from "../../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, SettingSource } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { ALL_FIELDS, credentialsWord, ENV_KEY_ID, ENV_SECRET, envName, LOCAL_FIELDS, REMOTE_FIELDS, shortSha, sourceWord, type FieldSpec } from "../lib/backup.ts";
-import { byteSize, momentText } from "../lib/format.ts";
+import { byteSize, hostDate, momentText } from "../lib/format.ts";
 import { postJson, type PostBody } from "../lib/post.ts";
-import { Fold, Section, Status, Time } from "./ui.tsx";
+import { NavIcon } from "./nav-icons.tsx";
+import { SettingRow, SettingsCard, Switch } from "./settings-ui.tsx";
+import { Fold, Status, Time } from "./ui.tsx";
 
 const POLL_MS = 3_000;
 const GIVE_UP_MS = 120_000;
@@ -43,6 +48,10 @@ function Notice({ note }: NoticeProps): React.ReactNode {
   );
 }
 
+interface StateProps {
+  backups: BackupsStatus;
+}
+
 // --- problems and state ------------------------------------------------------------------
 
 interface ProblemsProps {
@@ -63,11 +72,7 @@ function Problems({ problems }: ProblemsProps): React.ReactNode {
   );
 }
 
-interface StateProps {
-  backups: BackupsStatus;
-}
-
-/** Three lines: the last run, whether one runs now, and the bucket. */
+/** Three lines: the last run, whether one runs now, and the remote copy. */
 function StateLines({ backups }: StateProps): React.ReactNode {
   const { today, offset } = useClock();
   const { last, running, remote, remoteConfigured } = backups;
@@ -81,12 +86,7 @@ function StateLines({ backups }: StateProps): React.ReactNode {
           ) : (
             <>
               <Status tone={last.ok ? "ok" : "bad"} label={last.ok ? "ok" : "failed"} /> <Time iso={last.at} />, {momentText(last.at, today, offset)}
-              {last.name === null ? null : (
-                <>
-                  <br />
-                  <code className="bk-file">{last.name}</code>
-                </>
-              )}
+              {last.name === null ? null : <code className="bk-file">{last.name}</code>}
               {last.error === null ? null : <span className="bk-err ink-bad">{last.error}</span>}
             </>
           )}
@@ -105,7 +105,7 @@ function StateLines({ backups }: StateProps): React.ReactNode {
         </dd>
       </div>
       <div>
-        <dt>Bucket</dt>
+        <dt>Remote copy</dt>
         <dd>
           {!remoteConfigured ? (
             "No remote copy set up."
@@ -172,7 +172,7 @@ function RunButton({ backups }: StateProps): React.ReactNode {
   const label = posting || (waiting && backups.running === null) ? "Starting…" : busy ? "Backup is running…" : "Back up now";
   return (
     <div className="bk-run">
-      <button type="button" className="bk-btn bk-btn-main" disabled={busy} onClick={() => void press()}>
+      <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void press()}>
         {label}
       </button>
       <Notice note={note} />
@@ -190,6 +190,7 @@ interface MarkProps {
   no: string;
 }
 
+/** Where a copy is: a square in the state colour and a word. Never a kind colour. */
 function Mark({ on, yes, no }: MarkProps): React.ReactNode {
   return <span className={on ? "bk-mark tone-ok" : "bk-mark bk-mark-off tone-idle"}>{on ? yes : no}</span>;
 }
@@ -219,42 +220,38 @@ function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNo
 
   return (
     <li className="bk-snap">
-      <p className="bk-snap-head">
-        <time dateTime={row.at} title={row.at} className="bk-when">
-          {momentText(row.at, today, offset)}
-        </time>
-        <span className="bk-size">{byteSize(row.bytes)}</span>
-        <span className="bk-files">{row.files === null ? "files not known" : `${row.files} ${row.files === 1 ? "file" : "files"}`}</span>
-      </p>
-      <p className="bk-marks">
-        <Mark on={row.local} yes="on this host" no="not on this host" />
-        <Mark on={row.remote} yes="in the bucket" no="not in the bucket" />
-      </p>
-      <p className="bk-name">
-        <code>{row.name}</code>
-      </p>
-      <p className="bk-sha">
+      <time dateTime={row.at} title={row.at} className="bk-when">
+        {hostDate(row.at, offset) === today ? `Today ${momentText(row.at, today, offset)}` : momentText(row.at, today, offset)}
+      </time>
+      <span className="bk-size">{byteSize(row.bytes)}</span>
+      <span className="bk-files">{row.files === null ? <span className="bk-none">files not known</span> : `${row.files} ${row.files === 1 ? "file" : "files"}`}</span>
+      <span className="bk-where">
+        <Mark on={row.local} yes="this host" no="not on this host" />
+        {row.remote || remoteConfigured ? <Mark on={row.remote} yes="bucket" no="not in the bucket" /> : null}
+      </span>
+      <p className="bk-meta">
+        <code className="bk-name">{row.name}</code>
         {row.sha256 === null ? (
-          <span className="text-muted">No checksum on record.</span>
+          <span className="bk-none">No checksum on record.</span>
         ) : (
-          <>
-            <span className="bk-sha-label">sha256</span>{" "}
+          <span className="bk-sha">
+            sha256{" "}
             <button type="button" className="bk-sha-btn" aria-expanded={showSha} onClick={() => setShowSha(!showSha)}>
               <code>{showSha ? row.sha256 : `${shortSha(row.sha256)}…`}</code>
             </button>
-          </>
+          </span>
         )}
       </p>
       <div className="bk-acts">
         {ask === null ? (
           <>
             {row.local ? (
-              <button type="button" className="bk-btn bk-btn-quiet" disabled={busy} onClick={() => setAsk("local")}>
+              <button type="button" className="st-btn st-btn-small" disabled={busy} onClick={() => setAsk("local")}>
                 Delete here
               </button>
             ) : null}
             {row.remote && remoteConfigured ? (
-              <button type="button" className="bk-btn bk-btn-quiet" disabled={busy} onClick={() => setAsk("remote")}>
+              <button type="button" className="st-btn st-btn-small" disabled={busy} onClick={() => setAsk("remote")}>
                 Delete in bucket
               </button>
             ) : null}
@@ -262,10 +259,10 @@ function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNo
         ) : (
           <span className="bk-ask" role="group" aria-label="Confirm the delete">
             <span className="bk-ask-q">{ask === "local" ? "Delete from this host?" : "Delete from the bucket?"}</span>
-            <button type="button" className="bk-btn bk-btn-danger" disabled={busy} onClick={() => void remove(ask)}>
+            <button type="button" className="st-btn st-btn-small st-btn-danger" disabled={busy} onClick={() => void remove(ask)}>
               Yes
             </button>
-            <button type="button" className="bk-btn bk-btn-quiet" disabled={busy} onClick={() => setAsk(null)}>
+            <button type="button" className="st-btn st-btn-small" disabled={busy} onClick={() => setAsk(null)}>
               No
             </button>
           </span>
@@ -276,33 +273,32 @@ function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNo
   );
 }
 
-interface ListProps {
-  backups: BackupsStatus;
-}
-
-function SnapshotList({ backups }: ListProps): React.ReactNode {
+function SnapshotList({ backups }: StateProps): React.ReactNode {
   const { snapshots, remoteConfigured, storePath, localBytes } = backups;
+  const intro = snapshots.length === 0 ? undefined : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds ${byteSize(localBytes)}.`;
   return (
-    <div className="bk-block">
-      <h3 className="bk-h">Snapshots</h3>
+    <SettingsCard title="Snapshots" intro={intro}>
       {snapshots.length === 0 ? (
-        <p className="panel-empty bk-empty">No snapshot yet. Press Back up now.</p>
+        <p className="bk-empty">No snapshot yet. Press Back up now.</p>
       ) : (
-        <>
-          <p className="bk-sum">
-            {snapshots.length} {snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds {byteSize(localBytes)}.
+        <div className="bk-table">
+          <p className="bk-thead" aria-hidden="true">
+            <span>Made</span>
+            <span className="bk-num">Size</span>
+            <span className="bk-num">Files</span>
+            <span>Where</span>
           </p>
           <ul className="bk-list">
             {snapshots.map((row) => (
               <SnapshotRow key={row.name} row={row} remoteConfigured={remoteConfigured} />
             ))}
           </ul>
-        </>
+        </div>
       )}
       <p className="bk-restore">
         To restore by hand, stop the web service and the timers first. Then run <code className="inline-code">tar -xzf {"<file>"} -C {storePath}</code>. There is no restore button on purpose: a restore overwrites the store.
       </p>
-    </div>
+    </SettingsCard>
   );
 }
 
@@ -310,14 +306,47 @@ function SnapshotList({ backups }: ListProps): React.ReactNode {
 
 type Draft = ReadonlyMap<FieldSpec["key"], string | boolean>;
 
-interface SettingsProps {
-  backups: BackupsStatus;
-}
-
 /** The value of a field as the page shows it: a boolean for a toggle, text otherwise. */
 function shown(backups: BackupsStatus, field: FieldSpec): string | boolean {
   const value = backups.settings[field.key].value;
   return field.kind === "toggle" ? value === true : String(value);
+}
+
+interface MarkerProps {
+  field: FieldSpec;
+  source: SettingSource;
+  changed: boolean;
+  busy: boolean;
+  onReset: (field: FieldSpec) => void;
+}
+
+/** Where a value came from, only when that is news: a default gets no marker. */
+function SourceMark({ field, source, changed, busy, onReset }: MarkerProps): React.ReactNode {
+  if (changed) return <p className="st-mark st-mark-draft">Changed, not saved yet.</p>;
+  switch (source) {
+    case "default":
+      return null;
+    case "env":
+      return (
+        <p className="st-mark st-mark-env">
+          <NavIcon name="lock" size={14} className="st-mark-icon" />
+          <span>
+            {sourceWord(source)}: <code>{envName(field.wire)}</code>. Change it where the service starts.
+          </span>
+        </p>
+      );
+    case "config":
+      return <p className="st-mark st-mark-config">{sourceWord(source)}.</p>;
+    case "file":
+      return (
+        <p className="st-mark st-mark-file">
+          {sourceWord(source)}.{" "}
+          <button type="button" className="st-link" disabled={busy} onClick={() => onReset(field)}>
+            Reset to default
+          </button>
+        </p>
+      );
+  }
 }
 
 interface FieldProps {
@@ -329,52 +358,24 @@ interface FieldProps {
   onReset: (field: FieldSpec) => void;
 }
 
-function Source({ field, backups, busy, onReset }: Pick<FieldProps, "field" | "backups" | "busy" | "onReset">): React.ReactNode {
-  const { source } = backups.settings[field.key];
-  return (
-    <p className="st-hint bk-src">
-      <span className={`bk-source bk-source-${source}`}>{sourceWord(source)}</span>
-      {source === "env" ? ` by ${envName(field.wire)}. Change it where the service starts.` : ""}
-      {source === "file" ? (
-        <>
-          {" "}
-          <button type="button" className="bk-link" disabled={busy} onClick={() => onReset(field)}>
-            Reset to default
-          </button>
-        </>
-      ) : null}
-    </p>
-  );
-}
-
 function SettingField({ field, backups, draft, busy, onChange, onReset }: FieldProps): React.ReactNode {
-  const locked = backups.settings[field.key].source === "env";
+  const { source } = backups.settings[field.key];
+  const locked = source === "env";
   const value = draft.get(field.key) ?? shown(backups, field);
   const id = `bk-set-${field.wire}`;
+  const marker = <SourceMark field={field} source={source} changed={draft.has(field.key)} busy={busy} onReset={onReset} />;
   if (field.kind === "toggle") {
     return (
-      <div className="st-field bk-field">
-        <div className="st-toggle">
-          <div className="st-toggle-text">
-            <span id={id} className="st-label">
-              {field.label}
-            </span>
-            <span className="st-hint">{field.hint}</span>
-          </div>
-          <button type="button" role="switch" aria-checked={value === true} aria-labelledby={id} disabled={locked} className="st-switch" onClick={() => onChange(field, value !== true)} />
-        </div>
-        <Source field={field} backups={backups} busy={busy} onReset={onReset} />
-      </div>
+      <SettingRow label={field.label} labelId={id} help={field.hint} marker={marker} inline>
+        <Switch on={value === true} labelledBy={id} disabled={locked} onFlip={() => onChange(field, value !== true)} />
+      </SettingRow>
     );
   }
   return (
-    <div className="st-field bk-field">
-      <label htmlFor={id} className="st-label">
-        {field.label}
-      </label>
+    <SettingRow label={field.label} htmlFor={id} help={field.hint} marker={marker}>
       <input
         id={id}
-        className="bk-input"
+        className={`st-input st-input-${field.width}`}
         type={field.kind === "number" ? "number" : "text"}
         inputMode={field.kind === "number" ? "numeric" : undefined}
         min={field.kind === "number" ? 1 : undefined}
@@ -386,9 +387,7 @@ function SettingField({ field, backups, draft, busy, onChange, onReset }: FieldP
         value={String(value)}
         onChange={(event) => onChange(field, event.currentTarget.value)}
       />
-      <p className="st-hint">{field.hint}</p>
-      <Source field={field} backups={backups} busy={busy} onReset={onReset} />
-    </div>
+    </SettingRow>
   );
 }
 
@@ -402,11 +401,30 @@ function requestValue(field: FieldSpec, value: string | boolean): { ok: true; va
   return { ok: true, value: number };
 }
 
-function SettingsForm({ backups }: SettingsProps): React.ReactNode {
+/** The saved remote copy in one line, so a first look tells whether there is one. */
+function RemoteSummary({ backups }: StateProps): React.ReactNode {
+  const { settings, remoteConfigured } = backups;
+  if (!remoteConfigured) return "No remote copy set up. Snapshots stay on this host only.";
+  const prefix = settings.prefix.value;
+  return (
+    <>
+      Copies go to bucket <strong className="bk-strong">{settings.bucket.value}</strong> at <code className="bk-code">{settings.endpoint.value}</code>
+      {prefix === "" ? "." : (
+        <>
+          , in the folder <code className="bk-code">{prefix}</code>.
+        </>
+      )}
+    </>
+  );
+}
+
+function SettingsForm({ backups }: StateProps): React.ReactNode {
   const { revalidate } = useRevalidator();
   const [draft, setDraft] = useState<Draft>(new Map());
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
+  const [remoteOpen, setRemoteOpen] = useState(false);
+  const remoteId = useId();
 
   const change = (field: FieldSpec, value: string | boolean): void => {
     const next = new Map(draft);
@@ -460,40 +478,57 @@ function SettingsForm({ backups }: SettingsProps): React.ReactNode {
     finish("Saved.");
   };
 
-  const group = (title: string, fields: readonly FieldSpec[]): React.ReactNode => (
-    <fieldset className="bk-group">
-      <legend className="bk-legend">{title}</legend>
-      {fields.map((field) => (
-        <SettingField key={field.key} field={field} backups={backups} draft={draft} busy={busy} onChange={change} onReset={(target) => void reset(target)} />
-      ))}
-    </fieldset>
+  const discard = (): void => {
+    setDraft(new Map());
+    setNote(null);
+  };
+
+  const rows = (fields: readonly FieldSpec[]): React.ReactNode =>
+    fields.map((field) => <SettingField key={field.key} field={field} backups={backups} draft={draft} busy={busy} onChange={change} onReset={(target) => void reset(target)} />);
+
+  const unsaved = ALL_FIELDS.filter((field) => draft.has(field.key)).map((field) => field.label);
+  const remoteButton = (
+    <button type="button" className={backups.remoteConfigured ? "st-btn" : "st-btn st-btn-main"} aria-expanded={remoteOpen} aria-controls={remoteId} onClick={() => setRemoteOpen(!remoteOpen)}>
+      {remoteOpen ? "Hide the settings" : backups.remoteConfigured ? "Change" : "Set up a remote copy"}
+    </button>
   );
 
   return (
-    <div className="bk-block">
-      <h3 className="bk-h">Settings</h3>
-      <div className="panel panel-pad bk-panel">
-        {group("Local", LOCAL_FIELDS)}
-        {group("Remote copy (S3 bucket)", REMOTE_FIELDS)}
-        <div className="bk-save">
-          <button type="button" className="bk-btn bk-btn-main" disabled={busy || draft.size === 0} onClick={() => void save()}>
-            Save settings
-          </button>
-          <span className="st-hint">{draft.size === 0 ? "Nothing changed." : `${draft.size} ${draft.size === 1 ? "change" : "changes"} to save.`}</span>
+    <div className="bk-settings">
+      <SettingsCard title="Local">{rows(LOCAL_FIELDS)}</SettingsCard>
+      <SettingsCard title="Remote copy (S3 bucket)" intro={<RemoteSummary backups={backups} />} action={remoteButton}>
+        <div id={remoteId} hidden={!remoteOpen}>
+          {rows(REMOTE_FIELDS)}
         </div>
+        {backups.remoteConfigured ? <BucketTest /> : null}
+      </SettingsCard>
+      {unsaved.length === 0 ? (
         <Notice note={note} />
-      </div>
+      ) : (
+        <div className="bk-savebar" role="region" aria-label="Unsaved settings">
+          <div className="bk-savebar-text">
+            <p className="bk-savebar-head">
+              {unsaved.length === 1 ? "1 change is not saved yet:" : `${unsaved.length} changes are not saved yet:`} {unsaved.join(", ")}.
+            </p>
+            <Notice note={note} />
+          </div>
+          <div className="bk-savebar-acts">
+            <button type="button" className="st-btn" disabled={busy} onClick={discard}>
+              Discard
+            </button>
+            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void save()}>
+              Save settings
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // --- the key pair and the test -----------------------------------------------------------
 
-interface CredentialsProps {
-  backups: BackupsStatus;
-}
-
-function Credentials({ backups }: CredentialsProps): React.ReactNode {
+function Credentials({ backups }: StateProps): React.ReactNode {
   const { revalidate } = useRevalidator();
   const [keyId, setKeyId] = useState("");
   const [secret, setSecret] = useState("");
@@ -525,63 +560,60 @@ function Credentials({ backups }: CredentialsProps): React.ReactNode {
     void send("/api/snapshots/credentials", { accessKeyId: keyId.trim(), secretAccessKey: secret }, "The key pair is saved on this host.");
   };
 
+  const intro = (
+    <>
+      The key pair is <strong className="bk-strong">{credentialsWord(credentials)}</strong>.
+    </>
+  );
   return (
-    <div className="bk-block">
-      <h3 className="bk-h">Key pair for the bucket</h3>
-      <div className="panel panel-pad bk-panel">
-        <p className="bk-cred-line">
-          The key pair is <strong>{credentialsWord(credentials)}</strong>.
+    <SettingsCard title="Key pair for the bucket" intro={intro}>
+      {credentials === "env" ? (
+        <p className="st-card-note">
+          The environment sets it, through <code className="bk-code">{ENV_KEY_ID}</code> and <code className="bk-code">{ENV_SECRET}</code>. This page cannot change it.
         </p>
-        {credentials === "env" ? (
-          <p className="st-hint">
-            The environment sets it, through {ENV_KEY_ID} and {ENV_SECRET}. This page cannot change it.
-          </p>
-        ) : (
-          <div className="bk-cred" role="group" aria-label="Save a key pair">
-            <div className="st-field bk-field">
-              <label htmlFor="bk-key-id" className="st-label">
-                Access key id
-              </label>
-              <input id="bk-key-id" className="bk-input" type="text" autoComplete="off" autoCapitalize="off" spellCheck={false} value={keyId} onChange={(event) => setKeyId(event.currentTarget.value)} />
-            </div>
-            <div className="st-field bk-field">
-              <label htmlFor="bk-secret" className="st-label">
-                Secret key
-              </label>
-              <input
-                id="bk-secret"
-                className="bk-input"
-                type="password"
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                value={secret}
-                onChange={(event) => setSecret(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") store();
-                }}
-              />
-              <p className="st-hint">The page writes the pair to this host and never shows it again.</p>
-            </div>
-            <div className="bk-save">
-              <button type="button" className="bk-btn bk-btn-main" disabled={busy} onClick={store}>
-                Save the key pair
+      ) : (
+        <div role="group" aria-label="Save a key pair">
+          <SettingRow label="Access key id" htmlFor="bk-key-id">
+            <input id="bk-key-id" className="st-input st-input-long" type="text" autoComplete="off" autoCapitalize="off" spellCheck={false} value={keyId} onChange={(event) => setKeyId(event.currentTarget.value)} />
+          </SettingRow>
+          <SettingRow label="Secret key" htmlFor="bk-secret" help="The page writes the pair to this host and never shows it again.">
+            <input
+              id="bk-secret"
+              className="st-input st-input-long"
+              type="password"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={secret}
+              onChange={(event) => setSecret(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") store();
+              }}
+            />
+          </SettingRow>
+          <div className="st-card-foot">
+            {credentials === "file" ? (
+              <button type="button" className="st-btn" disabled={busy} onClick={() => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed.")}>
+                Remove the saved key
               </button>
-              {credentials === "file" ? (
-                <button type="button" className="bk-btn bk-btn-quiet" disabled={busy} onClick={() => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed.")}>
-                  Remove the saved key
-                </button>
-              ) : null}
-            </div>
+            ) : null}
+            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={store}>
+              Save the key pair
+            </button>
           </div>
-        )}
-        <Notice note={note} />
-      </div>
-    </div>
+        </div>
+      )}
+      {note === null ? null : (
+        <div className="st-card-foot">
+          <Notice note={note} />
+        </div>
+      )}
+    </SettingsCard>
   );
 }
 
-function BucketTest({ backups }: StateProps): React.ReactNode {
+/** The bucket check, a row at the end of the remote card. It needs a remote copy set up. */
+function BucketTest(): React.ReactNode {
   const { revalidate } = useRevalidator();
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
@@ -600,26 +632,18 @@ function BucketTest({ backups }: StateProps): React.ReactNode {
   };
 
   return (
-    <div className="bk-block">
-      <h3 className="bk-h">Test the bucket</h3>
-      <div className="panel panel-pad bk-panel">
-        <p className="st-hint">Lists the bucket, then writes and deletes one small test object. It uses the saved settings.</p>
-        <div className="bk-save">
-          <button type="button" className="bk-btn bk-btn-quiet" disabled={busy || !backups.remoteConfigured} onClick={() => void test()}>
-            {busy ? "Testing…" : "Test the bucket"}
-          </button>
-          {backups.remoteConfigured ? null : <span className="st-hint">Set the endpoint and the bucket first.</span>}
-        </div>
-        <Notice note={note} />
-      </div>
-    </div>
+    <SettingRow label="Bucket test" help="Lists the bucket, then writes and deletes one small test object. It uses the saved settings." marker={<Notice note={note} />}>
+      <button type="button" className="st-btn" disabled={busy} onClick={() => void test()}>
+        {busy ? "Testing…" : "Test the bucket"}
+      </button>
+    </SettingRow>
   );
 }
 
 function EnvHelp({ backups }: StateProps): React.ReactNode {
   return (
     <Fold summary="Set these with environment variables">
-      <p className="st-hint">
+      <p className="bk-env-lede">
         Put the lines in <code className="inline-code">{backups.envFile}</code>. The timer and this page read that file. Restart the web service after a change. An environment value wins over this page.
       </p>
       <dl className="bk-env">
@@ -648,32 +672,19 @@ function EnvHelp({ backups }: StateProps): React.ReactNode {
   );
 }
 
-// --- the section -------------------------------------------------------------------------
+// --- the tab -----------------------------------------------------------------------------
 
 export function Backups({ backups }: StateProps): React.ReactNode {
   return (
-    <Section title="Backups" id="backups">
-      <div className="bk">
-        <Problems problems={backups.problems} />
-        <div className="bk-grid">
-          <div className="bk-col">
-            <div className="bk-block">
-              <h3 className="bk-h">State</h3>
-              <div className="panel panel-pad bk-panel">
-                <StateLines backups={backups} />
-                <RunButton backups={backups} />
-              </div>
-            </div>
-            <SnapshotList backups={backups} />
-            <BucketTest backups={backups} />
-            <EnvHelp backups={backups} />
-          </div>
-          <div className="bk-col">
-            <SettingsForm backups={backups} />
-            <Credentials backups={backups} />
-          </div>
-        </div>
-      </div>
-    </Section>
+    <div className="st-body bk">
+      <Problems problems={backups.problems} />
+      <SettingsCard title="Status" action={<RunButton backups={backups} />}>
+        <StateLines backups={backups} />
+      </SettingsCard>
+      <SnapshotList backups={backups} />
+      <SettingsForm backups={backups} />
+      <Credentials backups={backups} />
+      <EnvHelp backups={backups} />
+    </div>
   );
 }

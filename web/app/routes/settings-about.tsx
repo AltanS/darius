@@ -4,7 +4,7 @@ import { Link, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/settings-about";
 import type { loader as rootLoader } from "../root.tsx";
-import { Section } from "../components/ui.tsx";
+import { SettingRow, SettingsCard } from "../components/settings-ui.tsx";
 import { statusOf } from "../lib/status.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
@@ -17,32 +17,25 @@ export const meta: Route.MetaFunction = () => [{ title: "About | Settings | dari
 
 export default function SettingsAbout({ loaderData }: Route.ComponentProps): React.ReactNode {
   const root = useRouteLoaderData<typeof rootLoader>("root");
+  const profiles = loaderData.profiles;
   return (
-    <div className="st-body stack">
-      <Section title="About">
-        <dl className="st-about">
-          <div>
-            <dt>Host</dt>
-            <dd>{root?.host}</dd>
-          </div>
-          <div>
-            <dt>Version</dt>
-            <dd>darius {root?.version}</dd>
-          </div>
-          <div>
-            <dt>Seen by</dt>
-            <dd>{root?.viewer}</dd>
-          </div>
-          <div>
-            <dt>Profiles</dt>
-            <dd>
-              <Link to="/profiles" className="st-about-link">
-                {loaderData.profiles === 0 ? "None yet" : `${loaderData.profiles} ${loaderData.profiles === 1 ? "profile" : "profiles"}`}
-              </Link>
-            </dd>
-          </div>
-        </dl>
-      </Section>
+    <div className="st-body">
+      <SettingsCard title="This host">
+        <SettingRow label="Host" help="The machine that serves this page.">
+          <span className="st-value">{root?.host}</span>
+        </SettingRow>
+        <SettingRow label="Version" help="The darius release on this host.">
+          <span className="st-value">darius {root?.version}</span>
+        </SettingRow>
+        <SettingRow label="Seen by" help="Who this host thinks you are.">
+          <span className="st-value">{root?.viewer}</span>
+        </SettingRow>
+        <SettingRow label="Profiles" help="Named presets for starting an agent harness.">
+          <Link to="/profiles" className="st-value st-value-link">
+            {profiles === 0 ? "None yet" : `${profiles} ${profiles === 1 ? "profile" : "profiles"}`}
+          </Link>
+        </SettingRow>
+      </SettingsCard>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * The notification switch (0.32.0), on the settings page since the IA work (it sat in the footer). It registers the service
+ * The notification switch (0.32.0), a row on the Notifications tab of the settings. It registers the service
  * worker (web/public/sw.js), asks the host for its VAPID key, and subscribes
  * this browser with `darius serve`'s push endpoints (src/web/push-api.ts):
  * GET /api/push/key, POST /api/push/subscribe, POST /api/push/unsubscribe.
@@ -11,6 +11,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+
+import { SettingRow } from "./settings-ui.tsx";
 
 type PushState =
   | { kind: "checking" }
@@ -96,6 +98,29 @@ function failure(cause: Error): PushState {
   return { kind: "failed", text: `Notifications failed: ${cause.message}` };
 }
 
+interface PushRowProps {
+  /** Where this device stands, in words. */
+  state: React.ReactNode;
+  tone?: "bad";
+  children?: React.ReactNode;
+}
+
+/** The one row of the switch: its state on the left, the button on the right. */
+function PushRow({ state, tone, children }: PushRowProps): React.ReactNode {
+  return (
+    <SettingRow
+      label="Push notifications"
+      help={
+        <span role="status" className={tone === "bad" ? "ink-bad" : undefined}>
+          {state}
+        </span>
+      }
+    >
+      {children}
+    </SettingRow>
+  );
+}
+
 export function PushSwitch(): React.ReactNode {
   const [state, setState] = useState<PushState>({ kind: "checking" });
   useEffect(() => {
@@ -108,39 +133,41 @@ export function PushSwitch(): React.ReactNode {
 
   switch (state.kind) {
     case "checking":
-      return <p className="push push-note">Checking this device…</p>;
+      return <PushRow state="Checking this device…" />;
     case "unavailable":
-      return <p className="push push-note">{state.text}</p>;
+      return <PushRow state={state.text} />;
     case "busy":
-      return <p className="push push-note">{state.text}</p>;
+      return <PushRow state={state.text} />;
     case "failed":
       return (
-        <p className="push push-note ink-bad">
-          {state.text}{" "}
-          <button type="button" className="push-btn" onClick={() => run("Checking…", check)}>
+        <PushRow state={state.text} tone="bad">
+          <button type="button" className="st-btn" onClick={() => run("Checking…", check)}>
             Try again
           </button>
-        </p>
+        </PushRow>
       );
     case "off":
       return (
-        <p className="push">
-          <button type="button" className="push-btn" onClick={() => run("Turning notifications on…", () => turnOn(state.key))}>
+        <PushRow state="Off for this device.">
+          <button type="button" className="st-btn st-btn-main" onClick={() => run("Turning notifications on…", () => turnOn(state.key))}>
             Turn on notifications
           </button>
-        </p>
+        </PushRow>
       );
     case "on":
       return (
-        <p className="push">
-          <span className="push-on">
-            <span className="status-dot" aria-hidden="true" />
-            Notifications on for this device
-          </span>
-          <button type="button" className="push-btn" onClick={() => run("Turning notifications off…", turnOff)}>
+        <PushRow
+          state={
+            <span className="push-on">
+              <span className="status-dot" aria-hidden="true" />
+              On for this device.
+            </span>
+          }
+        >
+          <button type="button" className="st-btn" onClick={() => run("Turning notifications off…", turnOff)}>
             Turn off
           </button>
-        </p>
+        </PushRow>
       );
   }
 }

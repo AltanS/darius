@@ -121,7 +121,7 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
         <label className="fu-label" htmlFor={`fu-note-${run}`}>
           Note for the follow-up (optional)
         </label>
-        <input id={`fu-note-${run}`} className="bk-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
+        <input id={`fu-note-${run}`} className="st-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
       </div>
       {asking ? (
         <div className="fu-ask" role="group" aria-label="Confirm the follow-up">
@@ -134,17 +134,17 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
             </pre>
           </div>
           <div className="fu-acts">
-            <button type="button" className="bk-btn bk-btn-main" disabled={busy} onClick={() => void start()}>
+            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void start()}>
               {busy ? "Starting…" : "Yes, start it"}
             </button>
-            <button type="button" className="bk-btn bk-btn-quiet" disabled={busy} onClick={() => setAsking(false)}>
+            <button type="button" className="st-btn" disabled={busy} onClick={() => setAsking(false)}>
               No
             </button>
           </div>
         </div>
       ) : (
         <div className="fu-acts">
-          <button type="button" className="bk-btn bk-btn-main" disabled={busy || chosen.length === 0} onClick={() => setAsking(true)}>
+          <button type="button" className="st-btn st-btn-main" disabled={busy || chosen.length === 0} onClick={() => setAsking(true)}>
             Start follow-up on {readiness.host}
           </button>
         </div>

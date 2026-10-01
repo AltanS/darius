@@ -2,6 +2,16 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.50.1] - 2026-10-01
+
+### Changed
+
+- The settings pages are redesigned for reading. Every setting is one row: the label and a one-line help on the left, the control on the right. On a phone the control drops under the text.
+- Related rows sit in titled cards. A marker shows only where a value is not the default: "Saved here", or "Set by the environment" with a lock and the variable name.
+- The backups tab folds the remote fields behind one button and says at once whether a remote copy is set up. Unsaved changes show a sticky save bar with Save and Discard.
+- The key pair sits in no form, so an early Enter cannot send the secret in a URL. Inputs are short, medium or long by what they hold.
+- Settings buttons and the run page's follow-up card share one button style.
+
 ## [0.50.0] - 2026-10-01
 
 ### Changed
