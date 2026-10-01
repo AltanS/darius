@@ -1,13 +1,13 @@
-# systemd/darius-run-due.timer — hourly at 5 minutes past, per
-# docs/plan-tonight.md ("Sweep, runner, timers"). Offset by 5 minutes so it never
+# systemd/darius-run-due.timer — every 15 minutes at :05, :20, :35 and :50, per
+# docs/plan-tonight.md ("Sweep, runner, timers"). Offset by 5 minutes from sync so it never
 # races darius-sync.timer's :00/:15/:30/:45 firings for the same lock. Persistent=true
 # for the same missed-window reason as the vigil sweep.
 [Unit]
-Description=Run darius run-due once an hour
+Description=Run darius run-due every 15 minutes
 Documentation=https://github.com/AltanS/darius
 
 [Timer]
-OnCalendar=*:05
+OnCalendar=*:05/15
 Persistent=true
 AccuracySec=1min
 
