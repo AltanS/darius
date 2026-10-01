@@ -201,6 +201,14 @@ function firstDue(progress: Progress, context: { cadence: Cadence | undefined; t
   return context.today;
 }
 
+/** The lifecycle of ritual `slug` from the whole ledger: the latest `ritual.lifecycle` state, `retired` terminal. */
+export function ritualLifecycle(ledger: readonly LedgerLine[], slug: string): Lifecycle {
+  const lines = ledger
+    .filter((line) => line.item === `ritual/${slug}`)
+    .toSorted((left, right) => compareText(left.id, right.id));
+  return readLifecycle(lines);
+}
+
 function readLifecycle(lines: LedgerLine[]): Lifecycle {
   let lifecycle: Lifecycle = "active";
   for (const line of lines) {
