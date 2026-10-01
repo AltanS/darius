@@ -28,7 +28,7 @@ import { UsageError, type Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { markerDirty } from "../core/reconcile.ts";
 import { openProject, type Project } from "../core/store.ts";
-import { tomlArrayMultiline, tomlLiteral, tomlString } from "../core/toml.ts";
+import { tomlArrayMultiline, tomlLiteral, tomlString, tomlText } from "../core/toml.ts";
 import { checkoutDir } from "../core/workdir.ts";
 import type { ParsedArgs } from "./registry.ts";
 
@@ -105,13 +105,14 @@ function ritualTable(ritual: Ritual, skill: string): string {
   if (ritual.cadence !== undefined && ritual.cadence !== "") lines.push(`cadence = ${tomlString(ritual.cadence)}`);
   if (ritual.anchor === "completion") lines.push('anchor = "completion"');
   lines.push(`skill = ${tomlString(skill)}`);
+  if (ritual.args !== undefined && ritual.args !== "") lines.push(`args = ${tomlString(ritual.args)}`);
   if (policy.profile !== undefined) lines.push(`profile = ${tomlString(policy.profile)}`);
   if (policy.model !== undefined) lines.push(`model = ${tomlString(policy.model)}`);
   if (policy.max_turns !== undefined) lines.push(`max_turns = ${String(policy.max_turns)}`);
   lines.push(`mode = ${tomlString(policy.mode)}`);
   lines.push(...listLines("may", policy.may, tomlString));
   lines.push(...listLines("hold", policy.hold, tomlLiteral));
-  if (policy.notes !== undefined && policy.notes !== "") lines.push(`notes = ${tomlString(policy.notes)}`);
+  if (policy.notes !== undefined && policy.notes !== "") lines.push(`notes = ${tomlText(policy.notes)}`);
   return lines.join("\n");
 }
 

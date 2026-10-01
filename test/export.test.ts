@@ -320,3 +320,23 @@ test("a ritual with a skill and a body warns on stderr and in --json", async () 
   const parsed: { warnings: string[] } = JSON.parse(json.stdout);
   assert.deepEqual(parsed.warnings, ["weekly-audit: the store body is not exported; the skill audit is the procedure"]);
 });
+
+test("export writes args and a multi-line note in the \"\"\" form, and the marker reads back the same values", async () => {
+  const { project } = setup();
+  const note = "Never push.\nHand in a diff.\nSay \"done\"\"";
+  project.writeItem(
+    { header: ritualHeader("with-args", { skill: "audit", args: "--site acme", policy: { mode: "report", may: [], hold: [], notes: note } }), body: "ignored\n" },
+    { who: "test" },
+  );
+  const result = await run(project.name, []);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /\[rituals\.with-args\]\ntitle = "Title of with-args"\ncadence = "1d"\nskill = "audit"\nargs = "--site acme"\n/u);
+  assert.ok(result.stdout.includes('notes = """\nNever push.\nHand in a diff.\nSay "done"\\""""\n'), "the closing quote of the note is escaped");
+  const target = join(SANDBOX, `check-args-${String(counter)}`);
+  mkdirSync(target);
+  writeFileSync(join(target, ".darius.toml"), result.stdout);
+  const ritual = readMarker(target)?.rituals.find((item) => item.slug === "with-args");
+  assert.equal(ritual?.args, "--site acme");
+  assert.equal(ritual?.policy.notes, note, "the note survives the export and the parse");
+  assert.doesNotMatch(result.stdout, /\[rituals\.daily-report\][^[]*args =/u, "a ritual without args gets no args line");
+});

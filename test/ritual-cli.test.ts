@@ -842,3 +842,27 @@ test("ritual list warns when the mirror differs from this checkout, and when a r
   assert.match((await runCli(ritualCommand, project, ["list"])).stdout, /! daily was retired; use a new slug/u);
   assert.deepEqual(JSON.parse((await runCli(ritualCommand, project, ["reconcile", "--json"])).stdout).warnings, ["daily was retired; use a new slug"]);
 });
+
+test("a ritual's args are mirrored, shown by show and list --json, rehashed on change, and cleared when git drops it", async () => {
+  const project = "rc-v3-args";
+  const dir = v3Project(project);
+  const marker = join(dir, ".darius.toml");
+  writeFileSync(marker, readFileSync(marker, "utf8").replace('skill = "daily"\n', 'skill = "daily"\nargs = "--site acme"\nnotes = """\nNever push.\nHand in a diff.\n"""\n'));
+  const first = await runCli(ritualCommand, project, ["reconcile", "--json"]);
+  assert.deepEqual(JSON.parse(first.stdout).adopted, ["daily"]);
+  assert.equal(readRitual(project, "daily").args, "--site acme");
+  assert.equal(readRitual(project, "daily").policy.notes, "Never push.\nHand in a diff.\n", "a multi-line note reaches the store item whole");
+  const hash = readRitual(project, "daily").def_hash;
+  assert.match((await runCli(ritualCommand, project, ["show", "daily"])).stdout, /^args: --site acme$/mu);
+  assert.equal(JSON.parse((await runCli(ritualCommand, project, ["show", "daily", "--json"])).stdout).header.args, "--site acme");
+  assert.equal(JSON.parse((await runCli(ritualCommand, project, ["list", "--json"])).stdout).rituals[0].args, "--site acme");
+  assert.deepEqual(JSON.parse((await runCli(ritualCommand, project, ["reconcile", "--json"])).stdout).unchanged, ["daily"]);
+  writeFileSync(marker, readFileSync(marker, "utf8").replace("--site acme", "--site other"));
+  assert.deepEqual(JSON.parse((await runCli(ritualCommand, project, ["reconcile", "--json"])).stdout).updated, ["daily"]);
+  assert.equal(readRitual(project, "daily").args, "--site other");
+  assert.notEqual(readRitual(project, "daily").def_hash, hash);
+  writeFileSync(marker, readFileSync(marker, "utf8").replace('args = "--site other"\n', ""));
+  await runCli(ritualCommand, project, ["reconcile"]);
+  assert.equal("args" in readRitual(project, "daily"), false, "dropping args from git clears the mirror");
+  assert.doesNotMatch((await runCli(ritualCommand, project, ["show", "daily"])).stdout, /^args:/mu);
+});

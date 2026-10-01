@@ -235,12 +235,12 @@ test("a repo ritual row carries its source, schedule, timeout and the git facts"
   const project = openProject("web-ack");
   const doc = project.readItem<Ritual>("ritual", "nightly");
   assert.ok(doc !== null);
-  const repo = { ...doc.header, source: "repo" as const, at: "07:00", tz: "Europe/Berlin", timeout: "30m", def_commit: "abcdef123456", def_host: "host-a", def_at: "2026-10-01T06:00:00.000Z", def_dirty: true };
+  const repo = { ...doc.header, source: "repo" as const, at: "07:00", tz: "Europe/Berlin", args: "--site acme", timeout: "30m", def_commit: "abcdef123456", def_host: "host-a", def_at: "2026-10-01T06:00:00.000Z", def_dirty: true };
   project.writeItem({ header: repo, body: doc.body }, { who: "test" });
   const row = webContext("this host").ritual("web-ack", "nightly")?.row;
   assert.deepEqual(
-    [row?.source, row?.defCommit, row?.defHost, row?.defAt, row?.defDirty, row?.at, row?.zone, row?.timeout],
-    ["repo", "abcdef123456", "host-a", "2026-10-01T06:00:00.000Z", true, "07:00", "Europe/Berlin", "30m"],
+    [row?.source, row?.defCommit, row?.defHost, row?.defAt, row?.defDirty, row?.at, row?.zone, row?.args, row?.timeout],
+    ["repo", "abcdef123456", "host-a", "2026-10-01T06:00:00.000Z", true, "07:00", "Europe/Berlin", "--site acme", "30m"],
   );
   assert.match(row?.nextDueAt ?? "", /^\d{4}-\d{2}-\d{2}T/u);
   assert.deepEqual(row?.warnings, []);

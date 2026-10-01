@@ -22,11 +22,17 @@
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
  *   [policies.read-only]               mode, may, hold, notes
  *   [rituals.daily-report]             title, skill, and optionally cadence,
- *   at = "07:00"                       anchor, at, tz, from, timeout, profile,
- *   skill = "daily-report"             model, max_turns, and either `policy`
- *   policy = "read-only"               or mode, may, hold, notes
+ *   at = "07:00"                       anchor, at, tz, from, args, timeout,
+ *   skill = "daily-report"             profile, model, max_turns, and either
+ *   args = "--site acme"               `policy` or mode, may, hold, notes
+ *   policy = "read-only"
  *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
  *   hold_extra = ['\bpush\b']          adds to the policy's hold (or the own hold)
+ *
+ * `args` is input for the skill, one line of at most 256 characters. The
+ * run prompt passes it on under `## Arguments`. It is part of the definition
+ * hash and is mirrored into the store item, so every host must run 0.57.0
+ * before a marker uses it.
  *
  * `may_extra` and `hold_extra` only add: the effective `may` is the base
  * `may` and then the extra rules, the effective `hold` the same, each with
@@ -93,6 +99,8 @@ export interface RepoRitual {
   tz?: string;
   from?: string;
   skill: string;
+  /** Input for the skill, one line (`args = "--site acme"`). The run prompt passes it on; it is not procedure. */
+  args?: string;
   timeoutMs?: number;
   profile?: string;
   model?: string;
@@ -133,7 +141,7 @@ const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz"]);
 const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args"]);
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
-  "title", "cadence", "anchor", "at", "tz", "from", "skill", "timeout", "profile", "model", "max_turns",
+  "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "may_extra", "hold_extra",
 ]);
 const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes"]);
@@ -146,6 +154,8 @@ const AT_TEXT = /^([01]\d|2[0-3]):[0-5]\d$/u;
 const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const TIMEOUT_TEXT = /^(\d+)(m|h)$/u;
 const MAX_TIMEOUT_MINUTES = 12 * 60;
+/** The longest `args` text of a ritual, in characters. */
+export const MAX_ARGS_LENGTH = 256;
 /** A Claude Code permission rule: a bare tool name, or `Tool(pattern)`. */
 export const PERMISSION_RULE_RE = /^[A-Za-z_][A-Za-z0-9_]*(\([^]*\))?$/u;
 const MODES: readonly Mode[] = ["off", "report", "act"];
@@ -318,6 +328,19 @@ function ritualText(table: Table, key: string, at: { section: string; source: So
   return value;
 }
 
+/** A ritual's `args`: a non-empty one-line string of at most 256 characters. */
+function decodeArgs(table: Table, at: { section: string; source: Source }): string | undefined {
+  const value = table.args;
+  if (value === undefined) return undefined;
+  const line = at.source.lines[`${at.section}.args`];
+  const fail = (expected: string): Error => new Error(`${where(at.source.file, line)}: args must be ${expected}`);
+  if (!isText(value)) throw fail('a string: args = "--site acme"');
+  if (value === "") throw fail("not empty; leave the key out for no arguments");
+  if (value.includes("\n") || value.includes("\r")) throw fail("one line, with no newline");
+  if (value.length > MAX_ARGS_LENGTH) throw fail(`at most ${String(MAX_ARGS_LENGTH)} characters, got ${String(value.length)}`);
+  return value;
+}
+
 function decodeTimeout(table: Table, at: { section: string; source: Source }): number | undefined {
   const text = ritualText(table, "timeout", at, { pattern: TIMEOUT_TEXT, expected: 'like "30m" or "2h"' });
   if (text === undefined) return undefined;
@@ -446,6 +469,7 @@ function decodeRitual(
       }
     }
   }
+  const args = decodeArgs(table, at);
   const timeoutMs = decodeTimeout(table, at);
   const profile = ritualText(table, "profile", at, { pattern: PROFILE_NAME, expected: "a profile name" });
   const model = ritualText(table, "model", at);
@@ -459,6 +483,7 @@ function decodeRitual(
   if (hhmm !== undefined) ritual.at = hhmm;
   if (zone !== undefined) ritual.tz = zone;
   if (from !== undefined) ritual.from = from;
+  if (args !== undefined) ritual.args = args;
   if (timeoutMs !== undefined) ritual.timeoutMs = timeoutMs;
   if (profile !== undefined) ritual.profile = profile;
   if (model !== undefined) ritual.model = model;

@@ -175,11 +175,12 @@ function mirrored(base: Ritual, definition: Definition, at: Checkout): Ritual {
     def_at: at.now.toISOString(),
     updated: at.now.toISOString(),
   };
-  for (const key of ["cadence", "at", "tz", "from", "timeout", "def_commit"] as const) delete header[key];
+  for (const key of ["cadence", "at", "tz", "from", "args", "timeout", "def_commit"] as const) delete header[key];
   if (ritual.cadence !== undefined) header.cadence = ritual.cadence;
   if (ritual.at !== undefined) header.at = ritual.at;
   if (ritual.tz !== undefined) header.tz = ritual.tz;
   if (ritual.from !== undefined) header.from = ritual.from;
+  if (ritual.args !== undefined) header.args = ritual.args;
   if (definition.timeout !== undefined) header.timeout = definition.timeout;
   if (at.commit !== undefined) header.def_commit = at.commit;
   return header;

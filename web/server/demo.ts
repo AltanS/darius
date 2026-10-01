@@ -68,6 +68,7 @@ function ritual(slug: string, title: string, extra: Partial<RitualRow> = {}): Ri
     defDirty: false,
     at: null,
     zone: null,
+    args: null,
     timeout: null,
     nextDueAt: null,
     warnings: [],

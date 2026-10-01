@@ -16,7 +16,7 @@ function run(extra: Partial<RunRow> = {}): RunRow {
 }
 
 function ritual(extra: Partial<RitualRow> = {}): RitualRow {
-  return { slug: "a", title: "A", lifecycle: "active", mode: "report", cadence: "7d", nextDue: null, isDue: false, overdueDays: 0, skill: null, profile: null, host: null, lastCompleted: null, heldRun: null, openRun: null, failedToday: null, source: null, defCommit: null, defHost: null, defAt: null, defDirty: false, at: null, zone: null, timeout: null, nextDueAt: null, warnings: [], ...extra };
+  return { slug: "a", title: "A", lifecycle: "active", mode: "report", cadence: "7d", nextDue: null, isDue: false, overdueDays: 0, skill: null, profile: null, host: null, lastCompleted: null, heldRun: null, openRun: null, failedToday: null, source: null, defCommit: null, defHost: null, defAt: null, defDirty: false, at: null, zone: null, args: null, timeout: null, nextDueAt: null, warnings: [], ...extra };
 }
 
 test("a run has one word and one tone for each state", () => {

@@ -312,6 +312,8 @@ interface ListedRitual {
   source?: "repo" | "unmanaged";
   at?: string;
   tz?: string;
+  /** The skill's input from the marker (`args`); absent when none is set. */
+  args?: string;
   /** What the operator should see: a stale mirror, a retired slug named again. */
   warnings?: string[];
 }
@@ -336,6 +338,7 @@ function listRituals(project: Project): ListedRitual[] {
     else if (marker !== null && !isRepoRitual(doc, slug, marker) && state.lifecycle !== "retired") listed.source = "unmanaged";
     if (doc.header.at !== undefined) listed.at = doc.header.at;
     if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
+    if (doc.header.args !== undefined) listed.args = doc.header.args;
     const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker);
     if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
@@ -393,6 +396,7 @@ function runShow(args: ParsedArgs): number {
   if (state.heldRun !== undefined) console.log(`held run: ${state.heldRun}`);
   if (state.openRun !== undefined) console.log(`open run: ${state.openRun}`);
   if (doc.header.skill !== undefined) console.log(`skill: ${doc.header.skill}`);
+  if (doc.header.args !== undefined) console.log(`args: ${doc.header.args}`);
   if (doc.header.timeout !== undefined) console.log(`timeout: ${doc.header.timeout}`);
   console.log(`source: ${showSource(doc, ledger, v3Marker(project))}`);
   if (doc.header.host !== undefined) console.log(`host: ${doc.header.host} (other hosts skip it)`);

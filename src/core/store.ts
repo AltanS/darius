@@ -274,7 +274,7 @@ export function withFileLock<R>(lockPath: string, fn: () => R, timing: LockTimin
 const RITUAL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "cadence", "anchor",
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
-  "source", "at", "tz", "from", "timeout", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
+  "source", "at", "tz", "from", "args", "timeout", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
 const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
@@ -417,7 +417,7 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
   const source = reader.optionalString("source");
   if (source !== undefined && source !== "repo") throw new Error(`${where}: 'source' must be repo, got '${source}'`);
   if (source !== undefined) ritual.source = source;
-  for (const key of ["at", "tz", "from", "timeout", "def_hash", "def_commit", "def_host", "def_at"] as const) {
+  for (const key of ["at", "tz", "from", "args", "timeout", "def_hash", "def_commit", "def_host", "def_at"] as const) {
     const value = reader.optionalString(key);
     if (value !== undefined) ritual[key] = value;
   }
@@ -527,7 +527,7 @@ function encodeHeader(item: Item): FrontmatterHeader {
     putIfSet(entries, "skill", item.skill);
     putIfSet(entries, "host", item.host);
     putIfSet(entries, "source", item.source);
-    for (const key of ["at", "tz", "from", "timeout", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
+    for (const key of ["at", "tz", "from", "args", "timeout", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
     putIfSet(entries, "def_dirty", item.def_dirty === undefined ? undefined : String(item.def_dirty));
     putIfSet(entries, "def_host", item.def_host);
     putIfSet(entries, "def_at", item.def_at);

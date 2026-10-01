@@ -11,7 +11,7 @@ import { isManual, itemKind, itemManual, kindWord, type Kind } from "../web/app/
 import { activity } from "../web/app/lib/view.ts";
 
 function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
-  return { slug, title: slug, lifecycle: "active", mode: "report", cadence: "1d", nextDue: null, isDue: false, overdueDays: 0, skill: null, profile: null, host: null, lastCompleted: null, heldRun: null, openRun: null, failedToday: null, source: null, defCommit: null, defHost: null, defAt: null, defDirty: false, at: null, zone: null, timeout: null, nextDueAt: null, warnings: [], ...extra };
+  return { slug, title: slug, lifecycle: "active", mode: "report", cadence: "1d", nextDue: null, isDue: false, overdueDays: 0, skill: null, profile: null, host: null, lastCompleted: null, heldRun: null, openRun: null, failedToday: null, source: null, defCommit: null, defHost: null, defAt: null, defDirty: false, at: null, zone: null, args: null, timeout: null, nextDueAt: null, warnings: [], ...extra };
 }
 
 function run(item: string, startedAt: string): RunRow {

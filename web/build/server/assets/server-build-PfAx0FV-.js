@@ -16289,7 +16289,7 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "folds",
 					children: [
-						scheduleAt === null && row.timeout === null && !fromGit ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+						scheduleAt === null && row.timeout === null && row.args === null && !fromGit ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
 							summary: "Schedule",
 							open: true,
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
@@ -16307,6 +16307,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 								...row.nextDueAt === null ? [] : [{
 									label: "Next due",
 									value: row.nextDueAt
+								}],
+								...row.args === null ? [] : [{
+									label: "Arguments",
+									value: row.args
 								}],
 								...row.timeout === null ? [] : [{
 									label: "Timeout",
@@ -17442,7 +17446,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-Dt7lSf2F.js",
+			"module": "/assets/ritual-CTstTt3L.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17522,8 +17526,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-abcc0fb7.js",
-	"version": "abcc0fb7",
+	"url": "/assets/manifest-adfdd411.js",
+	"version": "adfdd411",
 	"sri": void 0
 };
 //#endregion

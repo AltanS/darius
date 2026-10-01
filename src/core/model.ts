@@ -59,6 +59,8 @@ export interface Ritual extends ItemHeader {
   at?: string;
   tz?: string;
   from?: string;
+  /** The mirrored input for the skill (`args` in the marker): one line, passed on in the run prompt. */
+  args?: string;
   /** The mirrored per-run budget, as written: `30m`, `2h`. */
   timeout?: string;
   /** `definitionHash` of the mirrored definition. */

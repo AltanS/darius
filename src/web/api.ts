@@ -113,6 +113,8 @@ export interface RitualRow {
   /** The mirrored schedule: `HH:MM` and an IANA zone; null for a store ritual. */
   at: string | null;
   zone: string | null;
+  /** The skill's input from the marker (`args`); null when none is set. */
+  args: string | null;
   /** The per-run budget as written (`30m`); null when none is set. */
   timeout: string | null;
   /** The instant the next occurrence is due (ISO); null for a retired ritual. */

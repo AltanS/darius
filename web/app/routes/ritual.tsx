@@ -182,13 +182,14 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         <aside className="board-rail">
           <Section title="Rules and instructions">
             <div className="folds">
-              {scheduleAt === null && row.timeout === null && !fromGit ? null : (
+              {scheduleAt === null && row.timeout === null && row.args === null && !fromGit ? null : (
                 <Fold summary="Schedule" open>
                   <Facts
                     facts={[
                       { label: "Cadence", value: cadence ?? <span className="text-muted">none</span> },
                       ...(scheduleAt === null ? [] : [{ label: "At", value: scheduleAt }]),
                       ...(row.nextDueAt === null ? [] : [{ label: "Next due", value: row.nextDueAt }]),
+                      ...(row.args === null ? [] : [{ label: "Arguments", value: row.args }]),
                       ...(row.timeout === null ? [] : [{ label: "Timeout", value: row.timeout }]),
                     ]}
                   />

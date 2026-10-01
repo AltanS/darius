@@ -388,6 +388,12 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["hold that does not compile", v3(`${RITUAL}hold = ['(']\n`), /:9: hold must be a list of regular expressions that compile, got "\("/u],
   ["hold that needs the u flag", v3(`${RITUAL}hold = ['\\p{Nope}']\n`), /:9: hold must be a list of regular expressions that compile/u],
   ["notes not a string", v3(`${RITUAL}notes = 3\n`), /:9: notes must be a string/u],
+  ["args not a string", v3(`${RITUAL}args = ["--site", "acme"]\n`), /:9: args must be a string: args = "--site acme"/u],
+  ["args empty", v3(`${RITUAL}args = ""\n`), /:9: args must be not empty/u],
+  ["args with a newline", v3(`${RITUAL}args = "--site acme\\n--dry"\n`), /:9: args must be one line, with no newline/u],
+  ["args with a newline in a multi-line string", v3(`${RITUAL}args = """\n--site acme\n--dry"""\n`), /:9: args must be one line, with no newline/u],
+  ["args over 256 characters", v3(`${RITUAL}args = "${"a".repeat(257)}"\n`), /:9: args must be at most 256 characters, got 257/u],
+  ["args in a policy table", v3('[policies.p]\nmode = "off"\nargs = "x"\n'), /:7: unknown key "args"/u],
   ["policy missing", v3(`${RITUAL}policy = "nope"\n`), /:9: policy = "nope" names no \[policies\.nope\] table/u],
   ["policy with mode", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmode = "off"\n`), /:12: mode cannot be combined with policy = "p"/u],
   ["policy with may", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nmay = ["Bash"]\n`), /:12: may cannot be combined with policy = "p"/u],
@@ -542,4 +548,42 @@ test("resolvedLines: mode, then may, then hold, each sorted, one per line", () =
     "hold: \\bdeploy\\b",
     "hold: \\bpush\\b",
   ]);
+});
+
+// --- args and multi-line notes ------------------------------------------------------
+
+test("a ritual's args reads back; 256 characters is the limit; a ritual without args has no key", () => {
+  assert.equal(firstRitual(`${RITUAL}args = "--site acme"\n`).args, "--site acme");
+  assert.equal(firstRitual(`${RITUAL}args = "${"a".repeat(256)}"\n`).args?.length, 256);
+  assert.equal("args" in firstRitual(RITUAL), false);
+});
+
+test("args are part of the definition hash, and a profile's args list is a different key", () => {
+  const plain = firstRitual(RITUAL);
+  const withArgs = firstRitual(`${RITUAL}args = "--site acme"\n`);
+  const other = firstRitual(`${RITUAL}args = "--site other"\n`);
+  assert.notEqual(definitionHash(plain), definitionHash(withArgs));
+  assert.notEqual(definitionHash(withArgs), definitionHash(other));
+  const reordered = firstRitual('[rituals.daily]\nargs = "--site acme"\nskill = "daily"\ncadence = "1d"\ntitle = "Daily"\n');
+  assert.equal(definitionHash(withArgs), definitionHash(reordered), "key order does not matter");
+  const profile = readMarker(checkout(`v = 2\nproject = "ws"\n[profiles.p]\nargs = ["--flag"]\n`));
+  assert.deepEqual(profile?.profiles.p?.args, ["--flag"]);
+});
+
+test("notes in the multi-line form read back as the same value and give the same definition hash", () => {
+  const single = firstRitual(`${RITUAL}notes = "Never push.\\nHand in a diff.\\n"\n`);
+  const multi = firstRitual(`${RITUAL}notes = """\nNever push.\nHand in a diff.\n"""\n`);
+  const wrapped = firstRitual(`${RITUAL}notes = """Never push.\nHand in a diff.\n"""\n`);
+  assert.equal(multi.policy.notes, "Never push.\nHand in a diff.\n");
+  assert.equal(definitionHash(single), definitionHash(multi));
+  assert.equal(definitionHash(multi), definitionHash(wrapped));
+  const folded = firstRitual(`${RITUAL}notes = """\nOne long note \\\n    over two lines."""\n`);
+  const flat = firstRitual(`${RITUAL}notes = "One long note over two lines."\n`);
+  assert.equal(definitionHash(folded), definitionHash(flat));
+  assert.equal(multi.line, single.line);
+});
+
+test("a multi-line notes value keeps the line of the keys after it", () => {
+  const text = v3(`${RITUAL}notes = """\none\ntwo\n"""\nat = "07:00"\nmode = "plain"\n`);
+  assert.throws(() => readMarker(checkout(text)), /:14: mode must be "off", "report" or "act"/u);
 });

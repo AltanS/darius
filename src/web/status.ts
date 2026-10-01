@@ -165,6 +165,7 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout:
         defDirty: header.def_dirty === true,
         at: header.at ?? null,
         zone: header.tz ?? null,
+        args: header.args ?? null,
         timeout: header.timeout ?? null,
         nextDueAt: state.nextDueAt ?? null,
         warnings: ritualWarnings(doc, state.lifecycle, marker),

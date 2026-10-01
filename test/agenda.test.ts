@@ -37,6 +37,7 @@ function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
     defDirty: false,
     at: null,
     zone: null,
+    args: null,
     timeout: null,
     nextDueAt: null,
     warnings: [],
