@@ -15,8 +15,10 @@ vigils, and it records the evidence that each check passed. State lives outside 
 to an S3-compatible bucket that you run. A scheduler hands due rituals to a headless Claude Code
 session, and you answer held questions in a terminal UI.
 
-**Status: early.** Rituals, vigils, runs, sync, import of a legacy `.tracker/`, and the unattended
-runner work. The TUI, milestones, and specs do not exist yet. The design is in
+**Status: experimental.** Rituals, vigils, runs, sync, snapshot backups, import of a legacy
+`.tracker/`, the unattended runner, the terminal UI (the Due and Run screens), and a read-only web
+status page work. Milestones and specs still run through a vendored copy of the older `tracker`
+CLI, which darius calls for you. They are not native to darius yet. The design is in
 [`docs/concept.md`](docs/concept.md).
 
 ## Requirements
