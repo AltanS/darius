@@ -25,6 +25,7 @@
  *   the host id, `host` in that host's config.toml. `--host ""` clears it.
  *   ritual pause|resume|retire <slug> [--who W]
  *   ritual reconcile [--project P] [--dry-run] [--json]
+ *   ritual export [--project P] [--write] [--json]
  *
  * v3 projects (0.54.0; docs/architecture/marker-v3.md, section 2): a project
  * whose `.darius.toml` says `v = 3` defines its rituals there. `add` is refused
@@ -33,6 +34,10 @@
  * file and line for any other. `retire` is refused for a repo ritual: remove
  * the table and commit. `reconcile` mirrors the checkout's marker into the
  * store by hand (run-due does it on every batch); `--dry-run` writes nothing.
+ *
+ * `export` (0.55.0, section 6) prints a v3 marker built from the project's
+ * store rituals; `--write` writes `.darius.toml` and the skill files into the
+ * linked checkout. It never runs git. See src/cli/ritual-export.ts.
  *
  * `--may`/`--hold` are repeatable (docs/concept.md, "Domain model"'s policy
  * YAML): giving the flag at all REPLACES the ritual's existing list, in the
@@ -63,9 +68,10 @@ import { itemRef, openProject, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { checkoutDir, projectWorkdir } from "../core/workdir.ts";
 import { errorMessage } from "../runtime.ts";
+import { runExport } from "./ritual-export.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "add | list | show | set | pause | resume | retire | reconcile";
+const VERBS = "add | list | show | set | pause | resume | retire | reconcile | export";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -527,10 +533,10 @@ function runReconcile(args: ParsedArgs): number {
 
 export const ritualCommand: Command = {
   name: "ritual",
-  summary: "add, list, show, edit and change lifecycle of rituals; reconcile mirrors a v3 .darius.toml into the store",
+  summary: "add, list, show, edit and change lifecycle of rituals; reconcile mirrors a v3 .darius.toml into the store; export builds one from the store",
   audience: "session",
   // In a v3 project add and retire are refused for repo rituals, and set takes host, owner, agent, tag and due only.
-  usage: `ritual ${VERBS.replaceAll(" | ", "|")} (v3 project: add refused; set host|owner|agent|tag|due only; retire refused)`,
+  usage: `ritual ${VERBS.replaceAll(" | ", "|")} (v3 project: add refused; set host|owner|agent|tag|due only; retire refused; export [--write] prints or writes a v3 marker)`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {
@@ -550,6 +556,8 @@ export const ritualCommand: Command = {
         return setLifecycle(args, "retired");
       case "reconcile":
         return runReconcile(args);
+      case "export":
+        return runExport(args);
       default:
         throw new UsageError(`ritual needs a verb: ${VERBS}`);
     }

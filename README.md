@@ -476,6 +476,31 @@ to edit. `ritual retire` is refused for a repo ritual: remove the table and comm
 reconcile retires it. A retired slug stays retired. Use a new slug if you want it back.
 A store ritual that the marker does not name is `unmanaged`: it never runs from the timer.
 
+### Move a project to v3
+
+`darius ritual export` builds a v3 marker from the store rituals of a v2 project. It never commits.
+
+```bash
+darius ritual export             # print the v3 marker to stdout
+darius ritual export --write     # write .darius.toml and the skill files in the linked checkout
+```
+
+It keeps the root keys, `[profiles.*]` and `[defaults]` of the current marker as they are, sets
+`v = 3`, and adds `tz` with this host's zone. It adds one `[rituals.<slug>]` per active or paused
+ritual. It leaves out retired rituals and never writes `host`. A ritual with no skill gets
+`skill = "<slug>"`, and its body becomes `.claude/skills/<slug>/SKILL.md`. Policies are written
+inline; you can move them into `[policies.<name>]` by hand.
+
+Export stops with exit 2 when a slug has a dot or is not a v3 slug, when a ritual has no cadence,
+or when a `may` or `hold` value would not pass `marker check`. `--write` also stops when
+`.darius.toml` or a target skill file has uncommitted changes, when the marker is already v3, or
+when a target skill file exists.
+
+1. Run `darius ritual export` and read the result. Rename any slug it refuses.
+2. Run `darius ritual export --write` in the linked checkout of `acme-web`.
+3. Run `darius marker check`. Review the files, commit and push.
+4. On each host that runs the timer, pull the commit and run `darius ritual reconcile`.
+
 A ritual's `timeout` replaces the unit's `--timeout` for that run, and the lease follows it.
 `run-due` skips a ritual, and says why in its report:
 
@@ -569,7 +594,7 @@ the full reference.
 
 - `darius setup [--systemd] [--remote]`: link the CLI, write the config, install the timers, create the bucket.
 - `darius update [vX.Y.Z] [--check] [--major] [--hosts h1,h2]`: move this host, or other hosts, to a release.
-- `darius ritual add|list|show|set|pause|resume|retire|reconcile`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store.
+- `darius ritual add|list|show|set|pause|resume|retire|reconcile|export`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store. `export [--write]` builds a v3 marker from a v2 project's rituals.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, or print its SessionStart hook.

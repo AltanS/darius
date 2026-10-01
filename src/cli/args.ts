@@ -39,6 +39,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "findings-stdin",
   "output-stdin",
   "dry-run",
+  "write",
   "all-projects",
   "include-heavy",
   "classify-only",
