@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.51.0] - 2026-10-01
+
+### Added
+
+- `darius snapshot config [--json]` prints every snapshot setting with its value and source (env, file, config, default).
+- `darius snapshot config set <key> <value> [<key> <value> ...]` and `config unset <key> [...]` save to `snapshot.json` with the page's rules. A key the environment sets exits 1 and names the variable. A bad value exits 1 with the page's message. An unknown key exits 2 and lists the keys. `endpoint` and `bucket` go in one call. `--json` gives `{ok, key, value, source}`.
+- `darius snapshot credentials set --key-id <id>` reads the secret from stdin only. A terminal, a secret in argv and a `--secret` flag exit 2. The file stays mode 0600. `credentials clear` removes it. `credentials [status]` names the source and the key id, never the secret. When the environment sets the pair, set and clear exit 1.
+- `darius snapshot status` has a timer line and a `timer` object in `--json`: installed, enabled, active, the next run, and the fix when it is missing or stopped. No systemd user session prints `timer: unknown` and keeps the exit code.
+- `darius snapshot list --remote` lists the bucket's snapshots of this host, newest first, with size and whether each is also here. `--json` gives `{ok, local, remote}`. Exit 1 without a bucket, 3 when the bucket cannot be reached.
+- The darius skill has a Backups section: the verbs, the exit codes, and the rule that the secret goes on stdin only.
+- `DARIUS_SYSTEMCTL` names the systemctl program for `snapshot status`. The test script points it at a missing file.
+
+### Changed
+
+- The settings page and the CLI save through shared core functions in `src/core/snapshot-settings.ts`: `applySnapshotSettings`, `saveSnapshotCredentials` and `removeSnapshotCredentials`. Each refuses what the environment sets, with one message.
+- The page's key pair endpoints (`/api/snapshots/credentials` and `credentials/clear`) now refuse with 400 when the environment sets the pair. Before, they wrote or removed a file that was never used.
+- `snapshot config` and `snapshot credentials` read `~/.config/darius/snapshot.env` under the shell's variables, so a key the units get from that file is shown as env and refused.
+- The README backups guide gives the CLI route next to each page step. The concept doc records the shared core.
+
 ## [0.50.1] - 2026-10-01
 
 ### Changed

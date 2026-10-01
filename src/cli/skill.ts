@@ -98,6 +98,18 @@ const TAIL = `
 \`run follow-up <run> --approve N\` is for a person: a new attended run that may run the command lines of question N as written.
 On the wrong host \`run now\`, \`run resume\` and \`run follow-up\` refuse and print the \`ssh <host> darius ...\` command for the right one; a person may add \`--on <host>\`, a run never does.
 
+## Backups
+
+A snapshot is a dated tar.gz of this host's darius store, in a local folder and optionally in an S3 bucket. Each host backs up its own store.
+
+- Read: \`snapshot status\` (settings, timer, last run), \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
+- Act: \`snapshot create\` makes one now. \`snapshot check\` tests the bucket.
+- Settings: \`snapshot config set <key> <value>\`, \`snapshot config unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
+- Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
+- Never put the secret in a command line, a flag, or a file in the repo.
+- Exit 1: refused, for example a key the environment sets. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
+- Restore is by hand with \`tar -xzf\`, and only when the operator asks.
+
 ## Examples
 
 The next open task, and the rituals due:

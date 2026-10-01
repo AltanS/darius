@@ -140,6 +140,15 @@ test("renderSkill is pure: an unmarked command is hidden, a marked one shows its
   assert.equal(readStamp(text)?.version, "9.9.9");
 });
 
+test("the skill teaches backups: the snapshot verbs, the secret on stdin only, and never in argv or the repo", () => {
+  const text = renderSkill([], "9.9.9");
+  assert.match(text, /^## Backups$/mu);
+  assert.match(text, /printf %s "\$SECRET" \| darius snapshot credentials set --key-id ID/u);
+  assert.match(text, /Never put the secret in a command line, a flag, or a file in the repo\./u);
+  assert.match(text, /snapshot list \[--remote\]/u);
+  assert.match(text, /Exit 3: the bucket could not be reached/u);
+});
+
 test("install writes the file and prints its path; a second install writes nothing", () => {
   const { root, env } = sandbox();
   const file = join(root, "claude", "skills", "darius", "SKILL.md");

@@ -100,7 +100,7 @@ backup: the old `darius export` is gone.
 #### Quick start
 
 1. A host that runs `darius setup --systemd` or `darius update` already has the timer. Check it:
-   `systemctl --user list-timers darius-snapshot.timer`. It runs at 04:00 every day.
+   `darius snapshot status` shows a `timer` line with the next run. It runs at 04:00 every day.
 2. Make one now: `darius snapshot create`.
 3. Look at it: `darius snapshot list`. You see the file name and its size.
 
@@ -138,8 +138,10 @@ sizes.
 darius does not create the bucket. Make it first, on a machine other than the one that holds your
 sync bucket, and make a key pair that may list, write and delete objects in it. Then:
 
-1. Set the endpoint and the bucket (see "Settings"), in the settings page or in `snapshot.env`.
-2. Save the key pair (see "The key pair").
+1. Set the endpoint and the bucket (see "Settings"). Use the settings page, or
+   `darius snapshot config set endpoint https://s3.example.com bucket darius-snapshots`.
+2. Save the key pair (see "The key pair"). Use the settings page, or
+   `printf %s "$SECRET" | darius snapshot credentials set --key-id <key id>`.
 3. Run `darius snapshot check`. It lists the bucket, writes a small test object and deletes it. If it
    says `ok`, run `darius snapshot create`: the file is now in the bucket as well.
 
@@ -150,6 +152,7 @@ Do this once after you set it up, and again after you change anything:
 ```bash
 darius snapshot status                   # settings, the last run, the last bucket contact, any problems
 darius snapshot check                    # the bucket answers, and you may write and delete
+darius snapshot list --remote            # the snapshots in the bucket, and which are also here
 f=$(darius snapshot list | head -1 | cut -d' ' -f1)
 sha256sum ~/.local/share/darius-snapshots/$f      # must equal "sha256" in $f.json
 mkdir /tmp/try && tar -xzf ~/.local/share/darius-snapshots/$f -C /tmp/try && diff -rq /tmp/try ~/.local/share/darius
@@ -160,8 +163,20 @@ changed since the snapshot show up. Remove `/tmp/try` afterwards.
 
 #### Settings
 
-Open `/settings/backups` on the status page to change them. A setting that an environment variable
-sets is locked on the page, and the page names the variable. The page never shows the secret key.
+Open `/settings/backups` on the status page to change them, or use the CLI. A setting that an
+environment variable sets is locked on the page, and the page names the variable. The page never
+shows the secret key.
+
+```bash
+darius snapshot config                    # every key, its value, and where the value comes from
+darius snapshot config set keep 14        # save one value
+darius snapshot config set endpoint https://s3.example.com bucket darius-snapshots   # these two go together
+darius snapshot config unset keep         # back to config.toml or the default
+```
+
+The page and the CLI save to the same file and check values with the same rules. A bad value exits
+`1` with the same message the page shows. A key that an environment variable sets exits `1`, and the
+message names the variable. An unknown key exits `2` and lists the keys.
 
 Four places can set a value. The first one that has a valid value wins:
 
@@ -187,7 +202,9 @@ Four places can set a value. The first one that has a valid value wins:
 **Environment variables reach only the units.** Put them in `~/.config/darius/snapshot.env`, one
 `NAME=value` per line. The snapshot timer and the web service read that file. A command you type
 in a shell does not, so `darius snapshot create` by hand ignores it unless you export the variables
-there. After you edit the file, restart the page: `systemctl --user restart darius-web`.
+there. `darius snapshot config` and `darius snapshot credentials` do read the file, so they show
+and refuse what the timer and the page see. After you edit the file, restart the page:
+`systemctl --user restart darius-web`.
 
 ```toml
 # ~/.config/darius/config.toml, the same keys without the prefix
@@ -213,22 +230,39 @@ or `snapshot.json`. darius takes it from the first of these:
    aws_secret_access_key = <secret key>
    ```
 
-The settings page can write this file. It cannot read the secret back.
+The settings page can write this file, and so can the CLI. Neither reads the secret back.
+
+```bash
+read -rs SECRET                                                    # type the secret, it is not shown
+printf %s "$SECRET" | darius snapshot credentials set --key-id <key id>
+darius snapshot credentials                                        # which pair is used, and its key id
+darius snapshot credentials clear                                  # remove the saved pair
+```
+
+The secret comes on stdin only. Never put it in an argument, a flag, or a file in a repo: a command
+line shows up in the process list and in the shell history. Without a pipe, `set` exits `2` and
+shows the line above. When the environment sets the pair, `set` and `clear` exit `1` and name the
+variables.
 
 #### Commands
 
 ```bash
 darius snapshot create [--no-upload]       # make a snapshot, copy it to the bucket, delete the old ones
-darius snapshot list                       # the snapshots on this host, newest first
-darius snapshot status                     # settings and where each value came from, the last run, problems
+darius snapshot list [--remote]            # the snapshots on this host, newest first; --remote: the bucket's too
+darius snapshot status                     # the settings summary, the timer, the last run, problems
 darius snapshot check                      # list the bucket, then write and delete a small test object
 darius snapshot delete <name> [--remote]   # delete one snapshot, here or in the bucket
+darius snapshot config [set <key> <value> | unset <key>]   # show or change the settings
+darius snapshot credentials [set --key-id <id> | clear]    # the key pair; the secret on stdin
 ```
+
+Each verb acts on the host you type it on. Every action on the settings page has a verb here.
 
 Exit codes: `0` done (also when snapshots are off). `1` refused or failed. `2` wrong usage. `3` the
 snapshot is saved on the host, but the bucket could not be reached. The next run makes a new
 snapshot and sends that one. It does not send the missed one again. A run that exits `3` still
 counts as a good local backup, so `status` shows the last run as `ok`. Read its bucket line too.
+`list --remote` exits `1` when no bucket is set up, and `3` when it cannot reach the bucket.
 
 #### When something goes wrong
 
@@ -236,6 +270,7 @@ counts as a good local backup, so `status` shows the last run as `ok`. Read its 
 |---|---|---|
 | Exit `3`, or a failed bucket line | the bucket could not be reached | Fix the network or the endpoint. Run `darius snapshot check` |
 | "no access key" | no key pair on this host | Save the key pair |
+| `timer: not installed` in `status` | the timer unit is missing | Run the command the line names |
 | `status` lists problems | a setting has a bad value | Fix the value where `status` says it comes from |
 | "the store holds a name that looks like a secret" | a file named like a secret is in the store | Remove it from `~/.local/share/darius` |
 | "a snapshot is already running" | another run holds the lock | Wait. A lock of a dead process, or one over 12 hours old, is taken over by itself |
@@ -411,7 +446,7 @@ the full reference.
 - `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
-- `darius snapshot create|list|status|check|delete`: dated archives of this host's store, local and in an S3 bucket.
+- `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.

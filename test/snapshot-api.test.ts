@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -116,6 +116,31 @@ test("the key pair is written 0600, answers carry no key, and the page data neve
   assert.equal(bad.status, 400);
   assert.equal((await snapshotApi(post("credentials", { accessKeyId: 5 }), never)).status, 400);
 
+  assert.equal((await snapshotApi(post("credentials/clear", {}), never)).status, 200);
+  assert.equal(collectBackups().credentials, "none");
+});
+
+test("a key pair the environment sets refuses a save and a clear here, with the CLI's message, and the saved file stays (0.51.0)", async () => {
+  const keep = await snapshotApi(post("credentials", { accessKeyId: "AKIAEXAMPLE", secretAccessKey: "very-secret-value" }), never);
+  assert.equal(keep.status, 200);
+  const before = readFileSync(snapshotCredentialsPath(), "utf8");
+  process.env.DARIUS_SNAPSHOT_ACCESS_KEY_ID = "AKIAFROMENV";
+  process.env.DARIUS_SNAPSHOT_SECRET_ACCESS_KEY = "env-secret";
+  const message = "the key pair is set by DARIUS_SNAPSHOT_ACCESS_KEY_ID and DARIUS_SNAPSHOT_SECRET_ACCESS_KEY; change it where the service starts";
+  try {
+    const saved = await snapshotApi(post("credentials", { accessKeyId: "AKIANEW", secretAccessKey: "other-secret" }), never);
+    assert.equal(saved.status, 400);
+    assert.deepEqual(saved.body, { ok: false, error: message });
+    const cleared = await snapshotApi(post("credentials/clear", {}), never);
+    assert.equal(cleared.status, 400);
+    assert.deepEqual(cleared.body, { ok: false, error: message });
+    assert.doesNotMatch(JSON.stringify([saved.body, cleared.body]), /env-secret|other-secret|very-secret-value/u);
+    assert.equal(readFileSync(snapshotCredentialsPath(), "utf8"), before, "a refused save or clear leaves the saved pair");
+  } finally {
+    delete process.env.DARIUS_SNAPSHOT_ACCESS_KEY_ID;
+    delete process.env.DARIUS_SNAPSHOT_SECRET_ACCESS_KEY;
+  }
+  assert.equal(statSync(snapshotCredentialsPath()).mode & 0o777, 0o600);
   assert.equal((await snapshotApi(post("credentials/clear", {}), never)).status, 200);
   assert.equal(collectBackups().credentials, "none");
 });

@@ -40,6 +40,9 @@ export DARIUS_TAILSCALE="$SANDBOX/no-tailscale"
 export DARIUS_APP_DIR="$SANDBOX/app"
 export DARIUS_SOURCE="$SANDBOX/no-source"
 export DARIUS_SSH="$SANDBOX/no-ssh"
+# `darius snapshot status` reads the snapshot timer through systemctl --user.
+# No test may ask the operator's real user manager; tests inject a fake.
+export DARIUS_SYSTEMCTL="$SANDBOX/no-systemctl"
 # Claude Code's config dir: `darius setup` refreshes a stamped skill file
 # there, and `darius skill install` writes one. No test may touch ~/.claude.
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude"

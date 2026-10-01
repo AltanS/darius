@@ -22,6 +22,11 @@
  * from `<configDir>/snapshot-credentials` (the AWS-ini file of
  * src/core/credentials.ts, mode 0600). The page can write that file and never
  * reads it back.
+ *
+ * The page (src/web/snapshot-api.ts) and `darius snapshot config|credentials`
+ * (src/cli/snapshot.ts) write through the same functions here:
+ * applySnapshotSettings, saveSnapshotCredentials, removeSnapshotCredentials.
+ * Each refuses a key or a key pair the environment sets, with one message.
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -224,10 +229,13 @@ export function clearSnapshotCredentials(): void {
 
 export type CredentialsSource = "env" | "file" | "none";
 
+export const ENV_KEY_ID = "DARIUS_SNAPSHOT_ACCESS_KEY_ID";
+export const ENV_SECRET = "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY";
+
 /** Where the key pair would come from, without reading any secret. */
 export function credentialsSource(env: NodeJS.ProcessEnv = process.env): CredentialsSource {
-  const id = env.DARIUS_SNAPSHOT_ACCESS_KEY_ID ?? "";
-  const secret = env.DARIUS_SNAPSHOT_SECRET_ACCESS_KEY ?? "";
+  const id = env[ENV_KEY_ID] ?? "";
+  const secret = env[ENV_SECRET] ?? "";
   if (id !== "" && secret !== "") return "env";
   return existsSync(snapshotCredentialsPath()) ? "file" : "none";
 }
@@ -244,6 +252,22 @@ export function readSnapshotCredentials(env: NodeJS.ProcessEnv = process.env): {
   } catch (cause) {
     return { ok: false, error: errorMessage(cause) };
   }
+}
+
+export interface SnapshotKeyInfo {
+  source: CredentialsSource;
+  /** The access key id; null when there is no pair or it cannot be read. */
+  keyId: string | null;
+  /** Why the pair cannot be read. Names no key value. */
+  error: string | null;
+}
+
+/** Where the key pair comes from and its access key id. The id is not secret; the secret is never returned. */
+export function snapshotKeyId(env: NodeJS.ProcessEnv = process.env): SnapshotKeyInfo {
+  const source = credentialsSource(env);
+  if (source === "none") return { source, keyId: null, error: null };
+  const read = readSnapshotCredentials(env);
+  return read.ok ? { source, keyId: read.credentials.accessKeyId, error: null } : { source, keyId: null, error: read.error };
 }
 
 // --- the merge ----------------------------------------------------------------------------
@@ -411,4 +435,115 @@ export function planSnapshotSave(
   const own = resolveSnapshotSettings({ env, file: next }).problems.filter((problem) => !problem.startsWith("config.toml") && !problem.startsWith("DARIUS_SNAPSHOT_"));
   if (own.length > 0) return { ok: false, errors: own };
   return { ok: true, values: next };
+}
+
+export type ApplyResult =
+  | { ok: true; resolved: ResolvedSnapshotSettings }
+  /** `invalid`: the patch was refused and nothing was written. `write`: the file could not be written. */
+  | { ok: false; failed: "invalid" | "write"; errors: string[] };
+
+/**
+ * A save of the settings page and of `darius snapshot config set|unset`: checks
+ * the patch against the saved file and `env` (planSnapshotSave), writes
+ * `snapshot.json`, and returns the new merged view. `null` clears a key.
+ */
+export function applySnapshotSettings(input: ReadonlyMap<string, RawSetting>, env: NodeJS.ProcessEnv = process.env): ApplyResult {
+  const plan = planSnapshotSave(input, readSnapshotFile(), env);
+  if (!plan.ok) return { ok: false, failed: "invalid", errors: plan.errors };
+  try {
+    writeSnapshotFile(plan.values);
+  } catch (cause) {
+    return { ok: false, failed: "write", errors: [`the settings could not be saved: ${errorMessage(cause)}`] };
+  }
+  return { ok: true, resolved: resolveSnapshotSettings({ env, file: plan.values }) };
+}
+
+// --- snapshot.env -------------------------------------------------------------------------
+
+export const SNAPSHOT_ENV_FILE = "snapshot.env";
+
+export function snapshotEnvFilePath(): string {
+  return join(configDir(), SNAPSHOT_ENV_FILE);
+}
+
+/**
+ * The `DARIUS_SNAPSHOT_*` lines of `<configDir>/snapshot.env`, the file the
+ * snapshot timer and the web service load (systemd `EnvironmentFile=`). A
+ * shell does not load it, so the CLI reads it here to see what the units see.
+ * Blank lines and `#` or `;` comments are skipped, an `export ` prefix and
+ * one pair of matching quotes are dropped. A missing file is no values.
+ */
+export function readSnapshotEnvFile(): NodeJS.ProcessEnv {
+  const found: NodeJS.ProcessEnv = {};
+  let text: string;
+  try {
+    text = readFileSync(snapshotEnvFilePath(), "utf8");
+  } catch {
+    return found;
+  }
+  for (const raw of text.split("\n")) {
+    const line = raw.trim().replace(/^export\s+/u, "");
+    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    const match = /^(DARIUS_SNAPSHOT_[A-Z_]+)\s*=\s*(.*)$/u.exec(line);
+    const name = match?.[1];
+    const value = match?.[2];
+    if (name === undefined || value === undefined) continue;
+    const quoted = /^(["'])(.*)\1$/u.exec(value);
+    found[name] = quoted?.[2] ?? value;
+  }
+  return found;
+}
+
+/** The environment the snapshot units run with: `snapshot.env` under this process's own variables (a set, non-empty variable here wins). */
+export function snapshotUnitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...env };
+  for (const [name, value] of Object.entries(readSnapshotEnvFile())) {
+    if (merged[name] === undefined || merged[name] === "") merged[name] = value;
+  }
+  return merged;
+}
+
+/** The variables that set the key pair, when the environment sets it (credentialsSource is `env`), else null. */
+export function credentialsEnvLock(env: NodeJS.ProcessEnv = process.env): string | null {
+  return credentialsSource(env) === "env" ? `${ENV_KEY_ID} and ${ENV_SECRET}` : null;
+}
+
+// --- a change of the key pair -------------------------------------------------------------
+
+export type CredentialsChange =
+  /** `removed`: a clear found a saved pair. A save always reports false. */
+  | { ok: true; removed: boolean }
+  /** `locked`: the environment sets the pair, nothing was written. `invalid`: the write was refused or failed. */
+  | { ok: false; failed: "locked" | "invalid"; error: string };
+
+/** Why the pair cannot be changed here: the environment sets it. Null when it does not. */
+function credentialsLockError(env: NodeJS.ProcessEnv): string | null {
+  const lock = credentialsEnvLock(env);
+  return lock === null ? null : `the key pair is set by ${lock}; change it where the service starts`;
+}
+
+/**
+ * A save of the key pair from the settings page and from `darius snapshot
+ * credentials set`. Refused while the environment sets the pair, since the
+ * saved one would never be used. No message names a key value.
+ */
+export function saveSnapshotCredentials(accessKeyId: string, secretAccessKey: string, env: NodeJS.ProcessEnv = process.env): CredentialsChange {
+  const locked = credentialsLockError(env);
+  if (locked !== null) return { ok: false, failed: "locked", error: locked };
+  try {
+    writeSnapshotCredentials(accessKeyId, secretAccessKey);
+  } catch (cause) {
+    // The messages of writeSnapshotCredentials name no key value.
+    return { ok: false, failed: "invalid", error: errorMessage(cause) };
+  }
+  return { ok: true, removed: false };
+}
+
+/** A removal of the saved key pair from the page and from `darius snapshot credentials clear`. Refused while the environment sets the pair. */
+export function removeSnapshotCredentials(env: NodeJS.ProcessEnv = process.env): CredentialsChange {
+  const locked = credentialsLockError(env);
+  if (locked !== null) return { ok: false, failed: "locked", error: locked };
+  const removed = existsSync(snapshotCredentialsPath());
+  clearSnapshotCredentials();
+  return { ok: true, removed };
 }

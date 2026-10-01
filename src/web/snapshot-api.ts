@@ -14,7 +14,7 @@
  * Every answer is `{ ok: true, ... }` or `{ ok: false, error }`. A request
  * must come from the page itself (its Origin names the host it went to, or
  * `$DARIUS_WEB_URL`), be JSON, and be at most MAX_BODY bytes. A key set by
- * the environment cannot be changed here. The access key pair goes into
+ * the environment cannot be changed here, nor a key pair it sets. The access key pair goes into
  * `<config>/snapshot-credentials` (0600) and comes back nowhere: no answer, no
  * page and no log line holds it. Restoring is not here: it overwrites the
  * store, so it stays a `tar -xzf` by hand.
@@ -26,15 +26,7 @@ import { fileURLToPath } from "node:url";
 import { hostId } from "../core/ledger.ts";
 import type { JsonValue } from "../core/model.ts";
 import { checkRemote, deleteLocalSnapshot, deleteRemoteSnapshot, runningSnapshot } from "../core/snapshot.ts";
-import {
-  clearSnapshotCredentials,
-  planSnapshotSave,
-  readSnapshotFile,
-  resolveSnapshotSettings,
-  writeSnapshotCredentials,
-  writeSnapshotFile,
-  type RawSetting,
-} from "../core/snapshot-settings.ts";
+import { applySnapshotSettings, removeSnapshotCredentials, resolveSnapshotSettings, saveSnapshotCredentials, type RawSetting } from "../core/snapshot-settings.ts";
 import { errorMessage } from "../runtime.ts";
 import { MAX_BODY, isSameOrigin, type PushApiReply } from "./push-api.ts";
 
@@ -81,13 +73,8 @@ function saveSettings(body: { readonly [key: string]: JsonValue }): PushApiReply
     if (!isRaw(value)) return fail(400, `${key} must be text, a number, true, false or null`);
     input.set(key, value);
   }
-  const plan = planSnapshotSave(input, readSnapshotFile());
-  if (!plan.ok) return fail(400, plan.errors.join("; "));
-  try {
-    writeSnapshotFile(plan.values);
-  } catch (cause) {
-    return fail(500, `the settings could not be saved: ${errorMessage(cause)}`);
-  }
+  const applied = applySnapshotSettings(input);
+  if (!applied.ok) return fail(applied.failed === "write" ? 500 : 400, applied.errors.join("; "));
   return done();
 }
 
@@ -95,13 +82,13 @@ function saveCredentials(body: { readonly [key: string]: JsonValue }): PushApiRe
   const id = body.accessKeyId;
   const secret = body.secretAccessKey;
   if (!isText(id) || !isText(secret)) return fail(400, "send { accessKeyId, secretAccessKey }");
-  try {
-    writeSnapshotCredentials(id, secret);
-  } catch (cause) {
-    // The messages of writeSnapshotCredentials name no key value.
-    return fail(400, errorMessage(cause));
-  }
-  return done();
+  const saved = saveSnapshotCredentials(id, secret);
+  return saved.ok ? done() : fail(400, saved.error);
+}
+
+function clearCredentials(): PushApiReply {
+  const cleared = removeSnapshotCredentials();
+  return cleared.ok ? done() : fail(400, cleared.error);
 }
 
 function startRun(start: RunStarter): PushApiReply {
@@ -149,10 +136,7 @@ export async function snapshotApi(request: SnapshotRequest, start: RunStarter = 
   if (route === "run") return startRun(start);
   if (route === "settings") return saveSettings(parsed);
   if (route === "credentials") return saveCredentials(parsed);
-  if (route === "credentials/clear") {
-    clearSnapshotCredentials();
-    return done();
-  }
+  if (route === "credentials/clear") return clearCredentials();
   if (route === "delete") return deleteOne(parsed);
   const checked = await checkRemote(resolveSnapshotSettings(), hostId());
   return checked.ok ? done({ count: checked.objects.length }) : fail(400, checked.error ?? "the check failed");

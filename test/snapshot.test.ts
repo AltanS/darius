@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { UsageError } from "../src/cli/registry.ts";
-import { snapshotCommand } from "../src/cli/snapshot.ts";
+import { runSnapshotCommand, snapshotCommand, type SnapshotDeps } from "../src/cli/snapshot.ts";
 import { createS3, S3Error, type RemoteConfig, type UploadSource } from "../src/core/s3.ts";
 import {
   checkRemote,
@@ -438,6 +438,15 @@ test("a part answered with a client error is not retried", async () => {
   }
 });
 
+/** No systemd user session: status must never ask the real one. */
+const noSystemd: SnapshotDeps = {
+  systemctl: () => {
+    throw new Error("systemctl: not found");
+  },
+  stdinIsTTY: () => false,
+  readStdin: () => "",
+};
+
 // --- the command -----------------------------------------------------------------------------------------
 
 test("the command refuses an unknown verb and reports status as JSON", async () => {
@@ -447,7 +456,7 @@ test("the command refuses an unknown verb and reports status as JSON", async () 
   console.log = (line: string) => lines.push(line);
   process.env.DARIUS_SNAPSHOT_DIR = folder("cli");
   try {
-    const code = await snapshotCommand.run({ positional: ["status"], flags: {}, json: true, repeated: {} });
+    const code = await runSnapshotCommand({ positional: ["status"], flags: {}, json: true, repeated: {} }, noSystemd);
     assert.equal(code, 0);
   } finally {
     console.log = log;
@@ -474,7 +483,7 @@ test("create with enabled = false does nothing and exits 0; status shows a faile
     mkdirSync(folder("cli-off"), { recursive: true });
     writeFileSync(join(folder("cli-off"), "status.json"), JSON.stringify({ v: 1, last: { at: "2026-10-01T04:00:00.000Z", ok: true, name: "x", error: null }, remote: { at: "2026-10-01T04:00:01.000Z", ok: false, error: "no response", objects: [] } }));
     lines.length = 0;
-    await snapshotCommand.run({ positional: ["status"], flags: {}, json: false, repeated: {} });
+    await runSnapshotCommand({ positional: ["status"], flags: {}, json: false, repeated: {} }, noSystemd);
     assert.match(lines.join("\n"), /last run .*ok/u);
     assert.match(lines.join("\n"), /bucket, last contact .*failed, no response/u);
   } finally {

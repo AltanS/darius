@@ -549,6 +549,30 @@ export async function checkRemote(resolved: ResolvedSnapshotSettings, host: stri
   }
 }
 
+export type RemoteListing = { ok: true; objects: RemoteObject[] } | { ok: false; error: string; offline: boolean };
+
+/**
+ * The bucket's snapshots of this host, newest first, without a probe write
+ * (`darius snapshot list --remote`). Stores the listing as the last bucket
+ * contact, as checkRemote does. `offline` is true when the bucket could not
+ * be reached at all (exit 3), false for any other failure.
+ */
+export async function listRemoteSnapshots(resolved: ResolvedSnapshotSettings, host: string, bucketForTest?: Bucket): Promise<RemoteListing> {
+  const { remote, dir } = resolved.settings;
+  if (remote === null) return { ok: false, error: "no remote copy is set up", offline: false };
+  const made = bucketForTest === undefined ? makeBucket(remote) : { ok: true as const, bucket: bucketForTest };
+  if (!made.ok) return { ok: false, error: made.error, offline: false };
+  try {
+    const objects = await listBucket(made.bucket, remote, host);
+    saveRemote(dir, { at: new Date().toISOString(), ok: true, error: null, objects });
+    return { ok: true, objects };
+  } catch (cause) {
+    const error = errorMessage(cause);
+    saveRemote(dir, { at: new Date().toISOString(), ok: false, error, objects: readSnapshotState(dir).remote?.objects ?? [] });
+    return { ok: false, error, offline: cause instanceof S3NetworkError };
+  }
+}
+
 function saveRemote(dir: string, remote: NonNullable<SnapshotState["remote"]>): void {
   try {
     writeSnapshotState(dir, { ...readSnapshotState(dir), remote });
