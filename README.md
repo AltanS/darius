@@ -474,8 +474,14 @@ darius marker check --resolved daily-report  # the effective policy of one ritua
 ```
 
 It prints `ok: v3, 2 rituals, 1 policies`, or the first error as `file:line: message` and exit 1.
-Warnings do not change the exit code: a skill file missing in this checkout, a policy no ritual
-uses, a v3 marker with no rituals. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
+A ritual whose skill file `.claude/skills/<skill>/SKILL.md` is missing in this checkout is an
+error too (exit 1): the timer would skip it as `skill-missing`. Warnings do not change the exit
+code: a policy no ritual uses, a v3 marker with no rituals. `--resolved <slug>` prints `mode:`, then
+one `may:` and one `hold:` line per entry, each list sorted. An inline policy and a factored
+one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
+
+Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`: an older
+host refuses unknown ritual keys.
 
 ### How a v3 marker runs
 
@@ -626,7 +632,7 @@ the full reference.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
-- `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does, and list warnings. `--resolved` prints the effective policy of one ritual.
+- `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does. A missing skill file is an error; other findings are warnings. `--resolved` prints the effective policy of one ritual.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.
 - `darius selftest seed|fire|status`: the `darius-selftest` project the acceptance run uses.
 - `darius policy-check`: the PreToolUse hook that unattended runs use. You do not call it.

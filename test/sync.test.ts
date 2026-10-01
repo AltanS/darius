@@ -192,6 +192,20 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     await server.stop();
   });
 
+  test("a run.started line with skill_hash travels as it is; the key is not a blob reference", async () => {
+    const name = uniqueProject("skillhash");
+    const a = projectOf(hostA, name);
+    const skillHash = "a".repeat(64);
+    const written = appendLine(a, { who: "test", type: "run.started", item: "ritual/heartbeat", run: "r1", skill_hash: skillHash });
+    const pushed = await syncAs(hostA, name, server);
+    assert.equal(pushed.pushedChunks, 1);
+    assert.equal(pushed.blobsPushed, 0, "skill_hash names no blob");
+    const pulled = await syncAs(hostB, name, server);
+    assert.equal(pulled.blobsPulled, 0);
+    const line = readLedger(projectOf(hostB, name)).find((one) => one.id === written.id);
+    assert.equal(line?.skill_hash, skillHash);
+  });
+
   test("a line and the blob it names travel from A to B", async () => {
     const name = uniqueProject("roundtrip");
     const a = projectOf(hostA, name);

@@ -901,6 +901,47 @@ test("a ritual whose skill file is not in the checkout skips as skill-missing; w
   assert.equal(ritualsOf(found.report)[0]?.end, "complete", JSON.stringify(found.report));
 });
 
+test("a failing skip, skill-missing, makes the batch fail", async () => {
+  const project = "rd-v3-skill-missing-fails";
+  v3Checkout(project, { skill: false });
+  const { code, report } = await batchAt(project, AFTER_AT);
+  assert.equal(ritualsOf(report)[0]?.reason, "skill-missing");
+  assert.equal(report.ok, false, "a failing skip");
+  assert.equal(code, 1);
+});
+
+test("run.started records skill_hash, the sha256 of SKILL.md; run show prints it; sync does not take it for a blob", async () => {
+  const project = "rd-v3-skill-hash";
+  const dir = v3Checkout(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { report } = await batchAt(project, AFTER_AT);
+  assert.equal(ritualsOf(report)[0]?.end, "complete", JSON.stringify(report));
+  const started = linesOf(project, "run.started")[0];
+  const expected = sha256Hex(readFileSync(join(dir, ".claude", "skills", "daily", "SKILL.md")));
+  assert.equal(started?.skill_hash, expected);
+  assert.equal(started?.skill_sha, undefined);
+  const shown = await runCli(runCommand, ["show", String(started?.run), "--project", project]);
+  assert.match(shown.stdout, new RegExp(`^skill hash ${expected.slice(0, 12)}$`, "mu"));
+  const json = JSON.parse((await runCli(runCommand, ["show", String(started?.run), "--project", project, "--json"])).stdout);
+  assert.equal(json.skill_hash, expected);
+});
+
+test("a run whose skill file cannot be read still starts, with no skill_hash", { skip: process.getuid?.() === 0 }, async () => {
+  const project = "rd-v3-skill-unreadable";
+  const dir = v3Checkout(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  // The file is there (the preflight stats it) but cannot be read.
+  const file = join(dir, ".claude", "skills", "daily", "SKILL.md");
+  chmodSync(file, 0o000);
+  try {
+    const { report } = await batchAt(project, AFTER_AT);
+    assert.equal(ritualsOf(report)[0]?.end, "complete", JSON.stringify(report));
+    assert.equal(linesOf(project, "run.started")[0]?.skill_hash, undefined);
+  } finally {
+    chmodSync(file, 0o644);
+  }
+});
+
 test("a dirty skill folder skips only its ritual as skill-dirty and fails the batch; by hand it warns and runs", { skip: NO_GIT }, async () => {
   const project = "rd-v3-skill-dirty";
   const otherSkill = join(SANDBOX, `${project}-checkout`, ".claude", "skills", "other");

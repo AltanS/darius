@@ -64,16 +64,23 @@ function v3Checkout(): string {
   return dir;
 }
 
-test("marker check: a v3 file is ok and warns about each skill file missing here", async () => {
+test("marker check: a missing skill file is an error and exits 1; with the files it is ok", async () => {
   const dir = v3Checkout();
   const run = await runCli(markerCommand, ["check", dir]);
-  assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /ok: v3, 2 rituals, 1 policies/u);
-  assert.match(run.stdout, /warning: \[rituals\.daily-report\] skill "daily-report" has no \.claude\/skills\/daily-report\/SKILL\.md in this checkout/u);
-  assert.match(run.stdout, /warning: \[rituals\.weekly-audit\] skill "weekly-audit" has no/u);
+  assert.equal(run.code, 1, run.stdout);
+  assert.match(run.stderr, /error: \[rituals\.daily-report\] skill "daily-report" has no \.claude\/skills\/daily-report\/SKILL\.md in this checkout/u);
+  assert.match(run.stderr, /error: \[rituals\.weekly-audit\] skill "weekly-audit" has no/u);
+  assert.doesNotMatch(run.stdout, /^ok:/mu, "no ok line when it fails");
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout);
+  assert.equal(json.ok, false);
+  assert.equal(json.errors.length, 2);
   addSkill(dir, "daily-report");
+  const half = await runCli(markerCommand, ["check", dir]);
+  assert.equal(half.code, 1, "one skill is still missing");
+  assert.doesNotMatch(half.stderr, /daily-report/u);
   addSkill(dir, "weekly-audit");
   const clean = await runCli(markerCommand, ["check", dir]);
+  assert.equal(clean.code, 0, clean.stderr);
   assert.equal(clean.stdout, "ok: v3, 2 rituals, 1 policies");
 });
 
@@ -101,13 +108,17 @@ test("marker check: a v2 or v1 file is ok with no ritual counts", async () => {
   assert.equal((await runCli(markerCommand, ["check", checkout('project = "acme-web"\n')])).stdout, "ok: v1");
 });
 
-test("marker check: --json reports version, counts and warnings", async () => {
-  const json = JSON.parse((await runCli(markerCommand, ["check", v3Checkout(), "--json"])).stdout);
+test("marker check: --json reports version, counts, errors and warnings", async () => {
+  const dir = v3Checkout();
+  addSkill(dir, "daily-report");
+  addSkill(dir, "weekly-audit");
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout);
   assert.equal(json.ok, true);
   assert.equal(json.version, 3);
   assert.equal(json.rituals, 2);
   assert.equal(json.policies, 1);
-  assert.equal(json.warnings.length, 2);
+  assert.deepEqual(json.errors, []);
+  assert.deepEqual(json.warnings, []);
 });
 
 test("marker check: no file is a usage error; a missing verb or extra argument too", async () => {

@@ -6,8 +6,9 @@
  * directory. With one it reads the marker in that directory. Exit 0 and
  * `ok: v3, 2 rituals, 1 policies` when the file parses, 1 with the first
  * error as `file:line: message` when it does not, 2 when there is no file.
- * Warnings never change the exit code: a ritual whose skill file is missing
- * in this checkout, a policy no ritual names, a v3 marker with no rituals.
+ * A ritual whose skill file is missing in this checkout is an error too
+ * (exit 1): run-due would skip it as `skill-missing`. Warnings never change
+ * the exit code: a policy no ritual names, a v3 marker with no rituals.
  *
  * The parser never touches the file system; the skill-file check lives here
  * (and in run-due's preflight).
@@ -39,17 +40,24 @@ interface CheckReport {
   warnings: string[];
 }
 
-/** The warnings for a parsed marker; `dir` is the checkout holding the skill files. */
+/** The errors that need the file system: a ritual whose skill file is not in this checkout. */
+function skillErrorsFor(marker: Marker): string[] {
+  const errors: string[] = [];
+  if (marker.version !== 3) return errors;
+  for (const ritual of marker.rituals) {
+    const skillFile = join(".claude", "skills", ritual.skill, "SKILL.md");
+    if (!existsSync(join(marker.dir, skillFile))) {
+      errors.push(`[rituals.${ritual.slug}] skill "${ritual.skill}" has no ${skillFile} in this checkout`);
+    }
+  }
+  return errors;
+}
+
+/** The warnings for a parsed marker. */
 function warningsFor(marker: Marker): string[] {
   const warnings: string[] = [];
   if (marker.version !== 3) return warnings;
   if (marker.rituals.length === 0) warnings.push("no [rituals.<slug>] tables: this v3 marker defines no rituals");
-  for (const ritual of marker.rituals) {
-    const skillFile = join(".claude", "skills", ritual.skill, "SKILL.md");
-    if (!existsSync(join(marker.dir, skillFile))) {
-      warnings.push(`[rituals.${ritual.slug}] skill "${ritual.skill}" has no ${skillFile} in this checkout`);
-    }
-  }
   const used = new Set(marker.rituals.map((ritual) => ritual.policyName));
   for (const name of Object.keys(marker.policies)) {
     if (!used.has(name)) warnings.push(`[policies.${name}] is not used by any ritual`);
@@ -85,6 +93,8 @@ function check(dir: string | undefined): CheckReport {
   report.version = marker.version;
   report.rituals = marker.rituals.length;
   report.policies = Object.keys(marker.policies).length;
+  report.errors = skillErrorsFor(marker);
+  report.ok = report.errors.length === 0;
   report.warnings = warningsFor(marker);
   return report;
 }
@@ -151,7 +161,7 @@ async function runCheck(args: ParsedArgs): Promise<number> {
 
 export const markerCommand: Command = {
   name: "marker",
-  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does and lists warnings; --resolved <slug> prints a ritual's effective policy",
+  summary: "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings; --resolved <slug> prints a ritual's effective policy",
   audience: "session",
   usage: "marker check [dir] [--resolved <slug>]",
   async run(args: ParsedArgs): Promise<number> {

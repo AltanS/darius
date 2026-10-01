@@ -50,6 +50,7 @@ Left out of the v3 design on purpose (design section 14).
 - A due window that expires a missed occurrence. Today nothing expires.
 - Store policies and a policy library across repos.
 - `.mcp.json` forwarding and phase 3 vigils.
+- The web run detail shows `skill_hash`. `darius run show` prints it today.
 - The web shows the policy name of a repo ritual. The store keeps only the resolved policy, so this needs the name mirrored by reconcile.
 
 ## Architecture

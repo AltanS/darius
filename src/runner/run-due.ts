@@ -70,7 +70,7 @@ import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } 
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
 import { createS3, type S3 } from "../core/s3.ts";
-import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, type Project } from "../core/store.ts";
+import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
 import { localToday } from "../core/sweep.ts";
 import { syncProject } from "../core/sync.ts";
@@ -368,6 +368,19 @@ function hasSkillFile(dir: string, skill: string): boolean {
 }
 
 /**
+ * sha256 of the ritual skill's SKILL.md in the checkout `dir`, or undefined
+ * when it cannot be read. A read failure never fails the run.
+ */
+function skillHash(dir: string, skill: string | undefined): string | undefined {
+  if (skill === undefined) return undefined;
+  try {
+    return sha256Hex(readFileSync(join(dir, skillFile(skill))));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The skill preflight in the checkout `dir`: `skill-missing` when the skill
  * file is not there, then `skill-dirty` when its folder has uncommitted or
  * untracked files. Only committed config runs unattended; by hand a dirty
@@ -389,13 +402,15 @@ function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], now: Date): bo
 }
 
 /** Appends run.started under the project lock, or returns the open run that blocks it. */
-function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string; policySha: string }): { run: string } | { blockedBy: string } {
+function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string; policySha: string; skillHash?: string | undefined }): { run: string } | { blockedBy: string } {
   const { doc, run, policySha } = target;
   return ctx.project.withLock(() => {
     const state = ritualState(doc, readLedger(ctx.project), { now: ctx.now });
     const open = state.heldRun ?? state.openRun;
     if (open !== undefined) return { blockedBy: open };
     const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run, policy_sha: policySha };
+    // `skill_hash` does not end in `_sha`: sync would take such a key for a blob reference.
+    if (target.skillHash !== undefined) line.skill_hash = target.skillHash;
     const { followUp } = ctx.options;
     if (followUp !== undefined) {
       line.follow_up_of = followUp.parent;
@@ -773,7 +788,7 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
     }
     const started =
       resume === undefined
-        ? startRun(ctx, { doc, run, policySha: prepared.policySha })
+        ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill) })
         : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha });
     if ("blockedBy" in started) {
       discard(prepared.files);

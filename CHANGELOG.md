@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.56.0] - 2026-10-01
+
+### Added
+
+- Skip reason `skill-dirty`: an unattended run skips one ritual when `git status --porcelain` lists a modified or untracked file in `.claude/skills/<skill>/`. The other rituals of the project still run. `run now` warns `.claude/skills/<skill>/ has uncommitted changes; this run uses them` and goes on. It is a failing skip, like `skill-missing`.
+- `may_extra` and `hold_extra` on a v3 ritual. They add rules and patterns to the `may` and `hold` of the named policy, or of the ritual's own lists. They never remove one, so a ritual never has fewer `hold` patterns than its base.
+- `darius marker check --resolved <slug> [--json]` prints the effective policy of one ritual: the mode, then the `may` and `hold` lists, each sorted.
+- `skill_hash` on `run.started`: the sha256 of the ritual skill's `SKILL.md` at launch. `darius run show` prints its first 12 characters (`--json` carries all of it). If the file cannot be read, the run starts without it.
+
+### Changed
+
+- `darius marker check` exits 1 when a ritual's skill file is missing in the checkout, with an `error:` line per ritual. Before it was a warning. `run-due` already skipped such a ritual as `skill-missing`. Other warnings stay warnings.
+- Duplicate rules inside one `may` or `hold` list are now removed. A marker that repeated a rule gets one new definition hash, and the next reconcile reports that ritual once as updated.
+- `darius skill` names `may_extra`, `hold_extra` and `marker check --resolved`.
+
+### Upgrade note
+
+- Run 0.56.0 on every host before a marker uses `may_extra` or `hold_extra`. An older host refuses unknown ritual keys, so it skips the whole project.
+
 ## [0.55.1] - 2026-10-01
 
 ### Fixed

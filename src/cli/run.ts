@@ -537,12 +537,14 @@ function runShow(args: ParsedArgs): number {
   const sha = completed?.findings_sha;
   const findings = isText(sha) ? getBlobText(project, sha) : null;
   const result = storedResult(project, completed);
+  const skillHash = lines.find((line) => line.type === "run.started")?.skill_hash;
   if (args.json) {
-    printJson({ project: project.name, ...row, findings, result });
+    printJson({ project: project.name, ...row, skill_hash: isText(skillHash) ? skillHash : undefined, findings, result });
     return 0;
   }
   const outcome = row.outcome === null ? "" : ` (${row.outcome})`;
   console.log(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
+  if (isText(skillHash)) console.log(`skill hash ${skillHash.slice(0, 12)}`);
   if (result !== null) for (const line of describeResult(result)) console.log(line);
   console.log(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;
