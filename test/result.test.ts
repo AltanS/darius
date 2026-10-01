@@ -144,3 +144,30 @@ test("the tighter limits clip detail, question, recommendation and action silent
   assert.equal(result.questions[0]?.recommendation?.length, 200);
   assert.equal(result.actions[0]?.text.length, 200);
 });
+
+test("a question may list the exact commands a yes runs; each is one plain command (0.46.0)", () => {
+  const ok = parsed(
+    JSON.stringify({
+      v: 1,
+      status: "ok",
+      summary: "one question",
+      questions: [{ text: "Delete the two pages?", commands: ["pnpm -C tools cli pages delete 12 --confirm", "  pnpm -C tools cli pages delete 13 --confirm "] }],
+    }),
+  );
+  assert.deepEqual(ok.questions[0]?.commands, ["pnpm -C tools cli pages delete 12 --confirm", "pnpm -C tools cli pages delete 13 --confirm"]);
+  assert.equal(parsed('{"v":1,"status":"ok","summary":"x","questions":[{"text":"q"}]}').questions[0]?.commands, undefined, "commands stay optional");
+  const bad = (commands: string | readonly (string | number)[]): string[] => errorsOf(JSON.stringify({ v: 1, status: "ok", summary: "x", questions: [{ text: "q", commands }] }));
+  const cases: [string, RegExp][] = [
+    ["cd tools && pnpm cli x", /questions\[0\]\.commands\[0\]: not one plain command \(more than one command/u],
+    ["a | b", /more than one command/u],
+    ["a; b", /more than one command/u],
+    ["echo $(id)", /\$/u],
+    ["echo `id`", /command substitution/u],
+    ["echo x > /tmp/out", /output redirection/u],
+    [`echo ${"x".repeat(300)}`, /at most 300 characters/u],
+  ];
+  for (const [line, reason] of cases) assert.match(bad([line]).join("\n"), reason, line);
+  assert.match(bad(Array.from({ length: 21 }, (_, index) => `echo ${String(index)}`)).join("\n"), /commands: at most 20 lines, got 21/u);
+  assert.match(bad("echo x").join("\n"), /commands: must be a list of strings/u);
+  assert.match(bad([1]).join("\n"), /commands\[0\]: must be a string/u);
+});

@@ -152,6 +152,13 @@ export function buildPrompt(input: PromptInput): string {
   ].join("\n");
 }
 
+/** policy.json as written: a run without grants leaves the key out, so its file reads as before 0.46.0. */
+function policyFile(policy: RunPolicy): Omit<RunPolicy, "grants"> & { grants?: string[] } {
+  if (policy.grants.length > 0) return policy;
+  const { grants: _none, ...rest } = policy;
+  return rest;
+}
+
 /** Writes policy.json and prompt.md under `<projectRoot>/runs/<run>/`. `scope` "shell" is left out, as it is the default. */
 export function writeRunFiles(projectRoot: string, input: PromptInput, scope: GateScope = "shell"): RunFiles {
   const dir = join(projectRoot, "runs", input.run);
@@ -166,11 +173,12 @@ export function writeRunFiles(projectRoot: string, input: PromptInput, scope: Ga
     mode: policy.mode,
     may: [...policy.may],
     hold: [...policy.hold],
+    grants: [],
   };
   if (scope !== "shell") runPolicy.gate = scope;
   // Every run darius launches hands in a result (0.22.0); a by-hand run may.
   runPolicy.result = "required";
-  writeFileSync(files.policy, `${JSON.stringify(runPolicy, null, 2)}\n`);
+  writeFileSync(files.policy, `${JSON.stringify(policyFile(runPolicy), null, 2)}\n`);
   writeFileSync(files.prompt, buildPrompt(input));
   return files;
 }

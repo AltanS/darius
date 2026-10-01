@@ -135,6 +135,8 @@ export interface ResultItem {
 export interface ResultQuestion {
   text: string;
   recommendation?: string;
+  /** The exact command lines a yes would run (0.46.0). Text, shown as written. */
+  commands?: string[];
 }
 
 export interface ResultAction {

@@ -576,6 +576,24 @@ test("policy-check allows plain commands, other tools and the protocol; report m
   assert.equal(linesOf(project, "run.held").length, 1);
 });
 
+test("policy-check passes a granted line as written and fails closed on a grant that is not one plain command", async () => {
+  const project = "pc-grant";
+  const { policyFile, run } = seedRunningRun(project, "report");
+  const policy = JSON.parse(readFileSync(policyFile, "utf8"));
+  writeFileSync(policyFile, JSON.stringify({ ...policy, grants: ["git push origin main"], follow_up_of: "01PARENT" }));
+  const granted = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git  push origin main"));
+  assert.deepEqual([granted.code, granted.stdout], [0, ""]);
+  const chained = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("git push origin main && date"));
+  assert.equal(chained.code, 2, "a chain holding the grant is held as before");
+  assert.equal(linesOf(project, "run.held")[0]?.run, run);
+  const other = "pc-grant-bad";
+  const bad = seedRunningRun(other, "act");
+  writeFileSync(bad.policyFile, JSON.stringify({ ...JSON.parse(readFileSync(bad.policyFile, "utf8")), grants: ["date && git push"] }));
+  const refused = await runCli(policyCheckCommand, ["--policy", bad.policyFile], bashHook("date"));
+  assert.equal(refused.code, 2);
+  assert.match(refused.stdout, /grant \\"date && git push\\" is not one plain command/u);
+});
+
 test("policy-check fails closed without a policy", async () => {
   const saved = process.env.DARIUS_RUN_POLICY;
   delete process.env.DARIUS_RUN_POLICY;
@@ -1624,15 +1642,19 @@ test("run show prints a run's facts, its result and its findings; run list carri
     "One card is stale.",
     "",
     "```darius-result",
-    JSON.stringify({ v: 1, status: "ok", summary: "one stale card", items: [{ title: "Stale card", severity: "medium", state: "needs-decision", group: "site-c", target: "post 32454" }], questions: [{ text: "Delete it?", recommendation: "Yes." }] }),
+    JSON.stringify({ v: 1, status: "ok", summary: "one stale card", items: [{ title: "Stale card", severity: "medium", state: "needs-decision", group: "site-c", target: "post 32454" }], questions: [{ text: "Delete it?", recommendation: "Yes.", commands: ["pnpm -C tools cli cards delete 32454"] }] }),
     "```",
   ].join("\n");
+  const chained = findings.replace("pnpm -C tools cli cards delete 32454", "cd tools && pnpm cli cards delete 32454");
+  const refusedChain = await runCli(runCommand, ["complete", run, "--project", "res-show", "--outcome", "complete", "--findings-stdin"], chained);
+  assert.equal(refusedChain.code, 1, "a command line that is not one plain command is refused");
+  assert.match(refusedChain.stdout, /questions\[0\]\.commands\[0\]: not one plain command/u);
   const done = await runCli(runCommand, ["complete", run, "--project", "res-show", "--outcome", "complete", "--findings-stdin"], findings);
   assert.equal(done.code, 0, done.stdout);
   assert.match(done.stdout, /result attention, 1 question\(s\) for the operator, 1 open item\(s\)/u);
   const text = await runCli(runCommand, ["show", run, "--project", "res-show"]);
   assert.match(text.stdout, /Result: attention\. one stale card/u);
-  assert.match(text.stdout, /question 1: Delete it\? \(recommended: Yes\.\)/u);
+  assert.match(text.stdout, /question 1: Delete it\? \(recommended: Yes\.\)\n {4}run: pnpm -C tools cli cards delete 32454\n/u);
   assert.match(text.stdout, /medium needs-decision: Stale card \[site-c, post 32454\]/u);
   assert.match(text.stdout, /# Check\n\nOne card is stale\./u);
   assert.doesNotMatch(text.stdout, /```darius-result/u, "the block is not in the findings");

@@ -21,6 +21,7 @@
  * an error the model must fix.
  */
 
+import { grantRefusal } from "../harness/gate.ts";
 import type { JsonValue } from "./model.ts";
 
 export const RESULT_FENCE = "darius-result";
@@ -59,6 +60,12 @@ export interface ResultItem {
 export interface ResultQuestion {
   text: string;
   recommendation?: string;
+  /**
+   * The exact command lines a yes would run (0.46.0). Each is one plain
+   * command (grantRefusal in src/harness/gate.ts); `darius run follow-up
+   * --approve N` grants them to a follow-up run.
+   */
+  commands?: string[];
 }
 
 export interface ResultAction {
@@ -118,7 +125,7 @@ export const FINDINGS_MAX = 4000;
 export const HANDOFF_MAX = 200;
 
 /** More entries than these are an error, not a clip: the page could not show them. */
-const COUNT_LIMITS = { metrics: 12, items: 100, questions: 10, actions: 100 } as const;
+const COUNT_LIMITS = { metrics: 12, items: 100, questions: 10, actions: 100, commands: 20 } as const;
 
 // --- cut --------------------------------------------------------------------------------
 
@@ -278,7 +285,36 @@ function question(check: Checker, record: JsonRecord, where: string): ResultQues
   const out: ResultQuestion = { text: check.text(record, "text", where, TEXT_LIMITS.question) };
   const recommendation = check.optionalText(record, "recommendation", where, TEXT_LIMITS.recommendation);
   if (recommendation !== undefined) out.recommendation = recommendation;
+  const lines = commands(check, record, where);
+  if (lines.length > 0) out.commands = lines;
   return out;
+}
+
+/**
+ * A question's command lines. Never clipped or cleaned: a grant runs as
+ * written, so a line that is not one plain command is an error.
+ */
+function commands(check: Checker, record: JsonRecord, where: string): string[] {
+  const value = record.commands;
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    check.errors.push(`${where}.commands: must be a list of strings`);
+    return [];
+  }
+  if (value.length > COUNT_LIMITS.commands) {
+    check.errors.push(`${where}.commands: at most ${String(COUNT_LIMITS.commands)} lines, got ${String(value.length)}`);
+  }
+  return value.flatMap((entry, index) => {
+    const at = `${where}.commands[${String(index)}]`;
+    if (!isText(entry)) {
+      check.errors.push(`${at}: must be a string`);
+      return [];
+    }
+    const refused = grantRefusal(entry);
+    if (refused === undefined) return [entry.trim()];
+    check.errors.push(`${at}: not one plain command (${refused})`);
+    return [];
+  });
 }
 
 function action(check: Checker, record: JsonRecord, where: string): ResultAction {
@@ -375,7 +411,10 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, not-verified), optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200). `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, not-verified), optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "",
+  "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
+  "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",
   "",
   "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",

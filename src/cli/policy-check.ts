@@ -38,7 +38,7 @@ import type { JsonValue } from "../core/model.ts";
 import { openProject } from "../core/store.ts";
 import { claudeHarness } from "../harness/claude.ts";
 import type { HarnessAdapter, ToolCall } from "../harness/contract.ts";
-import { decide, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
+import { decide, grantRefusal, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
 import { HARNESS_IDS, harnessById } from "../harness/registry.ts";
 import { errorMessage } from "../runtime.ts";
 import { recordHold } from "../runner/hold.ts";
@@ -79,20 +79,39 @@ export function readRunPolicy(path: string): RunPolicy {
   if (!existsSync(path)) throw new Error(`run policy ${path} does not exist`);
   const parsed = parseJsonText(readFileSync(path, "utf8"), path);
   if (!isJsonRecord(parsed)) throw new Error(`${path}: not a JSON object`);
-  const { project, ritual, run, mode, may, hold, gate, result } = parsed;
+  const { project, ritual, run, mode, may, hold, gate, result, grants, follow_up_of: followUpOf } = parsed;
   const knownMode = MODES.find((candidate) => candidate === mode);
   if (!isJsonText(project) || !isJsonText(ritual) || !isJsonText(run) || knownMode === undefined) {
     throw new Error(`${path}: needs project, ritual, run and mode`);
   }
   if (!isJsonTextList(may) || !isJsonTextList(hold)) throw new Error(`${path}: may and hold must be string lists`);
-  const policy: RunPolicy = { v: 1, project, ritual, run, mode: knownMode, may: [...may], hold: [...hold] };
+  const policy: RunPolicy = { v: 1, project, ritual, run, mode: knownMode, may: [...may], hold: [...hold], grants: readGrants(grants, path) };
   if (gate !== undefined) {
     const scope = SCOPES.find((candidate) => candidate === gate);
     if (scope === undefined) throw new Error(`${path}: gate must be "shell" or "full"`);
     policy.gate = scope;
   }
   if (result === "required") policy.result = "required";
+  if (followUpOf !== undefined) {
+    if (!isJsonText(followUpOf) || followUpOf === "") throw new Error(`${path}: follow_up_of must be a run id`);
+    policy.follow_up_of = followUpOf;
+  }
   return policy;
+}
+
+/**
+ * The run's granted lines (0.46.0); absent means none. Each is checked
+ * again: a policy file with a line that is not one plain command is an
+ * error, and the hook then denies every call.
+ */
+function readGrants(grants: JsonValue | undefined, path: string): string[] {
+  if (grants === undefined) return [];
+  if (!isJsonTextList(grants)) throw new Error(`${path}: grants must be a string list`);
+  for (const line of grants) {
+    const refused = grantRefusal(line);
+    if (refused !== undefined) throw new Error(`${path}: grant "${line.slice(0, 80)}" is not one plain command (${refused})`);
+  }
+  return [...grants];
 }
 
 // --- ledger -----------------------------------------------------------------------

@@ -2,6 +2,15 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.46.0] - 2026-10-01
+
+### Added
+
+- Command grants in the gate. A run's `policy.json` may carry `grants`, exact command lines an operator approved, and `follow_up_of`. A shell line that equals a grant, with spaces and tabs outside quotes collapsed, passes the hold list, `may` and the report-mode verbs, as often as the run needs. Only the main session gets grants; a subagent call never does. A chain that holds a granted line is decided as before. A held run stays held.
+- A grant is one plain command: one line of at most 300 characters, one part in the shell split, no redirection, no `$` or backticks, no glob, brace or `~` outside quotes, no assignment to a name like `PATH`. `policy-check` denies every call when `policy.json` holds a grant that is not.
+- Result questions may list `commands`: up to 20 exact lines a yes would run, each one plain command. `run complete --outcome complete` refuses a block with a line that is not. The Result prompt explains the field and says to use a dir flag such as `pnpm -C tools`, not `cd tools && ...`.
+- `run show` prints each question's command lines under it. The web run data carries them.
+
 ## [0.45.0] - 2026-10-01
 
 ### Changed

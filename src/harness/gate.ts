@@ -42,6 +42,14 @@ export interface RunPolicy {
   gate?: GateScope;
   /** "required": `run complete --outcome complete` needs a valid darius-result block (src/core/result.ts). */
   result?: "required";
+  /**
+   * Command lines an operator approved for this run (`darius run follow-up`,
+   * 0.46.0). Each passes the gate as written (isGranted). Empty for every
+   * other run.
+   */
+  grants: string[];
+  /** The run this one follows up, when it is a follow-up. */
+  follow_up_of?: string;
 }
 
 export type GateScope = "shell" | "full";
@@ -335,6 +343,106 @@ export function mayAllowsShell(command: string, may: readonly string[]): boolean
   return mayRefusal(command, may) === undefined;
 }
 
+// --- grants ----------------------------------------------------------------------------
+
+/** The longest granted line, in characters. */
+export const GRANT_MAX = 300;
+
+/** Shell words that expand outside quotes: a glob, a brace list, a home dir. */
+const EXPANDING = new Set(["*", "?", "[", "]", "{", "}", "~"]);
+
+/**
+ * A command line with the spaces and tabs outside quotes collapsed to one
+ * space, trimmed. Quoted text stays as it is: there the spaces are part of
+ * an argument. A newline is never collapsed: the shell runs it as a second
+ * command.
+ */
+export function normalizeGrant(line: string): string {
+  let out = "";
+  let quote: "'" | '"' | undefined;
+  let gap = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i] ?? "";
+    if (quote === undefined && (ch === " " || ch === "\t")) {
+      gap = true;
+      continue;
+    }
+    if (gap && out !== "") out += " ";
+    gap = false;
+    out += ch;
+    if (ch === "\\" && quote !== "'") {
+      out += line[i + 1] ?? "";
+      i += 1;
+    } else if (quote === undefined && (ch === "'" || ch === '"')) quote = ch;
+    else if (quote === ch) quote = undefined;
+  }
+  return out;
+}
+
+/** The first shell word outside quotes that expands (EXPANDING), or undefined. */
+function unquotedExpansion(line: string): string | undefined {
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i] ?? "";
+    if (quote === undefined && ch === "\\") i += 1;
+    else if (quote === undefined && (ch === "'" || ch === '"')) quote = ch;
+    else if (quote === ch) quote = undefined;
+    else if (quote === undefined && EXPANDING.has(ch)) return ch;
+  }
+  return undefined;
+}
+
+/** True for a control character other than a tab, which counts as a space. */
+function hasControl(line: string): boolean {
+  for (const char of line) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\t") continue;
+    if (code < 0x20 || (code >= 0x7f && code < 0xa0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Why `line` cannot be a granted command, or undefined when it can. A grant
+ * is one plain command, so what the operator read is what runs: one line of
+ * at most GRANT_MAX characters, one part in the shell split (no &&, ||, ;,
+ * |), no redirection, no substitution, no $ at all, no glob, brace or ~
+ * outside quotes, no assignment that steers which program runs. A command
+ * that needs another dir names it with a flag (`pnpm -C tools ...`).
+ */
+export function grantRefusal(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (trimmed === "") return "an empty command";
+  const length = [...trimmed].length;
+  if (length > GRANT_MAX) return `at most ${String(GRANT_MAX)} characters, got ${String(length)}`;
+  if (hasControl(trimmed)) return "a newline or another control character; give one command on one line";
+  if (trimmed.includes("$")) return "a $ (a variable or a substitution); write the value out";
+  const scan = scanShell(trimmed);
+  if ("refused" in scan) return scan.refused;
+  if (scan.parts.length !== 1) return "more than one command (&&, ||, ; or |); give each command on its own, and a dir with a flag such as -C, not cd";
+  if (normalizeGrant(scan.parts[0] ?? "") !== normalizeGrant(trimmed)) return "an output redirection; a granted command writes no file";
+  const expansion = unquotedExpansion(trimmed);
+  if (expansion !== undefined) return `a ${expansion} outside quotes; the shell would expand it`;
+  const steering = stripAssignments(trimmed).names.find((name) => STEERING_NAME.test(name));
+  if (steering !== undefined) return `an assignment to ${steering}, which changes what commands run`;
+  return undefined;
+}
+
+/**
+ * True when the main session runs a line an operator granted: the line is
+ * one plain command (grantRefusal) and equals a grant once both are
+ * normalized (normalizeGrant). A line that holds a grant as one part of a
+ * chain is not granted. A subagent never gets a grant: the operator
+ * approved what the session they started runs, and the hook tells the two
+ * apart by the payload's agent id (src/harness/claude.ts).
+ */
+function isGranted(command: string, grants: readonly string[], agentId: string | undefined): boolean {
+  if (grants.length === 0 || agentId !== undefined) return false;
+  if (grantRefusal(command) !== undefined) return false;
+  const line = normalizeGrant(command.trim());
+  return grants.some((grant) => normalizeGrant(grant.trim()) === line);
+}
+
 // --- decision ------------------------------------------------------------------------
 
 function firstMatch(command: string, patterns: readonly string[]): string | undefined {
@@ -360,7 +468,9 @@ function hold(reason: string): GateDecision {
 /**
  * One shell command. Throws on an invalid regex. A subagent may hold the
  * run (fail closed) but not complete it: the main session collects the
- * findings, and the ledger cannot tell the two apart.
+ * findings, and the ledger cannot tell the two apart. A granted line
+ * (isGranted) passes the hold list, `may` and the report-mode verbs; a run
+ * that is held stays held (decide checks that first).
  */
 function decideShell(command: string, policy: RunPolicy, scope: GateScope, agentId?: string): GateDecision {
   const protocol = protocolVerb(command, policy.run);
@@ -368,6 +478,7 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, agent
     return deny("only the main session completes the run; return your findings to it");
   }
   if (protocol !== undefined) return ALLOW;
+  if (isGranted(command, policy.grants, agentId)) return ALLOW;
   const holdPattern = firstMatch(command, policy.hold);
   if (holdPattern !== undefined) return hold(`the command matches the hold pattern /${holdPattern}/: ${clip(command)}`);
   const refusal = scope === "full" ? mayRefusal(command, policy.may) : undefined;

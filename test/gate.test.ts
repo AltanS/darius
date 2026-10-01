@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { allowedTools, claudeHarness, disallowedTools } from "../src/harness/claude.ts";
 import type { ToolCall, ToolClass } from "../src/harness/contract.ts";
-import { decide as gateDecide, mayAllowsShell, mayRefusal, splitShell, type RunPolicy } from "../src/harness/gate.ts";
+import { decide as gateDecide, grantRefusal, mayAllowsShell, mayRefusal, normalizeGrant, splitShell, type RunPolicy } from "../src/harness/gate.ts";
 
 const RUN = "01GATERUN";
 
@@ -22,6 +22,7 @@ function policy(overrides: Partial<RunPolicy> = {}): RunPolicy {
     mode: "act",
     may: ["Bash(pnpm cli fc *)", "Bash(date)", "mcp__db__query", "WebFetch"],
     hold: ["git push", "deploy"],
+    grants: [],
     ...overrides,
   };
 }
@@ -231,7 +232,7 @@ test("a may refusal names the construct or the command that failed", () => {
   assert.match(mayRefusal("pnpm cli $(date)", may) ?? "", /command substitution/u);
   assert.match(mayRefusal("pnpm cli x < /tmp/in", may) ?? "", /input redirection/u);
   assert.match(mayRefusal("pnpm cli x & pnpm cli y", may) ?? "", /background job/u);
-  const full: RunPolicy = { v: 1, project: "p", ritual: "r", run: "01RUN", mode: "report", may, hold: [], gate: "full" };
+  const full: RunPolicy = { v: 1, project: "p", ritual: "r", run: "01RUN", mode: "report", may, hold: [], grants: [], gate: "full" };
   const decision = gateDecide({ class: "shell", name: "Bash", command: "cd djinn && echo exit=$?" }, { policy: full, isHeld: false });
   assert.equal(decision.verdict, "deny");
   assert.match(decision.verdict === "deny" ? decision.reason : "", /not allowed by the policy's may rules \(no may rule allows "echo exit=\$\?"\)/u);
@@ -372,4 +373,81 @@ test("a write tool may write a scratch file under /tmp, nothing else", () => {
   const base = { mode: "report" as const, hold: [], may: [] };
   assert.deepEqual(disallowedTools(base, "skip"), ["NotebookEdit", "WebFetch", "WebSearch", "Agent"]);
   assert.deepEqual(disallowedTools(base, "gated"), ["Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"], "gated runs keep the write tools off");
+});
+
+// --- grants (0.46.0) -------------------------------------------------------------------
+
+const GRANT = "pnpm -C tools cli fc --confirm 'site a' --post 12";
+
+test("a granted line passes hold, may and the report-mode verbs, as often as the run needs", () => {
+  for (const scoped of [
+    policy({ gate: "full", hold: ["--confirm"], grants: [GRANT] }),
+    policy({ gate: "full", mode: "report", hold: ["--confirm"], grants: [GRANT] }),
+    policy({ mode: "report", hold: ["--confirm"], grants: [GRANT] }),
+  ]) {
+    assert.equal(verdict(shell(GRANT), scoped), "allow");
+    assert.equal(verdict(shell(GRANT), scoped), "allow", "again");
+    assert.equal(verdict(shell(`  pnpm   -C tools\tcli fc --confirm 'site a'   --post 12 `), scoped), "allow", "spaces outside quotes normalized");
+    assert.equal(verdict(shell("pnpm -C tools cli fc --confirm 'site  a' --post 12"), scoped), "hold", "spaces inside quotes are the argument");
+    assert.equal(verdict(shell("pnpm -C tools cli fc --confirm 'site a' --post 13"), scoped), "hold", "another line holds as before");
+  }
+  assert.equal(verdict(shell(GRANT), policy({ gate: "full", hold: ["--confirm"], grants: [GRANT] }), true), "hold", "a held run stays held");
+});
+
+test("a chain that holds a granted line is decided as before", () => {
+  const scoped = policy({ gate: "full", hold: ["--confirm"], grants: [GRANT, "date"] });
+  assert.equal(verdict(shell(`${GRANT} && git push`), scoped), "hold");
+  assert.equal(verdict(shell(`date; ${GRANT}`), scoped), "hold");
+  assert.equal(verdict(shell(`${GRANT} | tee /tmp/x`), scoped), "hold");
+  assert.equal(verdict(shell(`${GRANT}\nrm -rf /srv`), scoped), "hold", "a newline is a second command");
+  assert.equal(verdict(shell(`${GRANT} > /tmp/out`), scoped), "hold", "a redirection is not the granted line");
+  const may = policy({ gate: "full", hold: [], may: ["Bash(date)"], grants: ["ls /srv"] });
+  assert.equal(verdict(shell("ls /srv"), may), "allow");
+  assert.match(decide(shell("ls /srv && ls /etc"), may) ?? "", /no may rule allows "ls \/srv"/u, "the chain meets may as before");
+});
+
+test("a subagent gets no grant", () => {
+  const scoped = policy({ gate: "full", hold: ["--confirm"], grants: [GRANT], may: ["Agent"] });
+  assert.equal(verdict(shell(GRANT), scoped), "allow");
+  assert.equal(verdict(sub(GRANT), scoped), "hold");
+  assert.equal(verdict(sub("pnpm -C tools cli fc --post 1"), policy({ gate: "full", grants: ["pnpm -C tools cli fc --post 1"] })), "deny");
+});
+
+test("a line that is not granted is decided as if the run had no grants", () => {
+  const calls = [shell(GRANT), shell("git push"), shell("date"), shell("ls /srv"), shell("rm -f /tmp/a"), sub("date"), tool("write", "Write")];
+  for (const base of [policy(), policy({ gate: "full" }), policy({ mode: "report" }), policy({ gate: "full", mode: "report" })]) {
+    const granted = { ...base, grants: ["echo granted", "pnpm -C tools cli fc --post 1"] };
+    for (const call of calls) {
+      for (const isHeld of [false, true]) {
+        assert.deepEqual(gateDecide(call, { policy: granted, isHeld }), gateDecide(call, { policy: base, isHeld }), call.command ?? call.name);
+      }
+    }
+  }
+});
+
+test("a grant is one plain command on one line", () => {
+  assert.equal(grantRefusal(GRANT), undefined);
+  assert.equal(grantRefusal("NODE_ENV=production pnpm -C web build"), undefined);
+  assert.equal(grantRefusal("git commit -m 'a; b && c | d > e'"), undefined, "operators in quotes are text");
+  const refusals: [string, RegExp][] = [
+    ["cd tools && pnpm cli x", /more than one command/u],
+    ["a || b", /more than one command/u],
+    ["a; b", /more than one command/u],
+    ["a | b", /more than one command/u],
+    ["a\nb", /newline/u],
+    ["echo $(id)", /\$/u],
+    ["echo `id`", /command substitution/u],
+    ["echo $HOME", /\$/u],
+    ["echo x > /tmp/out", /output redirection/u],
+    ["echo x > out", /redirection/u],
+    ["cat < in", /input redirection/u],
+    ["sleep 1 &", /background/u],
+    ["rm -f /tmp/*.log", /\* outside quotes/u],
+    ["ls ~", /~ outside quotes/u],
+    ["PATH=/tmp/x pnpm build", /assignment to PATH/u],
+    [`echo ${"x".repeat(300)}`, /at most 300 characters, got 305/u],
+    ["   ", /empty/u],
+  ];
+  for (const [line, reason] of refusals) assert.match(grantRefusal(line) ?? "", reason, line);
+  assert.equal(normalizeGrant("  a\t  b 'c  d'  "), "a b 'c  d'");
 });

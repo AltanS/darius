@@ -531,6 +531,18 @@ The repo holds what both callers need. The skills live in `.claude/skills/` at t
 
 The first unattended ritual on the lead host is `daily-report` in a project: mode `report`, the built-in profile.
 
+## Follow-up runs
+
+Status: 2026-10-01, 0.46.0. Design: Fable, 2026-10-01.
+
+A run that asks a question often knows the exact commands a yes would run. A question in the result block may list them in `commands`: up to 20 lines, each one plain command. The operator approves a question, and a follow-up run may then run those lines as written. Nothing else about the policy changes: mode, `may`, `hold` and `max_mode` stay as they are.
+
+**Grants in the gate (0.46.0).** The run's `policy.json` carries `grants`, the approved lines, and `follow_up_of`, the parent run. Right after the protocol check, a shell line that equals a grant passes the hold list, `may` and the report-mode verbs. Equal means equal after spaces and tabs outside quotes collapse to one. A line that holds a grant as one part of a chain is not granted. Only the main session gets grants: the hook payload of a subagent call carries `agent_id`, and such a call is decided as if the run had no grants. A held run stays held.
+
+A grant is one plain command, so what the operator read is what runs: one line, at most 300 characters, one part in the shell split, no redirection, no `$` or backticks, no glob, brace or `~` outside quotes, no assignment to a name like `PATH`. A command that needs another dir names it with a flag (`pnpm -C tools cli ...`). `run complete` refuses a result with a line that is not one plain command; `policy-check` denies every call when `policy.json` holds one.
+
+A grant passes the gate, not a native allowlist. With Claude Code in gated mode, the allowlist would still refuse a granted line that `may` does not name.
+
 ## Vigil auto-execution
 
 A vigil check is a shell command with an expectation. darius runs it. No LLM is involved. The rules are ported from the legacy vigil sweep script (read first-hand 2026-09-28) because they are measured on 60 real vigils. Two changes only: the event gate can fire itself through `gate_command`, and evidence goes to the ledger instead of into the vigil file.

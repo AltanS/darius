@@ -448,6 +448,7 @@ function describeResult(result: RunResult): string[] {
   result.questions.forEach((question, index) => {
     const rec = question.recommendation === undefined ? "" : ` (recommended: ${question.recommendation})`;
     lines.push(`  question ${String(index + 1)}: ${question.text}${rec}`);
+    for (const command of question.commands ?? []) lines.push(`    run: ${command}`);
   });
   for (const entry of result.items) {
     const where = [entry.group, entry.target].filter((part) => part !== undefined).join(", ");
