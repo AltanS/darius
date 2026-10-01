@@ -77,6 +77,16 @@ const STATUS: HostStatus = {
           openRun: null,
           failedToday: null,
           host: null,
+          source: null,
+          defCommit: null,
+          defHost: null,
+          defAt: null,
+          defDirty: false,
+          at: null,
+          zone: null,
+          timeout: null,
+          nextDueAt: null,
+          warnings: [],
         },
       ],
       runs: RUNS,
@@ -371,6 +381,22 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   assert.ok(workspacePage.replaceAll("<!-- -->", "").includes("Done by hand"), "the workspace section lists it in the same Coming up");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
   assert.ok(runs.includes(imported.run), "the runs page shows them on request");
+});
+
+test("the ritual page of a repo ritual shows where git defines it, the schedule and the warnings, and points edits to git", async () => {
+  const repo = { ...RITUAL.row, mode: "off", heldRun: null, source: "repo" as const, defCommit: "abcdef123456", defHost: "host-a", defAt: "2026-09-28T07:00:00.000Z", defDirty: true, at: "07:00", zone: "Europe/Berlin", timeout: "30m", nextDueAt: "2026-09-29T05:00:00.000Z", warnings: ["mirror is from host-b, this checkout differs: darius ritual reconcile"] };
+  const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: repo } : null) };
+  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
+  const text = page.replaceAll(/<[^>]+>/gu, "");
+  assert.ok(text.includes("Defined in .darius.toml at commit abcdef123456, host host-a"), "the source line");
+  assert.ok(text.includes("(uncommitted changes)"), "dirty");
+  assert.ok(text.includes("07:00 Europe/Berlin") && text.includes("30m"), "at, zone and timeout");
+  assert.ok(text.includes("mirror is from host-b, this checkout differs"), "the warning");
+  assert.ok(text.includes("set mode = ") && text.includes("in .darius.toml and commit"), "the off notice points to git");
+  assert.equal(text.includes("darius ritual set daily-report --mode"), false, "no edit command for a git-owned field");
+  const unmanaged = { ...RITUAL.row, source: "unmanaged" as const };
+  const other = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), { ...context, ritual: () => ({ ...RITUAL, row: unmanaged }) })).text()).replaceAll("<!-- -->", "");
+  assert.ok(other.includes("Not in .darius.toml"), "unmanaged");
 });
 
 test("unknown projects, rituals, runs and paths answer a themed 404", async () => {

@@ -40,6 +40,18 @@ means no cap, so existing setups do not change when it ships.
   answer); the page is read-only today.
 - A vigil detail page.
 
+## Marker v3 follow-ups
+
+Left out of the v3 design on purpose (design section 14).
+
+- `dir` on a ritual (a working directory inside the checkout).
+- Weekday lists (`days = [...]`). `cadence = "1w"` with `from` on a Monday gives a weekly Monday ritual.
+- More than one `at` per ritual: use two rituals.
+- A due window that expires a missed occurrence. Today nothing expires.
+- Store policies and a policy library across repos.
+- `.mcp.json` forwarding and phase 3 vigils.
+- The web shows the policy name of a repo ritual. The store keeps only the resolved policy, so this needs the name mirrored by reconcile.
+
 ## Architecture
 
 - The central server, with a service per host and the djinns (paused discussion).

@@ -9460,6 +9460,17 @@ function cadenceText(cadence) {
 	}[match[2] ?? "d"] ?? "day";
 	return count === 1 ? `every ${unit}` : `every ${count} ${unit}s`;
 }
+/** The source line of a ritual page: where the definition lives, and when it was last read. Null for a store ritual. Same facts as `darius ritual show`. */
+function sourceText(ritual, now) {
+	if (ritual.source === "unmanaged") return "Not in .darius.toml. This ritual never runs unattended.";
+	if (ritual.source !== "repo") return null;
+	return `Defined in .darius.toml at ${ritual.defCommit === null ? "no commit" : `commit ${ritual.defCommit}`}${ritual.defHost === null ? "" : `, host ${ritual.defHost}`}${ritual.defAt === null ? "" : `, ${relativeTime(ritual.defAt, now)}`}${ritual.defDirty ? " (uncommitted changes)" : ""}`;
+}
+/** "07:00 Europe/Berlin", or null for a ritual with no time of day. */
+function atText(ritual) {
+	if (ritual.at === null) return null;
+	return ritual.zone === null ? ritual.at : `${ritual.at} ${ritual.zone}`;
+}
 /** "Acknowledged by owner at 09:12: known outage." Store text, shown as text. */
 function ackText(ack, clock) {
 	const lead = `Acknowledged by ${ack.who} at ${momentText(ack.at, clock.today, clock.offset)}`;
@@ -9657,8 +9668,10 @@ function groupOf$1(today, date, overdue) {
 /** "every 7 days, last done 14 Sep": the cadence in words, then when it was last done. */
 function factsText(ritual) {
 	const cadence = cadenceText(ritual.cadence);
+	const cadenceAt = atText(ritual);
 	const done = ritual.lastCompleted === null ? "not done yet" : `last done ${shortDate(ritual.lastCompleted)}`;
-	return cadence === null ? done : `${cadence}, ${done}`;
+	const every = cadence === null || cadenceAt === null ? cadence : `${cadence} at ${cadenceAt}`;
+	return every === null ? done : `${every}, ${done}`;
 }
 /** Runs that count: imports and install proofs are history, not activity. */
 function isNoise$1(run) {
@@ -9722,7 +9735,7 @@ function ritualRow(input, project, ritual) {
 		state: at.state,
 		facts: factsText(ritual),
 		until: null,
-		note: null,
+		note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
 		overdueDays: at.overdueDays
 	};
 }
@@ -10190,7 +10203,7 @@ function unreadableCard(project) {
 	};
 }
 /**
-* The hourly run-due timer. The status has no timer log, so the line reads
+* The run-due timer, which fires every 15 minutes. The status has no timer log, so the line reads
 * the runs: the newest run the timer started anywhere (the self-test counts,
 * it proves the timer fires), and the djinns that are overdue but did not
 * start today.
@@ -16096,7 +16109,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 	}));
 	const cadence = cadenceText(row.cadence);
 	const model = policy.model ?? "the profile's model";
-	const { today } = useClock();
+	const { today, now } = useClock();
+	const source = sourceText(row, now);
+	const scheduleAt = atText(row);
+	const fromGit = row.source === "repo";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
 		className: "page-head",
 		children: [
@@ -16131,21 +16147,44 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 				className: "note-box",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 					row.mode === "off" ? "darius does not start this ritual (mode off)." : "darius does not start this ritual, because it is not active.",
-					" You run it by hand; darius tracks the schedule. To let darius run it, give it a policy with",
+					" You run it by hand; darius tracks the schedule.",
 					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
-						className: "inline-code",
-						children: [
-							"darius ritual set ",
-							row.slug,
-							" --mode report ..."
-						]
-					}),
-					"."
+					fromGit ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"To let darius run it, set ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "inline-code",
+							children: "mode = \"report\""
+						}),
+						" in ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "inline-code",
+							children: ".darius.toml"
+						}),
+						" and commit."
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"To let darius run it, give it a policy with ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
+							className: "inline-code",
+							children: [
+								"darius ritual set ",
+								row.slug,
+								" --mode report ..."
+							]
+						}),
+						"."
+					] })
 				] })
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "lede",
 				children: `darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`
+			}),
+			source === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "lede lede-tight source-line",
+				children: source
+			}),
+			row.warnings.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "note-box",
+				children: row.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: warning }, warning))
 			}),
 			row.skill === null && row.host === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "lede lede-tight",
@@ -16249,50 +16288,93 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 				title: "Rules and instructions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "folds",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-						summary: "Rules: what it may do, and what makes it stop and ask",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
-							{
-								label: "May run",
-								value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
-									items: policy.may,
-									none: "only the read-only defaults"
-								})
-							},
-							{
-								label: "Stops at",
-								value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
-									items: policy.hold,
-									none: "nothing"
-								})
-							},
-							{
-								label: "Max turns",
-								value: policy.maxTurns ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "text-muted",
-									children: "default"
-								})
-							},
-							{
-								label: "Profile",
-								value: policy.profile === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "text-muted",
-									children: "default"
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-									to: `/profiles#profile-${policy.profile}`,
-									children: policy.profile
-								})
-							},
-							...policy.notes === null ? [] : [{
-								label: "Notes",
-								value: policy.notes
-							}]
-						] })
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
-						summary: "Instructions",
-						open: manual,
-						children: ritual.body.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No instructions." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks: ritual.body })
-					})]
+					children: [
+						scheduleAt === null && row.timeout === null && !fromGit ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+							summary: "Schedule",
+							open: true,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
+								{
+									label: "Cadence",
+									value: cadence ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-muted",
+										children: "none"
+									})
+								},
+								...scheduleAt === null ? [] : [{
+									label: "At",
+									value: scheduleAt
+								}],
+								...row.nextDueAt === null ? [] : [{
+									label: "Next due",
+									value: row.nextDueAt
+								}],
+								...row.timeout === null ? [] : [{
+									label: "Timeout",
+									value: row.timeout
+								}]
+							] }), fromGit ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "rail-note",
+								children: [
+									"Git owns this definition. To change it, edit ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "inline-code",
+										children: ".darius.toml"
+									}),
+									" and commit. Pause, resume, host and due stay with ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "inline-code",
+										children: "darius ritual set"
+									}),
+									"."
+								]
+							}) : null]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+							summary: "Rules: what it may do, and what makes it stop and ask",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
+								{
+									label: "May run",
+									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
+										items: policy.may,
+										none: "only the read-only defaults"
+									})
+								},
+								{
+									label: "Stops at",
+									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
+										items: policy.hold,
+										none: "nothing"
+									})
+								},
+								{
+									label: "Max turns",
+									value: policy.maxTurns ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-muted",
+										children: "default"
+									})
+								},
+								{
+									label: "Profile",
+									value: policy.profile === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-muted",
+										children: "default"
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+										to: `/profiles#profile-${policy.profile}`,
+										children: policy.profile
+									})
+								},
+								...policy.notes === null ? [] : [{
+									label: "Notes",
+									value: policy.notes
+								}]
+							] })
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+							summary: "Instructions",
+							open: manual,
+							children: ritual.body.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No instructions." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks: ritual.body })
+						})
+					]
 				})
 			})
 		})]
@@ -16739,15 +16821,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DbupbONk.js",
+			"module": "/assets/root-e56Rhl5h.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/nav-icons-CVNBfdLd.js",
 				"/assets/clock-C06Q4GAu.js",
-				"/assets/view-CQdDrwg-.js",
-				"/assets/agenda-CrA6sk3Q.js",
+				"/assets/view-BXF-r1Za.js",
+				"/assets/agenda-u7fqVKHw.js",
 				"/assets/settings-YoGy02pU.js"
 			],
 			"css": ["/assets/root-BozdA5F6.css"],
@@ -16769,19 +16851,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CQjO8-OM.js",
+			"module": "/assets/overview-salqraYP.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js"
+				"/assets/view-BXF-r1Za.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16802,19 +16884,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CQjO8-OM.js",
+			"module": "/assets/overview-salqraYP.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js"
+				"/assets/view-BXF-r1Za.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16835,19 +16917,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CQjO8-OM.js",
+			"module": "/assets/overview-salqraYP.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js"
+				"/assets/view-BXF-r1Za.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16868,19 +16950,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-Eqyk5nK0.js",
+			"module": "/assets/vigils-B-cllWlW.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
+				"/assets/view-BXF-r1Za.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-6Ijv7doM.js",
+				"/assets/section-B12xRITg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/agenda-CrA6sk3Q.js"
+				"/assets/agenda-u7fqVKHw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16901,19 +16983,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-Eqyk5nK0.js",
+			"module": "/assets/vigils-B-cllWlW.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
+				"/assets/view-BXF-r1Za.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-6Ijv7doM.js",
+				"/assets/section-B12xRITg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/agenda-CrA6sk3Q.js"
+				"/assets/agenda-u7fqVKHw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16934,21 +17016,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-dizhqmi1.js",
+			"module": "/assets/rituals-BQWheDAK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-6Ijv7doM.js",
+				"/assets/section-B12xRITg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
+				"/assets/view-BXF-r1Za.js",
 				"/assets/row-CzI7mG7X.js",
-				"/assets/agenda-CrA6sk3Q.js"
+				"/assets/agenda-u7fqVKHw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16969,21 +17051,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-dizhqmi1.js",
+			"module": "/assets/rituals-BQWheDAK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-6Ijv7doM.js",
+				"/assets/section-B12xRITg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
+				"/assets/view-BXF-r1Za.js",
 				"/assets/row-CzI7mG7X.js",
-				"/assets/agenda-CrA6sk3Q.js"
+				"/assets/agenda-u7fqVKHw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17064,19 +17146,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestone-5lPLgYg2.js",
+			"module": "/assets/milestone-DuG2rMaN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/milestones-D_NpzYJS.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js"
+				"/assets/view-BXF-r1Za.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17258,18 +17340,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-jj9h33Qy.js",
+			"module": "/assets/runs-BNFsB7JI.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-y9QGYFmb.js",
+				"/assets/runs-WK8ZlKqs.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/view-BXF-r1Za.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/row-CzI7mG7X.js"
 			],
 			"css": [],
@@ -17360,15 +17442,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-Bc6uzJwS.js",
+			"module": "/assets/ritual-Dt7lSf2F.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/view-BXF-r1Za.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
@@ -17393,15 +17475,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-CoP-ABhv.js",
+			"module": "/assets/run-C_A_VKmV.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CQdDrwg-.js",
-				"/assets/runs-y9QGYFmb.js",
-				"/assets/pulse-cdrxSqlU.js",
+				"/assets/view-BXF-r1Za.js",
+				"/assets/runs-WK8ZlKqs.js",
+				"/assets/pulse-4Id7uDMT.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/row-CzI7mG7X.js",
 				"/assets/route-error-DMMzp2qt.js",
@@ -17440,8 +17522,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-25a17a95.js",
-	"version": "25a17a95",
+	"url": "/assets/manifest-abcc0fb7.js",
+	"version": "abcc0fb7",
 	"sri": void 0
 };
 //#endregion

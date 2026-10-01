@@ -393,7 +393,7 @@ function unreadableCard(project: ProjectStatus): Card {
 // --- health --------------------------------------------------------------------------------
 
 /**
- * The hourly run-due timer. The status has no timer log, so the line reads
+ * The run-due timer, which fires every 15 minutes. The status has no timer log, so the line reads
  * the runs: the newest run the timer started anywhere (the self-test counts,
  * it proves the timer fires), and the djinns that are overdue but did not
  * start today.

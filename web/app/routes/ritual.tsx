@@ -15,7 +15,7 @@ import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
 import { summaryTags } from "../lib/result.ts";
-import { asksYou, cadenceText, isImported, nextStep, reportExcerpt, ritualFailure, runState } from "../lib/view.ts";
+import { asksYou, atText, cadenceText, isImported, nextStep, reportExcerpt, ritualFailure, runState, sourceText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -67,7 +67,10 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
   const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
   const cadence = cadenceText(row.cadence);
   const model = policy.model ?? "the profile's model";
-  const { today } = useClock();
+  const { today, now } = useClock();
+  const source = sourceText(row, now);
+  const scheduleAt = atText(row);
+  const fromGit = row.source === "repo";
   return (
     <div>
       <header className="page-head">
@@ -88,12 +91,28 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         {manual ? (
           <div className="note-box">
             <p>
-              {row.mode === "off" ? "darius does not start this ritual (mode off)." : "darius does not start this ritual, because it is not active."} You run it by hand; darius tracks the schedule. To let darius run it, give it a policy with{" "}
-              <code className="inline-code">darius ritual set {row.slug} --mode report ...</code>.
+              {row.mode === "off" ? "darius does not start this ritual (mode off)." : "darius does not start this ritual, because it is not active."} You run it by hand; darius tracks the schedule.{" "}
+              {fromGit ? (
+                <>
+                  To let darius run it, set <code className="inline-code">mode = "report"</code> in <code className="inline-code">.darius.toml</code> and commit.
+                </>
+              ) : (
+                <>
+                  To let darius run it, give it a policy with <code className="inline-code">darius ritual set {row.slug} --mode report ...</code>.
+                </>
+              )}
             </p>
           </div>
         ) : (
           <p className="lede">{`darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`}</p>
+        )}
+        {source === null ? null : <p className="lede lede-tight source-line">{source}</p>}
+        {row.warnings.length === 0 ? null : (
+          <div className="note-box">
+            {row.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
         )}
         {row.skill === null && row.host === null ? null : (
           <p className="lede lede-tight">
@@ -163,6 +182,23 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         <aside className="board-rail">
           <Section title="Rules and instructions">
             <div className="folds">
+              {scheduleAt === null && row.timeout === null && !fromGit ? null : (
+                <Fold summary="Schedule" open>
+                  <Facts
+                    facts={[
+                      { label: "Cadence", value: cadence ?? <span className="text-muted">none</span> },
+                      ...(scheduleAt === null ? [] : [{ label: "At", value: scheduleAt }]),
+                      ...(row.nextDueAt === null ? [] : [{ label: "Next due", value: row.nextDueAt }]),
+                      ...(row.timeout === null ? [] : [{ label: "Timeout", value: row.timeout }]),
+                    ]}
+                  />
+                  {fromGit ? (
+                    <p className="rail-note">
+                      Git owns this definition. To change it, edit <code className="inline-code">.darius.toml</code> and commit. Pause, resume, host and due stay with <code className="inline-code">darius ritual set</code>.
+                    </p>
+                  ) : null}
+                </Fold>
+              )}
               <Fold summary="Rules: what it may do, and what makes it stop and ask">
                 <Facts
                   facts={[

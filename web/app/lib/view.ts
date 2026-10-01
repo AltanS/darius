@@ -7,7 +7,7 @@
  */
 
 import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { ackCommand, hostDate, momentText, relativeDate, roughDuration, runNowCommand, shortDate } from "./format.ts";
+import { ackCommand, hostDate, momentText, relativeDate, relativeTime, roughDuration, runNowCommand, shortDate } from "./format.ts";
 import { isUnattended, itemKind, itemManual, type Kind } from "./kind.ts";
 import { runWord } from "./state-words.ts";
 import type { Badge, Tone } from "./tone.ts";
@@ -129,6 +129,23 @@ export function cadenceText(cadence: string | null): string | null {
   const count = Number(match[1]);
   const unit = { h: "hour", d: "day", w: "week", m: "month" }[match[2] ?? "d"] ?? "day";
   return count === 1 ? `every ${unit}` : `every ${count} ${unit}s`;
+}
+
+/** The source line of a ritual page: where the definition lives, and when it was last read. Null for a store ritual. Same facts as `darius ritual show`. */
+export function sourceText(ritual: RitualRow, now: number): string | null {
+  if (ritual.source === "unmanaged") return "Not in .darius.toml. This ritual never runs unattended.";
+  if (ritual.source !== "repo") return null;
+  const commit = ritual.defCommit === null ? "no commit" : `commit ${ritual.defCommit}`;
+  const host = ritual.defHost === null ? "" : `, host ${ritual.defHost}`;
+  const age = ritual.defAt === null ? "" : `, ${relativeTime(ritual.defAt, now)}`;
+  const dirty = ritual.defDirty ? " (uncommitted changes)" : "";
+  return `Defined in .darius.toml at ${commit}${host}${age}${dirty}`;
+}
+
+/** "07:00 Europe/Berlin", or null for a ritual with no time of day. */
+export function atText(ritual: RitualRow): string | null {
+  if (ritual.at === null) return null;
+  return ritual.zone === null ? ritual.at : `${ritual.at} ${ritual.zone}`;
 }
 
 // --- failed runs: what happens next ------------------------------------------------------
