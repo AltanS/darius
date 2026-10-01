@@ -235,7 +235,8 @@ export function milestoneDetail(projectName: string, ref: string): MilestoneDeta
   };
 }
 
-function lastSync(name: string): string | null {
+/** `last_sync` from the project's `sync.json`; null when the file is missing, unreadable or has no such text. */
+export function lastSync(name: string): string | null {
   const file = join(projectDir(name), "sync.json");
   if (!existsSync(file)) return null;
   try {

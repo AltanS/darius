@@ -22,7 +22,7 @@
  *      stamped darius skill: then the plugin teaches and nothing is needed.
  *
  * `--systemd`: renders the units that config.toml's `[setup] units` lists
- * (sync, vigil-sweep, run-due, web and export; all of them when the key is
+ * (sync, vigil-sweep, run-due, web, export and snapshot; all of them when the key is
  * absent; export only when `[backup] repo` is set) from
  * the templates in `systemd/` into `~/.config/systemd/user/`, then runs
  * `daemon-reload` and `enable --now` on their timers, or on the standing
@@ -202,7 +202,7 @@ interface UnitSet {
 }
 
 /**
- * The nine unit files `--systemd` may install: the four timer/service
+ * The eleven unit files `--systemd` may install: the five timer/service
  * pairs, plus the standing web service, which has no timer.
  * `darius-seaweedfs.service` is deliberately absent: only
  * `scripts/seaweedfs-install.sh` installs it.
@@ -213,6 +213,7 @@ const UNIT_SETS = {
   "run-due": { files: ["darius-run-due.service", "darius-run-due.timer"], enable: "darius-run-due.timer" },
   web: { files: ["darius-web.service"], enable: "darius-web.service" },
   export: { files: ["darius-export.service", "darius-export.timer"], enable: "darius-export.timer" },
+  snapshot: { files: ["darius-snapshot.service", "darius-snapshot.timer"], enable: "darius-snapshot.timer" },
 } as const satisfies Readonly<Record<SetupUnit, UnitSet>>;
 
 /** What `--systemd` does with each unit on this host. */

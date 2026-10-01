@@ -120,11 +120,11 @@ test("writeConfigSkeleton writes once, then reports exists", () => {
   });
 });
 
-test("[setup] units: all five when absent, a listed subset in a fixed order, an unknown name refused with the valid ones", () => {
+test("[setup] units: all six when absent, a listed subset in a fixed order, an unknown name refused with the valid ones", () => {
   withConfigDir((dir) => {
     const file = join(dir, "config.toml");
     writeFileSync(file, 'host = "host-b"\n');
-    assert.deepEqual(loadConfig().setup.units, ["sync", "vigil-sweep", "run-due", "web", "export"]);
+    assert.deepEqual(loadConfig().setup.units, ["sync", "vigil-sweep", "run-due", "web", "export", "snapshot"]);
 
     writeFileSync(file, 'host = "host-b"\n\n[setup]\nunits = ["web", "sync", "sync"]\n');
     assert.deepEqual(loadConfig().setup.units, ["sync", "web"]);
@@ -133,10 +133,20 @@ test("[setup] units: all five when absent, a listed subset in a fixed order, an 
     assert.deepEqual(loadConfig().setup.units, []);
 
     writeFileSync(file, '[setup]\nunits = ["sync", "backup"]\n');
-    assert.throws(() => loadConfig(), /unknown unit "backup" \(valid: "sync", "vigil-sweep", "run-due", "web", "export"\)/);
+    assert.throws(() => loadConfig(), /unknown unit "backup" \(valid: "sync", "vigil-sweep", "run-due", "web", "export", "snapshot"\)/);
 
     writeFileSync(file, '[setup]\nunits = "sync"\n');
     assert.throws(() => loadConfig(), /\[setup\] "units" must be an array/);
+  });
+});
+
+test("[snapshot]: kept as a raw table for src/core/snapshot-settings.ts, absent when the table is", () => {
+  withConfigDir((dir) => {
+    const file = join(dir, "config.toml");
+    writeFileSync(file, 'host = "host-b"\n');
+    assert.equal(loadConfig().snapshot, undefined);
+    writeFileSync(file, 'host = "host-b"\n\n[snapshot]\nkeep = 3\nbucket = "bucket-1"\n');
+    assert.deepEqual(loadConfig().snapshot, { keep: 3, bucket: "bucket-1" });
   });
 });
 

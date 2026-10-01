@@ -1,7 +1,7 @@
 /**
- * The frame around every page. The top bar has three things: the brand gem
- * (it opens the Overview of the scope you are in), the workspace switcher and
- * the settings gear. The scope is one workspace or all of them. The switcher
+ * The frame around every page. The top bar has four things: the brand gem
+ * (it opens the Overview of the scope you are in), the workspace switcher, the
+ * status pulse and the settings gear. The scope is one workspace or all of them. The switcher
  * opens as a sheet under the bar on a phone and as a menu on a desktop; its
  * first entry is the Overview of the current scope, then All workspaces, then
  * each workspace with what needs you. The three sections of the scope, Vigils,
@@ -186,6 +186,9 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
             <span className="brand-word">darius</span>
           </Link>
           <Switcher data={data} place={place} overview={overview} to={scopeTo} pathKey={`${location.pathname}${location.search}`} />
+          <Link to="/status" className={location.pathname === "/status" ? "gear on" : "gear"} aria-label="Status" aria-current={location.pathname === "/status" ? "page" : undefined}>
+            <NavIcon name="status" size={22} />
+          </Link>
           <Link to="/settings" className={location.pathname === "/settings" ? "gear on" : "gear"} aria-label="Settings" aria-current={location.pathname === "/settings" ? "page" : undefined}>
             <NavIcon name="gear" size={22} />
           </Link>

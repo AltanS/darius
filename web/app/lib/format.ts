@@ -55,6 +55,28 @@ export function roughDuration(size: number): string {
   return `${Math.floor(size / DAY)} d`;
 }
 
+/** A size in bytes as "812 B", "48 MiB" or "1.4 GiB": one decimal below 10, none above. */
+export function byteSize(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+  let value = Math.max(0, bytes);
+  let at = 0;
+  while (value >= 1024 && at < units.length - 1) {
+    value /= 1024;
+    at += 1;
+  }
+  const text = at === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+  return `${text} ${units[at] ?? "B"}`;
+}
+
+/** An uptime in seconds as "12 d 3 h", "5 h 10 min" or "4 min". */
+export function uptimeText(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${Math.max(1, minutes)} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return pair(hours, "h", minutes % 60, "min");
+  return pair(Math.floor(hours / 24), "d", hours % 24, "h");
+}
+
 // --- host clock ----------------------------------------------------------------------------
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;

@@ -3045,6 +3045,12 @@
     color: var(--color-muted);
   }
 
+  /* Two links at the right of the bar: the first takes the free space, the second sits next to it. */
+
+  .gear + .gear {
+    margin-left: 0;
+  }
+
   .gear:hover {
     color: var(--color-parchment);
     text-decoration: none;
@@ -4188,6 +4194,587 @@
     display: inline-block;
     padding-block: 10px;
   }
+  /* --- the status page: backups, machine, hosts, projects ---------------------------- */
+
+  /* Backups: the state and the list on the left, the controls on the right on a wide screen. */
+
+  .bk {
+    display: grid;
+    gap: 20px;
+  }
+
+  .bk-grid {
+    display: grid;
+    gap: 24px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bk-col {
+    display: grid;
+    gap: 24px;
+    min-width: 0;
+    align-content: start;
+  }
+
+  @media (min-width: 1000px) {
+    .bk-grid {
+      grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+      align-items: start;
+    }
+  }
+
+  .bk-block > * + * {
+    margin-top: 10px;
+  }
+
+  .bk-h {
+    font: 600 12px/1 var(--font-sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .bk-panel > * + * {
+    margin-top: 16px;
+  }
+
+  .bk-problems {
+    max-width: none;
+    margin-top: 0;
+  }
+
+  .bk-problems-head {
+    font-weight: 600;
+  }
+
+  .bk-problems ul {
+    margin-top: 6px;
+    padding-left: 18px;
+    list-style: disc;
+  }
+
+  .bk-problems li {
+    overflow-wrap: anywhere;
+  }
+
+  .bk-state > div {
+    display: grid;
+    gap: 2px 16px;
+    padding-block: 10px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .bk-state > div:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .bk-state dt {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .bk-state dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (min-width: 640px) {
+    .bk-state > div {
+      grid-template-columns: 120px minmax(0, 1fr);
+    }
+  }
+
+  .bk-file,
+  .bk-name code,
+  .sy-path,
+  .bk-env code {
+    font-size: 13px;
+    color: var(--color-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .bk-err {
+    display: block;
+    margin-top: 4px;
+    font-size: 14px;
+  }
+
+  /* Buttons: 44 px tall, square. Main is gold, quiet is plain, danger is red. */
+
+  .bk-btn {
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid var(--color-sand-hi);
+    background: var(--color-surface);
+    font: inherit;
+    font-size: 14px;
+    color: var(--color-parchment);
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+
+  .bk-btn:hover:not(:disabled) {
+    border-color: var(--color-gold);
+  }
+
+  .bk-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .bk-btn-main {
+    border-color: var(--color-gold);
+    font-weight: 600;
+    color: var(--color-gold);
+  }
+
+  .bk-btn-danger {
+    border-color: var(--color-blood);
+    font-weight: 600;
+    color: var(--color-bad);
+  }
+
+  .bk-run .bk-btn-main {
+    width: 100%;
+  }
+
+  @media (min-width: 640px) {
+    .bk-run .bk-btn-main {
+      width: auto;
+      min-width: 200px;
+    }
+  }
+
+  .bk-note {
+    margin-top: 10px;
+    font-size: 14px;
+    color: var(--tone);
+    overflow-wrap: anywhere;
+  }
+
+  .bk-link {
+    min-height: 44px;
+    padding: 0 4px;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--color-gold);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .bk-link:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* The snapshot list: one block per snapshot, a hairline between. */
+
+  .bk-sum,
+  .bk-restore {
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .bk-block > .bk-restore {
+    max-width: 75ch;
+    margin-top: 16px;
+  }
+
+  .bk-empty {
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+  }
+
+  .bk-list {
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+  }
+
+  .bk-snap {
+    padding: 14px 16px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .bk-snap:first-child {
+    border-top: 0;
+  }
+
+  .bk-snap > * + * {
+    margin-top: 6px;
+  }
+
+  .bk-snap-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 14px;
+  }
+
+  .bk-when {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bk-size,
+  .bk-files {
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+
+  .bk-marks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+  }
+
+  /* A small mark: a square in the state colour, then the words. Never a kind colour. */
+
+  .bk-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 8px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-raised);
+    font-size: 13px;
+    color: var(--color-parchment);
+  }
+
+  .bk-mark::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: var(--tone);
+  }
+
+  .bk-mark-off {
+    background: none;
+    color: var(--color-faint);
+  }
+
+  .bk-sha {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .bk-sha-btn {
+    position: relative;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    text-align: left;
+    color: var(--color-muted);
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  /* A 44 px target around the short hash, without making the row taller. */
+
+  .bk-sha-btn::before {
+    content: "";
+    position: absolute;
+    inset: -13px -8px;
+  }
+
+  .bk-sha-btn code {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .bk-sha-btn:hover code {
+    color: var(--color-parchment);
+  }
+
+  .bk-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .bk-acts:empty {
+    display: none;
+  }
+
+  .bk-ask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .bk-ask-q {
+    width: 100%;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  @media (min-width: 640px) {
+    .bk-ask-q {
+      width: auto;
+      margin-right: 4px;
+    }
+  }
+
+  /* Settings: two groups of fields. */
+
+  .bk-group {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .bk-group + .bk-group {
+    margin-top: 24px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .bk-legend {
+    padding: 0;
+    font: 600 12px/1 var(--font-sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .bk-input {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--color-sand-hi);
+    background: var(--color-deep);
+    font: inherit;
+    color: var(--color-parchment);
+  }
+
+  .bk-input:disabled {
+    border-color: var(--color-sand);
+    opacity: 0.8;
+    cursor: not-allowed;
+  }
+
+  .st-switch:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .bk-src {
+    margin-top: 4px;
+  }
+
+  .bk-source {
+    display: inline-block;
+    padding: 0 6px;
+    border: 1px solid var(--color-sand);
+    font-size: 12px;
+    color: var(--color-muted);
+  }
+
+  .bk-source-env {
+    border-color: var(--color-late);
+    color: var(--color-late);
+  }
+
+  .bk-source-file {
+    border-color: var(--color-sand-hi);
+    color: var(--color-parchment);
+  }
+
+  .bk-save {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+  }
+
+  .bk-cred-line strong {
+    color: var(--color-gold-hi);
+  }
+
+  .bk-env > div {
+    display: grid;
+    gap: 0 16px;
+    padding-block: 6px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .bk-env > div:first-child {
+    border-top: 0;
+  }
+
+  .bk-env dd {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  @media (min-width: 640px) {
+    .bk-env > div {
+      grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+    }
+  }
+
+  /* The status strip is tighter on a phone, so "5 min since sync" stays on one line. */
+
+  @media (max-width: 639px) {
+    .pulse-status .pill {
+      gap: 2px 6px;
+      padding: 14px 6px 14px 28px;
+    }
+
+    .pulse-status .pill-dot {
+      left: 12px;
+    }
+
+    .pulse-status .pill-l {
+      font-size: 13px;
+    }
+  }
+
+  /* Machine, hosts, projects: lines, not tiles. */
+
+  .sy-grid {
+    display: grid;
+    gap: 40px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (min-width: 1000px) {
+    .sy-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      align-items: start;
+    }
+  }
+
+  .sy-rows {
+    padding: 4px 16px;
+    font-size: 14px;
+  }
+
+  .sy-rows > div {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2px 16px;
+    min-height: 40px;
+    padding-block: 8px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .sy-rows > div:first-child {
+    border-top: 0;
+  }
+
+  .sy-rows dt {
+    color: var(--color-muted);
+  }
+
+  .sy-rows dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sy-disks {
+    margin-top: 16px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+  }
+
+  .sy-disk {
+    padding: 12px 16px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .sy-disk:first-child {
+    border-top: 0;
+  }
+
+  .sy-disk-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2px 16px;
+    font-size: 14px;
+  }
+
+  .sy-disk-free {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+
+  .sy-bar {
+    display: block;
+    width: 100%;
+    height: 6px;
+    margin-block: 8px 6px;
+  }
+
+  .sy-bar-back {
+    fill: var(--track);
+  }
+
+  .sy-bar-fill {
+    fill: var(--tone);
+  }
+
+  .sy-list > .sy-item {
+    padding: 12px 16px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .sy-list > .sy-item:first-child {
+    border-top: 0;
+  }
+
+  .sy-item-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+  }
+
+  .sy-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .sy-size {
+    margin-left: auto;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+
+  .sy-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 16px;
+    margin-top: 2px;
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .sy-remote {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .sy-remote code {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
   /* --- ia: integration --------------------------------------------------------------- */
 
   /* Compact density for the shell and the milestones. Every target stays 44 px on a phone. */

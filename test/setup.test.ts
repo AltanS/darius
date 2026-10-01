@@ -101,11 +101,13 @@ const UNIT_FILES = [
   "darius-run-due.service",
   "darius-run-due.timer",
   "darius-web.service",
+  "darius-snapshot.service",
+  "darius-snapshot.timer",
 ] as const;
 
-const UNITS_TO_ENABLE = ["darius-sync.timer", "darius-vigil-sweep.timer", "darius-run-due.timer", "darius-web.service"] as const;
+const UNITS_TO_ENABLE = ["darius-sync.timer", "darius-vigil-sweep.timer", "darius-run-due.timer", "darius-web.service", "darius-snapshot.timer"] as const;
 
-/** Writes the seven unit files `--systemd` installs, with placeholder content, under `<root>/systemd/`. */
+/** Writes the nine unit files `--systemd` installs, with placeholder content, under `<root>/systemd/`. */
 function writeFakeUnits(root: string): void {
   const dir = join(root, "systemd");
   mkdirSync(dir, { recursive: true });
@@ -117,7 +119,7 @@ function writeFakeUnits(root: string): void {
 /** This repo's real unit templates. */
 const REPO_SYSTEMD = fileURLToPath(new URL("../systemd/", import.meta.url));
 
-/** Copies this repo's seven real unit templates into `dir`. */
+/** Copies this repo's nine real unit templates into `dir`. */
 function copyRealUnits(dir: string): void {
   mkdirSync(dir, { recursive: true });
   for (const name of UNIT_FILES) copyFileSync(join(REPO_SYSTEMD, name), join(dir, name));
@@ -562,7 +564,7 @@ test("--systemd skips a re-run with the same PATH, and a changed PATH rewrites, 
     // Only the services changed: the timers render the same and are not rewritten.
     assert.equal(
       rewritten.detail,
-      "rewrote darius-sync.service, darius-vigil-sweep.service, darius-run-due.service, darius-web.service " +
+      "rewrote darius-sync.service, darius-vigil-sweep.service, darius-run-due.service, darius-web.service, darius-snapshot.service " +
         `in ${unitDir} (rendered content changed); enabled ${UNITS_TO_ENABLE.join(", ")}`,
     );
     assert.deepEqual(changed.calls.slice(-3), [
@@ -781,7 +783,7 @@ test("a unit that leaves [setup] units is disabled and its files removed, and a 
     const all = await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, recordingSystemctl().runner, fakeBucketFactory("exists")));
     assert.equal(stepFor(all, "systemd").ok, true);
   });
-  assert.equal(readdirSync(unitDir).length, 7);
+  assert.equal(readdirSync(unitDir).length, 9);
 
   const { runner, calls } = recordingSystemctl();
   await withUnits('[setup]\nunits = ["sync"]\n', async () => {
@@ -789,12 +791,12 @@ test("a unit that leaves [setup] units is disabled and its files removed, and a 
     assert.equal(steps.length, 2);
     assert.equal(steps[0]?.skipped, true, "the sync unit is unchanged and running");
     assert.equal(steps[1]?.ok, true);
-    assert.match(steps[1]?.detail ?? "", /disabled darius-vigil-sweep\.timer, darius-run-due\.timer, darius-web\.service/);
+    assert.match(steps[1]?.detail ?? "", /disabled darius-vigil-sweep\.timer, darius-run-due\.timer, darius-web\.service, darius-snapshot\.timer/);
   });
   assert.deepEqual(readdirSync(unitDir).toSorted(), ["darius-sync.service", "darius-sync.timer"]);
   assert.deepEqual(
     calls.filter((call) => call[0] !== "is-enabled" && call[0] !== "is-active"),
-    [["disable", "--now", "darius-vigil-sweep.timer", "darius-run-due.timer", "darius-web.service"], ["daemon-reload"]],
+    [["disable", "--now", "darius-vigil-sweep.timer", "darius-run-due.timer", "darius-web.service", "darius-snapshot.timer"], ["daemon-reload"]],
   );
 
   const quiet = recordingSystemctl();
@@ -914,7 +916,7 @@ test("setupCommand without --json prints one ✓/·/! line per step", async () =
 test("selectUnits: export only with a [backup] repo, held back when listed without one", () => {
   const base = { host: "host-b", notify: { webhook: "" }, runner: { claude: "" } };
   const backup = { repo: "file:///srv/backup.git", dir: "/tmp/clone" };
-  assert.deepEqual(selectUnits(null), { install: ["sync", "vigil-sweep", "run-due", "web"], held: ["export"] });
+  assert.deepEqual(selectUnits(null), { install: ["sync", "vigil-sweep", "run-due", "web", "snapshot"], held: ["export"] });
   assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "vigil-sweep", "run-due", "web", "export"] } }), {
     install: ["sync", "vigil-sweep", "run-due", "web"],
     held: ["export"],

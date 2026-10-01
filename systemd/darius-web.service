@@ -8,6 +8,7 @@
 # DARIUS_WEB_BIND / DARIUS_WEB_PORT, read from an EnvironmentFile so a host
 # can set its tailnet address without editing this unit; darius serve itself
 # refuses 0.0.0.0 and ::, so this file grants no extra privilege.
+# snapshot.env holds the DARIUS_SNAPSHOT_* settings the snapshot timer also reads.
 #
 # Restart=on-failure: a crash restarts the page; a clean `stop` (or SIGTERM at
 # logout, since this is a user unit with no lingering requirement beyond what
@@ -20,6 +21,7 @@ Documentation=https://github.com/AltanS/darius
 Type=simple
 Environment="PATH=@PATH@"
 EnvironmentFile=-%h/.config/darius/web.env
+EnvironmentFile=-%h/.config/darius/snapshot.env
 ExecStart=@DARIUS@ serve
 Restart=on-failure
 RestartSec=5

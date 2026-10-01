@@ -74,6 +74,12 @@ export interface Config {
    * a private backup repo; `dir` is its local clone.
    */
   backup?: { repo: string; dir: string };
+  /**
+   * `[snapshot]`: the raw table of the local snapshots and their S3 copy
+   * (src/core/snapshot-settings.ts validates it and merges it with the
+   * environment and the dashboard's file). Absent without the table.
+   */
+  snapshot?: Readonly<Record<string, TomlValue>>;
 }
 
 /**
@@ -81,7 +87,7 @@ export interface Config {
  * them when the key is absent. `export` installs only when `[backup] repo`
  * is set (src/cli/setup.ts).
  */
-export const SETUP_UNITS = ["sync", "vigil-sweep", "run-due", "web", "export"] as const;
+export const SETUP_UNITS = ["sync", "vigil-sweep", "run-due", "web", "export", "snapshot"] as const;
 
 export type SetupUnit = (typeof SETUP_UNITS)[number];
 
@@ -192,7 +198,7 @@ function isLoopbackOrTailnet(host: string): boolean {
   return first === 100 && second >= 64 && second <= 127;
 }
 
-function checkEndpointAllowed(endpoint: string, allowHttp: boolean, file: string): void {
+export function checkEndpointAllowed(endpoint: string, allowHttp: boolean, file: string): void {
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -274,7 +280,9 @@ export function loadConfig(): Config {
   const backupTable = document.sections.backup;
   const backup = backupTable === undefined ? undefined : buildBackup(backupTable, file);
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, backup };
+  const snapshot = document.sections.snapshot;
+
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, backup, snapshot };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

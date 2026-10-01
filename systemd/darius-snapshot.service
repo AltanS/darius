@@ -1,0 +1,20 @@
+# systemd/darius-snapshot.service: archives this host's store into the local
+# snapshot folder and, when a remote copy is set up, uploads it to the S3
+# bucket. Triggered by darius-snapshot.timer. Type=oneshot for the same reason
+# as darius-sync.service. A template: `darius setup --systemd` fills in its
+# PATH and DARIUS placeholders.
+#
+# Settings can come from the environment. Put DARIUS_SNAPSHOT_* variables in
+# ~/.config/darius/snapshot.env; the web service reads the same file, so the
+# status page shows what the timer will use. The access key pair belongs in
+# DARIUS_SNAPSHOT_ACCESS_KEY_ID and DARIUS_SNAPSHOT_SECRET_ACCESS_KEY there,
+# or in ~/.config/darius/snapshot-credentials (mode 0600).
+[Unit]
+Description=darius snapshot
+Documentation=https://github.com/AltanS/darius
+
+[Service]
+Type=oneshot
+Environment="PATH=@PATH@"
+EnvironmentFile=-%h/.config/darius/snapshot.env
+ExecStart=@DARIUS@ snapshot create --json

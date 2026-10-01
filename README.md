@@ -85,7 +85,7 @@ them. A sync-only host sets one:
 
 ```toml
 [setup]
-units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "export"
+units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "export", "snapshot"
 ```
 
 `darius setup --systemd` enables the listed units. It disables and removes the others, but
@@ -106,6 +106,31 @@ dir = "~/.local/share/darius-backup"          # optional: the local clone, this 
 
 `darius export --dry-run` prints the counts and changes nothing. Offline, the commit stays in the
 local clone, the verb exits 3, and the next run pushes it.
+
+### Snapshots
+
+`darius snapshot create` archives this host's store into `~/.local/share/darius-snapshots/` as `darius-<host>-<UTC stamp>.tar.gz`, and copies it to an S3 bucket when you set one up. It is the backup for a large store. The nightly timer (`darius-snapshot.timer`, 04:00) runs it on every host that has not limited `[setup] units`. Restore by hand: stop the web service and the timers, then `tar -xzf <file> -C ~/.local/share/darius`.
+
+Set it in any of four places. The first one that holds a valid value wins:
+
+1. the environment, `DARIUS_SNAPSHOT_<KEY>`: put them in `~/.config/darius/snapshot.env`, which the timer and the web service both read
+2. the status page (`/status`), which saves to `~/.config/darius/snapshot.json`
+3. `[snapshot]` in `config.toml`
+4. the default
+
+```toml
+[snapshot]
+dir = "~/.local/share/darius-snapshots"   # outside the store and the config dir
+keep = 7                                   # local snapshots to keep
+endpoint = "https://s3.example.com"        # with bucket: the remote copy is on
+bucket = "darius-snapshots"
+region = "us-east-1"
+prefix = "darius"                          # keys are <prefix>/<host>/<name>
+keep_remote = 30
+# also: enabled, path_style, allow_http (loopback and tailnet only), sse
+```
+
+The access key pair is not a setting. Set `DARIUS_SNAPSHOT_ACCESS_KEY_ID` and `DARIUS_SNAPSHOT_SECRET_ACCESS_KEY`, or put an AWS-ini `[default]` file at `~/.config/darius/snapshot-credentials` (mode 0600). The status page can write that file, and never shows the key. Use a bucket that is not the sync bucket.
 
 ## Update
 
@@ -246,6 +271,7 @@ the full reference.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
 - `darius export [--dry-run]`: copy this host's store into the `[backup]` git repo, commit and push.
+- `darius snapshot create|list|status|check|delete`: dated archives of this host's store, local and in an S3 bucket.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.

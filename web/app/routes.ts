@@ -15,6 +15,8 @@ export default [
   // One milestone in full: README, spec texts, worklogs (0.42.0).
   route("w/:ws/milestones/:milestone", "routes/milestone.tsx"),
   route("settings", "routes/settings.tsx"),
+  // The machine, the store, the sync hosts and the backups of this host (0.44.0).
+  route("status", "routes/status.tsx"),
   route("runs", "routes/runs.tsx"),
   // The URL of the first status page (0.9.0), kept so old links still work.
   route("runs/:project/:run", "routes/legacy-run.tsx"),

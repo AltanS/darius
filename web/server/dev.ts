@@ -116,6 +116,13 @@ server.on("request", (req, res) => {
         res.end(`${JSON.stringify(demo ? demoStatus() : collectStatus(), null, 2)}\n`);
         return;
       }
+      if (url.pathname.startsWith("/api/snapshots/")) {
+        // The dev server has no writes: a stub answer, so the buttons of the status page work in the demo.
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.statusCode = req.method === "POST" ? 200 : 405;
+        res.end(req.method === "POST" ? `${JSON.stringify(url.pathname.endsWith("/check") ? { ok: true, count: 4 } : { ok: true })}\n` : `${JSON.stringify({ ok: false, error: "POST only" })}\n`);
+        return;
+      }
       const base = webContext(access.who);
       handle(toRequest(req, url.origin), loadContext(demo ? demoContext(base) : base))
         .then((response) => sendResponse(res, response))

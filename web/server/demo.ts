@@ -8,7 +8,7 @@
  * part of it; the milestone detail page is, for M12 of demo-shop.
  */
 
-import type { HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 
 const MINUTE = 60_000;
@@ -303,6 +303,80 @@ function demoMilestone(now: number): MilestoneDetail {
   };
 }
 
+/** Fake machine and store numbers: two hosts, three projects, generic names. */
+function demoSystem(now: number): SystemStatus {
+  const back = (ms: number): string => new Date(now - ms).toISOString();
+  const GB = 1024 ** 3;
+  return {
+    host: "host-a",
+    version: "0.44.0",
+    runtime: "bun 1.3.0",
+    platform: "linux x64",
+    generatedAt: new Date(now).toISOString(),
+    uptimeSeconds: 12 * 86_400 + 3 * 3600,
+    load: [0.42, 0.31, 0.27],
+    memory: { totalBytes: 16 * GB, freeBytes: 6 * GB },
+    disks: [
+      { label: "store", path: "/home/user/.local/share/darius", freeBytes: 210 * GB, totalBytes: 500 * GB },
+      { label: "backups", path: "/home/user/.local/share/darius-backup", freeBytes: 800 * GB, totalBytes: 2000 * GB },
+    ],
+    store: { path: "/home/user/.local/share/darius", bytes: 48 * 1024 * 1024, files: 1520, projects: 3, rituals: 7, vigils: 2, profiles: 3, runs: 214, milestones: 4, specs: 19 },
+    hosts: [
+      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"] },
+      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"] },
+    ],
+    projects: [
+      { project: "project-one", lastSync: back(5 * 60_000), rituals: 4, vigils: 1, profiles: 2, runs: 150, bytes: 30 * 1024 * 1024 },
+      { project: "project-three", lastSync: null, rituals: 1, vigils: 0, profiles: 0, runs: 9, bytes: 2 * 1024 * 1024 },
+      { project: "project-two", lastSync: back(2 * 3600_000), rituals: 2, vigils: 1, profiles: 1, runs: 55, bytes: 16 * 1024 * 1024 },
+    ],
+    syncRemote: { endpoint: "https://s3.example.com", bucket: "darius-state" },
+  };
+}
+
+const sha = (seed: string): string => seed.repeat(64).slice(0, 64);
+
+/** Fake snapshots of host-a: five files, three also in the bucket, one setting set by the environment. */
+function demoBackups(clock: number): BackupsStatus {
+  // Steady between two reads, so the page sees the same last run until a real run changes it.
+  const now = clock - (clock % 600_000);
+  const back = (ms: number): string => new Date(now - ms).toISOString();
+  const MIB = 1024 * 1024;
+  const row = (hoursAgo: number, mib: number, files: number | null, hash: string | null, local: boolean, remote: boolean): BackupRow => {
+    const at = back(hoursAgo * 3600_000);
+    const stamp = `${at.replaceAll(/[-:]/gu, "").slice(0, 15)}Z`;
+    return { name: `darius-host-a-${stamp}.tar.gz`, at, bytes: mib * MIB, files, sha256: hash, local, remote };
+  };
+  const snapshots = [row(3, 412, 1520, sha("3f9a"), true, true), row(27, 398, 1498, sha("b01c"), true, true), row(51, 371, 1450, sha("7d2e"), true, true), row(75, 120, 980, sha("c4a8"), true, false), row(99, 15, null, null, false, true)];
+  return {
+    generatedAt: new Date(now).toISOString(),
+    host: "host-a",
+    settings: {
+      enabled: { value: true, source: "file" },
+      dir: { value: "~/.local/share/darius-backup", source: "default" },
+      keep: { value: 7, source: "config" },
+      keepRemote: { value: 14, source: "default" },
+      endpoint: { value: "https://s3.example.com", source: "env" },
+      bucket: { value: "darius-backups", source: "file" },
+      region: { value: "us-east-1", source: "default" },
+      prefix: { value: "host-a/", source: "file" },
+      pathStyle: { value: true, source: "default" },
+      allowHttp: { value: false, source: "default" },
+      sse: { value: false, source: "default" },
+    },
+    problems: [],
+    credentials: "file",
+    remoteConfigured: true,
+    running: null,
+    last: { at: back(3 * 3600_000), ok: true, name: snapshots[0]?.name ?? null, error: null },
+    remote: { at: back(3 * 3600_000), ok: true, error: null, count: 4 },
+    snapshots,
+    localBytes: (412 + 398 + 371 + 120) * MIB,
+    storePath: "/home/user/.local/share/darius",
+    envFile: "/home/user/.config/darius/web.env",
+  };
+}
+
 /** The real context with the demo status; run and ritual detail pages answer 404, and only M12 of demo-shop has a detail page. */
 export function demoContext(base: WebContext): WebContext {
   return {
@@ -311,5 +385,7 @@ export function demoContext(base: WebContext): WebContext {
     ritual: () => null,
     run: () => null,
     milestone: (name, milestone) => (name === "demo-shop" && milestone.toUpperCase() === "M12" ? demoMilestone(Date.now()) : null),
+    system: () => demoSystem(Date.now()),
+    backups: () => demoBackups(Date.now()),
   };
 }

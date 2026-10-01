@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, WebContext, WebHandler } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -191,6 +191,58 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
   };
 }
 
+const SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+const SYSTEM: SystemStatus = {
+  host: "testhost",
+  version: "9.9.9",
+  runtime: "bun 1.3.0",
+  platform: "linux x64",
+  generatedAt: "2026-09-28T09:00:00.000Z",
+  uptimeSeconds: 90_000,
+  load: [0.5, 0.4, 0.3],
+  memory: { totalBytes: 8 * 1024 ** 3, freeBytes: 3 * 1024 ** 3 },
+  disks: [{ label: "store", path: "/home/test/.local/share/darius", freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3 }],
+  store: { path: "/home/test/.local/share/darius", bytes: 5 * 1024 ** 2, files: 90, projects: 1, rituals: 1, vigils: 1, profiles: 1, runs: 3, milestones: 1, specs: 2 },
+  hosts: [
+    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 4, projects: ["demo"] },
+    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [] },
+  ],
+  projects: [{ project: "demo", lastSync: "2026-09-28T08:55:00.000Z", rituals: 1, vigils: 1, profiles: 1, runs: 3, bytes: 1024 ** 2 }],
+  syncRemote: { endpoint: "https://sync.example.com", bucket: "sync-bucket" },
+};
+
+const BACKUPS: BackupsStatus = {
+  generatedAt: "2026-09-28T09:00:00.000Z",
+  host: "testhost",
+  settings: {
+    enabled: { value: true, source: "file" },
+    dir: { value: "~/backups", source: "default" },
+    keep: { value: 7, source: "default" },
+    keepRemote: { value: 14, source: "default" },
+    endpoint: { value: "https://s3.example.com", source: "env" },
+    bucket: { value: "darius-backups", source: "file" },
+    region: { value: "us-east-1", source: "default" },
+    prefix: { value: "", source: "default" },
+    pathStyle: { value: true, source: "default" },
+    allowHttp: { value: false, source: "default" },
+    sse: { value: false, source: "default" },
+  },
+  problems: [`the folder is not writable ${EVIL}`],
+  credentials: "file",
+  remoteConfigured: true,
+  running: null,
+  last: { at: "2026-09-28T07:00:00.000Z", ok: true, name: "darius-testhost-20260928T070000Z.tar.gz", error: null },
+  remote: { at: "2026-09-28T07:00:10.000Z", ok: true, error: null, count: 2 },
+  snapshots: [
+    { name: "darius-testhost-20260928T070000Z.tar.gz", at: "2026-09-28T07:00:00.000Z", bytes: 52_428_800, files: 90, sha256: "ab".repeat(32), local: true, remote: true },
+    { name: "darius-testhost-20260927T070000Z.tar.gz", at: "2026-09-27T07:00:00.000Z", bytes: 1024, files: null, sha256: null, local: false, remote: true },
+  ],
+  localBytes: 52_428_800,
+  storePath: "/home/test/.local/share/darius",
+  envFile: "/home/test/.config/darius/web.env",
+};
+
 const context: WebContext = {
   viewer: "owner on phone",
   nonce: NONCE,
@@ -201,6 +253,8 @@ const context: WebContext = {
     return row === undefined ? null : runDetail(row);
   },
   milestone: (project, milestone) => (project === "demo" && milestone.toUpperCase() === "M7" ? MILESTONE : null),
+  system: () => SYSTEM,
+  backups: () => BACKUPS,
 };
 
 async function get(path: string): Promise<{ status: number; body: string; headers: Headers }> {
@@ -893,4 +947,26 @@ test("defaultWorkspace decides what / opens; /all is always all workspaces", asy
   assert.equal(h1Of(all.body), "Two things need you.");
   const ghost = await readWith("/", { ws: "gone" }, status);
   assert.match(ghost.body, /<span class="sw-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
+});
+
+test("the status page: strip, backups, an env-locked field, no secret, the way in", async () => {
+  const page = await get("/status");
+  assert.equal(page.status, 200);
+  const body = page.body;
+  for (const text of ["Status", "Backups", "Back up now", "Snapshots", "on this host", "in the bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "set by environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs"]) {
+    assert.ok(body.includes(text), `the status page shows: ${text}`);
+  }
+  const input = (id: string): string => [...body.matchAll(/<input\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(`id="${id}"`)) ?? "";
+  assert.match(input("bk-set-endpoint"), /\bdisabled\b/u, "the endpoint is set by the environment, so its field is disabled");
+  assert.doesNotMatch(input("bk-set-bucket"), /\bdisabled\b/u, "a saved field stays editable");
+  assert.match(input("bk-secret"), /type="password"/u, "the secret field is a password field");
+  assert.match(input("bk-secret"), /autoComplete="off"|autocomplete="off"/u, "the browser is told not to remember it");
+  assert.doesNotMatch(input("bk-secret"), /\bvalue="[^"]/u, "the secret field is never prefilled");
+  assert.equal(body.includes(SECRET), false, "no secret on the page");
+  assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
+  assert.ok(body.includes("the folder is not writable &lt;script&gt;alert(1)&lt;/script&gt;"), "a problem shows, escaped");
+  assert.match(body, /<button(?![^>]*\bdisabled\b)[^>]*>Back up now<\/button>/u, "the Back up now button is on while nothing runs");
+  assert.ok(linkTo(body, "/status")?.includes('aria-current="page"'), "the status link of the top bar is lit");
+  assert.ok(linkTo(await get("/settings").then((reply) => reply.body), "/status") !== undefined, "the status link is on every page");
+  assertScriptsCarryNonce(body, "/status");
 });

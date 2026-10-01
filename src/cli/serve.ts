@@ -1,14 +1,17 @@
 /**
  * `darius serve [--bind ADDR] [--port N]`: the web status page of this host
- * (docs/concept.md, "App design" > "Web status page"). Read-only: it shows
- * the local store, the djinns, rituals, recent runs with their findings,
- * held questions and open vigils. `setup --systemd` installs it as the user
+ * (docs/concept.md, "App design" > "Web status page"). It shows the local
+ * store, the djinns, rituals, recent runs with their findings, held
+ * questions and open vigils, and the machine and its snapshots. The pages only
+ * read; the two API prefixes below are the only writes. `setup --systemd` installs it as the user
  * service `darius-web.service`.
  *
  *   GET /healthz             "ok", without an access check
  *   GET /api/status.json     the status as JSON
- *   /api/push/...            the notification button's endpoints, the only
- *                            writes (src/web/push-api.ts)
+ *   /api/push/...            the notification button's endpoints
+ *                            (src/web/push-api.ts)
+ *   /api/snapshots/...       the backup controls: run now, settings, key
+ *                            pair, bucket check, delete (src/web/snapshot-api.ts)
  *   GET <file>               a file of the built app (web/build/client)
  *   GET anything else        the web app (web/, React Router framework
  *                            mode): darius imports its committed server
@@ -44,6 +47,7 @@ import type { WebHandler } from "../web/api.ts";
 import { webContext } from "../web/context.ts";
 import { plainPage, renderForbidden } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
+import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
 import { collectStatus } from "../web/status.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -319,6 +323,12 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     if (url.pathname.startsWith(PUSH_API_PREFIX)) {
       const body = await readBody(request);
       const answer = pushApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
+      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      return;
+    }
+    if (url.pathname.startsWith(SNAPSHOT_API_PREFIX)) {
+      const body = await readBody(request);
+      const answer = await snapshotApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body });
       send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }

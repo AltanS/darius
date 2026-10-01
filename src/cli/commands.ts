@@ -28,6 +28,7 @@ import { selftestCommand } from "./selftest.ts";
 import { serveCommand } from "./serve.ts";
 import { setupCommand } from "./setup.ts";
 import { skillCommand } from "./skill.ts";
+import { snapshotCommand } from "./snapshot.ts";
 import { syncCommand } from "./sync.ts";
 import { tuiCommand } from "./tui.ts";
 import { updateCommand } from "./update.ts";
@@ -50,6 +51,7 @@ const COMMANDS: readonly Command[] = [
   serveCommand,
   setupCommand,
   skillCommand,
+  snapshotCommand,
   syncCommand,
   tuiCommand,
   updateCommand,

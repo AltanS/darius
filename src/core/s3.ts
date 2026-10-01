@@ -2,7 +2,7 @@
  * A small S3 client: AWS Signature V4 over `fetch` and WebCrypto.
  *
  * darius has zero runtime dependencies, so there is no AWS SDK. The client
- * speaks only the seven operations sync and setup need (plan-tonight.md,
+ * speaks only the operations sync, setup and snapshots need (plan-tonight.md,
  * "S3 client operations"): PutObject, GetObject, HeadObject, DeleteObject,
  * ListObjectsV2, HeadBucket, CreateBucket. It works under Bun and Node alike
  * because it touches nothing but the web globals `fetch`, `crypto.subtle`,
@@ -18,6 +18,11 @@
  * - ListObjectsV2 XML is read with a tag scanner, not an XML library.
  * - ETags are returned without their surrounding quotes, from every
  *   operation, so a caller can compare a `put` result with a `list` entry.
+ *
+ * Since 0.44.0 it also uploads large files in parts (CreateMultipartUpload,
+ * UploadPart, CompleteMultipartUpload, AbortMultipartUpload) for snapshots.
+ * The caller hands over a `UploadSource` (a size and a read function), so this
+ * file still touches no filesystem.
  *
  * Errors: a 412 on a conditional put is `{ conflict: true }`. A 404 on get or
  * head is `null`. Every other non-2xx throws `S3Error` with the status and the
@@ -67,6 +72,28 @@ export interface S3 {
   ensureBucket(): Promise<"exists" | "created">;
 }
 
+/** Bytes to upload: a size, and a way to read any range of them. A file reader is one. */
+export interface UploadSource {
+  size: number;
+  /** Exactly `length` bytes from `offset`; throws when the source cannot give them. */
+  read(offset: number, length: number): Promise<Uint8Array>;
+}
+
+export interface UploadOptions {
+  /** Bytes per part of a multipart upload. At least 5 MiB; raised when the source would need more than 10 000 parts. */
+  partSize?: number;
+  contentType?: string;
+}
+
+/**
+ * Uploads a source of any size without holding it all in memory: one PUT when it fits in a
+ * part, else a multipart upload (create, one request per part, complete; abort on failure).
+ * Kept apart from `S3` so the sync code and its test fakes need no change.
+ */
+export interface S3Upload {
+  upload(key: string, source: UploadSource, options?: UploadOptions): Promise<{ etag: string; size: number; parts: number }>;
+}
+
 /** The server answered with a status the caller did not expect. */
 export class S3Error extends Error {
   readonly status: number;
@@ -93,12 +120,18 @@ const ERROR_BODY_BYTES = 300;
 /** 10 000 pages of 1000 keys. A prefix that large is a bug, not a store. */
 const MAX_LIST_PAGES = 10_000;
 const SSE_ALGORITHM = "AES256";
+/** A part is up to 16 MiB and the link may be slow: a part gets five minutes. */
+const PART_TIMEOUT_MS = 300_000;
+const DEFAULT_PART_SIZE = 16 * 1024 * 1024;
+const MIN_PART_SIZE = 5 * 1024 * 1024;
+const MAX_PARTS = 10_000;
+const PART_ATTEMPTS = 3;
 
 const encoder = new TextEncoder();
 
 type HeaderPair = readonly [name: string, value: string];
 type QueryPair = readonly [name: string, value: string];
-type Method = "GET" | "PUT" | "HEAD" | "DELETE";
+type Method = "GET" | "PUT" | "POST" | "HEAD" | "DELETE";
 
 // ---------------------------------------------------------------------------
 // Signature V4, pure apart from WebCrypto being async.
@@ -279,6 +312,7 @@ interface RequestSpec {
   query?: readonly QueryPair[];
   body?: Uint8Array<ArrayBuffer>;
   headers?: readonly HeaderPair[];
+  timeoutMs?: number;
 }
 
 function bytesOf(body: Uint8Array | string): Uint8Array<ArrayBuffer> {
@@ -313,7 +347,7 @@ function requireKey(key: string): void {
   if (key === "") throw new Error("S3: object key is empty");
 }
 
-export function createS3(cfg: RemoteConfig, creds: Credentials): S3 {
+export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload {
   if (!cfg.path_style) throw new Error("S3: only path-style addressing is supported; set path_style = true");
   if (cfg.bucket === "") throw new Error("S3: bucket is empty");
   if (creds.accessKeyId === "" || creds.secretAccessKey === "") throw new Error("S3: credentials are empty");
@@ -348,8 +382,8 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 {
       return await fetch(url, {
         method: spec.method,
         headers: requestHeaders,
-        body: spec.method === "PUT" ? body : undefined,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        body: spec.method === "PUT" || spec.method === "POST" ? body : undefined,
+        signal: AbortSignal.timeout(spec.timeoutMs ?? REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
       throw new S3NetworkError(`S3 ${spec.method} ${spec.key ?? cfg.bucket}: no response from ${endpoint.origin}`, {
@@ -383,6 +417,83 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 {
     return parseListPage(await response.text());
   }
 
+  /** The part size for a source: the asked one, never under 5 MiB, large enough for 10 000 parts. */
+  function partSizeFor(size: number, asked: number | undefined): number {
+    const wanted = Math.max(asked ?? DEFAULT_PART_SIZE, MIN_PART_SIZE);
+    const mebibyte = 1024 * 1024;
+    return Math.max(wanted, Math.ceil(size / MAX_PARTS / mebibyte) * mebibyte);
+  }
+
+  async function startMultipart(key: string, contentType: string | undefined): Promise<string> {
+    const headers: HeaderPair[] = [];
+    if (contentType !== undefined) headers.push(["content-type", contentType]);
+    if (cfg.sse) headers.push(["x-amz-server-side-encryption", SSE_ALGORITHM]);
+    const spec: RequestSpec = { method: "POST", key, query: [["uploads", ""]], headers };
+    const response = await send(spec);
+    if (!response.ok) throw await failure(response, spec);
+    const uploadId = firstText(await response.text(), "UploadId");
+    if (uploadId === undefined || uploadId === "") throw new S3Error(`S3 POST ${key}: the answer has no UploadId`, response.status);
+    return uploadId;
+  }
+
+  async function uploadPart(key: string, uploadId: string, number: number, body: Uint8Array<ArrayBuffer>): Promise<string> {
+    const spec: RequestSpec = {
+      method: "PUT",
+      key,
+      query: [
+        ["partNumber", String(number)],
+        ["uploadId", uploadId],
+      ],
+      body,
+      timeoutMs: PART_TIMEOUT_MS,
+    };
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= PART_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await send(spec);
+        if (response.ok) {
+          await response.body?.cancel();
+          return etagOf(response, spec);
+        }
+        lastError = await failure(response, spec);
+      } catch (error) {
+        if (!(error instanceof S3NetworkError)) throw error;
+        lastError = error;
+        continue;
+      }
+      // A 4xx will not change on a second try.
+      if (lastError instanceof S3Error && lastError.status < 500) throw lastError;
+    }
+    throw lastError ?? new Error(`S3 PUT ${key}: part ${number} failed`);
+  }
+
+  async function completeMultipart(key: string, uploadId: string, etags: readonly string[]): Promise<string> {
+    const parts = etags.map((etag, index) => `<Part><PartNumber>${index + 1}</PartNumber><ETag>"${etag}"</ETag></Part>`).join("");
+    const spec: RequestSpec = {
+      method: "POST",
+      key,
+      query: [["uploadId", uploadId]],
+      body: encoder.encode(`<CompleteMultipartUpload>${parts}</CompleteMultipartUpload>`),
+      headers: [["content-type", "application/xml"]],
+      timeoutMs: PART_TIMEOUT_MS,
+    };
+    const response = await send(spec);
+    if (!response.ok) throw await failure(response, spec);
+    const text = await response.text();
+    // S3 may answer 200 and still carry an <Error> in the body.
+    if (text.includes("<Error>")) throw new S3Error(`S3 POST ${key}: ${redact(text.slice(0, ERROR_BODY_BYTES))}`, response.status);
+    return unquote(firstText(text, "ETag") ?? "");
+  }
+
+  async function abortMultipart(key: string, uploadId: string): Promise<void> {
+    try {
+      const response = await send({ method: "DELETE", key, query: [["uploadId", uploadId]] });
+      await response.body?.cancel();
+    } catch {
+      // The upload is already failing; a part left behind is the bucket's lifecycle rule to clean up.
+    }
+  }
+
   return {
     async put(key, body, o = {}) {
       requireKey(key);
@@ -399,6 +510,29 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 {
       if (!response.ok) throw await failure(response, spec);
       await response.body?.cancel();
       return { etag: etagOf(response, spec) };
+    },
+
+    async upload(key, source, options = {}) {
+      requireKey(key);
+      const { size } = source;
+      const partSize = partSizeFor(size, options.partSize);
+      if (size <= partSize) {
+        const result = await this.put(key, await source.read(0, size), { contentType: options.contentType });
+        if ("conflict" in result) throw new S3Error(`S3 PUT ${key}: unexpected conflict`, 412);
+        return { etag: result.etag, size, parts: 1 };
+      }
+      const uploadId = await startMultipart(key, options.contentType);
+      try {
+        const etags: string[] = [];
+        for (let offset = 0; offset < size; offset += partSize) {
+          const part = bytesOf(await source.read(offset, Math.min(partSize, size - offset)));
+          etags.push(await uploadPart(key, uploadId, etags.length + 1, part));
+        }
+        return { etag: await completeMultipart(key, uploadId, etags), size, parts: etags.length };
+      } catch (error) {
+        await abortMultipart(key, uploadId);
+        throw error;
+      }
     },
 
     async get(key) {

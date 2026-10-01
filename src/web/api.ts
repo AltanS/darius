@@ -286,6 +286,144 @@ export interface HostStatus {
   projects: ProjectStatus[];
 }
 
+// --- system status (0.44.0) ----------------------------------------------------------------
+
+/** One host that wrote ledger chunks into a project this host holds, or this host itself. */
+export interface SystemHost {
+  host: string;
+  /** True for the host that serves this page. */
+  self: boolean;
+  /** The time of its newest ledger chunk in any project (this host: its newest line); null when it has none. */
+  lastSeen: string | null;
+  /** Closed ledger chunks of this host, over all projects. */
+  chunks: number;
+  /** The projects this host wrote into. */
+  projects: string[];
+}
+
+/** What one project holds in the local store, and when this host last synced it. */
+export interface SystemProject {
+  project: string;
+  /** The last finished sync of this host; null when it never synced the project. */
+  lastSync: string | null;
+  rituals: number;
+  vigils: number;
+  profiles: number;
+  /** Runs in the ledger (lines of type `run.started`). */
+  runs: number;
+  /** Bytes the project directory holds. */
+  bytes: number;
+}
+
+export interface SystemDisk {
+  /** "store" or "backups": what lives on the volume. */
+  label: string;
+  path: string;
+  freeBytes: number;
+  totalBytes: number;
+}
+
+/** The machine and the store, for the status page. Computed by `src/web/system.ts`, never writes. */
+export interface SystemStatus {
+  host: string;
+  version: string;
+  /** "bun 1.x" or "node 22.x". */
+  runtime: string;
+  /** For example "linux x64". */
+  platform: string;
+  generatedAt: string;
+  uptimeSeconds: number;
+  /** The 1, 5 and 15 minute load averages. */
+  load: [number, number, number];
+  memory: { totalBytes: number; freeBytes: number };
+  disks: SystemDisk[];
+  store: {
+    path: string;
+    bytes: number;
+    files: number;
+    projects: number;
+    rituals: number;
+    vigils: number;
+    profiles: number;
+    runs: number;
+    /** Open milestones and their specs, read from the linked checkouts. */
+    milestones: number;
+    specs: number;
+  };
+  hosts: SystemHost[];
+  projects: SystemProject[];
+  /** The sync bucket, without any secret; null when this host has no `[remote]`. */
+  syncRemote: { endpoint: string; bucket: string } | null;
+}
+
+// --- backups (0.44.0) ------------------------------------------------------------------------
+
+/** Where a setting's value came from. `env` is locked: the page cannot change it. */
+export type SettingSource = "env" | "file" | "config" | "default";
+
+export interface BackupField<T> {
+  value: T;
+  source: SettingSource;
+}
+
+/** The snapshot settings (src/core/snapshot-settings.ts). The access key pair is never part of this. */
+export interface BackupSettings {
+  enabled: BackupField<boolean>;
+  /** The local folder, as written (with `~`). */
+  dir: BackupField<string>;
+  /** Local snapshots to keep. */
+  keep: BackupField<number>;
+  /** Snapshots to keep in the bucket. */
+  keepRemote: BackupField<number>;
+  endpoint: BackupField<string>;
+  bucket: BackupField<string>;
+  region: BackupField<string>;
+  prefix: BackupField<string>;
+  pathStyle: BackupField<boolean>;
+  allowHttp: BackupField<boolean>;
+  sse: BackupField<boolean>;
+}
+
+export interface BackupRow {
+  /** `darius-<host>-<UTC stamp>.tar.gz` */
+  name: string;
+  /** When it was made, an ISO time. */
+  at: string;
+  bytes: number;
+  /** Files in the store at that time; null when the manifest is gone or the snapshot is only in the bucket. */
+  files: number | null;
+  sha256: string | null;
+  local: boolean;
+  /** The bucket held it at the last contact. */
+  remote: boolean;
+}
+
+/** The state of the snapshots on this host: settings, the last run, the folder and the bucket. */
+export interface BackupsStatus {
+  generatedAt: string;
+  host: string;
+  settings: BackupSettings;
+  /** What the operator must fix; a run refuses while any exist. */
+  problems: string[];
+  /** Where the access key pair would come from. The key itself never leaves the host. */
+  credentials: "env" | "file" | "none";
+  /** True when the endpoint and the bucket are set and valid. */
+  remoteConfigured: boolean;
+  /** Set while a run holds the lock. */
+  running: { pid: number; startedAt: string } | null;
+  last: { at: string; ok: boolean; name: string | null; error: string | null } | null;
+  /** The last contact with the bucket (a run's upload or a check); `count` is its listing then. */
+  remote: { at: string; ok: boolean; error: string | null; count: number } | null;
+  /** Local snapshots, plus the ones only the bucket holds, newest first. */
+  snapshots: BackupRow[];
+  /** Bytes the local snapshots take. */
+  localBytes: number;
+  /** The store a snapshot is made from, and where `tar -xzf` puts one back. */
+  storePath: string;
+  /** The file that sets the environment of the timer and the page (`DARIUS_SNAPSHOT_*`). */
+  envFile: string;
+}
+
 // --- details -------------------------------------------------------------------------------
 
 export interface RitualPolicy {
@@ -415,6 +553,10 @@ export interface WebContext {
   run(project: string, run: string): RunDetail | null;
   /** A milestone by id (`M12`) or directory name (`M12-cart`); null when the project or the milestone is unknown. */
   milestone(project: string, milestone: string): MilestoneDetail | null;
+  /** The machine and the store (0.44.0). */
+  system(): SystemStatus;
+  /** The snapshots of this host (0.44.0). */
+  backups(): BackupsStatus;
 }
 
 /**
