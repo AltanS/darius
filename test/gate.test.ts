@@ -459,6 +459,8 @@ test("a run never starts a follow-up, whatever may says, under any prefix", () =
     "setsid darius run follow-up 01PARENT",
     "/home/u/.local/bin/darius run follow-up 01PARENT",
     "darius run 'follow-up' 01PARENT",
+    "darius run $'follow-up' 01PARENT",
+    "darius $'run' $\"follow-up\" 01PARENT",
     'bash -c "darius run follow-up 01PARENT"',
     "darius  run\tfollow\\-up 01PARENT",
     "date && darius run follow-up 01PARENT",
@@ -488,6 +490,9 @@ test("a run keeps its run markers: unset, env -u, env -i and an assignment are d
     "env --unset=DARIUS_RUN date",
     "env -i darius run list",
     "env - darius run list",
+    "env -iu X darius run list",
+    "env -0i darius run list",
+    "env -0u DARIUS_RUN date",
     "unset DARIUS_RUN",
     "unset FOO DARIUS_RUN_POLICY",
     "DARIUS_RUN= darius run list",
@@ -524,4 +529,17 @@ test("a grant is one plain command on one line", () => {
   ];
   for (const [line, reason] of refusals) assert.match(grantRefusal(line) ?? "", reason, line);
   assert.equal(normalizeGrant("  a\t  b 'c  d'  "), "a b 'c  d'");
+});
+
+test("a grant names the command itself, never a shell or loader that runs code the operator does not see", () => {
+  for (const word of ["bash", "sh", "zsh", "dash", "fish", "eval", "source", ".", "exec", "env", "xargs", "nohup", "setsid", "sudo", "time", "command", "builtin"]) {
+    const article = /^[aeiou]/u.test(word) ? "an" : "a";
+    assert.equal(grantRefusal(`${word} scripts/deploy.sh`), `${article} ${word} line runs code the operator does not see; grant the command itself`, word);
+  }
+  assert.match(grantRefusal("FOO=1 bash -c 'git push origin main'") ?? "", /a bash line runs code/u, "after an assignment");
+  assert.match(grantRefusal("/usr/bin/env git push") ?? "", /an env line runs code/u, "by its path");
+  assert.match(grantRefusal("'sudo' git push") ?? "", /a sudo line runs code/u, "quoted");
+  for (const line of ["pnpm -C tools cli fc --post 12 --confirm", "node scripts/report.mjs", "python3 -m tool", "git push origin main", "bashful --x", "./bash-like"]) {
+    assert.equal(grantRefusal(line), undefined, line);
+  }
 });

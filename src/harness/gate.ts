@@ -409,11 +409,27 @@ function hasControl(line: string): boolean {
 }
 
 /**
+ * Programs that run code the operator did not read: a shell, a script
+ * loader, or a wrapper that runs the command it is given. A grant names the
+ * command itself instead. `pnpm`, `node` and the like stay grantable: their
+ * line names what they run.
+ */
+const LOADERS: ReadonlySet<string> = new Set(["bash", "sh", "zsh", "dash", "fish", "eval", "source", ".", "exec", "env", "xargs", "nohup", "setsid", "sudo", "time", "command", "builtin"]);
+
+/** The program word of a line after its assignments, unquoted, without its dir. */
+function programWord(line: string): string {
+  const first = stripAssignments(line).rest.trim().split(/\s+/u)[0] ?? "";
+  const bare = first.replaceAll(/["'\\]/gu, "");
+  return bare.slice(bare.lastIndexOf("/") + 1);
+}
+
+/**
  * Why `line` cannot be a granted command, or undefined when it can. A grant
  * is one plain command, so what the operator read is what runs: one line of
  * at most GRANT_MAX characters, one part in the shell split (no &&, ||, ;,
  * |), no redirection, no substitution, no $ at all, no glob, brace or ~
- * outside quotes, no assignment that steers which program runs. A command
+ * outside quotes, no assignment that steers which program runs, and no
+ * shell or loader as the program (LOADERS). A command
  * that needs another dir names it with a flag (`pnpm -C tools ...`).
  */
 export function grantRefusal(line: string): string | undefined {
@@ -431,6 +447,8 @@ export function grantRefusal(line: string): string | undefined {
   if (expansion !== undefined) return `a ${expansion} outside quotes; the shell would expand it`;
   const steering = stripAssignments(trimmed).names.find((name) => STEERING_NAME.test(name));
   if (steering !== undefined) return `an assignment to ${steering}, which changes what commands run`;
+  const program = programWord(trimmed);
+  if (LOADERS.has(program)) return `${/^[aeiou]/u.test(program) ? "an" : "a"} ${program} line runs code the operator does not see; grant the command itself`;
   return undefined;
 }
 
@@ -468,18 +486,18 @@ export function startsFollowUp(command: string): boolean {
   return /\brun follow-up\b/u.test(plainShell(command));
 }
 
-/** The line without quotes and backslashes, runs of blanks as one space: what the shell would read as words. */
+/** The line without quotes, backslashes and `$` (so `$'follow-up'` reads as `follow-up`), runs of blanks as one space: what the shell would read as words. */
 function plainShell(command: string): string {
-  return command.replaceAll(/["'\\]/gu, "").replaceAll(/\s+/gu, " ");
+  return command.replaceAll(/["'\\$]/gu, "").replaceAll(/\s+/gu, " ");
 }
 
 /**
  * `DARIUS_RUN=`, `unset DARIUS_RUN`, `env -u DARIUS_RUN`, `env --unset=...`,
- * `env -i` and `env -`: a line that clears the variables that tell darius it
+ * `env -i` (also in a cluster, `env -iu X`) and `env -`: a line that clears the variables that tell darius it
  * runs inside a run. With them gone, `darius run follow-up` would not know.
  */
 const CLEARS_RUN_MARKER =
-  /\bDARIUS_RUN(?:_POLICY)?\s*=|\bunset\b[^;&|\n]*\bDARIUS_RUN|(?:^|\s)(?:-u\s*|--unset[=\s]\s*)DARIUS_RUN|\benv(?:\s+-\S+)*\s+(?:-i\b|--ignore-environment\b|-(?:\s|$))/u;
+  /\bDARIUS_RUN(?:_POLICY)?\s*=|\bunset\b[^;&|\n]*\bDARIUS_RUN|(?:^|\s)(?:-\w*u\s*|--unset[=\s]\s*)DARIUS_RUN|\benv(?:\s+-\S+)*\s+(?:-\w*i\w*\b|--ignore-environment\b|-(?:\s|$))/u;
 
 /** True when the line clears the run's own markers (CLEARS_RUN_MARKER). */
 export function clearsRunMarker(command: string): boolean {

@@ -16,6 +16,10 @@
  * (src/runner/follow-up-ready.ts), and the CLI checks once more. Like the
  * other write endpoints, a request must come from the page itself (its
  * Origin), be JSON, and be at most MAX_BODY bytes.
+ *
+ * The loopback viewer ("this host", src/web/auth.ts) may not start one: any
+ * process on this host is that viewer, and a run that may `curl` could set
+ * its own Origin. Only a tailnet identity starts a follow-up.
  */
 
 import { spawn } from "node:child_process";
@@ -66,6 +70,15 @@ export interface ActionDeps {
   readiness: (project: string, run: string) => Promise<FollowUpReadiness>;
   start: FollowUpStarter;
 }
+
+/** Who the access check let in: `local` is the loopback caller, "this host". */
+export interface ActionViewer {
+  who: string;
+  local?: boolean;
+}
+
+/** Why the loopback viewer gets no follow-up; the run page shows it too (src/web/context.ts). */
+export const LOOPBACK_FOLLOW_UP = "the follow-up button needs a tailnet identity; open the page by its tailnet address";
 
 const DEFAULT_DEPS: ActionDeps = { readiness: followUpReadiness, start: startDetachedFollowUp };
 
@@ -118,9 +131,10 @@ function readBody(parsed: JsonValue): FollowUpBody {
 }
 
 /** One request under ACTION_API_PREFIX, already past the access check. `viewer` is who the access check let in. */
-export async function actionApi(request: ActionRequest, viewer: string, deps: ActionDeps = DEFAULT_DEPS): Promise<PushApiReply> {
+export async function actionApi(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps = DEFAULT_DEPS): Promise<PushApiReply> {
   if (request.path !== FOLLOW_UP_PATH) return fail(404, "no such endpoint");
   if (request.method !== "POST") return fail(405, "POST only");
+  if (viewer.local === true) return fail(403, LOOPBACK_FOLLOW_UP);
   if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return fail(403, "the request must come from the darius page");
   if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return fail(415, "send JSON");
   if (request.body.length > MAX_BODY) return fail(413, "too large");
@@ -142,7 +156,7 @@ export async function actionApi(request: ActionRequest, viewer: string, deps: Ac
   const argv = ["run", "follow-up", body.run, "--project", body.project];
   for (const n of body.approve) argv.push("--approve", String(n));
   if (body.note !== undefined) argv.push("--note", body.note);
-  argv.push("--who", `web:${viewer}`);
+  argv.push("--who", `web:${viewer.who}`);
   const dir = join(openProject(body.project).root, "runs", body.run);
   try {
     mkdirSync(dir, { recursive: true });

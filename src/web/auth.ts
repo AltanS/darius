@@ -37,7 +37,8 @@ export interface Whois {
 /** Asks tailscaled about one tailnet address; null when it does not know it. Throws when it cannot ask. */
 export type WhoisLookup = (address: string) => Promise<Whois | null>;
 
-export type Access = { allowed: true; who: string } | { allowed: false; reason: string };
+/** `local` marks the loopback caller, "this host": any process here, so not a person the tailnet vouches for. */
+export type Access = { allowed: true; who: string; local?: true } | { allowed: false; reason: string };
 
 const TAILSCALE_TIMEOUT_MS = 5_000;
 const CACHE_MS = 60_000;
@@ -142,7 +143,7 @@ export function cachedWhois(lookup: WhoisLookup, now: () => number = Date.now): 
 
 /** Whether `remote` may see the page. Never throws: a failed lookup refuses. */
 export async function authorize(remote: string, context: { allow: ReadonlySet<string>; whois: WhoisLookup }): Promise<Access> {
-  if (isLoopback(remote)) return { allowed: true, who: "this host" };
+  if (isLoopback(remote)) return { allowed: true, who: "this host", local: true };
   const address = normalizeAddress(remote);
   let whois: Whois | null;
   try {

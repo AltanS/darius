@@ -622,6 +622,21 @@ test("an acknowledged failure leaves Failed today and shows under Due, dimmed", 
   assert.equal(texts(screen).includes("Failed today"), false);
 });
 
+test("a failed follow-up is not the ritual's failed-today run; a scheduled failure still is", () => {
+  freshStore("due-follow-up");
+  seedRitual("delta", "check");
+  const parent = startRun("delta", "check");
+  completeRun("delta", "check", parent, "complete");
+  const child = ulid();
+  appendLine(openProject("delta"), { who: "test", type: "run.started", item: "ritual/check", run: child, follow_up_of: parent });
+  completeRun("delta", "check", child, "failed", "it broke");
+  assert.equal(readDue().rows.some((row) => row.kind === "failed"), false, "a failed follow-up is not listed under Failed today");
+  const scheduled = startRun("delta", "check");
+  completeRun("delta", "check", scheduled, "failed", "it broke");
+  const failed = readDue().rows.filter((row) => row.kind === "failed");
+  assert.deepEqual(failed.map((row) => row.kind === "failed" && row.run), [scheduled]);
+});
+
 test("a Due row names the host pin, dimmed", () => {
   const pinned: DueRow = { kind: "ritual", project: "p", slug: "sweep", title: "Sweep", nextDue: null, overdueDays: 0, isOff: false, isRunning: false, isAcknowledgedFailure: false, host: "host-b", latestRun: null };
   const screen = dueScreen(dueView([pinned]).due, initialState(), SIZE, null);

@@ -11,6 +11,15 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `WebContext.followUp(project, run)` says whether this host can start a follow-up now, from a dry run of the verb. It writes nothing.
 - The run page shows each question's command lines as written, links a follow-up to its parent, and lists a parent's follow-ups. The run data carries `followUpOf` and `followUps`.
 
+### Security
+
+- The follow-up button needs a tailnet identity. A request from loopback ("this host") gets 403, since any process here, a run with `curl` too, is that viewer and may set its own Origin. The run page viewed over loopback says so instead of offering the button.
+- A follow-up waits while any run of the project is running: "run <id> of <ritual> is running; a follow-up starts when no run is open". A held run does not stop it. The CLI and the page check this the same way.
+- The gate reads `$'...'` and `$"..."` quoting as plain words, so `darius run $'follow-up' X` is denied like the plain line.
+- The gate catches `env -i` and `env -u` inside a cluster of flags, such as `env -iu X`.
+- A grant line may not start with a shell or a loader: `bash`, `sh`, `zsh`, `dash`, `fish`, `eval`, `source`, `.`, `exec`, `env`, `xargs`, `nohup`, `setsid`, `sudo`, `time`, `command` or `builtin`. Such a line runs code the operator does not see; grant the command itself. `pnpm`, `node` and `python` lines stay grantable.
+- The TUI's Failed today list leaves follow-ups out, as the timer does.
+
 ## [0.47.1] - 2026-10-01
 
 ### Fixed

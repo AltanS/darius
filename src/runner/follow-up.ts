@@ -57,6 +57,21 @@ export function followUpsOf(ledger: readonly LedgerLine[], parent: string): stri
   return ledger.flatMap((line) => (line.type === "run.started" && line.follow_up_of === parent && isText(line.run) ? [line.run] : []));
 }
 
+/** The first run of the project still in phase running, with its item; a held run does not count. */
+function runningRun(ledger: readonly LedgerLine[]): { run: string; item: string } | undefined {
+  const phase = new Map<string, { item: string; running: boolean }>();
+  for (const line of ledger) {
+    if (!isText(line.run)) continue;
+    const known = phase.get(line.run);
+    const item = known?.item ?? (isText(line.item) ? line.item : "");
+    if (line.type === "run.started" || line.type === "run.resumed") phase.set(line.run, { item, running: true });
+    else if (line.type === "run.held" || line.type === "run.completed") phase.set(line.run, { item, running: false });
+    else if (known === undefined) phase.set(line.run, { item, running: false });
+  }
+  for (const [run, view] of phase) if (view.running) return { run, item: view.item };
+  return undefined;
+}
+
 /** What the operator asked for on the command line. */
 export interface FollowUpRequest {
   parent: string;
@@ -74,7 +89,9 @@ export type FollowUpPlan = { grants: string[] } | { usage: string } | { refused:
  * Checks the parent and the request: the parent is a ritual run, closed
  * complete; each approved question exists and lists commands; each line is
  * one plain command; at least one line is granted; no follow-up of the
- * parent is still open. Duplicate lines are granted once.
+ * parent is still open; no run of the project is running (a held run is
+ * fine), so a granted line never races a run that is in the middle of its
+ * work. Duplicate lines are granted once.
  */
 export function planFollowUp(ledger: readonly LedgerLine[], result: RunResult | null, request: FollowUpRequest): FollowUpPlan {
   const { parent } = request;
@@ -106,6 +123,11 @@ export function planFollowUp(ledger: readonly LedgerLine[], result: RunResult | 
   }
   const open = followUpsOf(ledger, parent).find((run) => viewRun(ledger, run).phase !== "closed");
   if (open !== undefined) return { refused: `follow-up ${open} of run '${parent}' is still open; finish it first` };
+  const running = runningRun(ledger);
+  if (running !== undefined) {
+    const name = running.item.startsWith("ritual/") ? running.item.slice("ritual/".length) : running.item || "an unknown item";
+    return { refused: `run ${running.run.slice(-6).toLowerCase()} of ${name} is running; a follow-up starts when no run is open` };
+  }
   return { grants: [...new Set(grants)] };
 }
 

@@ -237,7 +237,7 @@ export function settingsCookie(header: string | null): string | null {
  * One request, already allowed. Exported for tests, which call it without a
  * socket. `requestHeaders` holds the raw request headers darius forwards.
  */
-export async function respond(method: string, url: URL, requestHeaders: Headers, viewer: string, app: WebApp): Promise<WebReply> {
+export async function respond(method: string, url: URL, requestHeaders: Headers, viewer: string, app: WebApp, local = false): Promise<WebReply> {
   if (method !== "GET" && method !== "HEAD") return reply(405, "text/plain", "read-only\n");
   const path = url.pathname;
   if (path === "/healthz") return reply(200, "text/plain", "ok\n");
@@ -246,7 +246,7 @@ export async function respond(method: string, url: URL, requestHeaders: Headers,
   if (file !== null) return fileReply(file, path);
   const loaded = await app.load();
   if (!loaded.ok) return reply(503, "text/html", plainPage("not built", loaded.error, "Run `bun run web:build` in the darius checkout."));
-  const context = webContext(viewer);
+  const context = webContext(viewer, undefined, local);
   const headers = new Headers();
   for (const name of FORWARDED_HEADERS) {
     const value = requestHeaders.get(name);
@@ -331,7 +331,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     }
     if (url.pathname.startsWith(ACTION_API_PREFIX)) {
       const body = await readBody(request);
-      const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
+      const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, { who: access.who, local: access.local === true });
       send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }
@@ -341,7 +341,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
       send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }
-    send(response, await respond(request.method ?? "GET", url, headersOf(request), access.who, app), isHead);
+    send(response, await respond(request.method ?? "GET", url, headersOf(request), access.who, app, access.local === true), isHead);
   } catch (cause) {
     console.error(`darius serve: ${url.pathname}: ${errorMessage(cause)}`);
     send(response, reply(500, "text/plain", "darius could not answer; see the journal\n"), isHead);

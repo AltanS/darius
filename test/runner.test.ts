@@ -41,12 +41,13 @@ import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
 import { failedToday as failedTodayRun, takeRitualLease } from "../src/runner/run-due.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
+import { planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
 import { preflightGate } from "../src/runner/launch.ts";
 import { agentName } from "../src/surface/herdr.ts";
 import { formatReport, type BatchReport, type RitualEntry } from "../src/runner/report.ts";
 import { harnessCommand } from "../src/cli/harness.ts";
-import { readSummary } from "../src/core/result.ts";
+import { readSummary, type RunResult } from "../src/core/result.ts";
 import { latestHandoff } from "../src/core/handoff.ts";
 import { missingTools, namedTools } from "../src/runner/tools.ts";
 
@@ -1912,6 +1913,30 @@ test("follow-up readiness for the web button: ready with the approvable question
   assert.match(await notReady("fu-nope", parent), /^no project fu-nope/u);
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-ready", "--json"])).stdout).run;
   assert.match(await notReady("fu-ready", open), /no question of this run lists commands; grant lines by hand: darius run follow-up \S+ --grant LINE/u);
+  assert.match(await withFakeHerdr({}, () => notReady("fu-ready", parent)), new RegExp(`^run ${open.slice(-6).toLowerCase()} of heartbeat is running; a follow-up starts when no run is open$`, "u"));
+});
+
+/** One bare ledger line, for the pure checks of planFollowUp. */
+function bareLine(type: string, run: string, item = "ritual/heartbeat", extra: Record<string, string> = {}): LedgerLine {
+  return { v: 1, id: `${type}-${run}`, at: "2026-10-01T08:00:00Z", host: "host-a", who: "test", project: "p", type, item, run, ...extra };
+}
+
+test("a follow-up waits while any run of the project is running; a held run does not stop it (0.48.0)", () => {
+  const parent = "01PARENTRUN000000000000000";
+  const other = "01OTHERRUN0000000000ABCDEF";
+  const result: RunResult = { v: 1, status: "attention", summary: "s", metrics: [], items: [], actions: [], questions: [{ text: "Push?", commands: ["git push origin main"] }] };
+  const base = [bareLine("run.started", parent), bareLine("run.completed", parent, "ritual/heartbeat", { outcome: "complete" })];
+  const request = { parent, approve: [1], grant: [] };
+  const granted = { grants: ["git push origin main"] };
+  assert.deepEqual(planFollowUp(base, result, request), granted);
+  const running = [...base, bareLine("run.started", other, "ritual/sweep")];
+  assert.deepEqual(planFollowUp(running, result, request), { refused: "run abcdef of sweep is running; a follow-up starts when no run is open" });
+  const held = [...running, bareLine("run.held", other, "ritual/sweep")];
+  assert.deepEqual(planFollowUp(held, result, request), granted, "a held run is fine");
+  assert.ok("refused" in planFollowUp([...held, bareLine("run.resumed", other, "ritual/sweep")], result, request), "a resumed run runs again");
+  assert.deepEqual(planFollowUp([...held, bareLine("run.completed", other, "ritual/sweep")], result, request), granted, "a closed run is fine");
+  const vigil = [...base, bareLine("run.started", "01VIGILRUN0000000000VVVVVV", "vigil/soak")];
+  assert.deepEqual(planFollowUp(vigil, result, request), { refused: "run vvvvvv of vigil/soak is running; a follow-up starts when no run is open" });
 });
 
 test("the run page data links a follow-up and its parent (0.48.0)", async () => {
@@ -1948,7 +1973,7 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
 
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-refuse", "--json"])).stdout).run;
   await refused("fu-refuse", open, ["--grant", "date"], /is running; a follow-up needs a closed run/u);
-  await refused("fu-refuse", parent, ["--grant", "date"], /open-run: run /u);
+  await refused("fu-refuse", parent, ["--grant", "date"], /run \w{6} of heartbeat is running; a follow-up starts when no run is open/u);
   await runCli(runCommand, ["complete", open, "--project", "fu-refuse", "--outcome", "failed"]);
   await refused("fu-refuse", open, ["--grant", "date"], /ended failed; a follow-up needs a complete run/u);
 

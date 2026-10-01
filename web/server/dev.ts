@@ -123,7 +123,7 @@ server.on("request", (req, res) => {
         res.end(req.method === "POST" ? `${JSON.stringify(url.pathname.endsWith("/check") ? { ok: true, count: 4 } : { ok: true })}\n` : `${JSON.stringify({ ok: false, error: "POST only" })}\n`);
         return;
       }
-      const base = webContext(access.who);
+      const base = webContext(access.who, undefined, access.local === true);
       handle(toRequest(req, url.origin), loadContext(demo ? demoContext(base) : base))
         .then((response) => sendResponse(res, response))
         .catch((error: Error) => {

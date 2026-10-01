@@ -19,7 +19,9 @@
  *      acknowledged that run. Such a ritual stays due, but it is listed here
  *      only: both rows would open the same run. An acknowledged one is a Due
  *      row again, marked "failed today, acknowledged": the timer still does
- *      not retry it today.
+ *      not retry it today. A follow-up run does not count, as for the timer
+ *      (`failedToday()` in src/runner/run-due.ts): its ritual's run is the
+ *      latest run that follows up nothing.
  *
  * A run's full result is a blob (`result_sha` on its `run.completed`
  * line); the Run screen reads it and checks it again with `parseResult()`,
@@ -176,11 +178,14 @@ function projectSections(project: ProjectStatus, today: string): Sections {
     sections.asks.push({ kind: "asks", project: project.name, slug: slugOf(run.item), run: run.run, questions: run.result?.questions ?? 0, endedAt: run.endedAt });
   }
 
+  const runOf = (run: string): RunRow | undefined => project.runs.find((row) => row.run === run) ?? everyRun().find((row) => row.run === run);
   for (const ritual of project.rituals) {
     const latest = latestRun(ritual);
-    const hasFailed = isFailedToday(latest, today);
-    if (hasFailed && latest.acknowledged === null) {
-      sections.failed.push({ kind: "failed", project: project.name, slug: ritual.slug, run: latest.run, endedAt: latest.endedAt });
+    // The run the timer counts (failedToday() skips follow-ups), not just the newest run.
+    const counted = ritual.failedToday === null ? undefined : runOf(ritual.failedToday.run);
+    const hasFailed = isFailedToday(counted, today);
+    if (hasFailed && counted.acknowledged === null) {
+      sections.failed.push({ kind: "failed", project: project.name, slug: ritual.slug, run: counted.run, endedAt: counted.endedAt });
       continue;
     }
     if (!ritual.isDue) continue;

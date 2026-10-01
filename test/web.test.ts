@@ -284,10 +284,10 @@ test("serve dispatches POST /api/run/follow-up to the action API; every other wr
     const serving = serveCommand.run(parseArgs(["--port", "47992", "--bind", "127.0.0.1"]));
     await new Promise((resolve) => setTimeout(resolve, 200));
     const body = JSON.stringify({ project: "demo", run: "01JX", approve: [1] });
-    const noOrigin = await call(47_992, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
-    assert.equal(noOrigin.status, 403);
-    assert.match(noOrigin.type, /^application\/json/u);
-    assert.match(noOrigin.body, /the request must come from the darius page/u);
+    const loopback = await call(47_992, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
+    assert.equal(loopback.status, 403);
+    assert.match(loopback.type, /^application\/json/u);
+    assert.match(loopback.body, /the follow-up button needs a tailnet identity; open the page by its tailnet address/u, "loopback is \"this host\": refused before any other check");
     const read = await call(47_992, { method: "GET", path: "/api/run/follow-up" });
     assert.equal(read.status, 405, "the action API takes POST only");
     for (const path of ["/", "/p/demo/runs/01JX", "/api/status.json", "/api/run"]) {
@@ -402,9 +402,9 @@ test("access: loopback passes; only an allowed login's own device passes from th
     ["100.64.0.30", parseWhois(OTHER_USER)],
   ]);
   const context = { allow: new Set(["owner"]), whois: async (ip: string) => devices.get(ip) ?? null };
-  assert.deepEqual(await authorize("127.0.0.1", context), { allowed: true, who: "this host" });
-  assert.deepEqual(await authorize("::1", context), { allowed: true, who: "this host" });
-  assert.deepEqual(await authorize("::ffff:127.0.0.1", context), { allowed: true, who: "this host" });
+  assert.deepEqual(await authorize("127.0.0.1", context), { allowed: true, who: "this host", local: true });
+  assert.deepEqual(await authorize("::1", context), { allowed: true, who: "this host", local: true });
+  assert.deepEqual(await authorize("::ffff:127.0.0.1", context), { allowed: true, who: "this host", local: true });
   assert.deepEqual(await authorize("::ffff:100.64.0.9", context), { allowed: true, who: "owner on laptop" });
   const tagged = await authorize("100.64.0.20", context);
   assert.equal(tagged.allowed, false);
@@ -440,7 +440,7 @@ test("behind a proxy: only the proxy's device header counts, and only for listed
   assert.deepEqual(await authorizeRequest("100.64.0.9", named("phone"), context), { allowed: true, who: "owner on laptop" }, "a direct caller's header is ignored");
   const forged = await authorizeRequest("100.64.0.30", named("laptop"), context);
   assert.equal(forged.allowed, false, "a direct caller cannot name itself");
-  assert.deepEqual(await authorizeRequest("127.0.0.1", named("phone"), { ...context, proxy: null }), { allowed: true, who: "this host" }, "without a proxy nothing changes");
+  assert.deepEqual(await authorizeRequest("127.0.0.1", named("phone"), { ...context, proxy: null }), { allowed: true, who: "this host", local: true }, "without a proxy nothing changes");
   const header = proxyTrust({ DARIUS_WEB_PROXY: "100.64.0.50", DARIUS_WEB_PROXY_HEADER: "Tailscale-User-Login" });
   assert.equal(header?.header, "tailscale-user-login");
   assert.equal(header?.devices.size, 0, "no device listed: every proxied request is refused");
