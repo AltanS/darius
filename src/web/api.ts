@@ -510,7 +510,15 @@ export interface FollowUpQuestion {
  */
 export type FollowUpReadiness =
   | { ready: true; host: string; profile: string; questions: FollowUpQuestion[] }
-  | { ready: false; host: string; reason: string };
+  | {
+      ready: false;
+      host: string;
+      reason: string;
+      /** The ritual's host when it is another one (0.50.0): its pin, or where its checkout is linked. */
+      rightHost?: string;
+      /** The command to type for the follow-up there: `ssh <rightHost> darius run follow-up ...`. */
+      command?: string;
+    };
 
 /**
  * One file of a milestone, or one worklog. Read-only from the linked

@@ -19,12 +19,16 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { flushAlerts, sendAlerts } from "../core/alerts.ts";
-import { defaultWho, readLedger } from "../core/ledger.ts";
+import { defaultWho, hostId, readLedger } from "../core/ledger.ts";
+import type { Document, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject, stateDir } from "../core/paths.ts";
-import { openProject } from "../core/store.ts";
+import { sshDarius, sshDariusLine, sshProgram } from "../core/ssh.ts";
+import { openProject, type Project } from "../core/store.ts";
+import { ritualHost } from "../core/workdir.ts";
 import { parentResult, planFollowUp, type FollowUp } from "../runner/follow-up.ts";
 import { runDue, viewRun, DEFAULT_RUN_TIMEOUT_MS, type RunDueOptions } from "../runner/run-due.ts";
 import { deliverReport, skipAlerts, type BatchReport, type ReportScope } from "../runner/report.ts";
@@ -145,6 +149,88 @@ export const runDueCommand: Command = {
   },
 };
 
+// --- the right host (0.50.0) -----------------------------------------------------------
+
+/** Skips that mean "not on this host": the timer passes them quietly, a person who asked gets exit 1. */
+const WRONG_HOST_SKIPS: ReadonlySet<string> = new Set(["other-host", "no-workdir"]);
+
+/**
+ * The argv of this verb as the user gave it, for another host: `run`, the
+ * positionals, then every flag in the order given, `--on` left out and
+ * `--project` set to the project resolved here (the other host has no
+ * cwd to find it from). `set` replaces or adds flags. A positional that
+ * looks like a flag goes after `--`.
+ */
+export function verbArgv(args: ParsedArgs, project: string, set: Readonly<Record<string, string>> = {}): string[] {
+  const values: Record<string, readonly string[] | true> = {};
+  for (const [name, value] of Object.entries(args.flags)) {
+    if (name === "on" || value === false) continue;
+    values[name] = value === true ? true : (args.repeated[name] ?? [value]);
+  }
+  values.project = [project];
+  for (const [name, value] of Object.entries(set)) values[name] = [value];
+  const flags = Object.entries(values).flatMap(([name, value]) => (value === true ? [`--${name}`] : value.flatMap((one) => [`--${name}`, one])));
+  const isFlagLike = args.positional.some((word) => word.startsWith("--"));
+  return isFlagLike ? ["run", ...flags, "--", ...args.positional] : ["run", ...args.positional, ...flags];
+}
+
+function isSet(name: string): boolean {
+  const value = process.env[name];
+  return value !== undefined && value !== "";
+}
+
+/** Who a forwarded run is by: `<login>@<this host> via ssh`. */
+function forwardedWho(): string {
+  const login = process.env.USER;
+  return `${login === undefined || login === "" ? userInfo().username : login}@${hostId()} via ssh`;
+}
+
+/**
+ * `--on <host>`: run this verb on `host` over ssh (src/core/ssh.ts), output
+ * streamed here, its exit code passed through. The host applies every gate
+ * itself. Undefined when there is no `--on`, or it names this host: then the
+ * verb runs here. Refused inside a run: ssh would drop DARIUS_RUN, and the
+ * other host would not know it is a run's call.
+ */
+function forwardOn(args: ParsedArgs, project: string, verb: string): number | undefined {
+  const on = stringFlag(args, "on");
+  if (on === undefined) return undefined;
+  if (isSet("DARIUS_RUN") || isSet("DARIUS_RUN_POLICY")) {
+    const reason = `run ${verb} --on is for a person; a run darius started does not reach other hosts`;
+    if (args.json) console.log(JSON.stringify({ ok: false, error: reason }));
+    else console.log(`! ${reason}`);
+    return EXIT_FAILED;
+  }
+  if (on === hostId()) return undefined;
+  return sshDarius(sshProgram(), on, verbArgv(args, project, { who: stringFlag(args, "who") ?? forwardedWho() }));
+}
+
+/**
+ * Refuses a verb typed on the wrong host, and names the right one with the
+ * command to type (0.50.0). Undefined when this host is right, or when no
+ * host is known: runDue decides then, and a `no-workdir` skip exits 1 too.
+ */
+function refuseWrongHost(args: ParsedArgs, target: { project: Project; ledger: readonly LedgerLine[]; doc: Document<Ritual> }): number | undefined {
+  const right = ritualHost(target.project, target.ledger, target.doc);
+  if (right === null || right.host === hostId()) return undefined;
+  const command = sshDariusLine(right.host, verbArgv(args, target.project.name));
+  const ritual = target.doc.header.slug;
+  if (args.json) {
+    console.log(JSON.stringify({ ok: false, ritual, host: right.host, why: right.why, command }));
+  } else {
+    const why = right.why === "pinned" ? "pinned" : "its checkout is linked there";
+    console.log(`! ${ritual} runs on ${right.host} (${why}): ${command}`);
+  }
+  return EXIT_FAILED;
+}
+
+/** The exit code of a run started by hand: a skip for the wrong host fails, where the timer would pass it quietly. */
+function byHandExitCode(report: BatchReport): number {
+  const entry = report.projects[0]?.rituals[0];
+  if (entry?.action === "skipped" && WRONG_HOST_SKIPS.has(entry.reason ?? "")) return EXIT_FAILED;
+  return runDueExitCode(report);
+}
+
 /**
  * `darius run now <ritual> [--project P] [--profile NAME] [--timeout S]
  * [--dry-run] [--json] [--who W]`: start one ritual unattended now, due or
@@ -154,12 +240,24 @@ export const runDueCommand: Command = {
  * the webhook too (to stdout without one), and alerts go out as after a
  * batch: a run started by hand in a tab or over ssh must not end without a
  * word.
+ *
+ * On a host that is not the ritual's (src/core/workdir.ts, ritualHost) it
+ * refuses with exit 1 and prints the ssh command for the right host, with
+ * `--dry-run` too; a `no-workdir` skip exits 1 as well (0.50.0). `--on HOST`
+ * runs the same verb on HOST over ssh instead. The same holds for `run
+ * resume` and `run follow-up`.
  */
 export async function runNow(args: ParsedArgs): Promise<number> {
   const slug = args.positional[1];
   if (slug === undefined || slug === "") throw new UsageError("run now: missing <ritual>");
   const project = resolveProject(stringFlag(args, "project"));
-  if (openProject(project).readItem("ritual", slug) === null) throw new UsageError(`no ritual '${slug}' in ${project}`);
+  const forwarded = forwardOn(args, project, "now");
+  if (forwarded !== undefined) return forwarded;
+  const store = openProject(project);
+  const doc = store.readItem<Ritual>("ritual", slug);
+  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project}`);
+  const wrongHost = refuseWrongHost(args, { project: store, ledger: readLedger(store), doc });
+  if (wrongHost !== undefined) return wrongHost;
   const now: NonNullable<RunDueOptions["now"]> = {};
   const profile = stringFlag(args, "profile");
   if (profile !== undefined && profile !== "") now.profile = profile;
@@ -175,7 +273,7 @@ export async function runNow(args: ParsedArgs): Promise<number> {
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
   await alertBatch(report, "run now");
   for (const failure of report.errors) console.error(`darius run now: ${failure.project}: ${failure.error}`);
-  return runDueExitCode(report);
+  return byHandExitCode(report);
 }
 
 function refuseResume(args: ParsedArgs, run: string, reason: string): number {
@@ -197,13 +295,20 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   const run = args.positional[1];
   if (run === undefined || run === "") throw new UsageError("run resume: missing <run>");
   const project = resolveProject(stringFlag(args, "project"));
-  const view = viewRun(readLedger(openProject(project)), run);
+  const forwarded = forwardOn(args, project, "resume");
+  if (forwarded !== undefined) return forwarded;
+  const store = openProject(project);
+  const ledger = readLedger(store);
+  const view = viewRun(ledger, run);
   if (view.item === undefined) throw new UsageError(`no run '${run}' in ${project}`);
   if (!view.item.startsWith(RITUAL_PREFIX)) throw new UsageError(`run '${run}' belongs to ${view.item}; only ritual runs resume`);
   if (view.phase !== "held") return refuseResume(args, run, `run '${run}' is not held (phase: ${view.phase ?? "unknown"})`);
   if (!view.isAnswered) {
     return refuseResume(args, run, `run '${run}' has no answer since it was held: darius run answer ${run} <n> <text> --project ${project}`);
   }
+  const doc = store.readItem<Ritual>("ritual", view.item.slice(RITUAL_PREFIX.length));
+  const wrongHost = doc === null ? undefined : refuseWrongHost(args, { project: store, ledger, doc });
+  if (wrongHost !== undefined) return wrongHost;
   const options: RunDueOptions = {
     projects: [project],
     only: view.item.slice(RITUAL_PREFIX.length),
@@ -216,7 +321,7 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
   await alertBatch(report, "run resume");
   for (const failure of report.errors) console.error(`darius run resume: ${failure.project}: ${failure.error}`);
-  return runDueExitCode(report);
+  return byHandExitCode(report);
 }
 
 /** `--approve N` values: whole numbers from 1. */
@@ -247,6 +352,8 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
   const parent = args.positional[1];
   if (parent === undefined || parent === "") throw new UsageError("run follow-up: missing <run>");
   const project = resolveProject(stringFlag(args, "project"));
+  const forwarded = forwardOn(args, project, "follow-up");
+  if (forwarded !== undefined) return forwarded;
   const store = openProject(project);
   const ledger = readLedger(store);
   const approved = [...new Set(approveFlags(args))];
@@ -259,7 +366,10 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
   if (args.flags.headless === true) followUp.headless = true;
   const isDryRun = args.flags["dry-run"] === true;
   const slug = (viewRun(ledger, parent).item ?? "").slice(RITUAL_PREFIX.length);
-  if (store.readItem("ritual", slug) === null) throw new UsageError(`run follow-up: no ritual '${slug}' in ${project}`);
+  const doc = store.readItem<Ritual>("ritual", slug);
+  if (doc === null) throw new UsageError(`run follow-up: no ritual '${slug}' in ${project}`);
+  const wrongHost = refuseWrongHost(args, { project: store, ledger, doc });
+  if (wrongHost !== undefined) return wrongHost;
   const options: RunDueOptions = {
     projects: [project],
     only: slug,

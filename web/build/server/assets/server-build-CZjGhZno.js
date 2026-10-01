@@ -16202,7 +16202,8 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 * on the confirm box, which lists every line the run will be granted, posts
 * to `/api/run/follow-up`. The page sends question numbers only, never a
 * command line. When this host cannot start one, the card says why and
-* gives the command for a host that can.
+* gives the command for a host that can. When the ritual runs on another
+* host (0.50.0), the card names it and gives the ssh command for it.
 */
 /** The CLI command for the same follow-up, for a host where the button is off. */
 function followUpCommand(run, project, numbers) {
@@ -16222,6 +16223,26 @@ function FollowUpCard({ project, run, readiness, questions }) {
 	const [asking, setAsking] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [notice, setNotice] = (0, import_react.useState)(null);
+	if (!readiness.ready && readiness.rightHost !== void 0 && readiness.command !== void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "card fu",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "fu-off",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+					tone: "idle",
+					label: "off"
+				}),
+				" This ritual runs on ",
+				readiness.rightHost,
+				". Open this page on ",
+				readiness.rightHost,
+				", or run:"
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "next-cmd",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: readiness.command })
+		})]
+	});
 	if (!readiness.ready) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card fu",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -17267,7 +17288,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-CTfhJJo8.js",
+			"module": "/assets/run-fBFNCXm4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17314,8 +17335,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-c5d71167.js",
-	"version": "c5d71167",
+	"url": "/assets/manifest-cf9f11f2.js",
+	"version": "cf9f11f2",
 	"sri": void 0
 };
 //#endregion

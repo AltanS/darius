@@ -22,9 +22,10 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { hostId } from "./ledger.ts";
 import { linkedDir, linksFile } from "./links.ts";
 import { readMarker, type Marker } from "./marker.ts";
-import type { JsonValue, LedgerLine } from "./model.ts";
+import type { Document, JsonValue, LedgerLine, Ritual } from "./model.ts";
 import type { Project } from "./store.ts";
 
 /** The ledger line `darius link` appends: `{path}` on this host. */
@@ -78,4 +79,35 @@ export function projectWorkdir(project: Project, ledger: readonly LedgerLine[]):
     };
   }
   return { dir: project.root, from: "store", marker: null };
+}
+
+/** The host a ritual's work belongs to, and why: its `host` pin, or the host that linked its checkout. */
+export interface RitualHost {
+  host: string;
+  why: "pinned" | "linked";
+}
+
+/**
+ * Where a ritual runs (docs/concept.md, "Host pin"; 0.50.0). There is no
+ * control host: the answer is per ritual.
+ *
+ *   1. Its `host` pin, when it has one.
+ *   2. This host, when the project has a checkout here: a link in
+ *      links.toml, or the repo of its latest import.
+ *   3. The host of the latest `project.linked` line from another host: the
+ *      checkout is there.
+ *   4. null: no pin and no checkout anywhere darius knows of. Any host may
+ *      run it (a project with no repo runs in its store dir).
+ *
+ * `run now`, `run resume` and `run follow-up` refuse on another host and name
+ * this one; the timer and the vigil sweep skip quietly instead.
+ */
+export function ritualHost(project: Project, ledger: readonly LedgerLine[], doc: Document<Ritual>): RitualHost | null {
+  const pin = doc.header.host;
+  if (pin !== undefined && pin !== "") return { host: pin, why: "pinned" };
+  const here = hostId();
+  const imported = importedRepo(ledger);
+  if (linkedDir(project.name) !== undefined || (imported !== undefined && existsSync(imported))) return { host: here, why: "linked" };
+  const other = ledger.findLast((one) => one.type === LINKED_LINE && isText(one.path) && one.host !== here);
+  return other === undefined ? null : { host: other.host, why: "linked" };
 }

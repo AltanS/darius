@@ -10,13 +10,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendLine, readLedger } from "../src/core/ledger.ts";
+import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
 import { linksFile, readLinks, writeLink } from "../src/core/links.ts";
 import { findMarker, isAboveCap, readMarker } from "../src/core/marker.ts";
 import { resolveProject } from "../src/core/paths.ts";
+import type { Document, LedgerLine, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { parseToml, tomlKey, tomlString } from "../src/core/toml.ts";
-import { projectWorkdir, LINKED_LINE } from "../src/core/workdir.ts";
+import { projectWorkdir, ritualHost, LINKED_LINE } from "../src/core/workdir.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-marker-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -212,4 +213,63 @@ test("workdir: a link to a gone dir is missing; a link to another project's chec
   const wrong = openProject("wd-wrong", { create: true });
   writeLink("wd-wrong", checkout('project = "someone-else"\n'));
   assert.throws(() => projectWorkdir(wrong, readLedger(wrong)), /names project "someone-else"/u);
+});
+
+// --- the right host (0.50.0) -------------------------------------------------------
+
+/** A ritual document, pinned to `host` when given. Only its header's host matters here. */
+function ritualDoc(host?: string): Document<Ritual> {
+  const header: Ritual = {
+    id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
+    kind: "ritual",
+    slug: "heartbeat",
+    title: "Heartbeat",
+    created: "2026-10-01T08:00:00Z",
+    updated: "2026-10-01T08:00:00Z",
+    tags: [],
+    cadence: "1d",
+    anchor: "due",
+    policy: { mode: "report", may: [], hold: [] },
+  };
+  if (host !== undefined) header.host = host;
+  return { header, body: "" };
+}
+
+/** A `project.linked` line from `host`, as a sync brings it. */
+function linkedLine(host: string, path: string, id: string): LedgerLine {
+  return { v: 1, id, at: "2026-10-01T08:00:00Z", host, who: "test", project: "rh", type: LINKED_LINE, path };
+}
+
+test("ritualHost: the pin wins over every link", () => {
+  const project = openProject("rh-pinned", { create: true });
+  writeLink("rh-pinned", checkout('project = "rh-pinned"\n'));
+  const ledger = [linkedLine("host-c", "/srv/rh", "01HZ0000000000000000000001")];
+  assert.deepEqual(ritualHost(project, ledger, ritualDoc("host-b")), { host: "host-b", why: "pinned" });
+});
+
+test("ritualHost: a checkout linked on another host names that host; the latest line wins", () => {
+  const project = openProject("rh-linked", { create: true });
+  const ledger = [linkedLine("host-b", "/srv/a", "01HZ0000000000000000000001"), linkedLine("host-c", "/srv/b", "01HZ0000000000000000000002")];
+  assert.deepEqual(ritualHost(project, ledger, ritualDoc()), { host: "host-c", why: "linked" });
+});
+
+test("ritualHost: a checkout here, linked or imported, names this host", () => {
+  const project = openProject("rh-here", { create: true });
+  writeLink("rh-here", checkout('project = "rh-here"\n'));
+  const elsewhere = [linkedLine("host-b", "/srv/a", "01HZ0000000000000000000001")];
+  assert.deepEqual(ritualHost(project, elsewhere, ritualDoc()), { host: hostId(), why: "linked" });
+
+  const repo = join(SANDBOX, "rh-imported-repo");
+  mkdirSync(join(repo, ".tracker"), { recursive: true });
+  const imported = openProject("rh-imported", { create: true });
+  appendLine(imported, { who: "test", type: "import", source: join(repo, ".tracker") });
+  assert.deepEqual(ritualHost(imported, [...elsewhere, ...readLedger(imported)], ritualDoc()), { host: hostId(), why: "linked" });
+});
+
+test("ritualHost: null with no pin and no checkout anywhere; this host's own old link line does not count", () => {
+  const project = openProject("rh-none", { create: true });
+  assert.equal(ritualHost(project, [], ritualDoc()), null);
+  appendLine(project, { who: "test", type: LINKED_LINE, path: "/nonexistent-darius/rh" });
+  assert.equal(ritualHost(project, readLedger(project), ritualDoc()), null);
+  assert.equal(ritualHost(project, [], ritualDoc("")), null, "an empty pin is no pin");
 });

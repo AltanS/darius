@@ -19,6 +19,9 @@
  *   run now <ritual> [--profile NAME] [--timeout S] [--dry-run]   (src/cli/run-due.ts)
  *   run resume <run> [--timeout S]                                (src/cli/run-due.ts)
  *   run follow-up <run> [--approve N] [--grant LINE] [--note T]   (src/cli/run-due.ts)
+ *                  These three run on the ritual's host only, and refuse
+ *                  elsewhere with the ssh command; `--on HOST` forwards
+ *                  them over ssh (0.50.0).
  *
  * RUN IDENTITY. A run's id is a ULID minted with `ulid()` at `run start` and
  * carried as the `run` payload field on every ledger line about it,

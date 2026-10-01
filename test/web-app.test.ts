@@ -793,6 +793,17 @@ test("the follow-up card says why it is off and gives the command; a run without
   assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false);
 });
 
+test("on a host without the checkout the follow-up card names the right host and gives the ssh command to copy (0.50.0)", async () => {
+  const command = `ssh host-b darius run follow-up ${ASKS} --approve 1 --project demo`;
+  const ctx = followUpContext({ ready: false, host: "host-a", reason: `runs on host-b; open this page on host-b, or: ${command}`, rightHost: "host-b", command });
+  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  const card = textOf(page);
+  assert.match(card, /off This ritual runs on host-b\. Open this page on host-b, or run:/u);
+  assert.ok(card.includes(command), "the ssh command, in a copy box");
+  assert.ok(page.includes('class="copy"'), "a copy button");
+  assert.equal(card.includes("Start follow-up on"), false, "no button: the page never forwards");
+});
+
 test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
   const off: FollowUpReadiness = { ready: false, host: "host-a", reason: "x" };
   const child = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT }));

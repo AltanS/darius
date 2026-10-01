@@ -9,10 +9,17 @@
  * follow-up through runDue, which checks the ritual, the host pin, the
  * linked checkout, `max_mode`, the profile and herdr. A dry run reaches no
  * bucket. The spawned CLI checks everything again before it starts.
+ *
+ * On a host that is not the ritual's (src/core/workdir.ts, ritualHost) the
+ * button is off, and the reason names the right host and the ssh command
+ * (0.50.0). The page never forwards a follow-up to another host.
  */
 
 import { hostId, readLedger } from "../core/ledger.ts";
+import type { Ritual } from "../core/model.ts";
+import { sshDariusLine } from "../core/ssh.ts";
 import { listProjects, openProject } from "../core/store.ts";
+import { ritualHost } from "../core/workdir.ts";
 import { errorMessage } from "../runtime.ts";
 import type { FollowUpQuestion, FollowUpReadiness } from "../web/api.ts";
 import { parentResult, planFollowUp } from "./follow-up.ts";
@@ -49,11 +56,18 @@ export async function followUpReadiness(projectName: string, run: string): Promi
     const questions = approvable(result?.questions ?? []);
     const item = viewRun(ledger, run).item;
     if (item === undefined) return off(`no run ${run} in ${projectName}`);
+    const slug = item.startsWith(RITUAL_PREFIX) ? item.slice(RITUAL_PREFIX.length) : item;
+    const doc = project.readItem<Ritual>("ritual", slug);
+    const right = doc === null ? null : ritualHost(project, ledger, doc);
+    if (right !== null && right.host !== host) {
+      const approve = questions.length === 0 ? ["--grant", "LINE"] : questions.flatMap((question) => ["--approve", String(question.n)]);
+      const command = sshDariusLine(right.host, ["run", "follow-up", run, ...approve, "--project", projectName]);
+      return { ready: false, host, reason: `runs on ${right.host}; open this page on ${right.host}, or: ${command}`, rightHost: right.host, command };
+    }
     if (questions.length === 0) return off(`no question of this run lists commands; grant lines by hand: darius run follow-up ${run} --grant LINE`);
     const plan = planFollowUp(ledger, result, { parent: run, approve: questions.map((question) => question.n), grant: [] });
     if ("usage" in plan) return off(plan.usage);
     if ("refused" in plan) return off(plan.refused);
-    const slug = item.startsWith(RITUAL_PREFIX) ? item.slice(RITUAL_PREFIX.length) : item;
     const { report } = await runDue({
       projects: [projectName],
       only: slug,

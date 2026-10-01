@@ -16,8 +16,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -28,11 +28,11 @@ import { profileCommand } from "../src/cli/profile.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
-import { isProtocolCommand, REPORT_MODE_WRITE_VERBS } from "../src/harness/gate.ts";
+import { forwardsRun, isProtocolCommand, REPORT_MODE_WRITE_VERBS } from "../src/harness/gate.ts";
 import type { Command } from "../src/cli/registry.ts";
-import { reportScope, runDueCommand } from "../src/cli/run-due.ts";
+import { reportScope, runDueCommand, verbArgv } from "../src/cli/run-due.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
-import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
+import type { JsonValue, LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
 import { getBlobText, openProject, sha256Hex } from "../src/core/store.ts";
 import { localToday } from "../src/core/sweep.ts";
@@ -1368,13 +1368,154 @@ test("a ritual pinned to another host is skipped as other-host, quietly; on its 
   assert.equal(formatReport(batch([skip]), "news").length, 0);
 
   const now = await runCli(runCommand, ["now", "heartbeat", "--project", project]);
-  assert.match(now.stdout, /heartbeat: skipped, other-host, pinned to host-b/u, "run now names the skip");
+  assert.equal(now.code, 1, "run now by hand on the wrong host refuses (0.50.0)");
+  assert.equal(now.stdout, `! heartbeat runs on host-b (pinned): ssh host-b darius run now heartbeat --project ${project}`);
   assert.equal(linesOf(project, "run.started").length, 0);
 
   assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", hostId()])).code, 0);
   const own = await runDueJson(project);
   assert.equal(ritualsOf(own.report)[0]?.end, "complete", "the pinned host runs it");
   assert.equal(linesOf(project, "run.started").length, 1);
+});
+
+// --- the right host (0.50.0) ---------------------------------------------------------------
+
+/** One ledger line from another host, as a sync brings it: `ledger/<host>/open.jsonl`. */
+function lineFrom(project: string, host: string, payload: Record<string, JsonValue>): void {
+  const ms = Date.now();
+  const line = { v: 1, id: ulid(ms), at: new Date(ms).toISOString(), host, who: "test", project, ...payload };
+  const dir = join(openProject(project).root, "ledger", host);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, "open.jsonl"), `${JSON.stringify(line)}\n`);
+}
+
+test("run now on the wrong host refuses with exit 1 and the ssh command, with --dry-run and --json too; the timer still skips quietly", async () => {
+  const project = "rh-now";
+  seedRitual(project);
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", "host-b"])).code, 0);
+  const dry = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--dry-run", "--profile", "fast"]);
+  assert.equal(dry.code, 1);
+  assert.equal(dry.stdout, `! heartbeat runs on host-b (pinned): ssh host-b darius run now heartbeat --project ${project} --dry-run --profile fast`);
+  const json = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+  assert.equal(json.code, 1);
+  assert.deepEqual(JSON.parse(json.stdout), { ok: false, ritual: "heartbeat", host: "host-b", why: "pinned", command: `ssh host-b darius run now heartbeat --project ${project} --json` });
+
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", ""])).code, 0);
+  lineFrom(project, "host-b", { type: "project.linked", path: "/srv/checkouts/rh-now" });
+  const linked = await runCli(runCommand, ["now", "heartbeat", "--project", project]);
+  assert.equal(linked.code, 1);
+  assert.equal(linked.stdout, `! heartbeat runs on host-b (its checkout is linked there): ssh host-b darius run now heartbeat --project ${project}`);
+  const timer = await runDueJson(project);
+  assert.equal(timer.code, 0, "the timer's no-workdir skip stays quiet");
+  assert.equal(ritualsOf(timer.report)[0]?.reason, "no-workdir");
+  assert.equal(linesOf(project, "run.started").length, 0, "no run exists");
+});
+
+test("run now by hand with no checkout here and no known right host exits 1 (no-workdir)", async () => {
+  const project = "rh-nowhere";
+  seedRitual(project);
+  appendLine(openProject(project), { who: "test", type: "import", source: "/nonexistent-darius/repo/.tracker" });
+  const now = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--dry-run"]);
+  assert.equal(now.code, 1, now.stdout);
+  assert.match(now.stdout, /heartbeat: skipped, no-workdir, /u);
+});
+
+test("run resume on the wrong host refuses with the ssh command for the held run", async () => {
+  const project = "rh-resume";
+  seedRitual(project);
+  const run: string = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", project, "--json"])).stdout).run;
+  assert.equal((await runCli(runCommand, ["hold", run, "--project", project, "--question", "push?"])).code, 0);
+  assert.equal((await runCli(runCommand, ["answer", run, "1", "yes", "--project", project])).code, 0);
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", "host-b"])).code, 0);
+  const resumed = await runCli(runCommand, ["resume", run, "--project", project]);
+  assert.equal(resumed.code, 1);
+  assert.equal(resumed.stdout, `! heartbeat runs on host-b (pinned): ssh host-b darius run resume ${run} --project ${project}`);
+  assert.equal(linesOf(project, "run.resumed").length, 0);
+});
+
+test("verbArgv rebuilds the verb for another host: --on left out, --project set, repeated flags kept in order", () => {
+  const args = parseArgs(["follow-up", "01RUN", "--on", "host-b", "--approve", "1", "--json", "--approve", "2", "--note", "it's \"done\""]);
+  assert.deepEqual(verbArgv(args, "acme-web", { who: "me@host-a via ssh" }), [
+    "run", "follow-up", "01RUN", "--approve", "1", "--approve", "2", "--json", "--note", "it's \"done\"", "--project", "acme-web", "--who", "me@host-a via ssh",
+  ]);
+  assert.deepEqual(verbArgv(parseArgs(["now", "--", "--odd"]), "p"), ["run", "--project", "p", "--", "now", "--odd"]);
+});
+
+const FAKE_SSH = join(BIN, "fake-ssh");
+const FAKE_SSH_LOG = join(SANDBOX, "ssh-log");
+writeFileSync(
+  FAKE_SSH,
+  `#!${BASH}
+# A fake ssh: ssh -o X -o Y <host> <words...>. It logs its argv, then parses the
+# remote line the way a login shell would and logs those words, so a test sees
+# what the remote darius would get. It never runs them.
+printf '%s\\0' "$@" > "${FAKE_SSH_LOG}.argv"
+shift 4
+host="$1"; shift
+eval "set -- $*"
+printf '%s\\0' "$host" "$@" > "${FAKE_SSH_LOG}.words"
+echo "remote output from $host"
+exit "\${FAKE_SSH_EXIT:-0}"
+`,
+);
+chmodSync(FAKE_SSH, 0o755);
+
+function sshWords(): string[] {
+  return readFileSync(`${FAKE_SSH_LOG}.words`, "utf8").split("\0").slice(0, -1);
+}
+
+test("--on forwards the verb over ssh: quoted words, output streamed, exit code passed through, --who names the caller", () => {
+  rmSync(`${FAKE_SSH_LOG}.words`, { force: true });
+  const env = { ...process.env, DARIUS_SSH: FAKE_SSH, FAKE_SSH_EXIT: "3", USER: "op", DARIUS_RUN: "", DARIUS_RUN_POLICY: "" };
+  const note = `it's "done" now`;
+  const ran = spawnSync(join(BIN, "darius"), ["run", "follow-up", "01RUNID", "--on", "host-b", "--project", "rh-on", "--approve", "1", "--note", note], { env, encoding: "utf8" });
+  assert.equal(ran.status, 3, ran.stderr);
+  assert.match(ran.stdout, /remote output from host-b/u, "the remote output streams through");
+  const argv = readFileSync(`${FAKE_SSH_LOG}.argv`, "utf8").split("\0").slice(0, 6);
+  assert.deepEqual(argv, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "host-b", "bash"]);
+  assert.deepEqual(sshWords(), [
+    "host-b", "bash", "-l", "-c", 'exec darius "$@"', "darius",
+    "run", "follow-up", "01RUNID", "--project", "rh-on", "--approve", "1", "--note", note, "--who", `op@${hostId()} via ssh`,
+  ]);
+
+  const given = spawnSync(join(BIN, "darius"), ["run", "now", "heartbeat", "--project", "rh-on", "--on", "host-c", "--who", "o'brien"], { env: { ...env, FAKE_SSH_EXIT: "0" }, encoding: "utf8" });
+  assert.equal(given.status, 0, given.stderr);
+  assert.deepEqual(sshWords().slice(6), ["run", "now", "heartbeat", "--project", "rh-on", "--who", "o'brien"], "a given --who stays");
+});
+
+test("--on is refused inside a run and never reaches ssh; --on naming this host runs here", async () => {
+  const project = "rh-on-run";
+  seedRitual(project);
+  rmSync(`${FAKE_SSH_LOG}.words`, { force: true });
+  process.env.DARIUS_SSH = FAKE_SSH;
+  process.env.DARIUS_RUN = "01INSIDE";
+  try {
+    const inside = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--on", "host-b"]);
+    assert.equal(inside.code, 1);
+    assert.equal(inside.stdout, "! run now --on is for a person; a run darius started does not reach other hosts");
+    delete process.env.DARIUS_RUN;
+    process.env.DARIUS_RUN_POLICY = "/tmp/policy.json";
+    assert.equal((await runCli(runCommand, ["resume", "01X", "--project", project, "--on", "host-b"])).code, 1);
+    delete process.env.DARIUS_RUN_POLICY;
+    assert.equal(existsSync(`${FAKE_SSH_LOG}.words`), false, "no ssh call");
+
+    assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", "host-b"])).code, 0);
+    const here = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--on", hostId()]);
+    assert.equal(here.code, 1);
+    assert.equal(here.stdout, `! heartbeat runs on host-b (pinned): ssh host-b darius run now heartbeat --project ${project}`);
+    assert.equal(existsSync(`${FAKE_SSH_LOG}.words`), false, "this host needs no ssh");
+  } finally {
+    delete process.env.DARIUS_RUN;
+    delete process.env.DARIUS_RUN_POLICY;
+    process.env.DARIUS_SSH = join(SANDBOX, "no-ssh");
+  }
+});
+
+test("the gate denies a run verb with --on in every run (0.50.0)", () => {
+  for (const line of ["darius run now heartbeat --on host-b", "darius run resume 01X --project p --on=host-b", "env FOO=1 darius run 'now' x --on host-b"]) {
+    assert.equal(forwardsRun(line), true, line);
+  }
+  for (const line of ["darius run now heartbeat", "darius run list --on", "echo run now --only x"]) assert.equal(forwardsRun(line), false, line);
 });
 
 // --- gate check per harness version ------------------------------------------------
@@ -1913,6 +2054,16 @@ test("follow-up readiness for the web button: ready with the approvable question
   assert.match(await withFakeHerdr({}, () => notReady("fu-ready-unlinked", unlinked)), /^no-workdir: a follow-up runs in a checkout/u);
   assert.match(await notReady("fu-ready", "01NOPE"), /^no run 01NOPE in fu-ready/u);
   assert.match(await notReady("fu-nope", parent), /^no project fu-nope/u);
+  const elsewhere = await seedParent("fu-ready-elsewhere");
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", "fu-ready-elsewhere", "--host", "host-b"])).code, 0);
+  const command = `ssh host-b darius run follow-up ${elsewhere} --approve 1 --project fu-ready-elsewhere`;
+  assert.deepEqual(await followUpReadiness("fu-ready-elsewhere", elsewhere), {
+    ready: false,
+    host: hostId(),
+    reason: `runs on host-b; open this page on host-b, or: ${command}`,
+    rightHost: "host-b",
+    command,
+  });
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-ready", "--json"])).stdout).run;
   assert.match(await notReady("fu-ready", open), /no question of this run lists commands; grant lines by hand: darius run follow-up \S+ --grant LINE/u);
   assert.match(await withFakeHerdr({}, () => notReady("fu-ready", parent)), new RegExp(`^run ${open.slice(-6).toLowerCase()} of heartbeat is running; a follow-up starts when no run is open$`, "u"));
@@ -1993,7 +2144,7 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
 
   const pinned = await seedParent("fu-pinned");
   assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", "fu-pinned", "--host", "host-b"])).code, 0);
-  await refused("fu-pinned", pinned, ["--approve", "1"], /other-host: pinned to host-b/u);
+  await refused("fu-pinned", pinned, ["--approve", "1"], /"host":"host-b","why":"pinned","command":"ssh host-b darius run follow-up \S+ --project fu-pinned --json --approve 1"/u);
 
   await addProfile("fu-gated", ["--permissions", "gated"]);
   const gated = await seedParent("fu-gated", { marker: 'v = 2\n[defaults]\nfollow_up = "fu-gated"\n' });

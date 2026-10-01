@@ -486,6 +486,11 @@ export function startsFollowUp(command: string): boolean {
   return /\brun follow-up\b/u.test(plainShell(command));
 }
 
+/** True when the line forwards a run verb to another host (`darius run now X --on HOST`, 0.50.0): ssh drops DARIUS_RUN, so the gate stops it here. */
+export function forwardsRun(command: string): boolean {
+  return /\brun (?:now|resume|follow-up)\b.*\s--on(?:[\s=]|$)/u.test(plainShell(command));
+}
+
 /** The line without quotes, backslashes and `$` (so `$'follow-up'` reads as `follow-up`), runs of blanks as one space: what the shell would read as words. */
 function plainShell(command: string): string {
   return command.replaceAll(/["'\\$]/gu, "").replaceAll(/\s+/gu, " ");
@@ -545,6 +550,7 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (protocol !== undefined) return ALLOW;
   // Before `may`, hold and grants (0.47.1): `Bash(darius *)` must not let a run start a follow-up.
   if (startsFollowUp(command)) return deny(`a run never starts a follow-up; a person does, outside the run: ${clip(command)}`);
+  if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;
   const holdPattern = firstMatch(command, policy.hold);

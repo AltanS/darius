@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.50.0] - 2026-10-01
+
+### Changed
+
+- `run now`, `run resume` and `run follow-up` typed on the wrong host refuse with exit 1, also with `--dry-run`. The right host is per ritual: its pin, else the host that linked its checkout. One line names it and the command to type: `! heartbeat runs on host-b (pinned): ssh host-b darius run now heartbeat --project acme-web`, or `(its checkout is linked there)`. `--json` gives `{ok: false, ritual, host, why, command}`.
+- A by-hand `run now` or `run resume` that finds no checkout on this host (`no-workdir`) exits 1 too. The timer and the vigil sweep keep their quiet skips.
+- On a host without the checkout, the run page's follow-up card is off and says "This ritual runs on <host>. Open this page on <host>, or run:" with the ssh command in a copy box. The readiness reason carries the host and the command. The page never forwards.
+
+### Added
+
+- `--on <host>` on `run now`, `run resume` and `run follow-up` runs the same verb on that host over ssh: `BatchMode`, a 10 second connect timeout, `DARIUS_SSH` for the program, a login bash for the PATH. Every word is shell-quoted. The output streams back and the exit code passes through. The host applies every check itself. `--who` becomes `<login>@<this host> via ssh` unless given. `--on` naming this host runs here.
+- `--on` is refused when `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and the gate denies `darius run now|resume|follow-up ... --on` in every run, since ssh drops those variables.
+- `ritualHost(project, ledger, ritual)` in `src/core/workdir.ts` says where a ritual runs and why. The ssh helper moved from `src/cli/update.ts` to `src/core/ssh.ts`.
+
 ## [0.48.2] - 2026-10-01
 
 ### Fixed

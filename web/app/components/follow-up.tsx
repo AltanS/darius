@@ -5,7 +5,8 @@
  * on the confirm box, which lists every line the run will be granted, posts
  * to `/api/run/follow-up`. The page sends question numbers only, never a
  * command line. When this host cannot start one, the card says why and
- * gives the command for a host that can.
+ * gives the command for a host that can. When the ritual runs on another
+ * host (0.50.0), the card names it and gives the ssh command for it.
  */
 
 import { useState } from "react";
@@ -50,6 +51,19 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Note | null>(null);
+
+  if (!readiness.ready && readiness.rightHost !== undefined && readiness.command !== undefined) {
+    return (
+      <div className="card fu">
+        <p className="fu-off">
+          <Status tone="idle" label="off" /> This ritual runs on {readiness.rightHost}. Open this page on {readiness.rightHost}, or run:
+        </p>
+        <div className="next-cmd">
+          <Command command={readiness.command} />
+        </div>
+      </div>
+    );
+  }
 
   if (!readiness.ready) {
     return (

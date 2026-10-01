@@ -76,6 +76,7 @@ import {
 } from "../core/app.ts";
 import type { JsonValue } from "../core/model.ts";
 import { appDir } from "../core/paths.ts";
+import { ssh as sshRun, sshProgram, SSH_FAILED, type Ran } from "../core/ssh.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -91,8 +92,6 @@ const HEALTH_TIMEOUT_MS = 30_000;
 const DARIUS_TIMEOUT_MS = 180_000;
 const SSH_PROBE_TIMEOUT_MS = 60_000;
 const SSH_UPDATE_TIMEOUT_MS = 900_000;
-/** ssh exits 255 when it cannot connect, or the connection drops. */
-const SSH_FAILED = 255;
 
 // --- deps -------------------------------------------------------------------------------
 
@@ -130,7 +129,6 @@ async function httpHealth(url: string, timeoutMs: number): Promise<boolean> {
 
 /** The real host: this root, the real home, `systemctl --user`, HTTP against loopback. */
 export function defaultUpdateDeps(): UpdateDeps {
-  const program = process.env.DARIUS_SSH;
   return {
     root: fileURLToPath(new URL("../../", import.meta.url)),
     app: appDir(),
@@ -139,7 +137,7 @@ export function defaultUpdateDeps(): UpdateDeps {
     health: httpHealth,
     healthTimeoutMs: HEALTH_TIMEOUT_MS,
     now: () => new Date(),
-    ssh: program === undefined || program === "" ? "ssh" : program,
+    ssh: sshProgram(),
   };
 }
 
@@ -255,13 +253,6 @@ function findTarget(request: UpdateRequest, from: string, source: string, app: s
   const newest = newestTag(listed.tags);
   if (newest === undefined) return { ok: false, outcome: result(1, "failed", from, undefined, `${source} has no vX.Y.Z tag`) };
   return { ok: true, tag: newest, tags: listed.tags };
-}
-
-interface Ran {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  error: string | undefined;
 }
 
 /** Runs a darius binary with this host's home and app dir, so a subprocess sees the same layout. */
@@ -520,18 +511,8 @@ export interface PushResult {
   hosts: HostReport[];
 }
 
-/** One word for a POSIX shell, bash, zsh or fish: ssh hands the command line to the host's login shell. */
-function shellWord(word: string): string {
-  return /^[A-Za-z0-9._/:@=+-]+$/u.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
-}
-
 function ssh(deps: UpdateDeps, host: string, args: readonly string[], input: string, timeoutMs: number): Ran {
-  const ran = spawnSync(deps.ssh, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "bash", "-l", "-s", "--", ...args.map(shellWord)], {
-    encoding: "utf8",
-    input,
-    timeout: timeoutMs,
-  });
-  return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr, error: ran.error === undefined ? undefined : errorMessage(ran.error) };
+  return sshRun(deps.ssh, host, ["bash", "-l", "-s", "--", ...args], input, timeoutMs);
 }
 
 function isRecord(value: JsonValue): value is { readonly [key: string]: JsonValue } {
