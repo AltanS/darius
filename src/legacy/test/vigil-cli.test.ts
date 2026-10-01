@@ -100,7 +100,7 @@ describe("vigil CLI", () => {
     const { exitCode, stdout } = runTracker(["vigil", "close", "soak", "--verdict", "failed"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("verdict failed");
-    expect(stdout).toContain("/tracker:add");
+    expect(stdout).toContain("darius add");
   });
 
   it("vigil add with no gate exits 1", () => {

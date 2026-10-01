@@ -642,7 +642,7 @@ status: Not Started
 
 ## Lessons
 
-<!-- populated by /tracker:enrich when the milestone completes -->
+<!-- populated by /darius-enrich when the milestone completes -->
 `;
 }
 

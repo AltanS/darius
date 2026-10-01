@@ -3955,7 +3955,7 @@ function runVigilClose(args: string[]): void {
     );
     if (result.verdict === "failed") {
       process.stdout.write(
-        "  Remediation goes to a new spec via /tracker:add — never bolt it onto the vigil.\n",
+        "  Remediation goes to a new spec via darius add. Never bolt it onto the vigil.\n",
       );
     }
   } catch (err) {
@@ -3998,7 +3998,7 @@ function runVigilClose(args: string[]): void {
  * give the vigil a real Command, or close it with a verdict.
  *
  * Exit 0 = clear to archive. Exit 1 = refused (or the milestone does not exist).
- * `/tracker:archive` calls this in its validate step, before anything is
+ * `/darius-archive` calls this in its validate step, before anything is
  * written or deleted.
  */
 function runArchiveCheck(args: string[]): void {

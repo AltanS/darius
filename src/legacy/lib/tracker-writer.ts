@@ -1527,7 +1527,7 @@ export function setVigilBody(opts: SetVigilBodyOpts): SetVigilBodyResult {
     throw new Error(
       `${slug} is closed (verdict ${verdict}${resolved}) — a closed vigil is a historical ` +
         "claim, not a draft, and its body is not rewritten. Route any follow-up to a new spec " +
-        "via /tracker:add.",
+        "via darius add.",
     );
   }
 
@@ -1580,7 +1580,7 @@ export type CloseVigilResult =
  * an already-closed vigil is not overwritten — its existing verdict is reported.
  * A closed vigil keeps its file as the provenance record (findings live in the
  * body). A `failed` verdict emits no automatic follow-up — remediation is routed
- * to a new spec via /tracker:add.
+ * to a new spec via darius add.
  */
 export function closeVigil(opts: CloseVigilOpts): CloseVigilResult {
   const { trackerRoot, slug } = opts;
