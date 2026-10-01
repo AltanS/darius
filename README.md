@@ -85,52 +85,116 @@ them. A sync-only host sets one:
 
 ```toml
 [setup]
-units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "export", "snapshot"
+units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "snapshot"
 ```
 
 `darius setup --systemd` enables the listed units. It disables and removes the others, but
 touches only the unit files it wrote. `darius update` reruns it, preserving your choices.
 
-### Nightly backup
+### Backups
 
-`darius export` copies this host's store into `<host>/` of a private backup git repo, commits
-when something changed, and pushes. It never copies the config dir, and it refuses when the store
-holds a file name that looks like a secret. The export timer runs daily at 03:30. Setup installs
-it only when `[backup] repo` is set:
+darius backs up a host's store with snapshots. A snapshot is one dated archive of the store:
+`darius-<host>-<UTC stamp>.tar.gz`. It sits in a local folder, and darius can copy it to an S3
+bucket as well. There is no git backup: the old `darius export` is gone.
 
-```toml
-[backup]
-repo = "git@github.com:<owner>/<name>.git"   # a private repo; the host needs a key that can push
-dir = "~/.local/share/darius-backup"          # optional: the local clone, this is the default
-```
+- **Local.** `~/.local/share/darius-snapshots/`. Each archive has a `.json` file next to it with the
+  time, the file count and the SHA-256. The newest 7 stay.
+- **Remote (optional).** An S3 bucket. The archive goes up in parts, so a file of several gigabytes
+  works. The key is `<prefix>/<host>/<name>`. The newest 30 stay. Use a bucket that is not your sync
+  bucket, on another machine.
+- **When.** `darius-snapshot.timer` runs at 04:00 every day (with up to 10 minutes of random delay)
+  on each host that does not limit `[setup] units`. Run one by hand with `darius snapshot create`.
+- **What is inside.** The store (`~/.local/share/darius`). Never the config folder: it holds keys.
+  A run refuses when the store holds a file that looks like a secret.
 
-`darius export --dry-run` prints the counts and changes nothing. Offline, the commit stays in the
-local clone, the verb exits 3, and the next run pushes it.
+#### Manage it on the settings page
 
-### Snapshots
+Open `/settings/backups`. It shows the last backup, the snapshot list, and the bucket state.
+You can start a backup, delete a snapshot, change every setting below, save or remove the key pair,
+and test the bucket. A setting that an environment variable sets is locked on the page, with the
+variable named next to it. The page never shows the secret key.
 
-`darius snapshot create` archives this host's store into `~/.local/share/darius-snapshots/` as `darius-<host>-<UTC stamp>.tar.gz`, and copies it to an S3 bucket when you set one up. It is the backup for a large store. The nightly timer (`darius-snapshot.timer`, 04:00) runs it on every host that has not limited `[setup] units`. Restore by hand: stop the web service and the timers, then `tar -xzf <file> -C ~/.local/share/darius`.
+#### Settings
 
-Set it in any of four places. The first one that holds a valid value wins:
+Four places set each value. The first one that holds a valid value wins:
 
-1. the environment, `DARIUS_SNAPSHOT_<KEY>`: put them in `~/.config/darius/snapshot.env`, which the timer and the web service both read
-2. the status page (`/status`), which saves to `~/.config/darius/snapshot.json`
+1. the environment, `DARIUS_SNAPSHOT_<KEY>`
+2. the settings page, which saves to `~/.config/darius/snapshot.json`
 3. `[snapshot]` in `config.toml`
 4. the default
 
+| Key | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `DARIUS_SNAPSHOT_ENABLED` | `true` | `false` stops the timer from making snapshots |
+| `dir` | `DARIUS_SNAPSHOT_DIR` | `~/.local/share/darius-snapshots` | the local folder, outside the store and the config folder |
+| `keep` | `DARIUS_SNAPSHOT_KEEP` | `7` | local snapshots to keep |
+| `endpoint` | `DARIUS_SNAPSHOT_ENDPOINT` | empty | the S3 address. With `bucket`, it turns the remote copy on |
+| `bucket` | `DARIUS_SNAPSHOT_BUCKET` | empty | the bucket name |
+| `region` | `DARIUS_SNAPSHOT_REGION` | `us-east-1` | the region the service expects |
+| `prefix` | `DARIUS_SNAPSHOT_PREFIX` | `darius` | a folder inside the bucket |
+| `keep_remote` | `DARIUS_SNAPSHOT_KEEP_REMOTE` | `30` | snapshots to keep in the bucket |
+| `path_style` | `DARIUS_SNAPSHOT_PATH_STYLE` | `true` | put the bucket in the path, not the host name |
+| `allow_http` | `DARIUS_SNAPSHOT_ALLOW_HTTP` | `false` | plain HTTP, for loopback and the tailnet only |
+| `sse` | `DARIUS_SNAPSHOT_SSE` | `false` | ask the service to encrypt each object |
+
+The timer and the web page start as separate processes. Put the environment variables in
+`~/.config/darius/snapshot.env` (one `NAME=value` per line). Both units read that file. Restart
+the web service after you change it: `systemctl --user restart darius-web`.
+
 ```toml
+# ~/.config/darius/config.toml
 [snapshot]
-dir = "~/.local/share/darius-snapshots"   # outside the store and the config dir
-keep = 7                                   # local snapshots to keep
-endpoint = "https://s3.example.com"        # with bucket: the remote copy is on
+keep = 7
+endpoint = "https://s3.example.com"
 bucket = "darius-snapshots"
-region = "us-east-1"
-prefix = "darius"                          # keys are <prefix>/<host>/<name>
+prefix = "darius"
 keep_remote = 30
-# also: enabled, path_style, allow_http (loopback and tailnet only), sse
 ```
 
-The access key pair is not a setting. Set `DARIUS_SNAPSHOT_ACCESS_KEY_ID` and `DARIUS_SNAPSHOT_SECRET_ACCESS_KEY`, or put an AWS-ini `[default]` file at `~/.config/darius/snapshot-credentials` (mode 0600). The status page can write that file, and never shows the key. Use a bucket that is not the sync bucket.
+#### The key pair
+
+The key pair is not a setting, so it never goes in `config.toml` or `snapshot.json`. It comes from
+the first of these:
+
+1. `DARIUS_SNAPSHOT_ACCESS_KEY_ID` and `DARIUS_SNAPSHOT_SECRET_ACCESS_KEY`
+2. `~/.config/darius/snapshot-credentials`, an AWS-ini file with a `[default]` section and mode
+   0600. The settings page can write this file. It never reads the secret back.
+
+#### Commands
+
+```bash
+darius snapshot create [--no-upload]   # make a snapshot, copy it to the bucket, apply retention
+darius snapshot list                   # the local snapshots, newest first
+darius snapshot status                 # the settings with their sources, the last run, any problems
+darius snapshot check                  # list the bucket, then write and delete a small test object
+darius snapshot delete <name> [--remote]   # delete one snapshot, here or in the bucket
+```
+
+Exit codes: 0 done. 1 refused or failed. 2 wrong usage. 3 the snapshot is saved locally, but the
+bucket could not be reached. The next run tries again.
+
+#### Restore
+
+Restoring overwrites the store, so darius has no restore command. Do it by hand:
+
+```bash
+systemctl --user stop darius-web darius-sync.timer darius-run-due.timer darius-vigil-sweep.timer
+# from the bucket: fetch the archive with any S3 tool first, for example:
+#   aws s3 cp s3://<bucket>/<prefix>/<host>/<name> . --endpoint-url <endpoint>
+sha256sum <name>                       # compare with "sha256" in <name>.json
+mv ~/.local/share/darius ~/.local/share/darius.before-restore
+mkdir ~/.local/share/darius
+tar -xzf <name> -C ~/.local/share/darius
+systemctl --user start darius-web darius-sync.timer darius-run-due.timer darius-vigil-sweep.timer
+```
+
+#### Moving off the git backup
+
+Version 0.43.0 had `darius export` and a `[backup]` table. Both are gone. `darius update` removes
+the old `darius-export` timer on its own. It leaves two things for you to remove by hand when you
+no longer need them: the old local clone (`~/.local/share/darius-backup` by default) and the
+private git repo it pushed to. An old `[backup]` table in `config.toml` does no harm. A
+`"export"` entry in `[setup] units` is an error: remove it.
 
 ## Update
 
@@ -270,7 +334,6 @@ the full reference.
 - `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
-- `darius export [--dry-run]`: copy this host's store into the `[backup]` git repo, commit and push.
 - `darius snapshot create|list|status|check|delete`: dated archives of this host's store, local and in an S3 bucket.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.

@@ -27,7 +27,7 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
-import { findSecretNames, listStore } from "./export.ts";
+import { findSecretNames, listStore } from "./store-scan.ts";
 import type { JsonValue } from "./model.ts";
 import { createS3, S3NetworkError, type S3, type S3Upload, type UploadSource } from "./s3.ts";
 import { readSnapshotCredentials, type ResolvedSnapshotSettings, type SnapshotRemote } from "./snapshot-settings.ts";

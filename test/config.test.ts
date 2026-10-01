@@ -120,11 +120,11 @@ test("writeConfigSkeleton writes once, then reports exists", () => {
   });
 });
 
-test("[setup] units: all six when absent, a listed subset in a fixed order, an unknown name refused with the valid ones", () => {
+test("[setup] units: all five when absent, a listed subset in a fixed order, an unknown name refused with the valid ones", () => {
   withConfigDir((dir) => {
     const file = join(dir, "config.toml");
     writeFileSync(file, 'host = "host-b"\n');
-    assert.deepEqual(loadConfig().setup.units, ["sync", "vigil-sweep", "run-due", "web", "export", "snapshot"]);
+    assert.deepEqual(loadConfig().setup.units, ["sync", "vigil-sweep", "run-due", "web", "snapshot"]);
 
     writeFileSync(file, 'host = "host-b"\n\n[setup]\nunits = ["web", "sync", "sync"]\n');
     assert.deepEqual(loadConfig().setup.units, ["sync", "web"]);
@@ -133,7 +133,7 @@ test("[setup] units: all six when absent, a listed subset in a fixed order, an u
     assert.deepEqual(loadConfig().setup.units, []);
 
     writeFileSync(file, '[setup]\nunits = ["sync", "backup"]\n');
-    assert.throws(() => loadConfig(), /unknown unit "backup" \(valid: "sync", "vigil-sweep", "run-due", "web", "export", "snapshot"\)/);
+    assert.throws(() => loadConfig(), /unknown unit "backup" \(valid: "sync", "vigil-sweep", "run-due", "web", "snapshot"\)/);
 
     writeFileSync(file, '[setup]\nunits = "sync"\n');
     assert.throws(() => loadConfig(), /\[setup\] "units" must be an array/);
@@ -150,29 +150,13 @@ test("[snapshot]: kept as a raw table for src/core/snapshot-settings.ts, absent 
   });
 });
 
-test("[backup]: absent means no backup, repo is required, dir defaults and expands ~, an unknown key is refused", () => {
+test("the retired [backup] table and the retired export unit name are refused or ignored as documented", () => {
   withConfigDir((dir) => {
     const file = join(dir, "config.toml");
-    writeFileSync(file, 'host = "host-b"\n');
-    assert.equal(loadConfig().backup, undefined);
-
-    writeFileSync(file, 'host = "host-b"\n\n[backup]\nrepo = "git@example.com:owner/backup.git"\n');
-    assert.deepEqual(loadConfig().backup, {
-      repo: "git@example.com:owner/backup.git",
-      dir: join(homedir(), ".local", "share", "darius-backup"),
-    });
-
-    writeFileSync(file, '[backup]\nrepo = "file:///srv/backup.git"\ndir = "~/backup-clone"\n');
-    assert.deepEqual(loadConfig().backup, { repo: "file:///srv/backup.git", dir: join(homedir(), "backup-clone") });
-
-    writeFileSync(file, '[backup]\ndir = "/tmp/clone"\n');
-    assert.throws(() => loadConfig(), /\[backup\] is missing the required key "repo"/);
-
-    writeFileSync(file, '[backup]\nrepo = ""\n');
-    assert.throws(() => loadConfig(), /\[backup\] "repo" is empty/);
-
-    writeFileSync(file, '[backup]\nrepo = "file:///srv/backup.git"\nbranch = "main"\n');
-    assert.throws(() => loadConfig(), /\[backup\] has an unknown key "branch"/);
+    writeFileSync(file, 'host = "host-b"\n\n[backup]\nrepo = "file:///srv/backup.git"\n');
+    assert.equal(loadConfig().host, "host-b", "an old [backup] table is ignored, not an error");
+    writeFileSync(file, '[setup]\nunits = ["sync", "export"]\n');
+    assert.throws(() => loadConfig(), /unknown unit "export"/);
   });
 });
 

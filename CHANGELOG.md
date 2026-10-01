@@ -9,8 +9,13 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `darius snapshot create|list|status|check|delete`: a dated `.tar.gz` of this host's store in a local folder (`~/.local/share/darius-snapshots`), with a manifest and SHA-256, and an optional copy in an S3 bucket. Retention keeps the newest 7 locally and 30 in the bucket. Large files go up in parts (multipart upload), and a failed upload is aborted.
 - Snapshot settings come from the environment (`DARIUS_SNAPSHOT_*`), the status page (`snapshot.json`), `[snapshot]` in `config.toml`, and defaults, in that order. The key pair comes from `DARIUS_SNAPSHOT_ACCESS_KEY_ID` and `DARIUS_SNAPSHOT_SECRET_ACCESS_KEY`, or `snapshot-credentials` (mode 0600).
 - `darius-snapshot.timer` runs the snapshot daily at 04:00. `snapshot` is a new name for `[setup] units`, installed by default. Both it and the web service read `~/.config/darius/snapshot.env`.
-- The status page `/status`: the machine, the hosts that sync, every project's last sync and counts, and the backups: run now, the snapshot list, delete, the settings with their sources (a value set by the environment is locked), the write-only key pair, and a bucket check.
+- The status page `/status`: the machine, the hosts that sync, and every project's last sync and counts.
+- The settings page is now tabs: General, Notifications, Backups, About. `/settings/backups` holds the backup controls: run now, the snapshot list, delete, the settings with their sources (a value set by the environment is locked), the write-only key pair, and a bucket check.
 - `/api/snapshots/...` on `darius serve`: the page's writes. Each request needs the page's own Origin, JSON, at most 4 KB, and passes the access check; no answer ever holds the key pair.
+
+### Removed
+
+- `darius export`, the `[backup]` table of `config.toml`, `darius-export.service` and `darius-export.timer`, and `export` as a name for `[setup] units`: the snapshot replaces the git backup. `setup --systemd` removes an export unit that darius wrote. An old `[backup]` table is ignored; `export` in `[setup] units` is an error. The old clone and the private repo it pushed to stay on disk and on the remote until you delete them.
 
 ### Changed
 

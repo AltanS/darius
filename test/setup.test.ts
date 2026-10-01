@@ -26,7 +26,6 @@ import {
   runSetup,
   selectUnits,
   timerPlan,
-  timerStates,
   setupCommand,
   type BucketFactory,
   type RemoteBucket,
@@ -911,80 +910,60 @@ test("setupCommand without --json prints one ✓/·/! line per step", async () =
   });
 });
 
-// --- the export timer and [backup] ----------------------------------------------------
+// --- the snapshot timer and the retired export timer -----------------------------------
 
-test("selectUnits: export only with a [backup] repo, held back when listed without one", () => {
+test("selectUnits: every unit without a config, the listed ones with one", () => {
   const base = { host: "host-b", notify: { webhook: "" }, runner: { claude: "" } };
-  const backup = { repo: "file:///srv/backup.git", dir: "/tmp/clone" };
-  assert.deepEqual(selectUnits(null), { install: ["sync", "vigil-sweep", "run-due", "web", "snapshot"], held: ["export"] });
-  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "vigil-sweep", "run-due", "web", "export"] } }), {
-    install: ["sync", "vigil-sweep", "run-due", "web"],
-    held: ["export"],
-  });
-  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "vigil-sweep", "run-due", "web", "export"] }, backup }), {
-    install: ["sync", "vigil-sweep", "run-due", "web", "export"],
-    held: [],
-  });
-  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync"] }, backup }), { install: ["sync"], held: [] });
+  assert.deepEqual(selectUnits(null), { install: ["sync", "vigil-sweep", "run-due", "web", "snapshot"] });
+  assert.deepEqual(selectUnits({ ...base, setup: { units: ["sync", "snapshot"] } }), { install: ["sync", "snapshot"] });
 });
 
-test("--systemd installs darius-export.timer with a [backup] repo, and removes it when [backup] goes away", async () => {
+test("--systemd installs darius-snapshot.timer by default from the real templates, and the web unit reads snapshot.env", async () => {
   const root = tempDir("darius-setup-root-");
   const home = tempDir("darius-setup-home-");
   writeFakeBin(root);
   copyRealUnits(join(root, "systemd"));
-  for (const name of ["darius-export.service", "darius-export.timer"]) copyFileSync(join(REPO_SYSTEMD, name), join(root, "systemd", name));
   const unitDir = join(home, ".config", "systemd", "user");
-  const first = recordingSystemctl();
+  const run = recordingSystemctl();
 
-  await withUnits('[setup]\nunits = ["sync", "export"]\n\n[backup]\nrepo = "file:///srv/backup.git"\n', async () => {
-    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, first.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
-    assert.equal(steps.length, 1);
-    assert.equal(steps[0]?.ok, true, steps[0]?.detail);
+  await withUnits("", async () => {
+    const step = stepFor(await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, run.runner, fakeBucketFactory("exists"))), "systemd");
+    assert.equal(step.ok, true, step.detail);
   });
-  assert.deepEqual(readdirSync(unitDir).toSorted(), ["darius-export.service", "darius-export.timer", "darius-sync.service", "darius-sync.timer"]);
-  assert.deepEqual(first.calls, [["daemon-reload"], ["enable", "--now", "darius-sync.timer", "darius-export.timer"]]);
-  assert.match(readFileSync(join(unitDir, "darius-export.service"), "utf8"), /^ExecStart=\S+ export --json$/mu);
-  const timer = readFileSync(join(unitDir, "darius-export.timer"), "utf8");
-  assert.match(timer, /^OnCalendar=03:30$/mu);
+  assert.match(readFileSync(join(unitDir, "darius-snapshot.service"), "utf8"), /^ExecStart=\S+ snapshot create --json$/mu);
+  assert.match(readFileSync(join(unitDir, "darius-snapshot.service"), "utf8"), /^EnvironmentFile=-%h\/\.config\/darius\/snapshot\.env$/mu);
+  assert.match(readFileSync(join(unitDir, "darius-web.service"), "utf8"), /^EnvironmentFile=-%h\/\.config\/darius\/snapshot\.env$/mu);
+  const timer = readFileSync(join(unitDir, "darius-snapshot.timer"), "utf8");
+  assert.match(timer, /^OnCalendar=04:00$/mu);
   assert.match(timer, /^RandomizedDelaySec=10min$/mu);
   assert.match(timer, /^Persistent=true$/mu);
-
-  const second = recordingSystemctl();
-  await withUnits('[setup]\nunits = ["sync", "export"]\n', async () => {
-    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, second.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
-    assert.equal(steps.every((step) => step.ok), true);
-    assert.match(steps.at(-1)?.detail ?? "", /removed darius-export\.service, darius-export\.timer \(not in \[setup\] units, or export without a \[backup\] repo\)/);
-  });
-  assert.deepEqual(readdirSync(unitDir).toSorted(), ["darius-sync.service", "darius-sync.timer"]);
-  assert.deepEqual(second.calls.at(-2), ["disable", "--now", "darius-export.timer"]);
+  assert.ok(run.calls.some((call) => call[0] === "enable" && call.includes("darius-snapshot.timer")));
 });
 
-test("--systemd --keep-stopped enables the new export timer once [backup] repo is set, and keeps a stopped timer stopped", async () => {
+test("--systemd removes the retired export unit when darius wrote it, and leaves one it did not write", async () => {
   const root = tempDir("darius-setup-root-");
   const home = tempDir("darius-setup-home-");
   writeFakeBin(root);
   copyRealUnits(join(root, "systemd"));
-  for (const name of ["darius-export.service", "darius-export.timer"]) copyFileSync(join(REPO_SYSTEMD, name), join(root, "systemd", name));
   const unitDir = join(home, ".config", "systemd", "user");
+  mkdirSync(unitDir, { recursive: true });
+  writeFileSync(join(unitDir, "darius-export.service"), "# systemd/darius-export.service: the old git backup\n");
+  writeFileSync(join(unitDir, "darius-export.timer"), "# systemd/darius-export.timer: the old git backup\n");
 
+  const first = recordingSystemctl();
   await withUnits('[setup]\nunits = ["sync"]\n', async () => {
-    await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, recordingSystemctl().runner, fakeBucketFactory("exists")));
+    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, first.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
+    assert.equal(steps.every((step) => step.ok), true);
+    assert.match(steps.at(-1)?.detail ?? "", /removed darius-export\.service, darius-export\.timer/u);
   });
-  assert.deepEqual(timerPlan(timerStates(() => undefined, unitDir, ["darius-sync.timer", "darius-export.timer"])), { keepStopped: [], restart: ["darius-sync.timer"] });
+  assert.equal(existsSyncQuiet(join(unitDir, "darius-export.timer")), false);
+  assert.ok(first.calls.some((call) => call[0] === "disable" && call.includes("darius-export.timer")));
 
-  const calls: string[][] = [];
-  const syncStopped: SystemctlRunner = (args) => {
-    calls.push(args);
-    if (args[0] === "is-active" && args[2] === "darius-sync.timer") throw new Error("inactive");
-  };
-  await withUnits('[setup]\nunits = ["sync", "export"]\n\n[backup]\nrepo = "file:///srv/backup.git"\n', async () => {
-    const step = stepFor(await runSetup({ systemd: true, remote: false, keepStopped: true }, fakeDeps(root, home, syncStopped, fakeBucketFactory("exists"))), "systemd");
-    assert.equal(step.ok, true, step.detail);
-    assert.match(step.detail, /enabled darius-export\.timer/u);
-    assert.match(step.detail, /left stopped darius-sync\.timer/u);
+  writeFileSync(join(unitDir, "darius-export.timer"), "# not ours\n");
+  const second = recordingSystemctl();
+  await withUnits('[setup]\nunits = ["sync"]\n', async () => {
+    const steps = (await runSetup({ systemd: true, remote: false }, fakeDeps(root, home, second.runner, fakeBucketFactory("exists")))).filter((step) => step.what === "systemd");
+    assert.ok(steps.some((step) => !step.ok && step.detail.includes("darius-export.timer")));
   });
-  assert.ok(existsSyncQuiet(join(unitDir, "darius-export.timer")));
-  assert.ok(calls.some((call) => call[0] === "enable" && call.includes("darius-export.timer")), "the new export timer is enabled");
-  assert.equal(calls.some((call) => call.includes("darius-sync.timer") && call[0] !== "is-active"), false, "the stopped sync timer is never enabled or started");
+  assert.equal(existsSyncQuiet(join(unitDir, "darius-export.timer")), true);
 });
