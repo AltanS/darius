@@ -49,6 +49,27 @@ export interface Ritual extends ItemHeader {
    * the repo: decision 9 keeps host names out of git.
    */
   host?: string;
+  /**
+   * `"repo"` when the git-owned fields below and in `policy` mirror a
+   * `[rituals.<slug>]` table of the marker (docs/concept.md, "Marker v3").
+   * Absent: a store ritual. Reconcile writes it; no verb does.
+   */
+  source?: "repo";
+  /** The mirrored schedule of a repo ritual: `HH:MM`, an IANA zone, a `YYYY-MM-DD` grid origin. */
+  at?: string;
+  tz?: string;
+  from?: string;
+  /** The mirrored per-run budget, as written: `30m`, `2h`. */
+  timeout?: string;
+  /** `definitionHash` of the mirrored definition. */
+  def_hash?: string;
+  /** The short commit of the checkout that reconcile read; absent outside git. */
+  def_commit?: string;
+  /** `.darius.toml` had uncommitted changes when reconcile read it. */
+  def_dirty?: boolean;
+  /** The host that reconciled, and when (ISO instant). */
+  def_host?: string;
+  def_at?: string;
   policy: Policy;
 }
 

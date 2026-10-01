@@ -43,7 +43,7 @@
 import { appendLine, defaultWho, isHostId, readLedger } from "../core/ledger.ts";
 import { parseDate, ritualState, rollCadence, type RitualState } from "../core/due.ts";
 import { handoffLines, latestHandoff } from "../core/handoff.ts";
-import { findMarker, isAboveCap, type Marker } from "../core/marker.ts";
+import { findMarker, isAboveCap, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
 import type { Policy, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { localToday } from "../core/sweep.ts";
@@ -92,9 +92,6 @@ function assertCadence(value: string): void {
 }
 
 // --- policy flags -------------------------------------------------------------
-
-/** A Claude Code permission rule: a bare tool name, or `Tool(pattern)`. */
-const PERMISSION_RULE_RE = /^[A-Za-z_][A-Za-z0-9_]*(\([^]*\))?$/u;
 
 function modeFlag(value: string): Policy["mode"] {
   if (value === "off" || value === "report" || value === "act") return value;

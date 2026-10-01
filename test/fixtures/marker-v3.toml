@@ -1,0 +1,44 @@
+# darius: this repo's project. Commit this file; each host links its checkout with darius init.
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "Europe/Berlin"
+
+[profiles.watch]
+surface = "herdr"
+permissions = "skip"
+
+[defaults]
+ritual = "watch"
+follow_up = "watch"
+
+[policies.read-only]
+mode = "report"
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli *)",
+  "Bash(date *)",
+]
+hold = ['\bdeploy\b', '--confirm\b']
+
+[rituals.daily-report]
+title = "Daily site report"
+cadence = "1d"
+at = "07:00"
+skill = "daily-report"
+policy = "read-only"
+timeout = "30m"
+
+[rituals.weekly-audit]
+title = "Weekly audit"
+cadence = "1w"
+from = "2026-10-05"
+at = "09:05"
+tz = "UTC"
+skill = "weekly-audit"
+mode = "act"
+may = ["Bash(cd tools)", "Bash(pnpm cli *)"]
+hold = ['\bdeploy\b']
+notes = "Never push. Hand in a diff."
+model = "opus"
+max_turns = 200

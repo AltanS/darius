@@ -85,6 +85,41 @@ test("a ritual and a vigil round-trip through writeItem and readItem with typed 
   assert.equal(project.readItem("ritual", "missing"), null);
 });
 
+test("a repo ritual's marker v3 keys round-trip through the codec and the project", () => {
+  const repo: Partial<Ritual> = {
+    source: "repo",
+    at: "07:00",
+    tz: "Europe/Berlin",
+    from: "2026-10-05",
+    timeout: "30m",
+    def_hash: "a".repeat(64),
+    def_commit: "0123456789ab",
+    def_dirty: false,
+    def_host: "host-a",
+    def_at: "2026-10-01T05:00:00.000Z",
+  };
+  const doc = ritualDoc(repo);
+  const text = encodeItem(doc);
+  assert.deepEqual(decodeItem(text, "x.md"), doc);
+  assert.match(text, /\ndef_dirty: false\n/u);
+  const project = openProject("repo-keys", { create: true });
+  project.writeItem(doc, { who: "test" });
+  assert.deepEqual(project.readItem<Ritual>("ritual", "heartbeat"), doc);
+  const dirty = ritualDoc({ ...repo, def_dirty: true, def_commit: undefined });
+  const { header } = decodeItem(encodeItem(dirty), "x.md");
+  assert.ok(header.kind === "ritual");
+  assert.equal(header.def_dirty, true);
+  assert.equal(header.def_commit, undefined);
+});
+
+test("a store ritual writes none of the repo keys, and a bad source or def_dirty is refused", () => {
+  const plain = encodeItem(ritualDoc());
+  assert.doesNotMatch(plain, /source|def_|\ntz:|\nat:|\ntimeout:/u);
+  const repoText = encodeItem(ritualDoc({ source: "repo", def_dirty: false }));
+  assert.throws(() => decodeItem(repoText.replace("source: repo", "source: store"), "x.md"), /x\.md.*source/u);
+  assert.throws(() => decodeItem(repoText.replace("def_dirty: false", "def_dirty: maybe"), "x.md"), /x\.md.*def_dirty/u);
+});
+
 test("writeItem keeps the previous version as a blob and appends item.changed", () => {
   const project = openProject("history", { create: true });
   project.writeItem(ritualDoc(), { who: "test" });

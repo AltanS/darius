@@ -17,6 +17,7 @@ import { harnessCommand } from "./harness.ts";
 import { importCommand } from "./import.ts";
 import { initCommand } from "./init.ts";
 import { linkCommand } from "./link.ts";
+import { markerCommand } from "./marker.ts";
 import { policyCheckCommand } from "./policy-check.ts";
 import { profileCommand } from "./profile.ts";
 import { pushCommand } from "./push.ts";
@@ -39,6 +40,7 @@ const COMMANDS: readonly Command[] = [
   importCommand,
   initCommand,
   linkCommand,
+  markerCommand,
   policyCheckCommand,
   profileCommand,
   pushCommand,

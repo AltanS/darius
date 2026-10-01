@@ -1,6 +1,6 @@
 /**
  * The hand-rolled TOML subset (src/core/toml.ts): dotted section headers and
- * one-line string arrays, on top of the flat tables, strings, booleans and
+ * string arrays (one-line and multi-line) and literal strings, on top of the flat tables, strings, booleans and
  * integers it already read and wrote.
  */
 
@@ -15,7 +15,9 @@ import { readMarker } from "../src/core/marker.ts";
 import {
   parseToml,
   tomlArray,
+  tomlArrayMultiline,
   tomlKey,
+  tomlLiteral,
   tomlSectionHeader,
   tomlString,
   type TomlDocument,
@@ -177,4 +179,65 @@ test("readMarker refuses project given as an array, not silently accepting it", 
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, ".darius.toml"), 'project = ["a", "b"]\n');
   assert.throws(() => readMarker(dir), /project = "<name>" is required/u);
+});
+
+// --- multi-line arrays and literal strings ----------------------------------------------
+
+test("an array may span lines, with comments, blank lines and a trailing comma", () => {
+  const text = 'a = 1\nmay = [\n  "x", # first\n\n  # a comment line\n  "y",\n]\nb = "after"\n';
+  const doc = parseToml(text, "x.toml");
+  assert.deepEqual(doc.root.may, ["x", "y"]);
+  assert.equal(doc.root.b, "after");
+  assert.equal(doc.lines.b, 8);
+});
+
+test("a multi-line array inside a section keeps the following keys and lines", () => {
+  const doc = parseToml('[rituals.a]\nmay = [\n"x"\n]\ntitle = "t"\n', "x.toml");
+  assert.deepEqual(doc.sections["rituals.a"], { may: ["x"], title: "t" });
+  assert.equal(doc.lines["rituals.a.title"], 5);
+});
+
+test("an unclosed multi-line array names the line it opened on", () => {
+  assert.throws(() => parseToml('\nmay = [\n"x",\n', "x.toml"), /x\.toml:2: unterminated array/u);
+});
+
+test("an error inside a multi-line array names the line of the item", () => {
+  assert.throws(() => parseToml('may = [\n"x",\n3,\n]\n', "x.toml"), /x\.toml:3: array elements must be quoted strings/u);
+});
+
+test("trailing content after a multi-line array's bracket is an error on that line", () => {
+  assert.throws(() => parseToml('may = [\n"x"\n] junk\n', "x.toml"), /x\.toml:3: trailing content after an array/u);
+});
+
+test("a literal string keeps backslashes: \\b stays two characters", () => {
+  const doc = parseToml("hold = '\\bdeploy\\b'\nlist = ['\\bone\\b', \"two\", 'a#b']\n", "x.toml");
+  assert.equal(doc.root.hold, "\\bdeploy\\b");
+  assert.equal(String(doc.root.hold).length, 10);
+  assert.deepEqual(doc.root.list, ["\\bone\\b", "two", "a#b"]);
+});
+
+test("an unterminated literal string is an error naming file and line", () => {
+  assert.throws(() => parseToml("a = 'oops\n", "x.toml"), /x\.toml:1: unterminated literal string/u);
+  assert.throws(() => parseToml("a = ['oops\n]\n", "x.toml"), /x\.toml:1: unterminated literal string/u);
+});
+
+test("tomlLiteral writes single quotes, and falls back when it cannot", () => {
+  assert.equal(tomlLiteral("\\bdeploy\\b"), "'\\bdeploy\\b'");
+  assert.equal(tomlLiteral("it's"), '"it\'s"');
+  assert.equal(tomlLiteral("a\nb"), '"a\\nb"');
+  for (const value of ["\\bdeploy\\b", "it's", "a\nb", "plain"]) {
+    assert.equal(parseToml(`k = ${tomlLiteral(value)}\n`, "x.toml").root.k, value);
+  }
+});
+
+test("tomlArrayMultiline round-trips through parseToml with either quote form", () => {
+  const items = ["\\bdeploy\\b", "--confirm\\b", 'say "hi"'];
+  assert.equal(tomlArrayMultiline([]), "[]");
+  assert.equal(tomlArrayMultiline(["a"]), '[\n  "a",\n]');
+  for (const quote of [undefined, tomlLiteral]) {
+    const text = `hold = ${tomlArrayMultiline(items, quote)}\nafter = true\n`;
+    const doc = parseToml(text, "x.toml");
+    assert.deepEqual(doc.root.hold, items);
+    assert.equal(doc.root.after, true);
+  }
 });

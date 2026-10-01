@@ -85,7 +85,7 @@ The three modes:
   blobs/<sha256>                        prior body versions, run findings, held outputs
   sync.json                             remote chunk list seen, item ETags, last sync
   .lock                                 O_EXCL lock for local writes (today's withLock pattern)
-<repo>/.darius.toml                     committed: v = 1, project = "acme-web", max_mode (optional)
+<repo>/.darius.toml                     committed: v = 1..3, project = "acme-web", max_mode, tz and rituals (v3)
 ```
 
 The store is outside the repo. Every worktree and every parallel session on one checkout share one store through the O_EXCL lock. Agents no longer find tracker markdown by walking the repo, which is the point.
@@ -128,6 +128,39 @@ Tracker state leaves git. `.darius.toml` is the only committed file. It holds id
 A checkout's path is per host. `darius link`, run inside a checkout, finds the marker and writes `<project> = "<dir>"` to `~/.config/darius/links.toml`, not to `config.toml`, because home-manager writes `config.toml` read-only. It refuses to move a project to a second checkout that still exists unless `--force`. It also appends one `project.linked{path}` ledger line per host and path, so every host learns that the project lives in a checkout. `import` takes the project from the source repo's marker and refuses a different one.
 
 `darius snapshot` is the backup (see "Backup"): a dated archive of the store, outside git. Nothing reads an archive back by itself. A read-only markdown snapshot for a docs site is not built.
+
+### Marker v3
+
+0.53.0 (design of 2026-10-01) lets the marker define rituals and policies. This release parses and
+checks them. Reconcile, the runner and the CLI guards follow in 0.54.0, export and the web in 0.55.0.
+
+```toml
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "Europe/Berlin"                  # required in v3
+
+[policies.read-only]                  # mode (required), may, hold, notes
+mode = "report"
+may = ["Bash(date *)"]
+hold = ['\bdeploy\b']
+
+[rituals.daily-report]                # slug: lowercase letters, digits, - and _, no dots
+title = "Daily site report"           # required: title, cadence, skill
+cadence = "1d"
+at = "07:00"                          # HH:MM in tz; also tz, from, anchor, timeout, profile, model, max_turns
+skill = "daily-report"
+policy = "read-only"                  # or mode, may, hold, notes on the ritual; not both
+timeout = "30m"                       # 1m to 12h
+```
+
+- **Who owns rituals.** A project with `v = 3` defines its rituals in git only. A project with `v <= 2` keeps store rituals. Both kinds coexist in one store. v1 and v2 stay readable and unchanged.
+- **Schedule.** `cadence`, `at` (one time), `tz`, `from` (grid origin) and `anchor`. A ritual `tz` overrides the root `tz`. Day boundaries of a v3 ritual follow its zone, never the host clock. Root `tz` is required (operator ruling, 2026-10-01): a v3 marker without it is an error at the `v = 3` line.
+- **No body.** The procedure is the skill. A ritual names a skill of the repo; the only tier a ritual may name (see "Djinns").
+- **Strict.** An unknown key or section, a bad `at`, `tz`, `from`, `timeout`, `may` rule or `hold` pattern, a `policy` that names no table, `policy` next to `mode`, `may`, `hold` or `notes`, a mode above `max_mode`, and `mode = "act"` with no `max_mode`, are errors with `file:line`. A `hold` pattern must compile with the `u` flag. The whole marker is refused on any error.
+- **TOML subset.** Arrays may span lines, with comments and a trailing comma. Single-quoted literal strings keep backslashes, so a regex is written `'\bdeploy\b'`.
+- **Check.** `darius marker check [dir]` runs the same parser and adds warnings (a skill file missing here, an unused policy, a v3 marker with no rituals). The parser never touches the file system.
+- **Rollout.** Every host must run 0.53.0 or later before a marker with the new keys is committed: an older host refuses a v3 file and skips the project.
 
 ### Security
 
@@ -237,6 +270,7 @@ darius note add --to <ref> --kind lesson|ruling|incident --stdin
 darius milestone|spec ...               phase 4
 darius sync [--pull-only] | doctor | import <path/.tracker> | export <dir> | setup | compact
 darius link [<dir>] [--force] | --list   record this host's checkout of the project named in .darius.toml
+darius marker check [<dir>]              parse .darius.toml as run-due does; print errors and warnings
 darius run-due --unattended [--dry-run] [--only <slug>]
 darius policy-check [--harness ID] [--preflight]   the gate; used by the harness's pre-tool hook
 darius serve [--bind auto|ADDR,...] [--port N]  this host's read-only status page, loopback and tailnet, port 4747
@@ -478,7 +512,7 @@ When a ritual names no profile and the repo has no `[defaults] ritual`, the prof
 
 Per host, `config.toml` holds only what differs per machine: the executable per harness. Today that is `[runner] claude`; a `[harness.<id>] bin` table comes with the second adapter.
 
-A repo that uses `[profiles]` or `[defaults]` writes `v = 2`. An older darius refuses a v2 marker with its existing "upgrade darius" error, so an old host skips the project instead of running it with the wrong profile. A v1 marker stays valid. The TOML subset gains one-line string arrays for `args`.
+A repo that uses `[profiles]` or `[defaults]` writes `v = 2`. An older darius refuses a v2 marker with its existing "upgrade darius" error, so an old host skips the project instead of running it with the wrong profile. A v1 marker stays valid. The TOML subset gains one-line string arrays for `args` (0.53.0: arrays may span lines, and single-quoted literal strings are read).
 
 **Editing.** One store, one set of core functions. The CLI comes first (`darius profile ...`, `darius ritual set --profile`). The TUI gets a profile screen over the same functions. A herdr plugin pane can host that TUI. A web UI would be one more client of the same functions, and it belongs to the central server, which is not decided (see "Non-goals").
 
@@ -634,13 +668,13 @@ No multi-user permissions. No web editor: the read-only status page of `darius s
 | 2 | Big bang vs strangler (amended 0.40.0) | Strangler by kind stays, but behind darius's own verbs, not behind the old path: darius dispatches a verb outside `DARIUS_KINDS` to the vendored legacy CLI | Every phase is testable against `tracker` output; the legacy sweep keeps working | One-shot import and switch (breaks 64 call sites and the daily sweep on one day) |
 | 3 | Where the app lives (amended 0.40.0) | New repo `AltanS/darius`, the sibling project's standards. The plugin stays in the marketplace repo until 1.0.0; it ships skills, agent and hooks, and no CLI | CLI and skills version together; installable without the marketplace | Stay in the legacy tracker plugin (plugin-relative paths, no `setup`, Node-only) |
 | 4 | Which bucket | Self-hosted SeaweedFS on the operator's workstation (the lead host) over the tailnet (operator ruling, 2026-09-28), reusing the rootless `seaweedfs.service` user unit of a sibling project | Already run and tested there; bodies hold internal notes; only `IfNoneMatch:*` needed; the lead host also runs the timer. Other hosts work offline when it is off and sync when it is back | Hosted S3 (third party holds internal notes); another agent's server (always on, but it is not the operator's box) |
-| 5 | Git after the switch (amended 0.40.0) | Operations state (rituals, runs, evidence) leaves git; `.darius.toml` marker committed; the backup is `darius snapshot`, outside git. Delivery state (milestones, specs, worklogs) stays in `.tracker/` in git until a 1.0.0 decision | Git was the collision source and a 33 MB repo tax | Keep `.tracker/` gitignored in the repo (worktrees diverge, shared checkout still collides) |
+| 5 | Git after the switch (amended 0.40.0) | Operations state (rituals, runs, evidence) leaves git; `.darius.toml` marker committed; the backup is `darius snapshot`, outside git. Delivery state (milestones, specs, worklogs) stays in `.tracker/` in git until a 1.0.0 decision. Amended 0.53.0: in a project whose marker says `v = 3`, rituals are defined in git (see "Marker v3"); runs and evidence stay out of git | Git was the collision source and a 33 MB repo tax | Keep `.tracker/` gitignored in the repo (worktrees diverge, shared checkout still collides) |
 | 6 | v1 scope | Rituals, runs, vigils, notes, evidence, sync, runner, minimal TUI; milestones and specs in phase 4 | Scheduling is the trigger; the old CLI serves specs meanwhile | Everything at once (delays the timer by months) |
-| 7 | Policy enforcement | Three layers: prompt, `PreToolUse` hook running `darius policy-check`, scoped credentials in the timer unit | A prompt alone is a request, not a gate | Prompt only; or a sandbox VM per run (later, not v1) |
+| 7 | Policy enforcement | Three layers: prompt, `PreToolUse` hook running `darius policy-check`, scoped credentials in the timer unit. Amended 0.53.0: a v3 ritual's policy (`mode`, `may`, `hold`, `notes`) is committed in `.darius.toml`, so it goes through a reviewed commit; `max_mode` caps it at parse time | A prompt alone is a request, not a gate | Prompt only; or a sandbox VM per run (later, not v1) |
 | 8 | Vigil execution | darius runs vigil Commands itself on a daily timer, no LLM; auto-closes `held` only; event gates auto-fire only through a `gate_command` | A vigil check is a shell command, so it needs a sweep, not an agent. the legacy rules are measured, so they are ported, not reinvented | An agent per vigil (cost, no gain); auto-closing `failed` (a precondition miss would read as a broken guard) |
-| 9 | What the repo holds vs the bucket (2026-09-28) | The repo holds `.darius.toml`: `v`, `project`, optional `max_mode`. The bucket holds definitions and facts. Checkout paths live per host in `links.toml` (`darius link`). Which host sweeps is decided by a daily lease per project, not by config | Identity and limits need review and history; facts and definitions need one writer and sync. A host name in the repo would tie a public repo to a machine and need a commit to change laptops | `runner = "<host>"` in the repo (host names in git, a commit per machine change); definitions or vigil Commands in git (two writers, no merge rule, agents could not add vigils); repo defaults for new rituals (an agent's `ritual add` would start on the timer unseen); links in `config.toml` (read-only under home-manager) |
+| 9 | What the repo holds vs the bucket (2026-09-28) | The repo holds `.darius.toml`: `v`, `project`, optional `max_mode`. The bucket holds definitions and facts. Checkout paths live per host in `links.toml` (`darius link`). Which host sweeps is decided by a daily lease per project, not by config. Amended 0.53.0: a v3 marker also holds `tz`, `[policies.*]` and `[rituals.*]`; the host pin, owner and tags stay in the store, and no host name goes in git | Identity and limits need review and history; facts and definitions need one writer and sync. A host name in the repo would tie a public repo to a machine and need a commit to change laptops | `runner = "<host>"` in the repo (host names in git, a commit per machine change); definitions or vigil Commands in git (two writers, no merge rule, agents could not add vigils); repo defaults for new rituals (an agent's `ritual add` would start on the timer unseen); links in `config.toml` (read-only under home-manager) |
 
-| 10 | Harness independence (2026-09-28) | A harness adapter and a surface adapter behind one contract. One gate, `darius policy-check`, judges every tool call of every harness; harness allowlists are a second layer. Named profiles, resolved item, then repo `.darius.toml` (v2), then store-wide `_global`, then built in. `max_mode` still caps every profile | The operator wants any harness and a watchable run. Probes show all four harnesses have a pre-tool gate that holds with permissions skipped, and all four pass the env the run protocol needs | Translating the policy into each harness's own permission rules (four rule languages, Codex drops per-run hooks silently, opencode and pi have no pattern rules); a watched run as a separate mode (more code, no gain) |
+| 10 | Harness independence (2026-09-28) | A harness adapter and a surface adapter behind one contract. One gate, `darius policy-check`, judges every tool call of every harness; harness allowlists are a second layer. Named profiles, resolved item, then repo `.darius.toml` (v2), then store-wide `_global`, then built in. `max_mode` still caps every profile. Amended 0.53.0: a v3 marker keeps `[profiles.*]` and `[defaults]` as in v2 | The operator wants any harness and a watchable run. Probes show all four harnesses have a pre-tool gate that holds with permissions skipped, and all four pass the env the run protocol needs | Translating the policy into each harness's own permission rules (four rule languages, Codex drops per-run hooks silently, opencode and pi have no pattern rules); a watched run as a separate mode (more code, no gain) |
 | 11 | Subagents in unattended runs (2026-09-30) | A ritual opts in by naming `Agent` in `may`. The gate judges every subagent call by the same policy (scope `full`), denies nesting, `isolation` and a subagent's `run complete`. Granted per run only after the gate check of that harness version saw the gate judge a subagent on this host | The fact check's skill needs an independent second verification. The hook fires inside subagents, but a subagent ignores the parent's `--disallowedTools` when permissions are skipped, so the gate must be the judge | Always deny (the first unattended fact check could not verify its CRITICAL); allow in gated mode through the allowlist (no proof that subagents keep the parent's permissions) |
 | 12 | Run results (2026-09-30) | Findings end with one fenced `darius-result` JSON block; darius checks it, stores it apart from the markdown, and keeps its counts on the ledger line. Required for every run darius launches; optional but checked for a by-hand run. A complete run with questions waits on the "needs you" lists until `run ack` records the decision | The web app and the TUI can draw a result, and a question for the operator no longer hides in prose | A second heredoc or a result file (refused by the gate, `Write` denied); JSON with the markdown inside (hard for a model); a schema per ritual (one generic shape first); an `answer` verb for complete runs (no session to resume) |
 | 13 | Ritual handoff (2026-09-30) | A run's result may carry `handoff`, one line of at most 200 characters, refused when longer. darius keeps it on the ledger line and puts it, with the operator's `run ack` note and the questions it answers, at the top of the next run's prompt. The source is the latest run with a result | Carry-over by instruction ("read yesterday's run first") depends on the model doing it, and the operator's decisions on a complete run reached no run at all | A free-length note or a file per ritual (grows into a second findings); clipping (a cut note can lose its meaning); the model reading `run show` itself (not certain); a note the operator writes by hand (the ack note covers it) |

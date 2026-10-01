@@ -44,31 +44,35 @@ interface ListedLink {
   dir: string;
   /** "ok", "missing" (the dir is gone), or what is wrong with its marker. */
   state: string;
+  /** `v3 (N rituals)` for a v3 marker that is ok; absent otherwise. */
+  marker?: string;
 }
 
-function linkState(project: string, dir: string): string {
-  if (!existsSync(dir)) return "missing";
+function linkState(project: string, dir: string): Pick<ListedLink, "state" | "marker"> {
+  if (!existsSync(dir)) return { state: "missing" };
   try {
     const marker = readMarker(dir);
-    if (marker === null) return `no ${MARKER_FILE}`;
-    return marker.project === project ? "ok" : `${MARKER_FILE} names ${marker.project}`;
+    if (marker === null) return { state: `no ${MARKER_FILE}` };
+    if (marker.project !== project) return { state: `${MARKER_FILE} names ${marker.project}` };
+    return marker.version === 3 ? { state: "ok", marker: `v3 (${String(marker.rituals.length)} rituals)` } : { state: "ok" };
   } catch (cause) {
-    return errorMessage(cause);
+    return { state: errorMessage(cause) };
   }
 }
 
 function runList(args: ParsedArgs): number {
-  const links: ListedLink[] = [...readLinks().entries()].map(([project, dir]) => ({
-    project,
-    dir,
-    state: linkState(project, dir),
-  }));
+  const links: ListedLink[] = [...readLinks().entries()].map(([project, dir]) => {
+    const { state, marker } = linkState(project, dir);
+    const link: ListedLink = { project, dir, state };
+    if (marker !== undefined) link.marker = marker;
+    return link;
+  });
   if (args.json) {
     console.log(JSON.stringify({ file: linksFile(), links }));
     return 0;
   }
   if (links.length === 0) console.log(`no links on this host (${linksFile()})`);
-  for (const link of links) console.log(`${link.project.padEnd(28)} ${link.dir}${link.state === "ok" ? "" : `  (${link.state})`}`);
+  for (const link of links) console.log(`${link.project.padEnd(28)} ${link.dir}${link.state === "ok" ? (link.marker === undefined ? "" : `  ${link.marker}`) : `  (${link.state})`}`);
   return 0;
 }
 

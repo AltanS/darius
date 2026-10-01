@@ -359,6 +359,104 @@ project = "acme-web"                 # the project this repo belongs to
 max_mode = "report"                 # optional: the highest ritual mode the timer may run here
 ```
 
+### Marker v3: rituals in git
+
+A marker with `v = 3` can define rituals and policies. This release reads and checks them
+(`darius marker check`). The runner does not start a git ritual yet; that comes with the next release.
+Root `tz` is required. Hosts need 0.53.0 or later before a v3 marker is committed.
+
+```toml
+# .darius.toml
+v = 3
+project = "acme-web"
+max_mode = "act"
+tz = "Europe/Berlin"
+
+[profiles.watch]
+surface = "herdr"
+permissions = "skip"
+
+[defaults]
+ritual = "watch"
+follow_up = "watch"
+
+[policies.read-only]
+mode = "report"
+may = [
+  "Bash(cd tools)",
+  "Bash(pnpm cli *)",
+  "Bash(date *)",
+]
+hold = ['\bdeploy\b', '--confirm\b']
+
+[rituals.daily-report]
+title = "Daily site report"
+cadence = "1d"
+at = "07:00"
+skill = "daily-report"
+policy = "read-only"
+timeout = "30m"
+
+[rituals.weekly-audit]
+title = "Weekly audit"
+cadence = "1w"
+from = "2026-10-05"
+at = "09:05"
+tz = "UTC"
+skill = "weekly-audit"
+mode = "act"
+may = ["Bash(cd tools)", "Bash(pnpm cli *)"]
+hold = ['\bdeploy\b']
+notes = "Never push. Hand in a diff."
+model = "opus"
+max_turns = 200
+```
+
+Arrays may span lines. `'...'` is a literal string: nothing is escaped, so a regex keeps its
+backslashes. A `'` inside one is not allowed.
+
+Root keys:
+
+| Key | Rule |
+|---|---|
+| `v` | 1, 2 or 3. `tz`, `[rituals.*]` and `[policies.*]` need 3. `[profiles.*]` and `[defaults]` need 2 or 3. |
+| `project` | The project name. |
+| `max_mode` | `off`, `report` or `act`. The ceiling for every ritual. A ritual with `mode = "act"` needs `max_mode = "act"`. |
+| `tz` | Required when `v = 3`. An IANA zone name, such as `Europe/Berlin`. |
+
+`[rituals.<slug>]` takes a slug of lowercase letters, digits, `-` and `_` (at most 64, no dots):
+
+| Key | Required | Rule |
+|---|---|---|
+| `title` | yes | Non-empty text. |
+| `cadence` | yes | `Nd`, `Nw` or `Nm`, such as `1d` or `2w`. |
+| `skill` | yes | The name of a skill in `.claude/skills/<skill>/SKILL.md`. The procedure is the skill; git holds no body. |
+| `anchor` | no | `due` (default) or `completion`. |
+| `at` | no | `HH:MM`, 24 hour. In the ritual's `tz`, else the root `tz`. |
+| `tz` | no | An IANA zone name. Overrides the root. |
+| `from` | no | `YYYY-MM-DD`. The first date of the cadence grid. |
+| `timeout` | no | `<N>m` or `<N>h`, from `1m` to `12h`. The budget of one run. |
+| `profile`, `model`, `max_turns` | no | As on a v2 ritual. |
+| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold` or `notes`. |
+| `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
+| `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
+| `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
+| `notes` | no | Plain text. |
+
+`[policies.<name>]` takes `mode` (required), `may`, `hold` and `notes`, with the same rules.
+Unknown keys and sections are errors that name the file and line.
+
+Check a marker before you commit it:
+
+```bash
+darius marker check          # the marker at or above the working directory
+darius marker check ../repo  # the marker in another checkout
+```
+
+It prints `ok: v3, 2 rituals, 1 policies`, or the first error as `file:line: message` and exit 1.
+Warnings do not change the exit code: a skill file missing in this checkout, a policy no ritual
+uses, a v3 marker with no rituals. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
+
 `darius init` links through `darius link`, which you can also run by hand:
 
 ```bash
@@ -449,6 +547,7 @@ the full reference.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
+- `darius marker check [dir]`: parse a repo's `.darius.toml` as the runner does, and list warnings.
 - `darius import <path/.tracker> --project P`: copy a legacy tracker's rituals and evidence, read-only.
 - `darius selftest seed|fire|status`: the `darius-selftest` project the acceptance run uses.
 - `darius policy-check`: the PreToolUse hook that unattended runs use. You do not call it.
