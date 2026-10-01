@@ -78,6 +78,7 @@ test("the skill names may_extra, hold_extra and marker check --resolved", () => 
   const text = darius(env, ["skill"]).stdout;
   assert.match(text, /`may_extra` and `hold_extra`/u);
   assert.match(text, /`marker check --resolved <slug>`/u);
+  assert.match(text, /input to the skill with `args`/u);
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });
 

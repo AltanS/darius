@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.57.0] - 2026-10-01
+
+### Added
+
+- `args` on a v3 ritual: input for the skill, one string of at most 256 characters with no newline. The run prompt has a `## Arguments` section right after `## Skill`, with the text and a sentence that says it is input, not instructions. `args` is part of the definition hash and of the store mirror. `ritual show` prints it, `ritual show --json` and `ritual list --json` carry it, `ritual export` writes it, and the web ritual page has a read-only "Arguments" row.
+- Multi-line strings (`"""..."""`) in `.darius.toml`, as in the TOML spec: the newline after the opening quotes is dropped, a line-ending backslash trims the newline and the white space after it, one or two quotes may sit inside. An unterminated one is an error that names its first line. The parser also reads `\uXXXX`, `\UXXXXXXXX`, `\r`, `\b` and `\f` in every double-quoted string.
+- `ritual export` writes a `notes` value that holds a newline in the `"""` form.
+- `darius marker check` warns when two rituals share most of their resolved `hold` patterns (the shorter list has at least 5 entries and at least 80 percent of it is in the other; rituals that name the same policy are skipped), and when a `notes` text is over 300 characters. Warnings do not change the exit code.
+
+### Changed
+
+- A newline in a quoted value of a store item file is now written as the escape `\n` and read back. Before, the store refused an item whose `notes` held a newline.
+- Wrapping a `notes` value as a single line or as a `"""` string gives the same definition hash.
+- `darius skill` names `args`.
+
+### Upgrade note
+
+- Run 0.57.0 on every host before a marker uses `args` or a `"""` string. An older host refuses the unknown ritual key, so it skips the whole project. It also cannot read a store item that holds `args` or a note with a newline.
+
 ## [0.56.0] - 2026-10-01
 
 ### Added

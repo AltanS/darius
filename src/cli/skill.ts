@@ -66,7 +66,7 @@ darius owns every tracker verb. Rituals and runs live in the darius store; miles
 - In .tracker/, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first; darius says so.
 - Pass --json where a verb takes it, and read the JSON on stdout.
-- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. A ritual may add to its policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy, and \`marker check\` fails when a skill file is missing. To move a v2 project, run \`ritual export [--write]\`; it never commits.
+- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. A ritual may add to its policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy, and \`marker check\` fails when a skill file is missing. Pass input to the skill with \`args\` (one line); procedure belongs in the skill, not in \`notes\`. To move a v2 project, run \`ritual export [--write]\`; it never commits.
 - Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
 - A tracker verb with no arguments prints its usage.
 

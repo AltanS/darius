@@ -428,6 +428,20 @@ max_turns = 200
 Arrays may span lines. `'...'` is a literal string: nothing is escaped, so a regex keeps its
 backslashes. A `'` inside one is not allowed.
 
+`"""..."""` is a multi-line string, as in the TOML spec, for a long `notes` text. A newline right
+after the opening `"""` is dropped. Other newlines stay. A backslash at the end of a line drops that
+newline and the spaces before the next word. One or two quotes may sit inside; the string ends at
+the first `"""` that is not escaped. Wrapping a value one way or the other never changes the
+ritual's definition hash, because the hash covers the value. An unterminated one is an error that
+names the line it opened on.
+
+```toml
+notes = """
+Never push.
+Hand in a diff.
+"""
+```
+
 Root keys:
 
 | Key | Rule |
@@ -444,6 +458,7 @@ Root keys:
 | `title` | yes | Non-empty text. |
 | `cadence` | no | `Nd`, `Nw` or `Nm`, such as `1d` or `2w`. Without it the ritual is on demand: only `run now` starts it. `at` and `from` need it. |
 | `skill` | yes | The name of a skill in `.claude/skills/<skill>/SKILL.md`. The procedure is the skill; git holds no body. |
+| `args` | no | Input for the skill, such as `args = "--site acme"`. One line, at most 256 characters, not empty. The run prompt passes it on under `## Arguments`, right after the skill. It is input, not procedure. It is part of the definition. |
 | `anchor` | no | `due` (default) or `completion`. |
 | `at` | no | `HH:MM`, 24 hour. In the ritual's `tz`, else the root `tz`. |
 | `tz` | no | An IANA zone name. Overrides the root. |
@@ -454,7 +469,7 @@ Root keys:
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
-| `notes` | no | Plain text. |
+| `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. |
 | `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
 | `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |
 
@@ -476,12 +491,29 @@ darius marker check --resolved daily-report  # the effective policy of one ritua
 It prints `ok: v3, 2 rituals, 1 policies`, or the first error as `file:line: message` and exit 1.
 A ritual whose skill file `.claude/skills/<skill>/SKILL.md` is missing in this checkout is an
 error too (exit 1): the timer would skip it as `skill-missing`. Warnings do not change the exit
-code: a policy no ritual uses, a v3 marker with no rituals. `--resolved <slug>` prints `mode:`, then
+code: a policy no ritual uses, a v3 marker with no rituals, two rituals that share most of their
+`hold` patterns (at least 5 in the shorter list, 80 percent of it in the other), and a `notes` text
+over 300 characters. The overlap warning reads `[rituals.a] and [rituals.b] share 5 of 6 hold
+patterns: factor into [policies.<name>] with hold_extra`, once per pair, and skips two rituals that
+name the same `policy`. The notes warning says procedure belongs in the skill and rules in `hold`.
+`--resolved <slug>` prints `mode:`, then
 one `may:` and one `hold:` line per entry, each list sorted. An inline policy and a factored
 one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
 
-Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`: an older
-host refuses unknown ritual keys.
+Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`, and 0.57.0
+or later before it uses `args` or a `"""` string: an older host refuses an unknown ritual key,
+and it cannot read a mirrored item that has `args` or a note with a newline.
+
+#### One skill, many rituals
+
+Keep the procedure in the skill and the differences in the ritual:
+
+- Variation is `args`. Two rituals may name one skill with `args = "--site acme"` and
+  `args = "--site other"`.
+- Chaining is two rituals. Step B runs on its own schedule or by hand after step A.
+- A wrapper skill is for the case where step B needs the output of step A in the same session.
+  Then list the union of the `may` rules of both steps on the ritual, so review sees what the
+  wrapper may do.
 
 ### How a v3 marker runs
 
