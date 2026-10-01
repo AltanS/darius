@@ -57,7 +57,7 @@ import { isAboveCap, type Marker } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
-import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
+import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
 import { localToday } from "../core/sweep.ts";
 import { syncProject } from "../core/sync.ts";
@@ -536,7 +536,8 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const granted = followUp === undefined ? undefined : { grants: followUp.grants, followUpOf: followUp.parent, cwd: target.cwd };
   const files = writeRunFiles(ctx.project.root, prompt, scope, granted);
   // run.started (or run.resumed) records it; the gate trusts grants only in this file (0.47.1).
-  const policySha = sha256Hex(readFileSync(files.policy, "utf8"));
+  // A `_sha` key names a blob that sync pushes, so the policy goes into the store too.
+  const policySha = putBlob(ctx.project, readFileSync(files.policy, "utf8"));
   const gate = gateCommand(files, harness);
   const message =
     followUp === undefined

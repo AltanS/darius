@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.48.2] - 2026-10-01
+
+### Fixed
+
+- A run's `policy.json` is now a blob in the store. Since 0.47.1, `run.started` and `run.resumed` name it as `policy_sha`, and sync pushes every blob a ledger line names. The blob was missing, so the sync after a launched run failed with "names blob ..., which is not in the local store".
+
 ## [0.48.1] - 2026-10-01
 
 ### Changed

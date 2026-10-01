@@ -14862,7 +14862,7 @@ function SettingField({ field, backups, draft, busy, onChange, onReset }) {
 				className: "bk-input",
 				type: field.kind === "number" ? "number" : "text",
 				inputMode: field.kind === "number" ? "numeric" : void 0,
-				min: field.kind === "number" ? 0 : void 0,
+				min: field.kind === "number" ? 1 : void 0,
 				step: field.kind === "number" ? 1 : void 0,
 				autoComplete: "off",
 				autoCapitalize: "off",
@@ -17050,7 +17050,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-N0SHX5L2.js",
+			"module": "/assets/settings-backups-BAeNEeTd.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17314,8 +17314,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-adb8274c.js",
-	"version": "adb8274c",
+	"url": "/assets/manifest-c5d71167.js",
+	"version": "c5d71167",
 	"sri": void 0
 };
 //#endregion

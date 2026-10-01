@@ -1819,6 +1819,8 @@ test("run follow-up starts a new attended run of the ritual that may run the app
   const checkout = join(SANDBOX, `${project}-checkout`);
   assert.equal(policy.cwd, checkout, "the run's dir, for the grants");
   assert.equal(started?.policy_sha, sha256Hex(readFileSync(join(runDir, "policy.json"), "utf8")), "run.started records the policy's sha256");
+  // A `_sha` key names a blob, and sync pushes every blob a line names: the policy must be in the store.
+  assert.equal(getBlobText(openProject(project), String(started?.policy_sha)), readFileSync(join(runDir, "policy.json"), "utf8"), "the policy is a blob in the store");
   assert.match(prompt, /Do not cd: a granted line names its dir with a flag\./u);
   const granted = await runCli(policyCheckCommand, ["--policy", join(runDir, "policy.json")], bashHook("git push  origin main", checkout));
   assert.deepEqual([granted.code, granted.stdout], [0, ""], "the granted line passes the hold list");
