@@ -115,11 +115,12 @@ function failedTodayOf(ledger: readonly LedgerLine[], slug: string, today: strin
   return { run, acknowledged };
 }
 
-function ritualRows(project: Project, ledger: LedgerLine[], today: string): RitualRow[] {
+function ritualRows(project: Project, ledger: LedgerLine[], now: Date): RitualRow[] {
+  const today = localToday(now);
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
-    const state = ritualState(doc, ledger, today);
+    const state = ritualState(doc, ledger, { now });
     const { header } = doc;
     return [
       {
@@ -248,13 +249,13 @@ export function lastSync(name: string): string | null {
   }
 }
 
-function projectStatus(name: string, today: string): ProjectStatus {
+function projectStatus(name: string, now: Date): ProjectStatus {
   const checkout = linkedDir(name) ?? null;
   const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, error: null };
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
-    status.rituals = ritualRows(project, ledger, today);
+    status.rituals = ritualRows(project, ledger, now);
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
     const stored = vigilRows(project, ledger);
     status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
@@ -297,7 +298,7 @@ export function collectStatus(now: Date = new Date()): HostStatus {
     // `|| 0`: in UTC the negation is -0, and a strict comparison sees -0 as another number.
     utcOffset: -now.getTimezoneOffset() || 0,
     profiles: profiles(),
-    projects: listProjects().map((name) => projectStatus(name, today)),
+    projects: listProjects().map((name) => projectStatus(name, now)),
   };
 }
 
@@ -364,7 +365,7 @@ export function ritualDetail(projectName: string, slug: string, now: Date = new 
   const doc = project.readItem<Ritual>("ritual", slug);
   if (doc === null) return null;
   const ledger = readLedger(project);
-  const row = ritualRows(project, ledger, localToday(now)).find((candidate) => candidate.slug === slug);
+  const row = ritualRows(project, ledger, now).find((candidate) => candidate.slug === slug);
   if (row === undefined) return null;
   const { policy } = doc.header;
   const item = `ritual/${slug}`;

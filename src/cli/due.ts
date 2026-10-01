@@ -26,7 +26,6 @@ import { readLedger } from "../core/ledger.ts";
 import { ritualState, type RitualState } from "../core/due.ts";
 import type { Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
-import { localToday } from "../core/sweep.ts";
 import { listProjects, openProject, type Project } from "../core/store.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -81,11 +80,11 @@ function toRow(project: Project, header: Ritual, state: RitualState): DueRow {
 
 function collectRows(project: Project): DueRow[] {
   const ledger = readLedger(project);
-  const today = localToday();
+  const now = new Date();
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
-    return [toRow(project, doc.header, ritualState(doc, ledger, today))];
+    return [toRow(project, doc.header, ritualState(doc, ledger, { now }))];
   });
 }
 
@@ -143,11 +142,11 @@ function printBrief(args: ParsedArgs): number {
   try {
     const project = openProject(resolveProject(stringFlag(args, "project")));
     const ledger = readLedger(project);
-    const today = localToday();
+    const now = new Date();
     const rows = project.listItems("ritual").flatMap((slug) => {
       const doc = project.readItem<Ritual>("ritual", slug);
       if (doc === null) return [];
-      const state = ritualState(doc, ledger, today);
+      const state = ritualState(doc, ledger, { now });
       return [{ slug, isDue: state.isDue, heldRun: state.heldRun ?? null, mode: doc.header.policy.mode }];
     });
     const line = briefLine(rows);

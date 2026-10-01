@@ -244,6 +244,8 @@ interface ProjectContext {
   /** The store-wide profiles (`_global`), or null when this host has none. */
   global: Project | null;
   host: string;
+  /** The batch start: every ritual of the batch is judged by it. */
+  now: Date;
   today: string;
   options: RunDueOptions;
   /** Shared by every project of the batch: one version check per harness, and the report that lists the checks. */
@@ -263,11 +265,11 @@ function skipped(slug: string, reason: SkipReason, detail?: string | undefined):
 function blocker(
   doc: Document<Ritual>,
   ledger: LedgerLine[],
-  at: { today: string; host: string; isNow: boolean; resuming?: string | undefined },
+  at: { now: Date; today: string; host: string; isNow: boolean; resuming?: string | undefined },
 ): RitualEntry | undefined {
   const { slug, policy } = doc.header;
-  const { today, isNow, resuming } = at;
-  const state = ritualState(doc, ledger, today);
+  const { now, today, isNow, resuming } = at;
+  const state = ritualState(doc, ledger, { now });
   if (isNow && state.lifecycle !== "active") return skipped(slug, "not-active", `the ritual is ${state.lifecycle}`);
   if (policy.mode === "off") {
     return skipped(slug, "policy-off", isNow ? "an unattended run needs mode report or act: darius ritual set --mode report" : undefined);
@@ -299,8 +301,8 @@ function resumeBlocker(slug: string, view: RunView, run: string): RitualEntry | 
 }
 
 /** True when the ritual is active and due today, whatever its policy says. */
-function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], today: string): boolean {
-  const state = ritualState(doc, ledger, today);
+function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], now: Date): boolean {
+  const state = ritualState(doc, ledger, { now });
   if (state.lifecycle !== "active") return false;
   return state.isDue || state.heldRun !== undefined || state.openRun !== undefined;
 }
@@ -309,7 +311,7 @@ function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], today: string)
 function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string; policySha: string }): { run: string } | { blockedBy: string } {
   const { doc, run, policySha } = target;
   return ctx.project.withLock(() => {
-    const state = ritualState(doc, readLedger(ctx.project), ctx.today);
+    const state = ritualState(doc, readLedger(ctx.project), { now: ctx.now });
     const open = state.heldRun ?? state.openRun;
     if (open !== undefined) return { blockedBy: open };
     const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run, policy_sha: policySha };
@@ -708,8 +710,8 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
   const ledger = readLedger(ctx.project);
   const { now, resume, followUp } = ctx.options;
   const isByHand = now !== undefined || resume !== undefined || followUp !== undefined;
-  if (!isByHand && !isCandidate(doc, ledger, ctx.today)) return null;
-  const blocked = blocker(doc, ledger, { today: ctx.today, host: ctx.host, isNow: isByHand, resuming: resume?.run }) ?? (followUp === undefined ? undefined : followUpBlocker(doc));
+  if (!isByHand && !isCandidate(doc, ledger, ctx.now)) return null;
+  const blocked = blocker(doc, ledger, { now: ctx.now, today: ctx.today, host: ctx.host, isNow: isByHand, resuming: resume?.run }) ?? (followUp === undefined ? undefined : followUpBlocker(doc));
   if (blocked !== undefined) return blocked;
   try {
     const where = projectWorkdir(ctx.project, ledger);
@@ -790,7 +792,8 @@ export async function runDue(options: RunDueOptions): Promise<{ report: BatchRep
   const cfg = loadConfigIfPresent();
   const s3 = remoteClient(cfg);
   const host = hostId();
-  const today = localToday();
+  const now = new Date();
+  const today = localToday(now);
   const report: BatchReport = { ok: true, date: today, host, dryRun: options.isDryRun, projects: [], errors: [] };
   const global = await openGlobal({ s3, cfg }, options.isDryRun, report);
   const names = options.projects.length > 0 ? options.projects : listProjects();
@@ -798,7 +801,7 @@ export async function runDue(options: RunDueOptions): Promise<{ report: BatchRep
   for (const name of names) {
     try {
       const project = openProject(name);
-      const ctx: ProjectContext = { project, s3, cfg, global, host, today, options, batch };
+      const ctx: ProjectContext = { project, s3, cfg, global, host, now, today, options, batch };
       report.projects.push(await runProject(ctx, cfg));
     } catch (cause) {
       report.errors.push({ project: name, error: errorMessage(cause) });
