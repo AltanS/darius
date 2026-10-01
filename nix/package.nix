@@ -39,6 +39,7 @@ stdenvNoCC.mkDerivation {
     fileset = lib.fileset.unions [
       ../bin
       ../scripts/run.sh
+      ../skills
       ../src
       ../systemd
       # The web app's committed build: hosts never build it (docs/concept.md,
@@ -60,7 +61,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
 
     mkdir -p $out/share/darius $out/bin
-    cp -r bin scripts src systemd package.json $out/share/darius/
+    cp -r bin scripts skills src systemd package.json $out/share/darius/
     mkdir -p $out/share/darius/web
     cp -r web/build $out/share/darius/web/
     install -Dm644 LICENSE $out/share/licenses/darius/LICENSE
