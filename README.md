@@ -1,5 +1,15 @@
 # darius
 
+> **Warning: darius is highly experimental. Use it at your own risk.**
+>
+> - A lot will change. Commands, config keys, file formats, and the store layout can break
+>   between releases, with little or no notice.
+> - Expect bugs and missing parts. Some features are half built.
+> - darius runs agents without a human present. Those agents can change files and run commands.
+>   Read what a ritual does before you let it run unattended.
+> - Back up your data. Do not depend on darius for anything you cannot afford to lose.
+> - The software comes with no warranty. See [License](#license).
+
 A project tracker for agent-driven work. It tracks milestones, specs, recurring rituals, and one-shot
 vigils, and it records the evidence that each check passed. State lives outside your git repo and syncs
 to an S3-compatible bucket that you run. A scheduler hands due rituals to a headless Claude Code

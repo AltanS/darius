@@ -25,6 +25,10 @@ Thumbs.db
 .claude/
 CLAUDE.local.md
 
+# This checkout's own darius marker and legacy tracker state
+.darius.toml
+.tracker/
+
 # nix build out-links
 result
 result-*
