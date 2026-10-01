@@ -68,7 +68,7 @@ import { allowsSubagents } from "../harness/gate.ts";
 import { resolveProfile, type RepoProfiles, type Resolution } from "../harness/profile.ts";
 import { errorMessage } from "../runtime.ts";
 import { launchHeadless, type ChildEnv, type LaunchResult } from "../surface/headless.ts";
-import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE } from "../surface/herdr.ts";
+import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE, type TabRun } from "../surface/herdr.ts";
 import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
 import { harnessReadiness, type Readiness } from "./harness-check.ts";
 import { acknowledgeRun, recordHold } from "./hold.ts";
@@ -771,13 +771,15 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
   const entry: ProjectEntry = { project: ctx.project.name, syncBefore: "skipped", syncAfter: "skipped", rituals: [] };
   if (!ctx.options.isDryRun) {
     entry.syncBefore = await syncStep(ctx.project, remote);
-    await closeFinishedTabs(join(ctx.project.root, "runs"), listRuns(ctx.project), (run) => isRunning(ctx.project, run));
+    await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
   }
   const slugs = ctx.project.listItems("ritual").filter((slug) => ctx.options.only === undefined || slug === ctx.options.only);
   for (const slug of slugs) {
     const ritual = await handleRitual(ctx, slug);
     if (ritual !== null) entry.rituals.push(ritual);
   }
+  // A ritual that ran just now has a newer run: its older tab can go (0.52.0).
+  if (!ctx.options.isDryRun) await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
   const didStart = entry.rituals.some((ritual) => ritual.action === "started");
   if (didStart) entry.syncAfter = await syncStep(ctx.project, remote);
   return entry;
@@ -811,8 +813,17 @@ function listRuns(project: Project): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-function isRunning(project: Project, run: string): boolean {
-  return viewRun(readLedger(project), run).phase === "running";
+/** Every run of the ledger and every run dir here, with what closeFinishedTabs needs. A run the ledger does not know counts as closed and old. */
+function tabRuns(project: Project): TabRun[] {
+  const ledger = readLedger(project);
+  const ids = new Set([...listRuns(project), ...ledger.flatMap((line) => (line.type === "run.started" && isJsonText(line.run) ? [line.run] : []))]);
+  return [...ids].map((run): TabRun => {
+    const view = viewRun(ledger, run);
+    const started = ledger.find((line) => line.run === run && line.type === "run.started");
+    const tab: TabRun = { run, item: view.item ?? "", phase: view.phase ?? "closed", startedAt: started?.at ?? "" };
+    if (view.completedAt !== undefined) tab.endedAt = view.completedAt;
+    return tab;
+  });
 }
 
 

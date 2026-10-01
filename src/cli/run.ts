@@ -7,9 +7,12 @@
  *   run start <ritual> [--who W]
  *                  prints what the previous run of the ritual passes on
  *                  (src/core/handoff.ts, 0.26.0)
- *   run hold <run> --question Q [--question Q ...] [--who W]
+ *   run hold <run> --question Q [--question Q ...] [--who W] [--banner]
  *   run answer <run> <n> <text...>
- *   run complete <run> --outcome complete|failed|abandoned [--findings-stdin] [--who W]
+ *   run complete <run> --outcome complete|failed|abandoned [--findings-stdin] [--who W] [--banner]
+ *                  Both print the ghost sign-off (src/core/signoff.ts, 0.52.0)
+ *                  after their output when DARIUS_RUN is the run, or with
+ *                  --banner; never with --json.
  *                  The findings may end with one ```darius-result block
  *                  (src/core/result.ts); a run darius launched must hand one
  *                  in to complete, and an invalid block is refused.
@@ -51,6 +54,7 @@ import { ritualState } from "../core/due.ts";
 import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
+import { signoffBanner, type SignoffInput } from "../core/signoff.ts";
 import { localToday } from "../core/sweep.ts";
 import { cutResult, FINDINGS_MAX, parseResult, readSummary, summarizeResult, type ResultSummary, type RunResult } from "../core/result.ts";
 import { getBlobText, itemRef, openProject, putBlob, type Project } from "../core/store.ts";
@@ -151,6 +155,29 @@ function runStart(args: ParsedArgs): number {
 
 // --- hold ---------------------------------------------------------------------
 
+/** `ritual/heartbeat` -> `heartbeat`. */
+function ritualOf(item: string): string {
+  return item.slice(item.indexOf("/") + 1);
+}
+
+/**
+ * The sign-off block (src/core/signoff.ts, 0.52.0) goes to the run's own
+ * session, and to a person who asks with --banner. Never into --json.
+ */
+function printBanner(args: ParsedArgs, project: Project, runId: string, facts: Omit<SignoffInput, "ritual" | "run" | "project" | "startedAt" | "followUpOf">): void {
+  if (args.json) return;
+  if (process.env.DARIUS_RUN !== runId && args.flags.banner !== true) return;
+  const lines = findRunLines(readLedger(project), runId);
+  const item = runItemRef(lines);
+  if (item === undefined) return;
+  const input: SignoffInput = { ...facts, ritual: ritualOf(item), run: runId, project: project.name };
+  const started = lines[0]?.at;
+  if (started !== undefined) input.startedAt = started;
+  const parent = followUpOf(lines, runId);
+  if (parent !== undefined) input.followUpOf = parent;
+  console.log(signoffBanner(input));
+}
+
 function runHold(args: ParsedArgs): number {
   const runId = requirePositional(args, 1, "<run> id");
   const questions = args.repeated.question ?? [];
@@ -165,6 +192,7 @@ function runHold(args: ParsedArgs): number {
   appendLine(project, { who, type: "run.held", item, run: runId, questions: [...questions] });
   if (args.json) printJson({ ok: true, run: runId, questions });
   else console.log(`✓ held run ${runId} with ${String(questions.length)} question(s)`);
+  printBanner(args, project, runId, { kind: "held", questions: questions.length });
   return 0;
 }
 
@@ -350,6 +378,9 @@ function appendCompletion(args: ParsedArgs, completion: Completion): number {
   }
   if (args.json) printJson(summary === undefined ? { ok: true, run: runId, outcome } : { ok: true, run: runId, outcome, result: summaryJson(summary) });
   else console.log(`✓ completed run ${runId} (${outcome})${summary === undefined ? "" : `, ${describeSummary(summary, intake.result?.handoff !== undefined)}`}`);
+  const facts: Parameters<typeof printBanner>[3] = { kind: "complete", outcome };
+  if (summary !== undefined) facts.summary = summary;
+  printBanner(args, project, runId, facts);
   return 0;
 }
 

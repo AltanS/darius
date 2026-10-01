@@ -975,7 +975,7 @@ async function withFakeHerdr<T>(opts: { status?: string; graceMs?: number; start
   }
 }
 
-test("herdr surface: a tab in darius-runs, the harness started with its interactive argv, the run completes; the next batch closes the tab", async () => {
+test("herdr surface: a tab in darius-runs, the harness started with its interactive argv, the run completes; the tab stays until the ritual has a newer run", async () => {
   await addProfile("rd-watch", ["--surface", "herdr"]);
   const project = "rd-herdr-watch";
   seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-watch" } });
@@ -1002,7 +1002,14 @@ test("herdr surface: a tab in darius-runs, the harness started with its interact
   assert.equal(JSON.parse(readFileSync(join(openProject(project).root, "runs", run, "herdr.json"), "utf8")).tab, "w9:t2");
 
   await withFakeHerdr({}, () => runDueJson(project));
-  assert.ok(herdrCalls().includes("tab close w9:t2"), "the next batch closes it");
+  assert.equal(herdrCalls().includes("tab close w9:t2"), false, "no newer run of the ritual and under 48 hours: the tab stays");
+  assert.equal(existsSync(join(openProject(project).root, "runs", run, "herdr.json")), true);
+
+  const newer = ulid();
+  appendLine(openProject(project), { who: "test", type: "run.started", item: "ritual/heartbeat", run: newer });
+  appendLine(openProject(project), { who: "test", type: "run.completed", item: "ritual/heartbeat", run: newer, outcome: "complete", findings_sha: null });
+  await withFakeHerdr({}, () => runDueJson(project));
+  assert.ok(herdrCalls().includes("tab close w9:t2"), "a newer run of the ritual closes it");
   assert.equal(existsSync(join(openProject(project).root, "runs", run, "herdr.json")), false);
 });
 

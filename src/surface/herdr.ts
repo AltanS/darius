@@ -20,8 +20,11 @@
  * than the grace time holds the run with a question naming the tab. On
  * timeout the tab is closed and the run fails as a headless one would.
  *
- * A finished run's tab stays open for the person; run-due closes it at the
- * start of the next batch (closeFinishedTabs).
+ * A finished run's tab stays open for the person, so a glance at the panes
+ * shows the sign-off (0.52.0). run-due closes it (closeFinishedTabs) when a
+ * newer run of the same ritual has started, or when the run ended more than
+ * 48 hours ago. A held run's tab is never closed that way: the run is not
+ * finished.
  */
 
 import { spawn } from "node:child_process";
@@ -328,21 +331,44 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
   return ended(started, end);
 }
 
+/** How long a finished run's tab stays when its ritual does not run again. */
+export const TAB_KEEP_MS = 48 * 60 * 60 * 1000;
+
+/** What closeFinishedTabs needs to know about one run, read from the ledger. */
+export interface TabRun {
+  run: string;
+  /** The ledger item, `ritual/<slug>`: runs of one ritual share it. */
+  item: string;
+  phase: "running" | "held" | "closed";
+  /** ISO time of the run.started line. */
+  startedAt: string;
+  /** ISO time of the run.completed line; a closed run without it counts as old. */
+  endedAt?: string;
+}
+
+/** True when the finished run's tab is due to close: a newer run of its ritual exists, or it ended over 48 hours ago. */
+export function isTabDue(run: TabRun, all: readonly TabRun[], now: number): boolean {
+  if (run.phase !== "closed") return false;
+  if (all.some((other) => other.item === run.item && other.run !== run.run && other.startedAt > run.startedAt)) return true;
+  const endedMs = run.endedAt === undefined ? Number.NaN : Date.parse(run.endedAt);
+  return Number.isNaN(endedMs) || now - endedMs > TAB_KEEP_MS;
+}
+
 /**
- * Closes the herdr tab of every run in `runsDir` whose run is no longer
- * running, and forgets it. Best effort: a tab the person already closed, or
- * a herdr that is gone, is not an error.
+ * Closes the herdr tab of every finished run in `runsDir` that isTabDue, and
+ * forgets it. A running or held run keeps its tab. Best effort: a tab the
+ * person already closed, or a herdr that is gone, is not an error.
  */
 export async function closeFinishedTabs(
   runsDir: string,
-  runs: readonly string[],
-  isRunning: (run: string) => boolean,
+  runs: readonly TabRun[],
+  now: number = Date.now(),
   target: HerdrTarget = herdrTarget(),
 ): Promise<number> {
   let closed = 0;
   for (const run of runs) {
-    const file = join(runsDir, run, TAB_FILE);
-    if (!existsSync(file) || isRunning(run)) continue;
+    const file = join(runsDir, run.run, TAB_FILE);
+    if (!existsSync(file) || !isTabDue(run, runs, now)) continue;
     const parsed = parseJson(readFileSync(file, "utf8"));
     const tab = isRecord(parsed) && isText(parsed.tab) ? parsed.tab : undefined;
     if (tab !== undefined) {

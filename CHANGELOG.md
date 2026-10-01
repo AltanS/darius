@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.52.0] - 2026-10-01
+
+### Added
+
+- A darius-started session ends with a sign-off: a small ASCII ghost leaving a castle, the ritual, the run, the result line, and when it ended and how long it took. A held run shows the ghost waiting at the gate with the question count and the answer command. A glance at the herdr panes in the morning shows that things went as expected.
+- `darius run complete` and `darius run hold` print the sign-off after their output when `DARIUS_RUN` is the run. A person gets it only with `--banner`. `--json` never has it.
+- The run prompt has a rule: after `run complete` or `run hold` succeeds, the last message is the sign-off block, copied exactly inside a code block. The resume message says the same.
+
+### Changed
+
+- A finished run's herdr tab now stays until a newer run of the same ritual has started, or until the run ended more than 48 hours ago. Before, the next batch closed every finished tab. A held run's tab is never closed this way.
+
 ## [0.51.0] - 2026-10-01
 
 ### Added

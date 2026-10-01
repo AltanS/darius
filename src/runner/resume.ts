@@ -91,7 +91,7 @@ export function resumeMessage(input: ResumeInput): string {
       "",
       ...answers,
       "",
-      "Go on with the procedure where you stopped. Follow the protocol in your system prompt: hold the run again if you need a person, and finish with darius run complete.",
+      "Go on with the procedure where you stopped. Follow the protocol in your system prompt: hold the run again if you need a person, and finish with darius run complete. After it succeeds, your last message is the sign-off block it printed, copied exactly inside a code block, and nothing else.",
       HOLD_STILL_APPLIES,
       FINDINGS_STYLE,
     ].join("\n");

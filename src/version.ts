@@ -1,2 +1,2 @@
 /** Kept in step with package.json and CHANGELOG.md by scripts/check-version.sh. */
-export const VERSION = "0.51.0";
+export const VERSION = "0.52.0";
