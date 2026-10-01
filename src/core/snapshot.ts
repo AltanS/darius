@@ -2,7 +2,7 @@
  * `darius snapshot`: a dated archive of this host's store, kept in a local
  * folder, with an optional copy in an S3 bucket (docs/concept.md,
  * "Snapshots"). It exists because the store can grow to gigabytes, which a git
- * repo is the wrong place for (the git export of 0.43.0 stays for small stores).
+ * repo is the wrong place for (it replaced the git export of 0.43.0).
  *
  * One snapshot is `darius-<host>-<UTC stamp>.tar.gz`, made by the system `tar`
  * from the state dir, so it restores with `tar -xzf` and nothing of darius.

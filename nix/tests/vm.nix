@@ -6,7 +6,7 @@
 #   bob    a plain checkout with `bin/darius setup --systemd --remote`, Node
 #          only, credentials 0600. This is the install that failed on NixOS
 #          in v0.2.0 (the unit PATH had no bash).
-# Each runs vigil-sweep, run-due and sync through systemd exactly as the timers
+# Each runs vigil-sweep, run-due, sync and snapshot through systemd exactly as the timers
 # would, against a SeaweedFS in the VM. A fake `claude` runs the PreToolUse
 # hook and completes the run with `darius` from the unit PATH.
 {
@@ -49,6 +49,32 @@ let
     [default]
     aws_access_key_id = ${accessKey}
     aws_secret_access_key = ${secretKey}
+  '';
+
+  # `darius vigil add` is a legacy verb: it writes `.tracker/vigils/` through
+  # the vendored CLI, and `vigil sweep` reads the store only (docs/concept.md,
+  # "Backward compatibility"). No CLI verb puts a vigil with a custom check
+  # into the store yet, so the test calls `addVigil`, the function the verb
+  # will call once vigils join DARIUS_KINDS, from the checkout it installed.
+  addStoreVigil = pkgs.writeText "darius-vm-add-vigil.mts" ''
+    import { readFileSync } from "node:fs";
+    import { pathToFileURL } from "node:url";
+
+    const src = pathToFileURL(`''${process.env.DARIUS_SRC}/`).href;
+    const { addVigil } = await import(`''${src}core/sweep.ts`);
+    const { openProject } = await import(`''${src}core/store.ts`);
+    const { defaultWho } = await import(`''${src}core/ledger.ts`);
+
+    const [project, slug, title, due] = process.argv.slice(2);
+    addVigil(openProject(project, { create: true }), {
+      slug,
+      title,
+      due,
+      heavy: false,
+      body: readFileSync(0, "utf8"),
+      who: defaultWho(),
+    });
+    console.log(`added vigil ''${slug} to ''${project}`);
   '';
 
   bobConfig = pkgs.writeText "darius-vm-bob-config.toml" ''
@@ -151,6 +177,7 @@ pkgs.testers.runNixOSTest {
 
     environment.etc."darius-test/credentials".source = credentials;
     environment.etc."darius-test/bob-config.toml".source = bobConfig;
+    environment.etc."darius-test/add-vigil.mts".source = addStoreVigil;
 
     systemd.services.seaweedfs = {
       description = "SeaweedFS for the darius VM test";
@@ -204,7 +231,7 @@ pkgs.testers.runNixOSTest {
     import json
     import shlex
 
-    TIMERS = ["darius-sync", "darius-vigil-sweep", "darius-run-due"]
+    TIMERS = ["darius-sync", "darius-vigil-sweep", "darius-run-due", "darius-snapshot"]
     UIDS = {"alice": 1000, "bob": 1001}
 
     def as_user(user, cmd):
@@ -212,6 +239,19 @@ pkgs.testers.runNixOSTest {
 
     def user_ctl(user, args):
         return as_user(user, f"XDG_RUNTIME_DIR=/run/user/{UIDS[user]} systemctl --user {args}")
+
+    def add_store_vigil(user, project, slug, title, command):
+        # Writes a vigil into the user's store, from the checkout in ~/darius.
+        body = f"# checks\n\n- [ ] {title}\n  - Command: `{command}`\n  - Expected: `exit 0`\n"
+        return as_user(
+            user,
+            f"DARIUS_SRC=$HOME/darius/src node --no-warnings /etc/darius-test/add-vigil.mts"
+            f" {shlex.quote(project)} {shlex.quote(slug)} {shlex.quote(title)} 2026-01-01 <<'EOF'\n{body}EOF",
+        )
+
+    def vigil_status(user, project, slug):
+        status = json.loads(as_user(user, f"~/.local/bin/darius selftest status --project {project} --json"))
+        return next(v for v in status["vigils"] if v["slug"] == slug)
 
     def run_unit(user, unit):
         # `start` on a oneshot returns when the unit is done.
@@ -275,7 +315,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("alice: every unit once, as its timer would"):
         as_user("alice", "darius selftest seed")
-        for unit in ["darius-vigil-sweep", "darius-run-due", "darius-sync"]:
+        for unit in ["darius-vigil-sweep", "darius-run-due", "darius-sync", "darius-snapshot"]:
             run_unit("alice", unit)
         check_selftest("alice", "darius")
 
@@ -320,18 +360,13 @@ pkgs.testers.runNixOSTest {
         as_user("bob", "~/.local/bin/darius selftest seed")
         # bob's login PATH has no ~/.local/bin (plain NixOS), and a check's
         # login shell replaces PATH. darius must still be callable in a check.
-        as_user(
-            "bob",
-            "printf '%s\\n' '# checks' ''' '- [ ] darius runs inside a check' '  - Command: `darius --version`' '  - Expected: `exit 0`'"
-            " | ~/.local/bin/darius vigil add calls-darius --project darius-selftest --title 'A check calls darius' --due 2026-01-01 --stdin",
-        )
-        for unit in ["darius-vigil-sweep", "darius-run-due", "darius-sync"]:
+        print(add_store_vigil("bob", "darius-selftest", "calls-darius", "A check calls darius", "darius --version"))
+        for unit in ["darius-vigil-sweep", "darius-run-due", "darius-sync", "darius-snapshot"]:
             run_unit("bob", unit)
         check_selftest("bob", "~/.local/bin/darius")
-        vigils = as_user("bob", "~/.local/bin/darius vigil list --project darius-selftest")
-        print(vigils)
-        line = next(l for l in vigils.splitlines() if l.startswith("calls-darius"))
-        assert "closed held" in line, line
+        calls = vigil_status("bob", "darius-selftest", "calls-darius")
+        print(calls)
+        assert calls["state"] == "closed" and calls.get("verdict") == "held", calls
 
     with subtest("bob: the sweep runs Commands in the linked checkout, once a day"):
         as_user("bob", "mkdir -p ~/ws/sub && touch ~/ws/here.txt")
@@ -339,16 +374,11 @@ pkgs.testers.runNixOSTest {
         out = as_user("bob", "cd ~/ws/sub && ~/.local/bin/darius link")
         print(out)
         assert "linked vm-ws to /home/bob/ws" in out, out
-        as_user(
-            "bob",
-            "printf '%s\\n' '# checks' ''' '- [ ] runs in the checkout' '  - Command: `test -f here.txt`' '  - Expected: `exit 0`'"
-            " | ~/.local/bin/darius vigil add in-checkout --project vm-ws --title 'Runs in the checkout' --due 2026-01-01 --stdin",
-        )
+        print(add_store_vigil("bob", "vm-ws", "in-checkout", "Runs in the checkout", "test -f here.txt"))
         run_unit("bob", "darius-vigil-sweep")
-        vigils = as_user("bob", "~/.local/bin/darius vigil list --project vm-ws")
-        print(vigils)
-        line = next(l for l in vigils.splitlines() if l.startswith("in-checkout"))
-        assert "closed held" in line, line
+        here = vigil_status("bob", "vm-ws", "in-checkout")
+        print(here)
+        assert here["state"] == "closed" and here.get("verdict") == "held", here
         # The timer again, the same day: the project's daily lease is done.
         run_unit("bob", "darius-vigil-sweep")
         journal = machine.succeed("journalctl --no-pager -o cat _UID=1001 _SYSTEMD_USER_UNIT=darius-vigil-sweep.service")

@@ -2,8 +2,8 @@
 #
 # It does what `darius setup --systemd` does for a checkout, declaratively:
 # puts darius on PATH, optionally writes ~/.config/darius/config.toml, and
-# declares the sync, vigil-sweep and run-due units and timers with the same
-# schedules as systemd/*.timer, plus the standing darius-web.service
+# declares the sync, vigil-sweep, run-due and snapshot units and timers with
+# the same schedules as systemd/*.timer, plus the standing darius-web.service
 # (services.darius.web) that runs the read-only status page.
 #
 # The unit PATH is spelled out here, not inherited. A user unit's environment
@@ -240,6 +240,8 @@ in
 
     vigilSweep = timerOptions "vigil sweep --all-projects --daily" "06:30";
 
+    snapshot = timerOptions "snapshot create" "04:00";
+
     runDue = timerOptions "run-due --unattended" "*:05" // {
       slice = mkOption {
         type = types.nullOr types.str;
@@ -316,6 +318,13 @@ in
               service "darius vigil sweep --all-projects --daily" "vigil sweep --all-projects --daily --json"
                 { };
           })
+          (mkIf cfg.snapshot.enable {
+            # snapshot.env is where DARIUS_SNAPSHOT_* settings live; the web
+            # service reads it too, as in systemd/darius-snapshot.service.
+            darius-snapshot = service "darius snapshot" "snapshot create --json" {
+              EnvironmentFile = "-%h/.config/darius/snapshot.env";
+            };
+          })
           (mkIf cfg.runDue.enable {
             darius-run-due = service "darius run-due --unattended" "run-due --unattended --json" (
               lib.optionalAttrs (cfg.runDue.slice != null) { Slice = cfg.runDue.slice; }
@@ -335,6 +344,14 @@ in
           (mkIf cfg.vigilSweep.enable {
             darius-vigil-sweep = timer "Run darius vigil sweep once a day" {
               OnCalendar = cfg.vigilSweep.onCalendar;
+              Persistent = true;
+              AccuracySec = "5min";
+            };
+          })
+          (mkIf cfg.snapshot.enable {
+            darius-snapshot = timer "Run darius snapshot once a day" {
+              OnCalendar = cfg.snapshot.onCalendar;
+              RandomizedDelaySec = "10min";
               Persistent = true;
               AccuracySec = "5min";
             };

@@ -15,7 +15,9 @@
  * Exit codes (probe contract): 0 done; 1 refused or failed (a problem in the
  * settings, a secret-looking name in the store, a failed upload that is no
  * network fault); 2 usage; 3 the snapshot is local but the bucket could not be
- * reached, and the next run tries again.
+ * reached. The next run makes a new snapshot and uploads that one; the missed
+ * one is not sent again. `create` with `enabled = false` does nothing and exits
+ * 0, so the timer does not show as failed.
  */
 
 import { hostId } from "../core/ledger.ts";
@@ -37,8 +39,15 @@ import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 const VERBS = "create | list | status | check | delete";
 
 async function create(args: ParsedArgs): Promise<number> {
+  const resolved = resolveSnapshotSettings();
+  // Off on purpose is not a failure: the timer must not show as failed every night.
+  if (resolved.problems.length === 0 && !resolved.settings.enabled) {
+    if (args.json) console.log(JSON.stringify({ code: 0, ok: true, name: null, skipped: "off" }));
+    else console.log("· snapshots are off (enabled = false), nothing done");
+    return 0;
+  }
   const result = await runSnapshot({
-    resolved: resolveSnapshotSettings(),
+    resolved,
     host: hostId(),
     version: VERSION,
     stateDir: stateDir(),
@@ -86,6 +95,8 @@ function status(args: ParsedArgs): number {
   console.log(remote === null ? "· no remote copy" : `· remote copy: ${remote.endpoint} bucket ${remote.bucket}, keep ${String(resolved.settings.keepRemote)}, key pair from ${credentialsSource()}`);
   if (running !== null) console.log(`· running now (pid ${String(running.pid)})`);
   if (state.last !== null) console.log(`· last run ${state.last.at}: ${state.last.ok ? "ok" : `failed, ${state.last.error ?? ""}`}`);
+  // A run can make its local snapshot (ok) and still fail to reach the bucket, so the bucket gets its own line.
+  if (state.remote !== null) console.log(`· bucket, last contact ${state.remote.at}: ${state.remote.ok ? `ok, ${String(state.remote.objects.length)} snapshots` : `failed, ${state.remote.error ?? ""}`}`);
   for (const problem of resolved.problems) console.log(`! ${problem}`);
   return resolved.problems.length === 0 ? 0 : 1;
 }

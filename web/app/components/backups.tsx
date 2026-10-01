@@ -377,7 +377,7 @@ function SettingField({ field, backups, draft, busy, onChange, onReset }: FieldP
         className="bk-input"
         type={field.kind === "number" ? "number" : "text"}
         inputMode={field.kind === "number" ? "numeric" : undefined}
-        min={field.kind === "number" ? 0 : undefined}
+        min={field.kind === "number" ? 1 : undefined}
         step={field.kind === "number" ? 1 : undefined}
         autoComplete="off"
         autoCapitalize="off"

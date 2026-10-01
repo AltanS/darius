@@ -1,6 +1,6 @@
 {
   # darius as a Nix flake: the package, a dev shell, a home-manager module that
-  # declares the three timers, and checks that prove it on a real NixOS.
+  # declares the timers, and checks that prove it on a real NixOS.
   #
   # The flake is additive. `git clone` + `bin/darius setup --systemd` stays a
   # supported install on every Linux, NixOS included. The flake is the

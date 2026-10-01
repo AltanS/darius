@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.48.1] - 2026-10-01
+
+### Changed
+
+- The README backups guide is rewritten for a first-time reader: quick start, what is and is not backed up, adding a bucket, checking that a backup works, a failure table, and a restore that also stops the snapshot timer. The concept doc says what the bucket check compares (size only) and what an exit 3 means for the next run.
+- `darius snapshot status` prints the last bucket contact on its own line, so a run that made its local snapshot but missed the bucket is visible.
+
+### Fixed
+
+- `darius snapshot create` with `enabled = false` does nothing and exits 0. It exited 1, so the timer unit showed as failed every night.
+- The number fields on the backups page no longer accept 0 (`keep` and `keep_remote` start at 1).
+- Stale comments about the retired git export are gone.
+- The home-manager module `services.darius` declares `darius-snapshot.service` and its timer (04:00, `snapshot.env`), as `setup --systemd` does for a checkout. Before, a Nix host had no snapshot timer.
+- The NixOS VM test runs the snapshot unit for both installs. It adds its two test vigils to the store directly, because `darius vigil add` is a legacy verb that writes `.tracker/vigils/`, which `vigil sweep` does not read.
+
 ## [0.48.0] - 2026-10-01
 
 ### Added

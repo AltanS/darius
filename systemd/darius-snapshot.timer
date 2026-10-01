@@ -1,5 +1,5 @@
 # systemd/darius-snapshot.timer: 04:00 local time daily, with up to 10 minutes
-# of random delay (the git export runs at 03:30). Persistent=true: if the host
+# of random delay. Persistent=true: if the host
 # is asleep or powered off at 04:00, run once at the next boot.
 [Unit]
 Description=Run darius snapshot once a day

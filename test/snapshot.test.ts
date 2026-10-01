@@ -458,3 +458,28 @@ test("the command refuses an unknown verb and reports status as JSON", async () 
   assert.equal(parsed.settings.keep.value, 7);
   assert.ok(readdirSync(sandbox).length > 0);
 });
+
+test("create with enabled = false does nothing and exits 0; status shows a failed bucket on its own line", async () => {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (line: string) => lines.push(line);
+  process.env.DARIUS_SNAPSHOT_DIR = folder("cli-off");
+  process.env.DARIUS_SNAPSHOT_ENABLED = "false";
+  try {
+    assert.equal(await snapshotCommand.run({ positional: ["create"], flags: {}, json: false, repeated: {} }), 0);
+    assert.match(lines.join("\n"), /snapshots are off/u);
+    assert.deepEqual(listLocalSnapshots(folder("cli-off")), []);
+
+    delete process.env.DARIUS_SNAPSHOT_ENABLED;
+    mkdirSync(folder("cli-off"), { recursive: true });
+    writeFileSync(join(folder("cli-off"), "status.json"), JSON.stringify({ v: 1, last: { at: "2026-10-01T04:00:00.000Z", ok: true, name: "x", error: null }, remote: { at: "2026-10-01T04:00:01.000Z", ok: false, error: "no response", objects: [] } }));
+    lines.length = 0;
+    await snapshotCommand.run({ positional: ["status"], flags: {}, json: false, repeated: {} });
+    assert.match(lines.join("\n"), /last run .*ok/u);
+    assert.match(lines.join("\n"), /bucket, last contact .*failed, no response/u);
+  } finally {
+    console.log = log;
+    delete process.env.DARIUS_SNAPSHOT_DIR;
+    delete process.env.DARIUS_SNAPSHOT_ENABLED;
+  }
+});
