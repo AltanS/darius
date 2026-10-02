@@ -396,6 +396,73 @@ test("milestone detail: a short spec starts open, a long one folded; worklogs st
   assert.match(body, /<a [^>]*aria-current="page"[^>]*href="\/w\/demo\/milestones"|<a [^>]*href="\/w\/demo\/milestones"[^>]*aria-current="page"/u, "the Milestones tab of the workspace");
 });
 
+interface Crumb {
+  text: string;
+  href: string | null;
+}
+
+/** The steps of the breadcrumb nav of a page: text and link target (null for the current page). */
+function crumbsOf(body: string): Crumb[] {
+  const nav = /<nav aria-label="Breadcrumb"[^>]*>(.*?)<\/nav>/su.exec(body)?.[1] ?? "";
+  assert.match(nav, /^<ol[ >]/u, "an ordered list");
+  return [...nav.matchAll(/<li[^>]*>(.*?)<\/li>/gsu)].map((item) => {
+    const inner = item[1] ?? "";
+    return { text: inner.replaceAll("<!-- -->", "").replaceAll(/<[^>]+>/gu, ""), href: /<a [^>]*href="([^"]*)"/u.exec(inner)?.[1] ?? null };
+  });
+}
+
+test("the breadcrumb nav: workspace, section, item, with the current page last and not a link", async () => {
+  const ritual = await get("/w/demo/rituals/daily-report");
+  const ritualTitle = RITUAL.row.title.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  assert.deepEqual(crumbsOf(ritual.body), [
+    { text: "demo", href: "/w/demo" },
+    { text: "Rituals", href: "/w/demo/rituals" },
+    { text: ritualTitle, href: null },
+  ]);
+  assert.match(ritual.body, /<span aria-current="page">/u, "the current step says so");
+
+  const run = await get(`/w/demo/runs/${DONE}`);
+  const steps = crumbsOf(run.body);
+  assert.deepEqual(steps.map((step) => step.href), ["/w/demo", "/w/demo/rituals", "/w/demo/rituals/daily-report", null], "ws / Rituals / ritual / run, a ritual run is filed under Rituals");
+  assert.equal(steps[0]?.text, "demo");
+  assert.equal(steps[1]?.text, "Rituals");
+  assert.equal(steps[2]?.text, ritualTitle);
+  assert.equal(steps[3]?.text, "Findings heading", "the run's own title");
+
+  const held = crumbsOf((await get(`/w/demo/runs/${HELD}`)).body);
+  assert.deepEqual(held.map((step) => step.href), ["/w/demo", "/w/demo/rituals", null], "a run titled by its ritual has no separate ritual step");
+  assert.equal(held.at(-1)?.text, ritualTitle);
+
+  assert.deepEqual(crumbsOf((await get("/w/demo/milestones/M7")).body), [
+    { text: "demo", href: "/w/demo" },
+    { text: "Milestones", href: "/w/demo/milestones" },
+    { text: "M7", href: null },
+  ]);
+
+  assert.deepEqual(crumbsOf((await get("/w/demo/runs")).body), [
+    { text: "demo", href: "/w/demo" },
+    { text: "Runs", href: null },
+  ]);
+  assert.deepEqual(crumbsOf((await get("/runs")).body), [
+    { text: "All workspaces", href: "/all" },
+    { text: "Runs", href: null },
+  ]);
+  assert.equal((await get("/w/demo/rituals")).body.includes('aria-label="Breadcrumb"'), false, "a section list has no crumbs");
+});
+
+test("a vigil run is filed under Vigils, and the ritual page shows Next due as a clock time, not raw ISO", async () => {
+  const vigilRun = { ...RUNS[2]!, item: "vigil/guard-soak" };
+  const vigilContext: WebContext = { ...context, run: (project, run) => (project === "demo" && run === DONE ? runDetail(vigilRun) : context.run(project, run)) };
+  const page = await (await handler(new Request(`http://darius.test/w/demo/runs/${DONE}`), vigilContext)).text();
+  const steps = crumbsOf(page);
+  assert.equal(steps[1]?.text, "Vigils");
+  assert.equal(steps[1]?.href, "/w/demo/vigils");
+  const repo = { ...RITUAL.row, heldRun: null, args: "--site acme", nextDueAt: "2026-09-29T05:00:00.000Z" };
+  const ritual = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), { ...context, ritual: () => ({ ...RITUAL, row: repo }) })).text()).replaceAll("<!-- -->", "");
+  assert.ok(ritual.includes("Next due") && /Next due.*?(29 Sep )?07:00/u.test(ritual.replaceAll(/<[^>]+>/gu, "")), "the host clock (UTC+2): a time, with the day when it is not today");
+  assert.equal(ritual.replaceAll(/<script.*?<\/script>/gsu, "").replaceAll(/<[^>]+>/gu, "").includes("2026-09-29T05:00:00.000Z"), false, "no raw ISO date in the page text (the hydration data keeps it)");
+});
+
 test("the run filter keeps only matching runs", async () => {
   const page = await get("/runs?state=held");
   assert.ok(page.body.includes(`/w/demo/runs/${HELD}`));

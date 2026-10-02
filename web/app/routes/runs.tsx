@@ -1,6 +1,7 @@
 import { data, Link, redirect } from "react-router";
 
 import type { Route } from "./+types/runs";
+import { Crumbs } from "../components/crumbs.tsx";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
 import { RunList } from "../components/runs.tsx";
 import { Section } from "../components/ui.tsx";
@@ -85,6 +86,7 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
   return (
     <div>
       <header className="page-head">
+        <Crumbs />
         <h1 className="page-title">Runs</h1>
         <p className="page-meta">
           <span>{filterText(query)}</span>

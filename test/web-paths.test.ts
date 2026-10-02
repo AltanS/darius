@@ -88,20 +88,48 @@ test("switchTarget() keeps the section and sends a detail page to its list", () 
   assert.equal(paths.href(paths.switchTarget(paths.placeOf("/all"), "other")), "/w/other");
 });
 
-test("crumbsOf() lists the scope, the section and the parent", () => {
+test("crumbsOf() lists the scope, the section, the parent and the title; only the last step is not a link", () => {
   const ritual = paths.placeOf("/w/demo/rituals/daily-report");
-  assert.deepEqual(paths.crumbsOf(ritual), [
+  assert.deepEqual(paths.crumbsOf(ritual, undefined, "Daily report"), [
     { label: "demo", href: "/w/demo" },
     { label: "Rituals", href: "/w/demo/rituals" },
+    { label: "Daily report", href: null },
   ]);
   const parent = { label: "Daily report", target: { to: "ritual", ws: "demo", slug: "daily-report" } satisfies Target };
-  assert.equal(paths.crumbsOf({ ...paths.placeOf("/w/demo/runs/01K"), section: "rituals" }, parent).at(-1)?.label, "Daily report");
+  const run = paths.placeOf("/w/demo/runs/01K");
+  const inRituals = { ...run, section: paths.litSection(run, "ritual") };
+  assert.deepEqual(paths.crumbsOf(inRituals, parent, "Findings heading"), [
+    { label: "demo", href: "/w/demo" },
+    { label: "Rituals", href: "/w/demo/rituals" },
+    { label: "Daily report", href: "/w/demo/rituals/daily-report" },
+    { label: "Findings heading", href: null },
+  ]);
+  const vigil = { label: "Guard soak", target: { to: "vigil", ws: "demo", slug: "guard" } satisfies Target };
+  assert.deepEqual(paths.crumbsOf({ ...run, section: paths.litSection(run, "vigil") }, undefined, "Guard soak").map((crumb) => crumb.label), ["demo", "Vigils", "Guard soak"]);
+  assert.equal(paths.crumbsOf({ ...run, section: "vigils" }, vigil).at(-1)?.href, null, "without a title the parent is the last step and not a link");
+  assert.deepEqual(paths.crumbsOf(paths.placeOf("/w/demo/runs")), [
+    { label: "demo", href: "/w/demo" },
+    { label: "Runs", href: null },
+  ]);
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/runs")), [
     { label: "All workspaces", href: "/all" },
-    { label: "Runs", href: "/runs" },
+    { label: "Runs", href: null },
   ]);
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/w/demo")), []);
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/settings")), []);
+});
+
+test("litSection() lights the section of the page; a run page lights the section of its item", () => {
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/rituals/daily-report")), "rituals");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/milestones/M7")), "milestones");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/findings")), "findings");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/runs")), "runs");
+  assert.equal(paths.litSection(paths.placeOf("/runs")), "runs");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/runs/01K"), "ritual"), "rituals");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/runs/01K"), "vigil"), "vigils");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/runs/01K")), null);
+  assert.equal(paths.litSection(paths.placeOf("/w/demo")), null);
+  assert.equal(paths.litSection(paths.placeOf("/status")), null);
 });
 
 const APP = fileURLToPath(new URL("../web/app/", import.meta.url));

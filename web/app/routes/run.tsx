@@ -2,17 +2,18 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/run";
 import { KindWord } from "../components/chip.tsx";
+import { Crumbs } from "../components/crumbs.tsx";
 import { FollowUpCard } from "../components/follow-up.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
-import { Crumbs, Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
+import { Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
 import { duration, shortRun } from "../lib/format.ts";
 import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
-import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
+import { excerpt, itemLabel, itemSlug, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -28,7 +29,7 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   // Only a run whose questions list commands can have a follow-up from this page; the check runs on the server.
   const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
   const followUp = hasCommands ? await context.followUp(run.project, run.row.run) : null;
-  return { run, kind: itemKind(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
+  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
@@ -47,15 +48,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
   return (
     <article>
       <header className="page-head">
-        <Crumbs>
-          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
-          {title === label ? null : (
-            <>
-              <span aria-hidden="true"> / </span>
-              <Link to={href(itemTarget(project, row.item))}>{label}</Link>
-            </>
-          )}
-        </Crumbs>
+        <Crumbs itemKind={kind} title={title} parent={title === label ? undefined : { label, target: itemTarget(project, row.item) }} />
         <h1 className="page-title page-title-run">
           {title === label ? (
             <Link to={href(itemTarget(project, row.item))} className="title-link">
