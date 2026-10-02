@@ -1,20 +1,13 @@
-/** The head of a project page: the status strip, and the panel for what is open now. */
+/** Small parts of the pages: one count of the status strip, a list that is short on a phone, a run clock. */
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
-import type { VigilRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { duration } from "../lib/format.ts";
-import { href } from "../lib/paths.ts";
 import type { Kind } from "../lib/kind.ts";
-import { railOf } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
-import { runState, stuckText, type ActivityRun } from "../lib/view.ts";
-import { KindWord } from "./chip.tsx";
 import { KindIcon } from "./kind.tsx";
-import { Row, RowList } from "./row.tsx";
-import { SectHead, Time } from "./ui.tsx";
 
 interface PillProps {
   label: string;
@@ -56,55 +49,6 @@ export function Pill({ label, value, tone, href: target, live = false, kind = nu
   );
 }
 
-/** A run that is open or waits for a person, with a word when it may be stuck. */
-export interface LiveRun {
-  run: ActivityRun;
-  stuck: string | null;
-}
-
-export interface PulseData {
-  live: readonly LiveRun[];
-  openVigils: readonly VigilRow[];
-  /** Rituals and dated vigils past due: the late segment, a link to Coming up. */
-  overdue: number;
-  /** Rows due today that are not running or held now. */
-  dueToday: number;
-  /** Armed vigils without a due date: the vigils segment opens their list. */
-  waiting: number;
-  /** Flagged vigils among those without a due date: the flagged segment opens their list too. */
-  flaggedWaiting: number;
-}
-
-interface PulseProps {
-  data: PulseData;
-}
-
-/**
- * The status strip of a project: need you, running, flagged, late, due today,
- * vigils armed. A segment shows only above zero, and the strip not at all
- * when every segment is zero. Each segment opens what it counts.
- */
-export function Pulse({ data }: PulseProps): React.ReactNode {
-  const running = data.live.filter(({ run }) => run.phase === "running").length;
-  const waiting = data.live.length - running;
-  const flagged = data.openVigils.filter((vigil) => vigil.flagged).length;
-  const armedHref = data.waiting === 0 ? "#coming-up" : "#waiting";
-  const segments = [
-    waiting === 0 ? null : <Pill key="need" label="need you" value={waiting} tone="wait" href="#now" />,
-    running === 0 ? null : <Pill key="running" label="running" value={running} tone="run" href="#now" live />,
-    flagged === 0 ? null : <Pill key="flagged" label="flagged" value={flagged} tone="bad" href={data.flaggedWaiting > 0 ? "#waiting" : "#coming-up"} />,
-    data.overdue === 0 ? null : <Pill key="late" label="late" value={data.overdue} tone="late" href="#coming-up" />,
-    data.dueToday === 0 ? null : <Pill key="today" label="due today" value={data.dueToday} tone="gold" href="#coming-up" />,
-    data.openVigils.length === 0 ? null : <Pill key="armed" label="vigils armed" kind="vigil" value={data.openVigils.length} tone="gold" href={armedHref} />,
-  ].filter((segment) => segment !== null);
-  if (segments.length === 0) return null;
-  return (
-    <nav className="pulse pulse-home stagger" aria-label="Summary">
-      {segments}
-    </nav>
-  );
-}
-
 interface PhoneMoreProps {
   /** How many rows the phone hides until the button is pressed. */
   hidden: number;
@@ -143,51 +87,4 @@ interface ElapsedProps {
 export function Elapsed({ since }: ElapsedProps): React.ReactNode {
   const { now } = useClock();
   return <span>{duration(since, new Date(now).toISOString()) || "just now"}</span>;
-}
-
-interface LivePanelProps {
-  live: readonly LiveRun[];
-}
-
-/** Runs that are open now or wait for a person; nothing at all when there are none. A running one sweeps a light along its top edge. */
-export function LivePanel({ live }: LivePanelProps): React.ReactNode {
-  if (live.length === 0) return null;
-  return (
-    <section id="now" className="section">
-      <SectHead title="Now" />
-      <div className="panel">
-        <RowList bare className="stagger">
-          {live.map(({ run, stuck }) => {
-            const state = runState(run);
-            const running = run.phase === "running";
-            const questions = run.phase === "held" && run.questions.length > 0 ? `${run.questions.length} question${run.questions.length === 1 ? "" : "s"}` : null;
-            return (
-              <Row
-                key={run.run}
-                kind={run.kind}
-                manual={run.manual}
-                href={href({ to: "run", ws: run.project, run: run.run })}
-                title={run.label}
-                rail={stuck === null ? railOf(state) : "late"}
-                live={running}
-                chips={<KindWord kind={run.kind} manual={run.manual} />}
-                state={state}
-                meta={[questions, run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null)}
-                time={
-                  running ? (
-                    <>
-                      for <Elapsed since={run.startedAt} />
-                    </>
-                  ) : (
-                    <Time iso={run.startedAt} />
-                  )
-                }
-                detail={stuck === null ? undefined : <span className="ink-late">{stuckText(stuck)}</span>}
-              />
-            );
-          })}
-        </RowList>
-      </div>
-    </section>
-  );
 }

@@ -1078,21 +1078,6 @@
     color: var(--color-parchment);
   }
 
-  /* The open and scheduled panels: as many columns as fit, 300 px at least. */
-
-  .band {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 24px 24px;
-    margin-bottom: 48px;
-  }
-
-  .band .rows {
-    border: 0;
-    background: none;
-    box-shadow: none;
-  }
-
   .rail-note {
     margin-bottom: 12px;
     font-size: 13px;
@@ -1113,10 +1098,6 @@
       border-top: 1px solid var(--line-soft);
     }
 
-    .band {
-      grid-template-columns: minmax(0, 1fr);
-      margin-bottom: 40px;
-    }
   }
 
   @media (max-width: 639px) {
@@ -1126,15 +1107,6 @@
   }
 
   /* --- project page (mobile redesign) ------------------------------------------------ */
-
-  /* The head: the checkout is a quiet mono line that may break after any slash. */
-
-  .proj-head .page-meta .proj-path {
-    font: 12px/1.5 var(--font-mono);
-    letter-spacing: 0;
-    color: var(--color-faint);
-    overflow-wrap: anywhere;
-  }
 
   /* Every list sits in a panel: one frame, rows without a second box, the same 16 px inside. */
 
@@ -1184,7 +1156,6 @@
       gap: 40px;
     }
 
-    .proj-body .band,
     .proj-body .board,
     .proj-body .board-main,
     .proj-body .board-rail {
@@ -1242,11 +1213,6 @@
       gap: 4px 16px;
       margin-top: 10px;
       font-size: 13px;
-    }
-
-    .proj-head .page-meta .proj-path {
-      order: 3;
-      flex: 1 0 100%;
     }
 
     .proj .sect {
@@ -2725,17 +2691,6 @@
     margin-top: 6px;
   }
 
-  .proj-head .proj-path {
-    margin-top: 6px;
-  }
-
-  .proj-head .proj-path code {
-    font: 12px/1.5 var(--font-mono);
-    letter-spacing: 0;
-    color: var(--color-faint);
-    overflow-wrap: anywhere;
-  }
-
   @media (max-width: 639px) {
   /* A Needs you card: the state and the age side by side at the left, not apart. */
 
@@ -2765,10 +2720,6 @@
 
   .brand:hover {
     text-decoration: none;
-  }
-
-  .brand-word {
-    display: none;
   }
 
   .gem {
@@ -3329,7 +3280,6 @@
     }
   }
 
-
   /* --- ia: milestones ---------------------------------------------------------------- */
 
   .ms-page {
@@ -3816,7 +3766,6 @@
       max-width: 880px;
     }
   }
-
 
   /* --- ia: settings and themes ------------------------------------------------------- */
 
@@ -5343,7 +5292,7 @@
       max-width: 100%;
     }
 
-    .crumb-back::before {
+    .crumb + .crumb-back::before {
       content: none;
     }
 
