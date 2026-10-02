@@ -249,7 +249,7 @@ test("alerts go to every device once; a gone device is dropped; a failed notice 
 
   assert.equal((await flushAlerts({ projects: ["push-flush"] }))?.sent, 2);
   assert.equal(service.received.length, 4, "two alerts to two devices");
-  assert.deepEqual(service.received[0], { title: "heartbeat waits for you", body: "push-flush: the run is held.\n1. may I push?", url: "/p/push-flush/runs/R1", tag: service.received[0]?.tag });
+  assert.deepEqual(service.received[0], { title: "heartbeat waits for you", body: "push-flush: the run is held.\n1. may I push?", url: "/w/push-flush/runs/R1", tag: service.received[0]?.tag });
   assert.match(service.received[2]?.body ?? "", /1\. Delete the card\? \(recommended: Yes\.\)/u);
   assert.equal(service.received[2]?.tag, "asks:R2");
   assert.match(service.authorization[0] ?? "", new RegExp(`^vapid t=\\S+, k=${keys.public}$`, "u"));

@@ -58,7 +58,7 @@ function oneLine(text: string): string {
 }
 
 function runPath(project: string, run: string): string {
-  return `/p/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}`;
+  return `/w/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}`;
 }
 
 function heldAlert(project: string, line: LedgerLine, run: string): Alert {
