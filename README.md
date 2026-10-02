@@ -43,24 +43,21 @@ what stays on the machine.
 
 ### In the repo (committed to git)
 
-```
+```text
 ~/projects/acme-web/
-├── .darius.toml                    project name, time zone, rituals and policies
-├── .claude/
-│   └── skills/
-│       ├── daily-report/
-│       │   └── SKILL.md            the steps of one ritual
-│       └── weekly-audit/
-│           └── SKILL.md
-├── .tracker/                       milestones, specs, worklogs and vigils
+├── .darius.toml                 # project name, time zone, rituals, policies
+├── .claude/skills/              # one folder per ritual procedure
+│   ├── daily-report/SKILL.md    #   the steps of one ritual
+│   └── weekly-audit/SKILL.md
+├── .tracker/                    # milestones, specs, worklogs, vigils
 │   ├── 00-INDEX.md
 │   ├── M12-checkout-redesign/
-│   │   ├── 00-README.md            the milestone
-│   │   └── 01-cart-page.md         one spec
+│   │   ├── 00-README.md         #   the milestone
+│   │   └── 01-cart-page.md      #   one spec
 │   ├── vigils/
-│   │   └── guard-soak.md           a one-shot check that waits for an event
+│   │   └── guard-soak.md        #   a check that waits for an event
 │   └── worklog/
-└── src/ ...                        your own code
+└── src/ ...                     # your own code
 ```
 
 Git holds the definition of the work. A ritual is a table in `.darius.toml`. Its procedure is the
@@ -72,37 +69,41 @@ skills and the `darius` command now do the work that the plugin did.
 
 ### On the host (never in git)
 
-```
+```text
+# The app: one clone per release
 ~/.local/
-├── bin/
-│   └── darius                      link to the installed release
-├── opt/darius/
-│   ├── current -> versions/v0.61.0 the live release
-│   └── versions/                   one shallow clone per release
-└── share/
-    ├── darius/                     the store
-    │   └── acme-web/
-    │       ├── items/
-    │       │   ├── rituals/        each ritual, mirrored from .darius.toml
-    │       │   └── vigils/
-    │       ├── runs/<id>/          one folder per run: prompt, policy, findings
-    │       ├── ledger/host-a/      the log of what happened, in chunks
-    │       ├── blobs/              older versions and large outputs
-    │       └── sync.json           what this host has pulled from the bucket
-    └── darius-snapshots/
-        └── darius-host-a-<time>.tar.gz   the daily backup of the store
+├── bin/darius                      # link to the installed release
+└── opt/darius/
+    ├── current -> versions/v0.61.0 # the live release
+    └── versions/                   # one shallow clone per release
 
+# The store: this host's state, synced through the bucket
+~/.local/share/darius/
+└── acme-web/                       # one folder per project
+    ├── items/
+    │   ├── rituals/                # each ritual, mirrored from .darius.toml
+    │   └── vigils/
+    ├── runs/<id>/                  # per run: prompt, policy, findings
+    ├── ledger/host-a/              # the log of what happened, in chunks
+    ├── blobs/                      # older versions and large outputs
+    └── sync.json                   # what this host pulled from the bucket
+
+# The daily backup of the store
+~/.local/share/darius-snapshots/
+└── darius-host-a-<time>.tar.gz
+
+# Host settings
 ~/.config/darius/
-├── config.toml                     host name, [remote] bucket, which timers run
-├── credentials                     this host's bucket key (mode 0600)
-└── links.toml                      project -> checkout on this host, written by `darius link`
+├── config.toml                     # host name, [remote] bucket, timers
+├── credentials                     # this host's bucket key (mode 0600)
+└── links.toml                      # project -> checkout, from `darius link`
 
-~/.claude/                          written by `darius skill install`
+# Claude Code files, written by `darius skill install`
+~/.claude/
 ├── skills/
-│   ├── darius/SKILL.md             teaches a session the darius commands
-│   └── darius-work/SKILL.md        one of 11 procedure skills, called /darius-work
-└── agents/
-    └── darius.md
+│   ├── darius/SKILL.md             # teaches a session the darius commands
+│   └── darius-work/SKILL.md        # one of 11 procedure skills
+└── agents/darius.md
 ```
 
 ### A normal day
