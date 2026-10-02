@@ -3,13 +3,15 @@ import { data, Link } from "react-router";
 import type { Route } from "./+types/ritual";
 import type { RitualHandoff } from "../../../src/web/api.ts";
 import { KindWord } from "../components/chip.tsx";
+import { Crumbs } from "../components/crumbs.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Report } from "../components/board.tsx";
 import { ResultChips, ResultQuestions } from "../components/result.tsx";
 import { StateWord } from "../components/row.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
-import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
+import { Chips, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
+import { momentText } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
@@ -67,16 +69,14 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
   const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
   const cadence = cadenceText(row.cadence);
   const model = policy.model ?? "the profile's model";
-  const { today, now } = useClock();
+  const { today, now, offset } = useClock();
   const source = sourceText(row, now);
   const scheduleAt = atText(row);
   const fromGit = row.source === "repo";
   return (
     <div>
       <header className="page-head">
-        <Crumbs>
-          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
-        </Crumbs>
+        <Crumbs title={row.title} />
         <h1 className="page-title page-title-sans">
           <TitleText text={row.title} />
         </h1>
@@ -188,7 +188,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
                     facts={[
                       { label: "Cadence", value: cadence ?? <span className="text-muted">none</span> },
                       ...(scheduleAt === null ? [] : [{ label: "At", value: scheduleAt }]),
-                      ...(row.nextDueAt === null ? [] : [{ label: "Next due", value: row.nextDueAt }]),
+                      ...(row.nextDueAt === null ? [] : [{ label: "Next due", value: momentText(row.nextDueAt, today, offset) }]),
                       ...(row.args === null ? [] : [{ label: "Arguments", value: row.args }]),
                       ...(row.timeout === null ? [] : [{ label: "Timeout", value: row.timeout }]),
                     ]}

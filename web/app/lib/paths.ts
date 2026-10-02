@@ -123,18 +123,44 @@ const SECTION_LABELS = {
   runs: "Runs",
 } satisfies Record<Section, string>;
 
+/** One step of the trail above a page. The last step is the current page and has no `href`. */
+export interface Crumb {
+  label: string;
+  href: string | null;
+}
+
 /**
- * The trail above a page, as links: the scope, then the section, then the
- * parent when there is one (a run's ritual). The page's own title is not in
- * it; the caller adds that. A page with no scope trail (an overview, a host
- * page, an unknown path) has no crumbs.
+ * The trail above a page: the scope, the section, the parent when there is
+ * one (a run's ritual), and the page's own title. Only the last step is not a
+ * link, so a page that gives no `title` (the Runs list) ends in its section.
+ * A page with no scope trail (an overview, a host page, an unknown path) has
+ * no crumbs.
  */
-export function crumbsOf(place: Place, parent?: { label: string; target: Target }): { label: string; href: string }[] {
+export function crumbsOf(place: Place, parent?: { label: string; target: Target }, title?: string): Crumb[] {
   if (place.kind !== "section" && place.kind !== "detail") return [];
-  const trail = [{ label: place.scope ?? "All workspaces", href: href({ to: "overview", ws: place.scope }) }];
+  const trail: Crumb[] = [{ label: place.scope ?? "All workspaces", href: href({ to: "overview", ws: place.scope }) }];
   if (place.section !== null) trail.push({ label: SECTION_LABELS[place.section], href: href({ to: "section", ws: place.scope, section: place.section }) });
   if (parent !== undefined) trail.push({ label: parent.label, href: href(parent.target) });
+  if (title !== undefined) trail.push({ label: title, href: null });
+  const last = trail.at(-1);
+  if (last !== undefined) last.href = null;
   return trail;
+}
+
+/**
+ * The section a page lights in the navigation, for the tab bar and for the
+ * Places tree alike. A list or a ritual or milestone page lights its own
+ * section. A run page lights the section of its item: `itemKind` is the kind
+ * of the run's ritual or vigil (the run loader returns it as `kind`), and a
+ * run of a ritual lights Rituals, of a vigil Vigils; `placeOf` alone cannot
+ * tell, it only reports "runs". The Runs list lights "runs", which the phone
+ * tab bar has no tab for, so it lights a Places row and no tab. An overview,
+ * a host page and an unknown path light nothing (null).
+ */
+export function litSection(place: Place, itemKind?: "ritual" | "vigil"): Section | null {
+  if (place.kind !== "section" && place.kind !== "detail") return null;
+  if (place.kind === "detail" && place.section === "runs") return itemKind === undefined ? null : itemKind === "vigil" ? "vigils" : "rituals";
+  return place.section;
 }
 
 /** The same place in another scope: a section stays, a detail page goes to its list, anything else to the Overview. */

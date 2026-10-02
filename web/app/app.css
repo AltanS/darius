@@ -225,12 +225,6 @@
     padding: 56px 0 40px;
   }
 
-  .crumbs {
-    margin-bottom: 8px;
-    font-size: 13px;
-    color: var(--color-faint);
-  }
-
   .page-title {
     font: 600 32px/1.15 var(--font-display);
     letter-spacing: 0.02em;
@@ -1982,44 +1976,11 @@
       margin-top: 10px;
     }
 
-  /* The crumb is one line: the last link ends in an ellipsis; each link is a 44 px target. */
-
-    .crumbs {
-      display: flex;
-      align-items: center;
-      margin: 0 0 -4px;
-      white-space: nowrap;
-    }
-
-    .crumbs > * {
-      flex: none;
-    }
-
-    .crumbs > span {
-      padding-inline: 6px;
-    }
-
-    .crumbs a {
-      display: block;
-      line-height: 44px;
-    }
-
-    .crumbs > a:last-child {
-      flex: 0 1 auto;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
   /* A title that links, and a link inside a fact: hit padding without a taller line. */
 
     .title-link,
     .facts a {
       padding-block: 12px;
-    }
-
-    .page-head:has(.crumbs) {
-      padding-top: 4px;
     }
 
   /* A section link keeps the head as tall as it was and takes hits 13 px beyond it. */
@@ -5321,6 +5282,91 @@
       .ms-sum {
         min-height: 44px;
       }
+    }
+  }
+
+  /* --- breadcrumbs (chunk D): a nav landmark with an ordered list ---------------------- */
+
+  .crumbs {
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: var(--color-faint);
+  }
+
+  .crumbs-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 8px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .crumb {
+    min-width: 0;
+  }
+
+  .crumb + .crumb::before {
+    content: "/";
+    margin-right: 8px;
+    color: var(--color-sand-hi);
+  }
+
+  .crumb a {
+    color: var(--color-muted);
+  }
+
+  .crumb a:hover {
+    color: var(--color-gold-hi);
+  }
+
+  .crumb-here {
+    color: var(--color-parchment);
+    overflow-wrap: anywhere;
+  }
+
+  /* Phone and tablet: only the step above the page, as a 44 px back link. The title is the heading below it. */
+
+  @media (max-width: 1023px) {
+    .crumbs {
+      margin: 0 0 -4px;
+    }
+
+    .crumb {
+      display: none;
+    }
+
+    .crumb-back {
+      display: block;
+      max-width: 100%;
+    }
+
+    .crumb-back::before {
+      content: none;
+    }
+
+    .crumb-back a {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 44px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 14px;
+    }
+
+    .crumb-back a::before {
+      content: "\2039";
+      flex: none;
+      font-size: 22px;
+      line-height: 1;
+      color: var(--color-gold);
+    }
+
+    .page-head:has(.crumbs) {
+      padding-top: 4px;
     }
   }
 }

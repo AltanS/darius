@@ -1,11 +1,11 @@
-import { data, Link } from "react-router";
+import { data } from "react-router";
 
 import type { Route } from "./+types/milestone";
+import { Crumbs } from "../components/crumbs.tsx";
 import { DetailStrip, FileFold, SpecFold, worklogWords } from "../components/milestone-detail.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { StateWord } from "../components/row.tsx";
-import { Crumbs, Empty, Section, TitleText } from "../components/ui.tsx";
-import { href } from "../lib/paths.ts";
+import { Empty, Section, TitleText } from "../components/ui.tsx";
 import { milestoneDetailView, omittedText } from "../lib/milestones.ts";
 import { statusOf } from "../lib/status.ts";
 
@@ -30,17 +30,13 @@ export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: 
 /** Read-only: a legacy tracker milestone with its README, spec texts, worklogs and other files. */
 export default function Milestone({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { view } = loaderData;
-  const { head, project } = view;
+  const { head } = view;
   const { target } = head;
   const readmeWhy = view.readme === null ? null : omittedText(view.readme.omitted);
   return (
     <div className="ms-page msd">
       <header className="ms-head">
-        <Crumbs>
-          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
-          <span aria-hidden="true"> / </span>
-          <Link to={href({ to: "section", ws: project, section: "milestones" })}>Milestones</Link>
-        </Crumbs>
+        <Crumbs title={head.id} />
         <h1 className="ms-h1 msd-h1">
           <span className="ms-id msd-id">{head.id}</span>
           <TitleText text={head.title} />

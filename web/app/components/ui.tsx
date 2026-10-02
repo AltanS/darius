@@ -148,12 +148,3 @@ export function Facts({ facts }: FactsProps): React.ReactNode {
     </dl>
   );
 }
-
-interface CrumbsProps {
-  children: React.ReactNode;
-}
-
-/** The path back up, above a page title. */
-export function Crumbs({ children }: CrumbsProps): React.ReactNode {
-  return <p className="crumbs">{children}</p>;
-}
