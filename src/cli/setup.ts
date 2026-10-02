@@ -70,7 +70,7 @@ import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-p
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
-import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles } from "./skill.ts";
+import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles, skillSource } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -598,15 +598,16 @@ export function defaultDeps(): SetupDeps {
  * host current. When the generated skill is installed at user level and
  * stamped, it also installs a file of the set that is missing (a new procedure
  * skill); with no such skill it installs nothing, that is `darius skill
- * install`. An unstamped file is the operator's; left alone. When a hook of
- * `darius skill hook` is not in settings.json, the detail says so. Setup
+ * install`. An unstamped file is the operator's; left alone. On a host that
+ * opted in (the generated skill is stamped at user level), the detail also
+ * names a hook of `darius skill hook` that is not ok in settings.json. Setup
  * never writes settings.json.
  */
 function refreshSkillStep(home: string): Step {
   try {
     const dir = claudeDir(home);
     const result = refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir));
-    const note = hookNote(dir);
+    const note = skillSource(dir)?.kind === "user" ? hookNote(dir) : null;
     return { what: "skill", ...result, detail: note === null ? result.detail : `${result.detail}; ${note}` };
   } catch (cause) {
     return { ok: false, what: "skill", detail: errorMessage(cause) };

@@ -291,6 +291,8 @@ test("setup says which hooks are not ok, and nothing when all three are", () => 
   const { claude, env } = sandbox();
   mkdirSync(claude, { recursive: true });
   const skillDetail = (): string => JSON.parse(darius(env, ["setup", "--json"]).stdout).steps.find((entry: { what: string }) => entry.what === "skill").detail;
+  assert.doesNotMatch(skillDetail(), /hooks:/u, "a host that never installed the skill hears nothing about hooks");
+  darius(env, ["skill", "install"]);
   assert.match(skillDetail(), /hooks: missing SessionStart, missing Stop, missing PostToolUse; see darius skill hook$/u);
   writeFileSync(join(claude, "settings.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: SESSION }] }], PostToolUse: [{ matcher: "Edit", hooks: [{ command: DRIFT }] }] } }));
   assert.match(skillDetail(), /hooks: missing Stop, differs PostToolUse; see darius skill hook$/u);
