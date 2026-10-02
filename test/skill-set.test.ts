@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -135,12 +135,13 @@ test("status lists 13 files, one line each, all ok after install; --json is an a
     const plain = darius(env, ["skill", "status"], runtime);
     assert.equal(plain.code, 0, plain.stderr);
     const lines = plain.stdout.trim().split("\n");
-    assert.equal(lines.length, 13);
-    assert.ok(lines.every((line) => line.startsWith("ok ")), plain.stdout);
+    assert.equal(lines.length, 13 + 3 + 1, "13 files, 3 hooks, the fix line");
+    assert.ok(lines.slice(0, 13).every((line) => line.startsWith("ok ")), plain.stdout);
+    assert.match(lines[13] ?? "", /^missing +hook SessionStart +.*settings\.json$/u);
     const entries: Entry[] = JSON.parse(darius(env, ["skill", "status", "--json"], runtime).stdout);
     assert.ok(Array.isArray(entries));
-    assert.deepEqual(entries.map((entry) => entry.name), [...SKILL_NAMES, "agent darius"]);
-    assert.ok(entries.every((entry) => entry.state === "ok" && entry.version === VERSION));
+    assert.deepEqual(entries.map((entry) => entry.name), [...SKILL_NAMES, "agent darius", "hook SessionStart", "hook Stop", "hook PostToolUse"]);
+    assert.ok(entries.slice(0, 13).every((entry) => entry.state === "ok" && entry.version === VERSION));
   }
 });
 
@@ -170,7 +171,7 @@ test("setup refreshes a changed stamped file of the set, leaves an unstamped one
   const { claude, env } = sandbox();
   const fresh = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   assert.equal(fresh.steps.find((step: { what: string }) => step.what === "skill").skipped, true);
-  assert.ok(!existsSync(join(claude, "skills")), "setup installs nothing");
+  assert.ok(!existsSync(join(claude, "skills")), "setup installs nothing without the generated skill");
 
   darius(env, ["skill", "install"]);
   const commit = join(claude, "skills", "darius-commit", "SKILL.md");
@@ -186,7 +187,113 @@ test("setup refreshes a changed stamped file of the set, leaves an unstamped one
   assert.equal(readFileSync(commit, "utf8"), current);
   assert.equal(readFileSync(agent, "utf8"), "my own agent\n");
 
+});
+
+test("setup installs a missing file of the set when the generated skill is stamped", () => {
+  const { claude, env } = sandbox();
+  darius(env, ["skill", "install"]);
+  const sync = join(claude, "skills", "darius-sync", "SKILL.md");
+  const agent = join(claude, "agents", "darius.md");
+  const commit = join(claude, "skills", "darius-commit", "SKILL.md");
+  rmSync(join(claude, "skills", "darius-sync"), { recursive: true });
+  rmSync(agent);
+  writeFileSync(commit, "my own commit\n");
+  const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
+  const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
+  assert.equal(step.skipped, false);
+  assert.match(step.detail, /^installed .*darius-sync\/SKILL\.md, .*agents\/darius\.md; /u);
+  assert.match(step.detail, /darius-commit\/SKILL\.md has no darius stamp; left alone/u);
+  assert.ok(existsSync(sync));
+  assert.ok(existsSync(agent));
+  assert.equal(readFileSync(commit, "utf8"), "my own commit\n", "an unstamped file stays");
+  assert.doesNotMatch(step.detail, /refreshed/u);
+});
+
+test("setup installs nothing when the generated skill is absent or unstamped", () => {
+  const { claude, env } = sandbox();
+  darius(env, ["skill", "install"]);
+  rmSync(join(claude, "skills", "darius"), { recursive: true });
   rmSync(join(claude, "skills", "darius-sync"), { recursive: true });
   darius(env, ["setup", "--json"]);
-  assert.ok(!existsSync(join(claude, "skills", "darius-sync")), "a missing file is not installed by setup");
+  assert.ok(!existsSync(join(claude, "skills", "darius")));
+  assert.ok(!existsSync(join(claude, "skills", "darius-sync")));
+
+  mkdirSync(join(claude, "skills", "darius"), { recursive: true });
+  writeFileSync(join(claude, "skills", "darius", "SKILL.md"), "my own darius skill\n");
+  darius(env, ["setup", "--json"]);
+  assert.ok(!existsSync(join(claude, "skills", "darius-sync")), "an unstamped generated skill is not an opt-in");
+  assert.equal(readFileSync(join(claude, "skills", "darius", "SKILL.md"), "utf8"), "my own darius skill\n");
+});
+
+const SESSION = "command -v darius >/dev/null 2>&1 && darius due --brief || true";
+const STOP = "command -v darius >/dev/null 2>&1 && darius hook-stop || true";
+const DRIFT = "command -v darius >/dev/null 2>&1 && darius hook-drift || true";
+
+function hookStates(env: NodeJS.ProcessEnv): Record<string, string> {
+  const entries: Entry[] = JSON.parse(darius(env, ["skill", "status", "--json"]).stdout);
+  return Object.fromEntries(entries.filter((entry) => entry.name.startsWith("hook ")).map((entry) => [entry.name, entry.state]));
+}
+
+test("status reports each hook state: ok, differs, missing, unreadable, no file", () => {
+  const { claude, env } = sandbox();
+  const file = join(claude, "settings.json");
+  mkdirSync(claude, { recursive: true });
+  const none = { "hook SessionStart": "missing", "hook Stop": "missing", "hook PostToolUse": "missing" };
+  assert.deepEqual(hookStates(env), none, "no settings.json");
+
+  const snippet = JSON.parse(darius(env, ["skill", "hook"]).stdout);
+  writeFileSync(file, JSON.stringify({ model: "x", ...snippet }));
+  assert.deepEqual(hookStates(env), { "hook SessionStart": "ok", "hook Stop": "ok", "hook PostToolUse": "ok" });
+  const okText = darius(env, ["skill", "status"]).stdout;
+  assert.doesNotMatch(okText, /To fix the hooks/u);
+
+  writeFileSync(file, JSON.stringify({
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: "darius due --brief" }] }],
+      PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: DRIFT }] }],
+      Stop: [{ hooks: [{ type: "command", command: "echo done" }] }],
+    },
+  }));
+  assert.deepEqual(hookStates(env), { "hook SessionStart": "differs", "hook Stop": "missing", "hook PostToolUse": "differs" });
+  const text = darius(env, ["skill", "status"]);
+  assert.match(text.stdout, /^differs +hook SessionStart +\S*settings\.json$/mu);
+  assert.match(text.stdout, /^missing +hook Stop /mu);
+  assert.match(text.stdout, new RegExp(`^To fix the hooks, paste the output of darius skill hook into ${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "mu"));
+
+  writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: SESSION }] }], Stop: [{ hooks: [{ command: STOP }] }], PostToolUse: [{ matcher: "Write|Edit", hooks: [{ command: DRIFT }] }] } }));
+  assert.deepEqual(hookStates(env), { "hook SessionStart": "ok", "hook Stop": "ok", "hook PostToolUse": "ok" });
+
+  writeFileSync(file, "{ not json");
+  assert.deepEqual(hookStates(env), { "hook SessionStart": "unreadable", "hook Stop": "unreadable", "hook PostToolUse": "unreadable" });
+  assert.match(darius(env, ["skill", "status"]).stdout, /^unreadable +hook Stop /mu);
+});
+
+test("status never writes settings.json, and hooks do not change the exit code", () => {
+  const { claude, env } = sandbox();
+  const file = join(claude, "settings.json");
+  mkdirSync(claude, { recursive: true });
+  writeFileSync(file, '{"hooks":{"Stop":[]}}');
+  const before = statSync(file);
+  const bytes = readFileSync(file, "utf8");
+  assert.equal(darius(env, ["skill", "status"]).code, 1, "no skill installed");
+  darius(env, ["skill", "install"]);
+  assert.equal(darius(env, ["skill", "status"]).code, 0, "hooks missing, skill installed");
+  darius(env, ["setup", "--json"]);
+  assert.equal(readFileSync(file, "utf8"), bytes);
+  assert.equal(statSync(file).mtimeMs, before.mtimeMs);
+  const absent = sandbox();
+  darius(absent.env, ["skill", "status"]);
+  darius(absent.env, ["setup", "--json"]);
+  assert.ok(!existsSync(join(absent.claude, "settings.json")), "no settings.json is created");
+});
+
+test("setup says which hooks are not ok, and nothing when all three are", () => {
+  const { claude, env } = sandbox();
+  mkdirSync(claude, { recursive: true });
+  const skillDetail = (): string => JSON.parse(darius(env, ["setup", "--json"]).stdout).steps.find((entry: { what: string }) => entry.what === "skill").detail;
+  assert.match(skillDetail(), /hooks: missing SessionStart, missing Stop, missing PostToolUse; see darius skill hook$/u);
+  writeFileSync(join(claude, "settings.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: SESSION }] }], PostToolUse: [{ matcher: "Edit", hooks: [{ command: DRIFT }] }] } }));
+  assert.match(skillDetail(), /hooks: missing Stop, differs PostToolUse; see darius skill hook$/u);
+  writeFileSync(join(claude, "settings.json"), darius(env, ["skill", "hook"]).stdout);
+  assert.doesNotMatch(skillDetail(), /hooks:/u);
 });

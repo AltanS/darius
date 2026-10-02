@@ -17,10 +17,13 @@
  *                             (never the `agents` dir)
  *   darius skill status       one line per file: ok, outdated (older stamped
  *                             text), edited (the body no longer matches its
- *                             stamp), unstamped or missing. Exit 0 when the
+ *                             stamp), unstamped or missing; then one line per
+ *                             hook in <claude>/settings.json: ok, differs,
+ *                             missing or unreadable (read-only). Exit 0 when the
  *                             generated skill teaches sessions here (user-level,
  *                             or an installed plugin's skills/darius/SKILL.md),
- *                             else exit 1. --json prints an array.
+ *                             else exit 1; hooks never change the exit code.
+ *                             --json prints one array with both kinds of entry.
  *   darius skill hook         print the SessionStart, Stop and PostToolUse hooks
  *                             for settings.json; the operator pastes them,
  *                             darius never writes settings.json
@@ -29,8 +32,11 @@
  * only commands marked `audience: "session"`. The last line of every file is a
  * stamp: the version and the first 12 hex digits of the sha256 of everything
  * above it. `darius setup` refreshes every stamped file of the set
- * (`refreshSkillFiles`) and installs nothing new, so `darius update` keeps
- * every host current. Only the generated text is capped, at 6144 bytes.
+ * (`refreshSkillFiles`), so `darius update` keeps every host current. When the
+ * generated skill is installed at user level and stamped (the operator opted
+ * in), setup also installs any file of the set that is missing, such as a
+ * procedure skill a new release adds. With no such skill, setup installs
+ * nothing. Only the generated text is capped, at 6144 bytes.
  */
 
 import { createHash } from "node:crypto";
@@ -351,26 +357,37 @@ export function refreshSkill(text: string, file: string, plugin: string | null =
 
 /**
  * What `darius setup` does with the whole set: refresh every stamped file
- * whose text changed, install nothing new, leave an unstamped file alone. The
- * generated skill keeps its own messages (not installed, a plugin teaches it,
- * no stamp). When any static file was rewritten, the detail lists the paths.
+ * whose text changed, leave an unstamped file alone. When the generated skill
+ * is installed at user level and stamped (the operator opted in), a file of
+ * the set that is missing is installed too. Otherwise nothing new is
+ * installed. The generated skill keeps its own messages (not installed, a
+ * plugin teaches it, no stamp). The detail lists installed and refreshed paths
+ * separately.
  */
 export function refreshSkillFiles(files: readonly ManagedFile[], plugin: string | null = null): RefreshResult {
   const [generated, ...rest] = files;
   if (generated === undefined) return { ok: true, skipped: true, detail: "no skill files" };
+  const optedIn = isStamped(generated.path);
   const first = refreshSkill(generated.text, generated.path, plugin);
   const written: string[] = first.skipped ? [] : [generated.path];
+  const installed: string[] = [];
   const notes: string[] = [];
   for (const file of rest) {
-    if (!existsSync(file.path)) continue;
+    if (!existsSync(file.path)) {
+      if (optedIn && installSkill(file.text, file.path) === "written") installed.push(file.path);
+      continue;
+    }
     if (readStamp(readFileSync(file.path, "utf8")) === null) {
       notes.push(`${file.path} has no darius stamp; left alone`);
       continue;
     }
     if (installSkill(file.text, file.path) === "written") written.push(file.path);
   }
-  if (written.length === 0) return notes.length === 0 ? first : { ...first, detail: `${first.detail}; ${notes.join("; ")}` };
-  return { ok: true, skipped: false, detail: `refreshed ${written.join(", ")}${notes.length === 0 ? "" : `; ${notes.join("; ")}`}` };
+  const parts: string[] = [];
+  if (installed.length > 0) parts.push(`installed ${installed.join(", ")}`);
+  if (written.length > 0) parts.push(`refreshed ${written.join(", ")}`);
+  if (parts.length === 0) return notes.length === 0 ? first : { ...first, detail: `${first.detail}; ${notes.join("; ")}` };
+  return { ok: true, skipped: false, detail: [...parts, ...notes].join("; ") };
 }
 
 export const HOOK_COMMAND = "command -v darius >/dev/null 2>&1 && darius due --brief || true";
@@ -387,6 +404,79 @@ export function hookSnippet(): string {
     },
   };
   return JSON.stringify(snippet, null, 2);
+}
+
+/** The state of one hook in settings.json. */
+export type HookState = "ok" | "differs" | "missing" | "unreadable";
+
+/** One hook darius suggests: its event, command, the verb that marks a variant of it, and the tools its matcher must cover. */
+interface HookSpec {
+  event: "SessionStart" | "Stop" | "PostToolUse";
+  command: string;
+  verb: string;
+  tools: readonly string[];
+}
+
+const HOOK_SPECS: readonly HookSpec[] = [
+  { event: "SessionStart", command: HOOK_COMMAND, verb: "darius due", tools: [] },
+  { event: "Stop", command: HOOK_STOP_COMMAND, verb: "darius hook-stop", tools: [] },
+  { event: "PostToolUse", command: HOOK_DRIFT_COMMAND, verb: "darius hook-drift", tools: ["Edit", "Write"] },
+];
+
+/** The state of one hook, read from the parsed `hooks` table of settings.json. */
+function hookEntryState(spec: HookSpec, hooks: JsonValue | undefined): HookState {
+  const groups = hooks !== undefined && isRecord(hooks) ? hooks[spec.event] : undefined;
+  if (!Array.isArray(groups)) return "missing";
+  let differs = false;
+  for (const group of groups) {
+    if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
+    const matcher = isText(group.matcher) ? group.matcher : "";
+    const covers = spec.tools.every((tool) => matcher.includes(tool));
+    for (const hook of group.hooks) {
+      if (!isRecord(hook) || !isText(hook.command)) continue;
+      if (hook.command === spec.command && covers) return "ok";
+      if (hook.command.includes(spec.verb)) differs = true;
+    }
+  }
+  return differs ? "differs" : "missing";
+}
+
+/** One hook line of `darius skill status`. Same fields as a file entry. */
+export interface HookStatusEntry {
+  name: string;
+  path: string;
+  state: HookState;
+  version: null;
+  source: "user";
+}
+
+/**
+ * Whether the three hooks of `darius skill hook` are in `<claude>/settings.json`. Read-only:
+ * darius never writes settings.json; the operator pastes the hooks. A missing file is
+ * `missing`; a file that is not valid JSON is `unreadable`.
+ */
+export function hookStatus(dir: string = claudeDir()): HookStatusEntry[] {
+  const path = join(dir, "settings.json");
+  let hooks: JsonValue | undefined;
+  let whole: HookState | null = null;
+  if (!existsSync(path)) {
+    whole = "missing";
+  } else {
+    try {
+      const parsed: JsonValue = JSON.parse(readFileSync(path, "utf8"));
+      hooks = isRecord(parsed) ? parsed.hooks : undefined;
+    } catch {
+      whole = "unreadable";
+    }
+  }
+  return HOOK_SPECS.map((spec) => ({ name: `hook ${spec.event}`, path, state: whole ?? hookEntryState(spec, hooks), version: null, source: "user" }));
+}
+
+/** A short note for `darius setup` when any hook is not ok, such as `hooks: missing Stop, differs PostToolUse; see darius skill hook`. Null when all three are ok. */
+export function hookNote(dir: string = claudeDir()): string | null {
+  const bad = hookStatus(dir).filter((entry) => entry.state !== "ok");
+  if (bad.length === 0) return null;
+  return `hooks: ${bad.map((entry) => `${entry.state} ${entry.name.slice("hook ".length)}`).join(", ")}; see darius skill hook`;
 }
 
 function currentSkill(): string {
@@ -423,7 +513,7 @@ export function fileState(file: string, expected: string): FileState {
 export interface StatusEntry {
   name: string;
   path: string;
-  state: FileState;
+  state: FileState | HookState;
   version: string | null;
   /** `plugin` for a generated skill that an installed plugin teaches, else `user`. */
   source: "user" | "plugin";
@@ -448,9 +538,13 @@ export function skillStatus(files: readonly ManagedFile[] = managedFiles(), dir:
   return entries;
 }
 
-/** `darius skill status`: one line per file; exit 0 when a session learns darius here, else exit 1 and the fix. */
+/**
+ * `darius skill status`: one line per file, then one per hook. Exit 0 when a session learns
+ * darius here, else exit 1 and the fix. The hook lines never change the exit code.
+ * darius never writes settings.json, so a bad hook gets a line that says how to fix it.
+ */
 function status(args: ParsedArgs): number {
-  const entries = skillStatus();
+  const entries: StatusEntry[] = [...skillStatus(), ...hookStatus()];
   const taught = skillSource() !== null;
   if (args.json) {
     console.log(JSON.stringify(entries));
@@ -460,6 +554,9 @@ function status(args: ParsedArgs): number {
       const where = entry.source === "plugin" ? `${entry.path} (from a plugin)` : entry.path;
       console.log(`${entry.state.padEnd(9)} ${entry.name.padEnd(24)} ${where}`);
     }
+    const hooks = entries.filter((entry) => entry.name.startsWith("hook "));
+    const first = hooks.find((entry) => entry.state !== "ok");
+    if (first !== undefined) console.log(`To fix the hooks, paste the output of darius skill hook into ${first.path}`);
   }
   return taught ? 0 : 1;
 }
@@ -483,7 +580,7 @@ function uninstall(args: ParsedArgs): number {
 export const skillCommand: Command = {
   name: "skill",
   summary:
-    "print the Claude Code skill for darius; install | uninstall the skill, 11 procedure skills and the agent; status lists them; hook prints the SessionStart, Stop and PostToolUse hooks",
+    "print the Claude Code skill for darius; install | uninstall the skill, 11 procedure skills and the agent; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

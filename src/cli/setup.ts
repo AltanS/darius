@@ -70,7 +70,7 @@ import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-p
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
-import { findPluginSkill, managedFiles, refreshSkillFiles } from "./skill.ts";
+import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -595,13 +595,19 @@ export function defaultDeps(): SetupDeps {
  * Rewrites every file of the skill set under `<claude>` (the generated skill,
  * the 11 procedure skills, the agent) that carries a darius stamp and differs
  * from this version's text, so `darius update` (which runs setup) keeps every
- * host current. Installs nothing new: that is `darius skill install`. An
- * unstamped file is the operator's; left alone.
+ * host current. When the generated skill is installed at user level and
+ * stamped, it also installs a file of the set that is missing (a new procedure
+ * skill); with no such skill it installs nothing, that is `darius skill
+ * install`. An unstamped file is the operator's; left alone. When a hook of
+ * `darius skill hook` is not in settings.json, the detail says so. Setup
+ * never writes settings.json.
  */
 function refreshSkillStep(home: string): Step {
   try {
     const dir = claudeDir(home);
-    return { what: "skill", ...refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir)) };
+    const result = refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir));
+    const note = hookNote(dir);
+    return { what: "skill", ...result, detail: note === null ? result.detail : `${result.detail}; ${note}` };
   } catch (cause) {
     return { ok: false, what: "skill", detail: errorMessage(cause) };
   }
