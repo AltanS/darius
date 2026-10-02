@@ -2,6 +2,38 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.63.0] - 2026-10-03
+
+### Added
+
+- Workspace-first navigation. A scope is one workspace or all workspaces, and it is always in the address. Each scope has six places: Overview, Vigils, Rituals, Findings, Milestones and Runs.
+- A Places sidebar on a desktop and a drawer on a phone. It lists All workspaces, each workspace with what needs you, the six places of the current scope, and a This host group (Status, Profiles, Settings). The host line at its end shows the host, the version, the update time, the viewer and the self-test.
+- A bar of five tabs on a phone: Overview, Vigils, Rituals, Findings and Milestones. The top bar is one button that names the scope and opens the drawer. A dot shows when another workspace needs you.
+- Breadcrumbs on the ritual, run, milestone and runs pages, and a back row to the parent on a phone.
+- New addresses under `/w/<workspace>/`: `/w/<workspace>/runs`, `/w/<workspace>/rituals/<slug>` and `/w/<workspace>/runs/<run>`. The old `/p/...`, `/runs/<project>/<run>`, `/runs?project=` and `/findings?project=` addresses redirect with a 301, and the other query parts stay. Old push notices still open.
+- A Workspaces list on the All workspaces Overview: each workspace with what needs you and what is due next.
+- A `finding` icon (a shield with a mark) for the Findings tab. The Next due time on the ritual page shows as a clock time.
+- One link builder, `web/app/lib/paths.ts`. A test fails on a link written by hand, and a crawl test follows every link of the main pages.
+
+### Changed
+
+- `/` is a redirect only: to the default workspace when one is set, else to `/all`.
+- The Project chips of the all-workspaces Findings and Runs pages are Workspace chips. A chip changes the scope.
+- Status, Profiles and Settings show no workspace controls. Their tabs and Places point at the last workspace you visited (cookie `darius_scope`).
+- An error page offers Back to the last scope, not Back home. A workspace Overview ends its rail with the workspace facts, and its All runs link opens the runs of that workspace.
+- Push notices link to `/w/<project>/runs/<run>`.
+
+### Fixed
+
+- The findings link no longer loses its workspace.
+- A run page lights a tab: Rituals for a ritual run, Vigils for a vigil run.
+- The Runs page no longer lights the Rituals tab.
+- Pages of the host no longer fall back to the default workspace after you leave a workspace.
+
+### Removed
+
+- The footer, the workspace switcher, the section tabs under the top bar, the status and gear icons in the top bar, and unused code and styles of the old frame.
+
 ## [0.62.0] - 2026-10-02
 
 ### Added
