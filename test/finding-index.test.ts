@@ -205,6 +205,26 @@ test("status: needs-decision, needs-code, high and critical need you; the rest i
   });
 });
 
+test("needs-you only for a confirmed finding under a key the run gave", () => {
+  const seed = new Seeder("fi-needs-you-rules");
+  seed.run("check", [{ key: "dropped", severity: "critical" }, { title: "No key", severity: "critical", state: "needs-decision" }]);
+  seed.run("check", [{ key: "kept", severity: "high" }]);
+  assert.equal(seed.find("check", "kept").status, "needs-you");
+  const dropped = seed.find("check", "dropped");
+  assert.equal(dropped.stale, true);
+  assert.equal(dropped.status, "open", "a stale finding is not confirmed");
+  const auto = seed.findings().find((finding) => finding.auto);
+  assert.equal(auto?.status, "open", "an auto key is a guess");
+});
+
+test("the prompt lists no auto keys", () => {
+  const seed = new Seeder("fi-prompt-auto");
+  seed.run("check", [{ key: "real", severity: "medium" }, { title: "No key", severity: "medium" }]);
+  const lines = findingPromptLines(seed.findings());
+  assert.equal(lines.length, 1);
+  assert.match(lines[0] ?? "", /\{real\}/u);
+});
+
 test("the sort is needs-you, open, closed, fixed; worst severity first; newest first", () => {
   const seed = new Seeder("fi-sort");
   seed.run("check", [

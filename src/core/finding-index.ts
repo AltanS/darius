@@ -156,10 +156,16 @@ function report(tracks: Map<string, Track>, at: { ritual: string; seen: FindingS
   known.history.push(step);
 }
 
-function statusOf(track: Track): FindingStatus {
+/**
+ * Needs-you only for a finding the newest run confirmed (not stale) under a
+ * key the run gave (not auto): an auto key is a guess, and the results from
+ * before keys existed would flood the list with findings long fixed.
+ */
+function statusOf(track: Track, stale: boolean): FindingStatus {
   const { state, severity } = track.latest;
   if (state === "fixed") return "fixed";
   if (track.closed !== undefined) return "closed";
+  if (stale || track.auto) return "open";
   if (state === "needs-decision" || state === "needs-code" || severity === "critical" || severity === "high") return "needs-you";
   return "open";
 }
@@ -181,7 +187,7 @@ function toFinding(track: Track, newestFull: ReadonlyMap<string, number>): Findi
     history: track.history.slice(-HISTORY_MAX),
     stale,
     reopened,
-    status: statusOf(track),
+    status: statusOf(track, stale),
   };
   if (latest.group !== undefined) finding.group = latest.group;
   if (latest.target !== undefined) finding.target = latest.target;
@@ -276,18 +282,20 @@ export const FINDINGS_LEAD =
 
 /**
  * The lines of the `## Open findings` section after its lead text: the
- * needs-you and open findings, worst first, then the closed ones. Empty when
- * there is nothing to say. `findings` is already one ritual's.
+ * needs-you and open findings, worst first, then the closed ones; only keys
+ * a run gave, never auto keys. Empty when there is nothing to say. `findings`
+ * is already one ritual's.
  */
 export function findingPromptLines(findings: readonly Finding[]): string[] {
-  const open = findings.filter((finding) => finding.status === "needs-you" || finding.status === "open");
+  const keyed = findings.filter((finding) => !finding.auto);
+  const open = keyed.filter((finding) => finding.status === "needs-you" || finding.status === "open");
   const lines = open.slice(0, PROMPT_OPEN_MAX).map((finding) => {
     const target = finding.target === undefined ? "" : ` [${finding.target}]`;
     const stale = finding.stale ? " stale" : "";
     return `- {${finding.key}} ${finding.severity} ${finding.state}: ${finding.title}${target} (since ${finding.firstSeen.at.slice(0, 10)})${stale}`;
   });
   if (open.length > PROMPT_OPEN_MAX) lines.push(`- (${String(open.length - PROMPT_OPEN_MAX)} more)`);
-  const closed = findings.filter((finding) => finding.status === "closed").slice(0, PROMPT_CLOSED_MAX);
+  const closed = keyed.filter((finding) => finding.status === "closed").slice(0, PROMPT_CLOSED_MAX);
   if (closed.length > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(`Closed by the operator, do not report again unless worse: ${closed.map((finding) => `{${finding.key}}`).join(", ")}`);
