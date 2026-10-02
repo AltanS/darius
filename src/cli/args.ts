@@ -45,6 +45,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "classify-only",
   "unattended",
   "open",
+  "all",
   "heavy",
   "remote",
   "systemd",

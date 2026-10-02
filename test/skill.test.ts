@@ -20,7 +20,7 @@ import { VERSION } from "../src/version.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const RUNTIMES = ["node", "bun"] as const;
-const SESSION_VERBS = ["due", "init", "marker", "ritual", "run"];
+const SESSION_VERBS = ["due", "finding", "init", "marker", "ritual", "run"];
 
 interface Sandbox {
   root: string;

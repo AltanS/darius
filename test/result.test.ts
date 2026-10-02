@@ -89,7 +89,7 @@ test("every problem is listed at once, with its path", () => {
     "items[1]: must be an object",
     "items[0].title: needs a non-empty string",
     "items[0].severity: must be one of critical, high, medium, low, info",
-    "items[0].state: must be one of open, fixed, needs-decision, not-verified",
+    "items[0].state: must be one of open, fixed, needs-decision, needs-code, not-verified",
     "questions[0].text: needs a non-empty string",
   ]);
   assert.match(errorsOf("{not json")[0] ?? "", /not valid JSON/u);
@@ -170,4 +170,24 @@ test("a question may list the exact commands a yes runs; each is one plain comma
   assert.match(bad(Array.from({ length: 21 }, (_, index) => `echo ${String(index)}`)).join("\n"), /commands: at most 20 lines, got 21/u);
   assert.match(bad("echo x").join("\n"), /commands: must be a list of strings/u);
   assert.match(bad([1]).join("\n"), /commands\[0\]: must be a string/u);
+});
+
+test("an item key is cleaned and kept; a key over 120 characters is refused, not clipped", () => {
+  const base = { v: 1, status: "ok", summary: "s" };
+  const item = (key: string | number) => JSON.stringify({ ...base, items: [{ title: "t", severity: "low", state: "open", key }] });
+  assert.equal(parsed(item("  site-a/\tpricing \n link  ")).items[0]?.key, "site-a/ pricing link");
+  assert.equal(parsed(item("k".repeat(120))).items[0]?.key, "k".repeat(120));
+  assert.match(errorsOf(item("k".repeat(121))).join("\n"), /items\[0\]\.key: at most 120 characters, got 121/u);
+  assert.match(errorsOf(item(7)).join("\n"), /items\[0\]\.key: must be a string/u);
+  assert.equal("key" in (parsed(item("   ")).items[0] ?? {}), false, "a blank key is no key");
+  assert.equal("key" in (parsed(JSON.stringify({ ...base, items: [{ title: "t", severity: "low", state: "open" }] })).items[0] ?? {}), false);
+});
+
+test("needs-code is an item state that counts as open; an unknown state is refused", () => {
+  const base = { v: 1, status: "ok", summary: "s" };
+  const result = parsed(JSON.stringify({ ...base, items: [{ title: "t", severity: "high", state: "needs-code" }] }));
+  assert.equal(result.items[0]?.state, "needs-code");
+  assert.equal(result.status, "attention", "an open high item raises status");
+  assert.deepEqual(summarizeResult(result).open, { critical: 0, high: 1, medium: 0, low: 0, info: 0 });
+  assert.match(errorsOf(JSON.stringify({ ...base, items: [{ title: "t", severity: "low", state: "needs-help" }] })).join("\n"), /items\[0\]\.state: must be one of open, fixed, needs-decision, needs-code, not-verified/u);
 });

@@ -6,7 +6,8 @@
  *
  *   run start <ritual> [--who W]
  *                  prints what the previous run of the ritual passes on
- *                  (src/core/handoff.ts, 0.26.0)
+ *                  (src/core/handoff.ts, 0.26.0) and the open findings of
+ *                  the ritual (src/core/finding-index.ts, 0.62.0)
  *   run hold <run> --question Q [--question Q ...] [--who W] [--banner]
  *   run answer <run> <n> <text...>
  *   run complete <run> --outcome complete|failed|abandoned [--findings-stdin] [--who W] [--banner]
@@ -51,6 +52,7 @@ import { join } from "node:path";
 
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { ritualState } from "../core/due.ts";
+import { collectFindings, findingPromptLines, findingsSection } from "../core/finding-index.ts";
 import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
@@ -119,7 +121,7 @@ function currentPhase(lines: readonly LedgerLine[]): RunPhase | undefined {
 
 // --- start ------------------------------------------------------------------
 
-type StartResult = { started: true; run: string; handoff: Handoff | null } | { started: false; openRun: string };
+type StartResult = { started: true; run: string; handoff: Handoff | null; findings: string[] } | { started: false; openRun: string };
 
 function runStart(args: ParsedArgs): number {
   const slug = requirePositional(args, 1, "<ritual> slug");
@@ -135,7 +137,8 @@ function runStart(args: ParsedArgs): number {
     if (openRun !== undefined) return { started: false, openRun };
     const runId = ulid();
     appendLine(project, { who, type: "run.started", item: itemRef("ritual", slug), run: runId });
-    return { started: true, run: runId, handoff: latestHandoff(project, ledger, slug) };
+    const findings = findingPromptLines(collectFindings(project, ledger).filter((finding) => finding.ritual === slug));
+    return { started: true, run: runId, handoff: latestHandoff(project, ledger, slug), findings };
   });
 
   if (!result.started) {
@@ -149,6 +152,7 @@ function runStart(args: ParsedArgs): number {
   }
   console.log(`✓ started run ${result.run} for ritual '${slug}'`);
   if (result.handoff !== null) console.log(`\n${handoffLines(result.handoff).join("\n")}`);
+  if (result.findings.length > 0) console.log(`\n${findingsSection(result.findings).join("\n")}`);
   return 0;
 }
 
@@ -514,7 +518,7 @@ function describeResult(result: RunResult): string[] {
   });
   for (const entry of result.items) {
     const where = [entry.group, entry.target].filter((part) => part !== undefined).join(", ");
-    lines.push(`  ${entry.severity} ${entry.state}: ${entry.title}${where === "" ? "" : ` [${where}]`}`);
+    lines.push(`  ${entry.severity} ${entry.state}: ${entry.title}${where === "" ? "" : ` [${where}]`}${entry.key === undefined ? "" : ` {${entry.key}}`}`);
   }
   for (const act of result.actions) lines.push(`  action ${act.state}: ${act.text}${act.target === undefined ? "" : ` [${act.target}]`}`);
   if (result.handoff !== undefined) lines.push(`  note for the next run: ${result.handoff}`);

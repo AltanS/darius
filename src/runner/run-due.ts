@@ -62,6 +62,7 @@ import { join } from "node:path";
 import { loadConfigIfPresent, type Config } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
 import { ritualState } from "../core/due.ts";
+import { collectFindings, findingPromptLines } from "../core/finding-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { takeLease, type LeaseOutcome } from "../core/lease.ts";
@@ -627,6 +628,7 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const { followUp } = ctx.options;
   const prompt: PromptInput = { project, run, ritual: doc.header, body: doc.body, handoff };
   if (followUp !== undefined) prompt.followUp = followUpSection(followUp, parentResult(ctx.project, ledger, followUp.parent));
+  else prompt.findings = findingPromptLines(collectFindings(ctx.project, ledger).filter((finding) => finding.ritual === doc.header.slug));
   // A skill can grant tools of its own (`allowed-tools`), so a ritual that
   // names one gets the full gate, which enforces `may` itself. So does one
   // that may start subagents: the gate must see each of their calls.

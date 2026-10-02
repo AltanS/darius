@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findingsSection } from "../core/finding-index.ts";
 import { handoffSection, type Handoff } from "../core/handoff.ts";
 import type { Ritual } from "../core/model.ts";
 import { RESULT_PROMPT, STYLE_PROMPT } from "../core/result.ts";
@@ -58,6 +59,8 @@ export interface PromptInput {
   body: string;
   /** What the previous run of the ritual passes on (src/core/handoff.ts); none for the harness check. */
   handoff?: Handoff | null;
+  /** The lines of the `## Open findings` section (src/core/finding-index.ts); none for a follow-up run or the harness check. */
+  findings?: readonly string[];
   /** The `## Follow-up` section of a follow-up run (src/runner/follow-up.ts). */
   followUp?: readonly string[];
 }
@@ -136,6 +139,7 @@ export function buildPrompt(input: PromptInput): string {
     modeLine,
     "",
     ...handoffSection(input.handoff ?? null),
+    ...findingsSection(input.findings ?? []),
     ...(input.followUp ?? []),
     "## Protocol",
     "",

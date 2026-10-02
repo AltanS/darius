@@ -15,6 +15,9 @@
  * for a decision at severity high or critical, or any item not verified
  * makes a result `attention`, whatever the model said. `failed` stays.
  *
+ * `key` (0.62.0) names an item across runs. Like `handoff`, it is never
+ * clipped: a longer key is an error.
+ *
  * `handoff` (0.26.0) is a note of at most HANDOFF_MAX characters for the
  * next run of the same ritual (src/core/handoff.ts). It is the one text
  * darius does not clip: a cut note can lose its meaning, so a longer one is
@@ -28,7 +31,7 @@ export const RESULT_FENCE = "darius-result";
 
 export const RESULT_STATUSES = ["ok", "attention", "failed"] as const;
 export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
-export const ITEM_STATES = ["open", "fixed", "needs-decision", "not-verified"] as const;
+export const ITEM_STATES = ["open", "fixed", "needs-decision", "needs-code", "not-verified"] as const;
 export const ACTION_STATES = ["done", "failed", "skipped"] as const;
 export const TONES = ["ok", "warn", "bad"] as const;
 
@@ -47,6 +50,11 @@ export interface ResultMetric {
 
 /** A problem the run found. Clean counts go in `metrics`, not here. */
 export interface ResultItem {
+  /**
+   * A stable id for the finding (0.62.0): the same finding carries the same
+   * key in every run of the ritual (src/core/finding-index.ts).
+   */
+  key?: string;
   title: string;
   severity: Severity;
   state: ItemState;
@@ -124,6 +132,9 @@ export const FINDINGS_MAX = 4000;
 /** The longest handoff note, in characters. */
 export const HANDOFF_MAX = 200;
 
+/** The longest item key, in characters. */
+export const KEY_MAX = 120;
+
 /** More entries than these are an error, not a clip: the page could not show them. */
 const COUNT_LIMITS = { metrics: 12, items: 100, questions: 10, actions: 100, commands: 20 } as const;
 
@@ -199,6 +210,20 @@ function handoff(check: Checker, record: JsonRecord): string | undefined {
   return note === "" ? undefined : note;
 }
 
+/** The item key, one line; longer than KEY_MAX characters is an error, not a clip: a cut key would split a finding. */
+function itemKey(check: Checker, record: JsonRecord, where: string): string | undefined {
+  const value = record.key;
+  if (value === undefined || value === null) return undefined;
+  if (!isText(value)) {
+    check.errors.push(`${where}.key: must be a string when set`);
+    return undefined;
+  }
+  const key = clean(value, Number.MAX_SAFE_INTEGER).replaceAll(/\s+/gu, " ");
+  const length = [...key].length;
+  if (length > KEY_MAX) check.errors.push(`${where}.key: at most ${String(KEY_MAX)} characters, got ${String(length)}; make it shorter`);
+  return key === "" ? undefined : key;
+}
+
 function zeroCounts(): SeverityCounts {
   return { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
 }
@@ -272,6 +297,8 @@ function item(check: Checker, record: JsonRecord, where: string): ResultItem {
     severity: check.choice(record, "severity", where, SEVERITIES) ?? "info",
     state: check.choice(record, "state", where, ITEM_STATES) ?? "open",
   };
+  const key = itemKey(check, record, where);
+  if (key !== undefined) out.key = key;
   const group = check.optionalText(record, "group", where, TEXT_LIMITS.group);
   if (group !== undefined) out.group = group;
   const target = check.optionalText(record, "target", where, TEXT_LIMITS.target);
@@ -411,15 +438,15 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, not-verified), optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
   "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",
   "",
-  "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
+  "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. Put in `questions` only what needs a decision. A fix you made, or an item that needs code, is never a question. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",
   "```darius-result",
-  '{"v": 1, "status": "attention", "summary": "37 pages checked; 1 critical fixed, 1 question.", "metrics": [{"label": "Pages checked", "value": 37}], "items": [{"title": "Broken link on the pricing page", "severity": "critical", "state": "fixed", "group": "site-a", "target": "page 12"}], "questions": [{"text": "Delete the two old landing pages on site-b now?", "recommendation": "Yes, delete them."}], "actions": [{"text": "Fixed the link in the price table", "state": "done", "target": "site-a page 12"}], "handoff": "Check that site-a page 12 still links to the pricing page. The old landing pages on site-b wait for the operator."}',
+  '{"v": 1, "status": "attention", "summary": "37 pages checked; 1 critical fixed, 1 question.", "metrics": [{"label": "Pages checked", "value": 37}], "items": [{"title": "Broken link on the pricing page", "severity": "critical", "state": "fixed", "key": "site-a/pricing-link-broken", "group": "site-a", "target": "page 12"}], "questions": [{"text": "Delete the two old landing pages on site-b now?", "recommendation": "Yes, delete them."}], "actions": [{"text": "Fixed the link in the price table", "state": "done", "target": "site-a page 12"}], "handoff": "Check that site-a page 12 still links to the pricing page. The old landing pages on site-b wait for the operator."}',
   "```",
   "",
 ];

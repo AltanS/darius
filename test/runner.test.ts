@@ -40,6 +40,7 @@ import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
 import { failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
+import { findingCommand } from "../src/cli/finding.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
 import { planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
@@ -2079,6 +2080,48 @@ test("a handoff note and the operator's answer reach the next run's prompt; a cr
   }
 });
 
+test("open findings reach the next run's prompt and `run start`; the first run has none", async () => {
+  const project = "res-findings";
+  const promptOf = (run: string): string => readFileSync(join(openProject(project).root, "runs", run, "prompt.md"), "utf8");
+  const runNow = async (): Promise<string> =>
+    JSON.parse((await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"])).stdout).projects[0].rituals[0].run;
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  process.env.FAKE_CLAUDE_RESULT = JSON.stringify({
+    v: 1,
+    status: "ok",
+    summary: "two findings",
+    items: [
+      { key: "link-12", title: "Broken link", severity: "high", state: "needs-code", target: "page 12" },
+      { key: "banner-3", title: "Old banner", severity: "low", state: "open" },
+      { key: "known-1", title: "Known quirk", severity: "low", state: "open" },
+    ],
+  });
+  try {
+    seedRitual(project);
+    const first = ritualsOf((await runDueJson(project)).report)[0]?.run ?? "";
+    assert.doesNotMatch(promptOf(first), /## Open findings/u, "the first run has nothing to re-check");
+    const closed = await runCli(findingCommand, ["close", "known-1", "--project", project, "--note", "tracked elsewhere"]);
+    assert.equal(closed.code, 0, closed.stdout);
+    process.env.FAKE_CLAUDE_RESULT = JSON.stringify({ v: 1, status: "ok", summary: "one left", items: [{ key: "link-12", title: "Broken link", severity: "high", state: "needs-code", target: "page 12" }] });
+    const second = await runNow();
+    const prompt = promptOf(second);
+    assert.match(prompt, /## Open findings\n\ndarius tracks these findings across runs\. Re-check each one and report it again with the same key/u);
+    assert.match(prompt, /^- \{link-12\} high needs-code: Broken link \[page 12\] \(since \d{4}-\d{2}-\d{2}\)$/mu);
+    assert.match(prompt, /^- \{banner-3\} low open: Old banner \(since \d{4}-\d{2}-\d{2}\)$/mu);
+    assert.match(prompt, /Closed by the operator, do not report again unless worse: \{known-1\}/u);
+    assert.ok(prompt.indexOf("## Open findings") < prompt.indexOf("## Protocol"), "the section comes before the protocol");
+    assert.match(prompt, /`key` \(at most 120 characters/u, "the result format documents the key");
+
+    process.env.FAKE_CLAUDE_MODE = "silent";
+    await runNow();
+    const started = await runCli(runCommand, ["start", "heartbeat", "--project", project]);
+    assert.match(started.stdout, /## Open findings\n\ndarius tracks these findings/u, "run start prints them too");
+    assert.match(started.stdout, /\{link-12\} high needs-code/u);
+  } finally {
+    delete process.env.FAKE_CLAUDE_RESULT;
+  }
+});
+
 test("an invalid block keeps the run open; if the model gives up, the failure keeps what it sent", async () => {
   process.env.FAKE_CLAUDE_MODE = "complete";
   process.env.FAKE_CLAUDE_RESULT = '{"v": 1, "status": "fine"}';
@@ -2133,7 +2176,7 @@ test("run show prints a run's facts, its result and its findings; run list carri
     "One card is stale.",
     "",
     "```darius-result",
-    JSON.stringify({ v: 1, status: "ok", summary: "one stale card", items: [{ title: "Stale card", severity: "medium", state: "needs-decision", group: "site-c", target: "post 32454" }], questions: [{ text: "Delete it?", recommendation: "Yes.", commands: ["pnpm -C tools cli cards delete 32454"] }] }),
+    JSON.stringify({ v: 1, status: "ok", summary: "one stale card", items: [{ title: "Stale card", severity: "medium", state: "needs-decision", group: "site-c", target: "post 32454", key: "card-32454" }], questions: [{ text: "Delete it?", recommendation: "Yes.", commands: ["pnpm -C tools cli cards delete 32454"] }] }),
     "```",
   ].join("\n");
   const chained = findings.replace("pnpm -C tools cli cards delete 32454", "cd tools && pnpm cli cards delete 32454");
@@ -2146,7 +2189,7 @@ test("run show prints a run's facts, its result and its findings; run list carri
   const text = await runCli(runCommand, ["show", run, "--project", "res-show"]);
   assert.match(text.stdout, /Result: attention\. one stale card/u);
   assert.match(text.stdout, /question 1: Delete it\? \(recommended: Yes\.\)\n {4}run: pnpm -C tools cli cards delete 32454\n/u);
-  assert.match(text.stdout, /medium needs-decision: Stale card \[site-c, post 32454\]/u);
+  assert.match(text.stdout, /medium needs-decision: Stale card \[site-c, post 32454\] \{card-32454\}\n/u);
   assert.match(text.stdout, /# Check\n\nOne card is stale\./u);
   assert.doesNotMatch(text.stdout, /```darius-result/u, "the block is not in the findings");
   const json = JSON.parse((await runCli(runCommand, ["show", run, "--project", "res-show", "--json"])).stdout);
@@ -2174,7 +2217,7 @@ const FOLLOW_UP_RESULT = {
   v: 1,
   status: "attention",
   summary: "one push waits",
-  items: [{ title: "Branch not pushed", severity: "medium", state: "needs-decision", target: "main" }],
+  items: [{ title: "Branch not pushed", severity: "medium", state: "needs-decision", target: "main", key: "main-not-pushed" }],
   actions: [{ text: "Checked the branch", state: "done" }],
   questions: [
     { text: "Push main now?", recommendation: "Yes.", commands: ["git push origin main"] },
@@ -2226,9 +2269,10 @@ test("run follow-up starts a new attended run of the ritual that may run the app
   assert.match(prompt, new RegExp(`## Follow-up\n\nThis run follows up run ${parent}\\. Its summary: one push waits`, "u"));
   assert.match(prompt, /Approved question 1: Push main now\? Recommended: Yes\.\nOperator note: push it/u);
   assert.match(prompt, /```bash\ngit push origin main\ndate\n```/u);
-  assert.match(prompt, /- medium needs-decision: Branch not pushed \[main\]/u);
+  assert.match(prompt, /- medium needs-decision: Branch not pushed \[main\] \{main-not-pushed\}/u);
+  assert.doesNotMatch(prompt, /## Open findings/u, "a follow-up lists no open findings: it reports only what it changed");
   assert.match(prompt, /- done: Checked the branch/u);
-  assert.match(prompt, /Run the granted lines as written, then verify each result\. Anything else holds as usual\./u);
+  assert.match(prompt, /Run the granted lines as written, then verify each result\. Anything else holds as usual\. In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one\. Do not repeat the parent's other items\./u);
   assert.ok(prompt.indexOf("## Follow-up") < prompt.indexOf("## Protocol"));
 
   const acks = linesOf(project, "run.acknowledged");

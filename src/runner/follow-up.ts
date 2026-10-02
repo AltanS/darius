@@ -162,10 +162,12 @@ export function followUpSection(followUp: FollowUp, result: RunResult | null): s
     "```",
     "",
   );
-  const open = (result?.items ?? []).filter((item) => item.state !== "fixed").map((item) => `- ${item.severity} ${item.state}: ${item.title}${item.target === undefined ? "" : ` [${item.target}]`}`);
+  const open = (result?.items ?? [])
+    .filter((item) => item.state !== "fixed")
+    .map((item) => `- ${item.severity} ${item.state}: ${item.title}${item.target === undefined ? "" : ` [${item.target}]`}${item.key === undefined ? "" : ` {${item.key}}`}`);
   if (open.length > 0) lines.push("Open items of that run:", ...clipped(open), "");
   const actions = (result?.actions ?? []).map((action) => `- ${action.state}: ${action.text}${action.target === undefined ? "" : ` [${action.target}]`}`);
   if (actions.length > 0) lines.push("Actions of that run:", ...clipped(actions), "");
-  lines.push("Run the granted lines as written, then verify each result. Anything else holds as usual. Report what changed.", "");
+  lines.push("Run the granted lines as written, then verify each result. Anything else holds as usual. In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one. Do not repeat the parent's other items.", "");
   return lines;
 }

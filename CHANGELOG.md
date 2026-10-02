@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.62.0] - 2026-10-02
+
+### Added
+
+- A result item may carry a `key`: a stable id for the finding, plain text, at most 120 characters. A longer key is refused, not clipped. The run prompt tells the run to reuse the key when it re-checks a finding. `darius run show` prints the key as `{key}` at the end of the item line.
+- A new item state, `needs-code`: the item needs a code or mapping fix and is not a question. It counts as open, so a high or critical one still raises the result to attention.
+- A findings index (`src/core/finding-index.ts`). darius derives one finding per (ritual, key) from the ledger and the result blobs that already sync: newest report, first and last sighting, run count, the last 10 steps, `stale`, `reopened` and a status (`needs-you`, `open`, `closed`, `fixed`). An item without a key gets the key `auto:group|target|title`. Nothing new is stored for a finding.
+- `darius finding list [--ritual SLUG] [--open | --all]`, `finding show <key>`, `finding close <key> [--note TEXT]` and `finding reopen <key>`. The list shows needs-you findings by default. A close writes a `finding.closed` ledger line; it holds while later reports keep the same or a lower severity, and a worse report ends it. `finding reopen` writes `finding.reopened`. The skill lists the verbs.
+- The run prompt gets an `## Open findings` section, after the handoff, for a normal run of a ritual: the needs-you and open findings (at most 40 lines), then the keys the operator closed (at most 20). `darius run start` prints it for a run by hand. No findings, no section.
+
+### Changed
+
+- A follow-up run no longer gets the open findings. Its prompt shows each open item of the parent with its key, and tells the run to report only the items it changed or re-checked, with the parent's key, and not to repeat the parent's other items. This stops a follow-up asking the operator the same question twice.
+- The result prompt says what goes in `questions`: only what needs a decision. A fix the run made, or an item that needs code, is never a question.
+- `--all` is a boolean flag in the argument parser.
+
 ## [0.61.0] - 2026-10-02
 
 ### Added
