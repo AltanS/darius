@@ -5,11 +5,13 @@ export default [
   index("routes/overview.tsx"),
   route("all", "routes/overview.tsx", { id: "overview-all" }),
   route("w/:ws", "routes/overview.tsx", { id: "overview-workspace" }),
-  // The three sections, for all workspaces and for one.
+  // The sections, for all workspaces and for one. Findings (0.62.0) filters through its address.
   route("vigils", "routes/vigils.tsx", { id: "vigils-all" }),
   route("w/:ws/vigils", "routes/vigils.tsx", { id: "vigils-workspace" }),
   route("rituals", "routes/rituals.tsx", { id: "rituals-all" }),
   route("w/:ws/rituals", "routes/rituals.tsx", { id: "rituals-workspace" }),
+  route("findings", "routes/findings.tsx", { id: "findings-all" }),
+  route("w/:ws/findings", "routes/findings.tsx", { id: "findings-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
   // One milestone in full: README, spec texts, worklogs (0.42.0).

@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 import type { Route } from "./+types/runs";
+import { ChipRow, chipClass } from "../components/chip-row.tsx";
 import { RunList } from "../components/runs.tsx";
 import { Section } from "../components/ui.tsx";
 import { scopeProjects } from "../lib/home.ts";
@@ -67,39 +67,6 @@ function filterText(query: Query): string {
   const where = query.project === "" ? " of every project" : ` in ${query.project}`;
   const imported = query.withImported ? ", imported runs included" : "";
   return `${what}${where}${imported}, newest first.`;
-}
-
-function chipClass(isActive: boolean, isToggle = false): string {
-  const kind = isToggle ? "fchip fchip-toggle" : "fchip";
-  return isActive ? `${kind} fchip-on` : kind;
-}
-
-interface ChipRowProps {
-  label: string;
-  /** The chip that is on; the row scrolls it into view when this changes. */
-  current: string;
-  children: React.ReactNode;
-}
-
-/**
- * One row of filter chips. On a phone the row scrolls sideways instead of
- * wrapping, so the filter stays two lines tall; the chip that is on is
- * scrolled into view, so the row never hides the current filter.
- */
-function ChipRow({ label, current, children }: ChipRowProps): React.ReactNode {
-  const row = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const element = row.current;
-    if (element === null) return;
-    const on = element.querySelector<HTMLElement>(".fchip-on:not(.fchip-toggle)");
-    if (on === null) return;
-    element.scrollLeft = Math.max(0, on.offsetLeft - (element.clientWidth - on.offsetWidth) / 2);
-  }, [current]);
-  return (
-    <div ref={row} role="group" aria-label={label} className="fchips">
-      {children}
-    </div>
-  );
 }
 
 export default function Runs({ loaderData }: Route.ComponentProps): React.ReactNode {

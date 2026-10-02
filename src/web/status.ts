@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ritualState } from "../core/due.ts";
+import { collectFindings, findingCounts } from "../core/finding-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
 import { readLegacyMilestoneDetail, type LegacyFile } from "../core/legacy-milestone-detail.ts";
@@ -281,12 +282,13 @@ export function lastSync(name: string): string | null {
 
 function projectStatus(name: string, now: Date): ProjectStatus {
   const checkout = linkedDir(name) ?? null;
-  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, error: null };
+  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null };
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
     status.rituals = ritualRows(project, ledger, now, checkout);
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
+    status.findings = findingCounts(collectFindings(project, ledger));
     const stored = vigilRows(project, ledger);
     status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
     const tracked = legacyMilestones(checkout);

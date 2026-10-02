@@ -134,6 +134,7 @@ function ItemRow({ item }: ItemRowProps): React.ReactNode {
       <div className="ritem-main">
         <p className="ritem-title">{item.title}</p>
         {item.target === undefined ? null : <p className="ritem-sub">{item.target}</p>}
+        {item.key === undefined ? null : <p className="ritem-key">{`key ${item.key}`}</p>}
         {item.detail === undefined ? null : (
           <Fold summary="Detail">
             <p className="ritem-detail">{item.detail}</p>

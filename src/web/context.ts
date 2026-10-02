@@ -6,14 +6,28 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { WebContext } from "./api.ts";
+import type { FindingRow, WebContext } from "./api.ts";
+import { collectFindings } from "../core/finding-index.ts";
+import { listProjects, openProject } from "../core/store.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
-import { hostId } from "../core/ledger.ts";
+import { hostId, readLedger } from "../core/ledger.ts";
 import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { collectBackups } from "./backups.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail } from "./status.ts";
+
+/** The findings of every project of this host, project by project, worst first within each. A project that cannot be read adds none. */
+export function collectFindingRows(): FindingRow[] {
+  return listProjects().flatMap((name) => {
+    try {
+      const project = openProject(name);
+      return collectFindings(project, readLedger(project)).map((finding): FindingRow => Object.assign({ project: name }, finding));
+    } catch {
+      return [];
+    }
+  });
+}
 
 export function newNonce(): string {
   return randomBytes(16).toString("base64");
@@ -30,6 +44,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     milestone: (project, milestone) => milestoneDetail(project, milestone),
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),
     backups: () => collectBackups(),
+    findings: () => Promise.resolve(collectFindingRows()),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),
   };
 }

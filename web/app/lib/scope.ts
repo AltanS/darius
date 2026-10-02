@@ -15,18 +15,19 @@ import { buildAgenda } from "./agenda.ts";
 import { needCounts, scopeProjects, selftestLines, type HomeScope, type SelftestLine } from "./home.ts";
 import { readSettings, type Settings } from "./settings.ts";
 
-export type Section = "vigils" | "rituals" | "milestones";
+export type Section = "vigils" | "rituals" | "milestones" | "findings";
 
-/** The badges on the tabs: vigils due today or late, rituals late. */
+/** The badges on the tabs: vigils due today or late, rituals late, findings that need the operator. */
 export interface TabCounts {
   vigils: number;
   rituals: number;
+  findings: number;
 }
 
 export function tabCounts(projects: readonly ProjectStatus[], today: string): TabCounts {
   const vigils = buildAgenda({ projects, today, only: "vigil" });
   const rituals = buildAgenda({ projects, today, only: "ritual" });
-  return { vigils: vigils.overdue + vigils.dueToday, rituals: rituals.overdue };
+  return { vigils: vigils.overdue + vigils.dueToday, rituals: rituals.overdue, findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0) };
 }
 
 /** The default workspace from the settings, when this host has it; otherwise null (all workspaces). */
@@ -89,7 +90,7 @@ export interface Place {
 }
 
 function isSection(text: string | undefined): text is Section {
-  return text === "vigils" || text === "rituals" || text === "milestones";
+  return text === "vigils" || text === "rituals" || text === "milestones" || text === "findings";
 }
 
 function decoded(text: string): string {
@@ -116,6 +117,7 @@ export function placeOf(pathname: string, search: string, defaultWorkspace: stri
   }
   if (first === "p" && second !== undefined) return { workspace: decoded(second), section: third === "rituals" ? "rituals" : null, overview: false };
   if (isSection(first)) return { workspace: null, section: first, overview: false };
+  if (first === "findings") return { workspace: new URLSearchParams(search).get("project"), section: "findings", overview: false };
   if (first === "runs") return { workspace: parts.length === 1 ? new URLSearchParams(search).get("project") : decoded(second ?? ""), section: "rituals", overview: false };
   return { workspace: defaultWorkspace, section: null, overview: false };
 }

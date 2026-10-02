@@ -18,6 +18,7 @@ export function loadContext(context: WebContext): AppLoadContext {
     milestone: (project, milestone) => context.milestone(project, milestone),
     system: () => context.system(),
     backups: () => context.backups(),
+    findings: () => context.findings(),
     followUp: (project, run) => context.followUp(project, run),
   };
 }

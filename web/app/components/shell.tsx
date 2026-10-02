@@ -5,7 +5,7 @@
  * opens as a sheet under the bar on a phone and as a menu on a desktop; its
  * first entry is the Overview of the current scope, then All workspaces, then
  * each workspace with what needs you. The three sections of the scope, Vigils,
- * Rituals and Milestones, are the tabs: at the bottom of a phone, under the
+ * Rituals, Findings and Milestones, are the tabs: at the bottom of a phone, under the
  * bar on a desktop. One footer line holds the host facts.
  */
 
@@ -29,6 +29,7 @@ interface SectionSpec {
 const SECTIONS: readonly SectionSpec[] = [
   { section: "vigils", label: "Vigils", badge: (tabs) => ({ count: tabs.vigils, tone: "wait", text: "due today or late" }) },
   { section: "rituals", label: "Rituals", badge: (tabs) => ({ count: tabs.rituals, tone: "late", text: "late" }) },
+  { section: "findings", label: "Findings", badge: (tabs) => ({ count: tabs.findings, tone: "wait", text: "need you" }) },
   { section: "milestones", label: "Milestones", badge: () => ({ count: 0, tone: "wait", text: "" }) },
 ];
 
@@ -39,6 +40,7 @@ interface SectionIconProps {
 
 function SectionIcon({ section, size }: SectionIconProps): React.ReactNode {
   if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
+  if (section === "findings") return <NavIcon name="finding" size={size} className="tab-ico" />;
   return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;
 }
 
@@ -128,7 +130,7 @@ function Switcher({ data, place, overview, to, pathKey }: SwitcherProps): React.
   const { workspace } = place;
   const known = data.workspaces.some((entry) => entry.name === workspace);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
-  const listed = workspace === null || known ? data.workspaces : [...data.workspaces, { name: workspace, error: false, needs: 0, tabs: { vigils: 0, rituals: 0 } }];
+  const listed = workspace === null || known ? data.workspaces : [...data.workspaces, { name: workspace, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 } }];
   const others = workspace !== null && data.workspaces.some((entry) => entry.name !== workspace && entry.needs > 0);
   return (
     // Keyed by the address, so the menu closes after each navigation.
@@ -170,7 +172,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   const location = useLocation();
   const place = placeOf(location.pathname, location.search, data.defaultWorkspace);
   const { workspace } = place;
-  const tabs = workspace === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? { vigils: 0, rituals: 0 });
+  const tabs = workspace === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
   // `/` is the default workspace, so all workspaces need an address of their own when one is set.
   const allOverview = data.defaultWorkspace === null ? "/" : "/all";
   const overviewOf = (name: string | null): string => (name === null ? allOverview : workspacePath(name));

@@ -8,7 +8,7 @@
  * part of it; the milestone detail page is, for M12 of demo-shop.
  */
 
-import type { BackupRow, BackupsStatus, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 
 const MINUTE = 60_000;
@@ -120,6 +120,79 @@ function milestones(): MilestoneRow[] {
   ].toSorted((left, right) => Number.parseInt(left.id.slice(1), 10) - Number.parseInt(right.id.slice(1), 10));
 }
 
+/**
+ * Findings in every status: needs-you (one under a given key, a needs-code
+ * one and a reopened one), open (one stale, one under an auto key, which is
+ * never needs-you), closed and fixed. Same rule as src/core/finding-index.ts:
+ * a stale or auto-key finding is open at most.
+ */
+function finding(now: number, row: Partial<FindingRow> & Pick<FindingRow, "project" | "ritual" | "key" | "title" | "severity" | "state" | "status">, firstAgo: number, lastAgo: number, extra: Partial<FindingRow> = {}): FindingRow {
+  const id = row.key.replaceAll(/\W/gu, "").slice(0, 12);
+  const last = `01DEMOLAST${id}`;
+  const first = `01DEMOFIRST${id}`;
+  return {
+    auto: false,
+    firstSeen: { run: first, at: ago(now, firstAgo) },
+    lastSeen: { run: last, at: ago(now, lastAgo) },
+    runs: 3,
+    history: [
+      { run: first, at: ago(now, firstAgo), state: "open", severity: row.severity },
+      { run: last, at: ago(now, lastAgo), state: row.state, severity: row.severity },
+    ],
+    stale: false,
+    reopened: false,
+    ...row,
+    ...extra,
+  };
+}
+
+function demoFindings(now: number): FindingRow[] {
+  const shop = "demo-shop";
+  return [
+    finding(
+      now,
+      { project: shop, ritual: "site-report", key: "checkout-500", title: "Checkout answers 500 for orders with a gift card", severity: "critical", state: "needs-code", status: "needs-you", group: "checkout", target: "/checkout/confirm", detail: "Seen in the last three reports. The gift card line has no tax rate, so the total is NaN.\nSteps: add a gift card, press Pay." },
+      3 * DAY,
+      5 * 60 * MINUTE,
+    ),
+    finding(
+      now,
+      { project: shop, ritual: "site-report", key: "promo-banner", title: "Promo banner shows last season's prices", severity: "high", state: "needs-decision", status: "needs-you", group: "home page", target: "banner 2" },
+      6 * DAY,
+      5 * 60 * MINUTE,
+      { reopened: true, history: [{ run: "01DEMOFIRSTpromobanner", at: ago(now, 6 * DAY), state: "open", severity: "high" }, { run: "01DEMOMIDpromobanner", at: ago(now, 4 * DAY), state: "fixed", severity: "high" }, { run: "01DEMOLASTpromobanner", at: ago(now, 5 * 60 * MINUTE), state: "needs-decision", severity: "high" }] },
+    ),
+    finding(now, { project: shop, ritual: "link-check", key: "link-img-44", title: "Image link on the size guide is broken", severity: "medium", state: "open", status: "open", target: "/size-guide" }, 9 * DAY, 26 * 60 * MINUTE),
+    finding(
+      now,
+      { project: shop, ritual: "link-check", key: "old-feed", title: "Old product feed answers 404", severity: "low", state: "open", status: "open", target: "/feeds/products-v1.xml" },
+      12 * DAY,
+      2 * DAY,
+      { stale: true },
+    ),
+    finding(
+      now,
+      { project: shop, ritual: "link-check", key: "auto:|/press|press page title is empty", auto: true, title: "Press page title is empty", severity: "high", state: "needs-decision", status: "open", target: "/press", detail: "The run gave no key, so darius made one. It stays open and never needs you." },
+      2 * DAY,
+      26 * 60 * MINUTE,
+    ),
+    finding(
+      now,
+      { project: shop, ritual: "site-report", key: "cdn-hit-rate", title: "Image CDN hit rate is low", severity: "medium", state: "open", status: "closed", group: "performance" },
+      14 * DAY,
+      5 * 60 * MINUTE,
+      { closed: { at: ago(now, 2 * DAY), who: "operator", note: "known, the CDN plan changes next month", severity: "medium" } },
+    ),
+    finding(now, { project: shop, ritual: "link-check", key: "footer-typo", title: "Typo in the footer", severity: "low", state: "fixed", status: "fixed", target: "footer" }, 8 * DAY, 26 * 60 * MINUTE),
+    finding(now, { project: "atlas-docs", ritual: "sitemap-check", key: "sitemap-gap", title: "Sitemap misses the new install guide", severity: "high", state: "needs-code", status: "needs-you", target: "/guides/install" }, 2 * DAY, 9 * 60 * MINUTE),
+  ];
+}
+
+function findingCounts(rows: readonly FindingRow[]): FindingCounts {
+  const needsYou = rows.filter((row) => row.status === "needs-you").length;
+  return { needsYou, open: needsYou + rows.filter((row) => row.status === "open").length };
+}
+
 function project(now: number): ProjectStatus {
   const running = run(now, "link-check", "running", null, 6 * MINUTE, { who: "timer" });
   const held = run(now, "price-sync", "held", null, 25 * MINUTE, { questions: ["Push the new prices to the live shop?", "Which currency rounds up?"] });
@@ -171,6 +244,7 @@ function project(now: number): ProjectStatus {
     ],
     milestones: milestones(),
     milestonesArchived: 41,
+    findings: findingCounts(demoFindings(now).filter((row) => row.project === "demo-shop")),
   };
 }
 
@@ -196,6 +270,7 @@ function atlas(now: number): ProjectStatus {
     vigils: [],
     milestones: [],
     milestonesArchived: 0,
+    findings: findingCounts(demoFindings(now).filter((row) => row.project === "atlas-docs")),
   };
 }
 
@@ -398,6 +473,7 @@ export function demoContext(base: WebContext): WebContext {
     milestone: (name, milestone) => (name === "demo-shop" && milestone.toUpperCase() === "M12" ? demoMilestone(Date.now()) : null),
     system: () => demoSystem(Date.now()),
     backups: () => demoBackups(Date.now()),
+    findings: () => Promise.resolve(demoFindings(Date.now())),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
   };
 }

@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FollowUpReadiness, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -111,10 +111,43 @@ const STATUS: HostStatus = {
         },
       ],
       milestonesArchived: 3,
+      findings: { needsYou: 2, open: 3 },
       error: null,
     },
   ],
 };
+
+function finding(key: string, extra: Partial<FindingRow>): FindingRow {
+  return {
+    project: "demo",
+    ritual: "daily-report",
+    key,
+    auto: false,
+    title: `Finding ${key}`,
+    severity: "medium",
+    state: "open",
+    firstSeen: { run: DONE, at: "2026-09-26T08:00:00.000Z" },
+    lastSeen: { run: DONE, at: "2026-09-28T08:00:00.000Z" },
+    runs: 2,
+    history: [
+      { run: DONE, at: "2026-09-26T08:00:00.000Z", state: "open", severity: "medium" },
+      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "open", severity: "medium" },
+    ],
+    stale: false,
+    reopened: false,
+    status: "open",
+    ...extra,
+  };
+}
+
+const FINDINGS: FindingRow[] = [
+  finding("link-12", { title: `Broken ${EVIL} link`, severity: "high", state: "needs-code", status: "needs-you", group: "site-a", target: "page 12", detail: `Seen twice ${EVIL}`, reopened: true }),
+  finding("tax-1", { title: "Tax rate missing", severity: "critical", state: "needs-decision", status: "needs-you" }),
+  finding("banner-3", { title: "Old banner", severity: "medium" }),
+  finding("feed-9", { title: "Old feed", severity: "low", stale: true }),
+  finding("shut-1", { title: "Shut thing", status: "closed", closed: { at: "2026-09-27T08:00:00.000Z", who: "op", note: "known", severity: "medium" } }),
+  finding("done-1", { title: "Done thing", state: "fixed", status: "fixed" }),
+];
 
 const RITUAL: RitualDetail = {
   project: "demo",
@@ -269,6 +302,7 @@ const context: WebContext = {
   milestone: (project, milestone) => (project === "demo" && milestone.toUpperCase() === "M7" ? MILESTONE : null),
   system: () => SYSTEM,
   backups: () => BACKUPS,
+  findings: () => Promise.resolve(FINDINGS),
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
 };
 
@@ -287,6 +321,8 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
+  ["/findings", ["Findings", "Findings that need you of every project, worst first.", "needs you (2)", "open (4)", "all (6)", "Broken &lt;script&gt;alert(1)&lt;/script&gt; link", "Tax rate missing", "needs code", "reopened", `/p/demo/runs/${DONE}`, "Detail and history", "Close"]],
+  ["/w/demo/findings", ["Findings", "Findings that need you in demo, worst first.", "Tax rate missing"]],
   ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
   ["/w/demo/milestones", ["Milestones", "In progress", "M7", "7 of 10 checks done", "<details", "M7/01", "6 of 6 checks", "M7/02", "Waiting", "depends on M7/01", "target 10 Sep, past", "3 archived", "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives", 'href="/w/demo/milestones/M7"']],
@@ -987,7 +1023,7 @@ function lateStatus(status: HostStatus = STATUS): HostStatus {
   return { ...status, projects: [{ ...demo!, rituals: [{ ...demo!.rituals[0]!, heldRun: null }] }, ...rest] };
 }
 
-test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, Rituals, Milestones, in that order, and no Home or Runs link", async () => {
+test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, Rituals, Findings, Milestones, in that order, and no Home or Runs link", async () => {
   const { body } = await readWith("/w/demo", {}, lateStatus());
   assert.ok(linkTo(body, "/w/demo")?.includes('class="brand"'), "the gem opens the Overview of the scope");
   assert.ok(linkTo(body, "/settings")?.includes('aria-label="Settings"'), "the gear opens Settings");
@@ -996,7 +1032,7 @@ test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, R
     const from = body.indexOf(`aria-label="${nav}"`);
     assert.ok(from !== -1, nav);
     const links = [...body.slice(from, body.indexOf("</nav>", from)).matchAll(/href="([^"]+)"/gu)].map((match) => match[1]);
-    assert.deepEqual(links, ["/w/demo/vigils", "/w/demo/rituals", "/w/demo/milestones"], `${nav}: the three tabs in order`);
+    assert.deepEqual(links, ["/w/demo/vigils", "/w/demo/rituals", "/w/demo/findings", "/w/demo/milestones"], `${nav}: the four tabs in order`);
   }
   assert.equal(body.includes('aria-label="Main"'), false, "no Home and Runs links any more");
   const all = await get("/milestones");
@@ -1007,7 +1043,8 @@ test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, R
   const rituals = await readWith("/rituals", {}, lateStatus());
   assert.match(rituals.body, /<span class="tab-bdg tone-late" title="1 late">/u, "the ritual is one day late");
   assert.ok(linkTo(rituals.body.slice(rituals.body.indexOf('aria-label="Sections"')), "/rituals")?.includes('aria-current="page"'), "the Rituals tab is lit");
-  assert.equal(/<span class="tab-bdg tone-wait"/u.test(rituals.body), false, "no vigil is due today or late");
+  assert.equal(rituals.body.includes("due today or late"), false, "no vigil is due today or late");
+  assert.match(rituals.body, /<span class="tab-bdg tone-wait" title="2 need you">/u, "the Findings tab counts what needs you");
 });
 
 test("the switcher lists Overview, All workspaces and each workspace with what needs you, and marks the current one", async () => {
@@ -1177,4 +1214,72 @@ test("the backups tab: the remote copy says at once whether there is one", async
   assert.ok(body.includes("No remote copy set up. Snapshots stay on this host only."), "no remote copy is said plainly");
   assert.match(body, /aria-expanded="false"[^>]*>Set up a remote copy<\/button>/u, "the button offers to set one up");
   assert.equal(body.includes(">Test the bucket</button>"), false, "no bucket test without a bucket");
+});
+
+function count(body: string): number {
+  return body.split('aria-label="Close the finding').length - 1;
+}
+
+test("the findings page: the view, project, ritual and severity filters, closed and fixed rows without a Close button, store text as text", async () => {
+  const needs = await get("/findings");
+  assert.ok(needs.body.includes("Tax rate missing") && needs.body.includes("Broken"), "the default view lists what needs you");
+  assert.equal(needs.body.includes("Old banner"), false);
+  assert.equal(count(needs.body), 2, "a Close button on each");
+  const open = await get("/findings?view=open");
+  assert.ok(open.body.includes("Old banner") && open.body.includes("Old feed") && open.body.includes(">stale<"));
+  assert.equal(open.body.includes("Shut thing"), false);
+  const all = await get("/findings?view=all");
+  assert.ok(all.body.includes("Shut thing") && all.body.includes("Done thing"));
+  assert.equal(count(all.body), 4, "no Close button on a closed or a fixed finding");
+  assert.ok(all.body.includes("Closed by op"), "the fold says who closed it");
+  const severe = await get("/findings?view=open&severity=critical");
+  assert.ok(severe.body.includes("Tax rate missing") && !severe.body.includes("Old banner"));
+  const none = await get("/findings?project=demo&ritual=nothing");
+  assert.ok(none.body.includes("No finding matches this filter."));
+  const quiet = await handler(new Request("http://darius.test/findings"), { ...context, findings: () => Promise.resolve([]) });
+  assert.ok((await quiet.text()).includes("Nothing needs you."));
+  const strip = (await get("/")).body.replaceAll("<!-- -->", "");
+  assert.match(strip, /href="\/findings"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">findings<\/span>/su, "the status strip counts them and opens the page");
+  assert.match((await get("/w/demo")).body.replaceAll("<!-- -->", ""), /href="\/findings\?project=demo"/u);
+  assert.ok((await get("/vigils")).body.includes('href="/findings"'), "the Findings tab");
+});
+
+test("the run page shows an item's key and the needs-code state", async () => {
+  const result: RunResult = {
+    v: 1,
+    status: "attention",
+    summary: "one thing",
+    metrics: [],
+    items: [{ key: "link-12", title: "Broken link", severity: "high", state: "needs-code" }],
+    questions: [],
+    actions: [],
+  };
+  const response = await handler(new Request(`http://darius.test/p/demo/runs/${DONE}`), { ...context, run: (project, run) => (project === "demo" && run === DONE ? runDetail(RUNS[2]!, result) : null) });
+  const body = (await response.text()).replaceAll("<!-- -->", "");
+  assert.ok(body.includes("needs code") && body.includes("key link-12"));
+});
+
+const lib = await import("../web/app/lib/findings.ts");
+
+test("findings filter logic: views, narrowing, facet options, addresses and words", () => {
+  const read = (search: string) => lib.readQuery(new URLSearchParams(search));
+  assert.deepEqual(read(""), lib.DEFAULT_QUERY);
+  assert.deepEqual(read("view=bogus&severity=bogus"), lib.DEFAULT_QUERY, "unknown values read as no filter");
+  const keys = (query: string) => lib.filterFindings(FINDINGS, read(query)).map((row) => row.key);
+  assert.deepEqual(keys(""), ["link-12", "tax-1"]);
+  assert.deepEqual(keys("view=open"), ["link-12", "tax-1", "banner-3", "feed-9"]);
+  assert.equal(keys("view=all").length, 6);
+  assert.deepEqual(keys("view=all&severity=low"), ["feed-9"]);
+  assert.deepEqual(keys("view=all&ritual=other"), []);
+  assert.deepEqual(keys("view=all&project=demo&ritual=daily-report&severity=critical"), ["tax-1"]);
+  const query = read("view=open");
+  assert.deepEqual([lib.viewCount(FINDINGS, query, "needs-you"), lib.viewCount(FINDINGS, query, "open"), lib.viewCount(FINDINGS, query, "all")], [2, 4, 6]);
+  assert.deepEqual(lib.facetOptions(FINDINGS, query, "severity"), ["critical", "high", "medium", "low"], "worst first, only those in the view");
+  assert.deepEqual(lib.facetOptions(FINDINGS, read("severity=low"), "severity"), ["critical", "high", "low"], "a chosen value stays; the others come from the other filters");
+  assert.deepEqual(lib.facetOptions(FINDINGS, read(""), "ritual"), ["daily-report"]);
+  assert.equal(lib.findingsHref("/findings", lib.DEFAULT_QUERY), "/findings");
+  assert.equal(lib.findingsHref("/w/demo/findings", { view: "open", project: "", ritual: "daily-report", severity: "high" }), "/w/demo/findings?view=open&ritual=daily-report&severity=high");
+  assert.equal(lib.filterText(read("view=open&project=demo&severity=high"), null), "Open findings in demo, severity high, worst first.");
+  assert.equal(lib.filterText(read(""), "demo"), "Findings that need you in demo, worst first.");
+  assert.deepEqual([lib.emptyText(read("")), lib.emptyText(read("view=open")), lib.emptyText(read("severity=low"))], ["Nothing needs you.", "No open findings.", "No finding matches this filter."]);
 });

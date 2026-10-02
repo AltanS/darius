@@ -523,11 +523,13 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
 /**
  * The status strip. A segment shows only above zero, and the strip not at all
  * when every segment is zero. The order: need you (held runs and runs that
- * ask), running (not the stuck ones), stuck, failed, flagged, unreadable, late
+ * ask), findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
  * (rituals and dated vigils past due), due today, and armed vigils.
  */
-function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null): Segment[] {
+function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null, findings: number): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
+  const findingsHref = workspace === null ? "/findings" : `/findings?project=${encodeURIComponent(workspace)}`;
+  const findingsSegment: Segment[] = findings === 0 ? [] : [{ key: "findings", label: "findings", count: findings, tone: "wait", href: findingsHref, live: false, kind: null }];
   const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true, kind: null }];
   const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
   const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), live: false, kind: null }];
@@ -536,6 +538,7 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, wo
   const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false, kind: "vigil" }];
   return [
     ...needSegment,
+    ...findingsSegment,
     ...runningSegment,
     ...cardSegment(needs, "stuck", "stuck", "late"),
     ...cardSegment(needs, "failed", "failed", "bad"),
@@ -578,7 +581,8 @@ export function scopeProjects(status: HostStatus, scope: HomeScope): ProjectStat
 
 export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope = ALL_WORKSPACES): Home {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
-  const all = scopeProjects(status, scope).map((project) => projectNeeds(clock, status.generatedAt, project));
+  const scoped = scopeProjects(status, scope);
+  const all = scoped.map((project) => projectNeeds(clock, status.generatedAt, project));
   const states = all.flatMap((needs) => needs.states);
   const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 
@@ -602,7 +606,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     tone: verdictTone(needs),
     sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
     next: nextLine(agenda, clock.today),
-    strip: statusStrip(needs, now.length, agenda, scope.workspace),
+    strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0)),
     now,
     needs,
     lastNight,

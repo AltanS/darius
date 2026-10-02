@@ -134,8 +134,8 @@ export interface RitualRow {
  */
 export type ResultStatus = "ok" | "attention" | "failed";
 export type ResultSeverity = "critical" | "high" | "medium" | "low" | "info";
-/** `open` and `needs-decision` wait for someone; `not-verified` could not be settled; `fixed` is done. */
-export type ResultItemState = "open" | "fixed" | "needs-decision" | "not-verified";
+/** `open`, `needs-decision` and `needs-code` wait for someone; `not-verified` could not be settled; `fixed` is done. */
+export type ResultItemState = "open" | "fixed" | "needs-decision" | "needs-code" | "not-verified";
 
 export interface ResultMetric {
   label: string;
@@ -145,6 +145,8 @@ export interface ResultMetric {
 }
 
 export interface ResultItem {
+  /** A stable id across runs of the ritual (0.62.0, "Findings"). Plain text. */
+  key?: string;
   title: string;
   severity: ResultSeverity;
   state: ResultItemState;
@@ -153,6 +155,58 @@ export interface ResultItem {
   /** What the item is about, for example a post. Text, never a link. */
   target?: string;
   detail?: string;
+}
+
+// --- findings (0.62.0) ---------------------------------------------------------------------
+
+/** What a finding is now: `needs-you` and `open` wait, `closed` is the operator's, `fixed` is done (src/core/finding-index.ts). */
+export type FindingStatus = "needs-you" | "open" | "fixed" | "closed";
+
+export interface FindingSeen {
+  run: string;
+  at: string;
+}
+
+export interface FindingStep {
+  run: string;
+  at: string;
+  state: ResultItemState;
+  severity: ResultSeverity;
+}
+
+/** One finding of a ritual, as `darius finding list --json` gives it, with the project it belongs to. Every text is untrusted plain text. */
+export interface FindingRow {
+  project: string;
+  /** The ritual slug. */
+  ritual: string;
+  key: string;
+  /** True when darius made the key: the run gave none. */
+  auto: boolean;
+  title: string;
+  severity: ResultSeverity;
+  state: ResultItemState;
+  group?: string;
+  target?: string;
+  detail?: string;
+  firstSeen: FindingSeen;
+  lastSeen: FindingSeen;
+  /** The results that reported it. */
+  runs: number;
+  /** Oldest first, the newest 10. */
+  history: FindingStep[];
+  stale: boolean;
+  reopened: boolean;
+  /** Only while the close is in force. */
+  closed?: { at: string; who: string; note?: string; severity: ResultSeverity };
+  status: FindingStatus;
+}
+
+/** The counts the dashboard shows for a project. */
+export interface FindingCounts {
+  /** Findings with the status `needs-you`. */
+  needsYou: number;
+  /** `needs-you` plus `open`. */
+  open: number;
 }
 
 export interface ResultQuestion {
@@ -282,6 +336,8 @@ export interface ProjectStatus {
   milestones: MilestoneRow[];
   /** How many milestones are archived. */
   milestonesArchived: number;
+  /** The findings its rituals report, counted (0.62.0). */
+  findings: FindingCounts;
   /** Set when darius could not read the project; the lists are then empty. */
   error: string | null;
 }
@@ -614,6 +670,8 @@ export interface WebContext {
   system(): SystemStatus;
   /** The snapshots of this host (0.44.0). */
   backups(): BackupsStatus;
+  /** The findings of every project of this host (0.62.0), worst first within a project. */
+  findings(): Promise<FindingRow[]>;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
 }

@@ -56,11 +56,13 @@ interface RowProps {
   note?: React.ReactNode;
   /** A desktop-only excerpt under the row; a phone does not show it. */
   excerpt?: React.ReactNode;
+  /** Whatever must sit under the row and stay clickable, such as a fold or a form. It is not under the stretched link. */
+  foot?: React.ReactNode;
   className?: string;
 }
 
 /** One row of a list; put it in a `RowList`. */
-export function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }: RowProps): React.ReactNode {
+export function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, foot, className }: RowProps): React.ReactNode {
   const classes = ["rw", rail === null ? "" : `rw-rail tone-${rail}`, live ? "rw-live" : "", className ?? ""].filter((part) => part !== "");
   const segments: React.ReactNode[] = [];
   if (chips !== undefined && chips !== null) segments.push(<span key="chips" className="rw-seg rw-chips">{chips}</span>);
@@ -96,6 +98,7 @@ export function Row({ id, kind, manual = false, title, href, rail = null, live =
         {detail === undefined || detail === null ? null : <p className="rw-detail">{detail}</p>}
         {note === undefined || note === null ? null : <p className="rw-note">{note}</p>}
         {excerpt === undefined || excerpt === null ? null : <div className="rw-excerpt">{excerpt}</div>}
+        {foot === undefined || foot === null ? null : <div className="rw-foot">{foot}</div>}
       </div>
     </li>
   );

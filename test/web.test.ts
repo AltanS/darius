@@ -35,6 +35,7 @@ const { acknowledgeRun } = await import("../src/runner/hold.ts");
 const { collectStatus, runRows } = await import("../src/web/status.ts");
 const { writeLink } = await import("../src/core/links.ts");
 const { ulid } = await import("../src/core/ulid.ts");
+const { Seeder } = await import("./helpers/finding-seed.ts");
 
 interface Seeded {
   run: string;
@@ -539,4 +540,52 @@ test("milestone detail through the WebContext: README, spec texts and worklogs a
   assert.equal(context.milestone("no-such-project", "M8"), null);
   openProject("web-detail-unlinked", { create: true });
   assert.equal(context.milestone("web-detail-unlinked", "M8"), null, "a project without a checkout on this host");
+});
+
+test("findings through the WebContext: rows carry their project, the status carries the counts, and a project without results has none", async () => {
+  const seeded = new Seeder("web-findings");
+  seeded.run("check", [
+    { key: "link-12", title: "Broken link", severity: "high", state: "needs-code", group: "site-a", target: "page 12" },
+    { key: "banner-3", title: "Old banner", severity: "medium" },
+    { key: "done-1", title: "Done thing", severity: "low", state: "fixed" },
+  ]);
+  seeded.close("check", "banner-3", "known");
+  openProject("web-no-findings", { create: true });
+  const rows = await webContext("tester").findings();
+  const mine = rows.filter((row) => row.project === "web-findings");
+  assert.deepEqual(
+    mine.map((row) => [row.project, row.ritual, row.key, row.status]),
+    [
+      ["web-findings", "check", "link-12", "needs-you"],
+      ["web-findings", "check", "banner-3", "closed"],
+      ["web-findings", "check", "done-1", "fixed"],
+    ],
+  );
+  assert.equal(mine[0]?.group, "site-a");
+  assert.equal(mine[0]?.history.length, 1);
+  assert.equal(mine[1]?.closed?.note, "known");
+  assert.equal(rows.some((row) => row.project === "web-no-findings"), false);
+  const projects = collectStatus().projects;
+  assert.deepEqual(projects.find((entry) => entry.name === "web-findings")?.findings, { needsYou: 1, open: 1 });
+  assert.deepEqual(projects.find((entry) => entry.name === "web-no-findings")?.findings, { needsYou: 0, open: 0 });
+});
+
+test("serve dispatches POST /api/finding/close to the finding API; the loopback viewer is refused and a read is 405", async () => {
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const serving = serveCommand.run(parseArgs(["--port", "47993", "--bind", "127.0.0.1"]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const body = JSON.stringify({ project: "web-findings", ritual: "check", key: "link-12" });
+    const loopback = await call(47_993, { method: "POST", path: "/api/finding/close", headers: { "content-type": "application/json" }, body });
+    assert.equal(loopback.status, 403);
+    assert.match(loopback.type, /^application\/json/u);
+    assert.match(loopback.body, /closing a finding needs a tailnet identity/u);
+    assert.equal((await call(47_993, { method: "GET", path: "/api/finding/close" })).status, 405);
+    assert.equal((await call(47_993, { method: "POST", path: "/api/finding/open", headers: { "content-type": "application/json" }, body })).status, 404);
+    process.emit("SIGTERM");
+    assert.equal(await serving, 0);
+  } finally {
+    console.log = log;
+  }
 });

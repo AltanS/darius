@@ -25,7 +25,7 @@ export function resultWord(status: ResultStatus): string {
 }
 
 const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const satisfies Record<ResultSeverity, number>;
-const STATE_RANK = { open: 0, "needs-decision": 1, "not-verified": 2, fixed: 3 } as const satisfies Record<ResultItemState, number>;
+const STATE_RANK = { open: 0, "needs-decision": 1, "needs-code": 2, "not-verified": 3, fixed: 4 } as const satisfies Record<ResultItemState, number>;
 
 export function severityTone(severity: ResultSeverity): Tone | null {
   if (severity === "critical") return "bad";
@@ -37,6 +37,7 @@ export function severityTone(severity: ResultSeverity): Tone | null {
 export function itemStateTag(state: ResultItemState): TagSpec {
   if (state === "fixed") return { text: "fixed", tone: "ok" };
   if (state === "needs-decision") return { text: "needs decision", tone: "wait" };
+  if (state === "needs-code") return { text: "needs code", tone: "wait" };
   if (state === "not-verified") return { text: "not verified", tone: "late" };
   return { text: "open", tone: null };
 }
@@ -63,7 +64,7 @@ export interface ItemGroup {
   items: ResultItem[];
 }
 
-/** Critical first, then by state: open, needs decision, not verified, fixed. Ties keep the model's order. */
+/** Critical first, then by state: open, needs decision, needs code, not verified, fixed. Ties keep the model's order. */
 function byWeight(left: ResultItem, right: ResultItem): number {
   return SEVERITY_RANK[left.severity] - SEVERITY_RANK[right.severity] || STATE_RANK[left.state] - STATE_RANK[right.state];
 }

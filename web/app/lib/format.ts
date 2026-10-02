@@ -173,7 +173,7 @@ export function workspacePath(workspace: string): string {
 }
 
 /** A section of a workspace, or of all workspaces when `workspace` is null: `/w/<ws>/vigils` or `/vigils`. */
-export function sectionPath(workspace: string | null, section: "vigils" | "rituals" | "milestones"): string {
+export function sectionPath(workspace: string | null, section: "vigils" | "rituals" | "milestones" | "findings"): string {
   return workspace === null ? `/${section}` : `${workspacePath(workspace)}/${section}`;
 }
 

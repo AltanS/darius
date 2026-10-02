@@ -8997,6 +8997,7 @@ var PATHS = {
 		"M3.6 6.6V13.7H12.4V6.6",
 		"M6.6 13.7V9.6H9.4V13.7"
 	],
+	finding: ["M7 2.4A4.6 4.6 0 1 0 7 11.6A4.6 4.6 0 1 0 7 2.4Z", "M10.4 10.4L14 14"],
 	lock: ["M3.4 7.2H12.6V14.2H3.4Z", "M5.4 7.2V4.9A2.6 2.6 0 0 1 10.6 4.9V7.2"]
 };
 function NavIcon({ name, size = 16, className }) {
@@ -10329,11 +10330,21 @@ function cardSegment(needs, kind, label, tone) {
 /**
 * The status strip. A segment shows only above zero, and the strip not at all
 * when every segment is zero. The order: need you (held runs and runs that
-* ask), running (not the stuck ones), stuck, failed, flagged, unreadable, late
+* ask), findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
 * (rituals and dated vigils past due), due today, and armed vigils.
 */
-function statusStrip(needs, running, agenda, workspace) {
+function statusStrip(needs, running, agenda, workspace, findings) {
 	const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
+	const findingsHref = workspace === null ? "/findings" : `/findings?project=${encodeURIComponent(workspace)}`;
+	const findingsSegment = findings === 0 ? [] : [{
+		key: "findings",
+		label: "findings",
+		count: findings,
+		tone: "wait",
+		href: findingsHref,
+		live: false,
+		kind: null
+	}];
 	const runningSegment = running === 0 ? [] : [{
 		key: "running",
 		label: "running",
@@ -10382,6 +10393,7 @@ function statusStrip(needs, running, agenda, workspace) {
 	}];
 	return [
 		...needSegment,
+		...findingsSegment,
 		...runningSegment,
 		...cardSegment(needs, "stuck", "stuck", "late"),
 		...cardSegment(needs, "failed", "failed", "bad"),
@@ -10426,7 +10438,8 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		today: status.today,
 		offset: status.utcOffset
 	};
-	const all = scopeProjects(status, scope).map((project) => projectNeeds(clock, status.generatedAt, project));
+	const scoped = scopeProjects(status, scope);
+	const all = scoped.map((project) => projectNeeds(clock, status.generatedAt, project));
 	const states = all.flatMap((needs) => needs.states);
 	const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 	const needs = [
@@ -10448,7 +10461,7 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		tone: verdictTone(needs),
 		sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
 		next: nextLine(agenda, clock.today),
-		strip: statusStrip(needs, now.length, agenda, scope.workspace),
+		strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0)),
 		now,
 		needs,
 		lastNight,
@@ -10582,7 +10595,8 @@ function tabCounts(projects, today) {
 	});
 	return {
 		vigils: vigils.overdue + vigils.dueToday,
-		rituals: rituals.overdue
+		rituals: rituals.overdue,
+		findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0)
 	};
 }
 /** The default workspace from the settings, when this host has it; otherwise null (all workspaces). */
@@ -10633,7 +10647,7 @@ function workspaceEntries(status, settings, needsBy) {
 	}));
 }
 function isSection(text) {
-	return text === "vigils" || text === "rituals" || text === "milestones";
+	return text === "vigils" || text === "rituals" || text === "milestones" || text === "findings";
 }
 function decoded$1(text) {
 	try {
@@ -10682,6 +10696,11 @@ function placeOf(pathname, search, defaultWorkspace) {
 		section: first,
 		overview: false
 	};
+	if (first === "findings") return {
+		workspace: new URLSearchParams(search).get("project"),
+		section: "findings",
+		overview: false
+	};
 	if (first === "runs") return {
 		workspace: parts.length === 1 ? new URLSearchParams(search).get("project") : decoded$1(second ?? ""),
 		section: "rituals",
@@ -10716,7 +10735,7 @@ function shellData(status, request) {
 * opens as a sheet under the bar on a phone and as a menu on a desktop; its
 * first entry is the Overview of the current scope, then All workspaces, then
 * each workspace with what needs you. The three sections of the scope, Vigils,
-* Rituals and Milestones, are the tabs: at the bottom of a phone, under the
+* Rituals, Findings and Milestones, are the tabs: at the bottom of a phone, under the
 * bar on a desktop. One footer line holds the host facts.
 */
 /** The tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late. */
@@ -10740,6 +10759,15 @@ var SECTIONS = [
 		})
 	},
 	{
+		section: "findings",
+		label: "Findings",
+		badge: (tabs) => ({
+			count: tabs.findings,
+			tone: "wait",
+			text: "need you"
+		})
+	},
+	{
 		section: "milestones",
 		label: "Milestones",
 		badge: () => ({
@@ -10752,6 +10780,11 @@ var SECTIONS = [
 function SectionIcon({ section, size }) {
 	if (section === "milestones") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
 		name: "milestone",
+		size,
+		className: "tab-ico"
+	});
+	if (section === "findings") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
+		name: "finding",
 		size,
 		className: "tab-ico"
 	});
@@ -10850,7 +10883,8 @@ function Switcher({ data, place, overview, to, pathKey }) {
 		needs: 0,
 		tabs: {
 			vigils: 0,
-			rituals: 0
+			rituals: 0,
+			findings: 0
 		}
 	}];
 	const others = workspace !== null && data.workspaces.some((entry) => entry.name !== workspace && entry.needs > 0);
@@ -10940,7 +10974,8 @@ function Shell({ data, children }) {
 	const { workspace } = place;
 	const tabs = workspace === null ? data.allTabs : data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? {
 		vigils: 0,
-		rituals: 0
+		rituals: 0,
+		findings: 0
 	};
 	const allOverview = data.defaultWorkspace === null ? "/" : "/all";
 	const overviewOf = (name) => name === null ? allOverview : workspacePath(name);
@@ -11116,11 +11151,11 @@ var root_exports = /* @__PURE__ */ __exportAll({
 	Layout: () => Layout,
 	default: () => root_default,
 	links: () => links,
-	loader: () => loader$16,
-	meta: () => meta$15,
+	loader: () => loader$17,
+	meta: () => meta$16,
 	shouldRevalidate: () => shouldRevalidate
 });
-function loader$16({ context, request }) {
+function loader$17({ context, request }) {
 	const settings = readSettings(request.headers.get("cookie"));
 	const status = statusOf(context);
 	return {
@@ -11138,7 +11173,7 @@ function loader$16({ context, request }) {
 function shouldRevalidate() {
 	return true;
 }
-var meta$15 = () => [{ title: "darius" }];
+var meta$16 = () => [{ title: "darius" }];
 var links = () => [
 	{
 		rel: "icon",
@@ -11516,8 +11551,9 @@ var SEVERITY_RANK = {
 var STATE_RANK = {
 	open: 0,
 	"needs-decision": 1,
-	"not-verified": 2,
-	fixed: 3
+	"needs-code": 2,
+	"not-verified": 3,
+	fixed: 4
 };
 function severityTone(severity) {
 	if (severity === "critical") return "bad";
@@ -11532,6 +11568,10 @@ function itemStateTag(state) {
 	};
 	if (state === "needs-decision") return {
 		text: "needs decision",
+		tone: "wait"
+	};
+	if (state === "needs-code") return {
+		text: "needs code",
 		tone: "wait"
 	};
 	if (state === "not-verified") return {
@@ -11569,7 +11609,7 @@ function metricTag(tone) {
 		word: "bad"
 	};
 }
-/** Critical first, then by state: open, needs decision, not verified, fixed. Ties keep the model's order. */
+/** Critical first, then by state: open, needs decision, needs code, not verified, fixed. Ties keep the model's order. */
 function byWeight(left, right) {
 	return SEVERITY_RANK[left.severity] - SEVERITY_RANK[right.severity] || STATE_RANK[left.state] - STATE_RANK[right.state];
 }
@@ -11857,6 +11897,10 @@ function ItemRow({ item }) {
 						className: "ritem-sub",
 						children: item.target
 					}),
+					item.key === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ritem-key",
+						children: `key ${item.key}`
+					}),
 					item.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
 						summary: "Detail",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -11991,7 +12035,7 @@ function StateWord({ state }) {
 	});
 }
 /** One row of a list; put it in a `RowList`. */
-function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, className }) {
+function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, foot, className }) {
 	const classes = [
 		"rw",
 		rail === null ? "" : `rw-rail tone-${rail}`,
@@ -12056,6 +12100,10 @@ function Row({ id, kind, manual = false, title, href, rail = null, live = false,
 					excerpt === void 0 || excerpt === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "rw-excerpt",
 						children: excerpt
+					}),
+					foot === void 0 || foot === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "rw-foot",
+						children: foot
 					})
 				]
 			})
@@ -12592,8 +12640,8 @@ function RouteError() {
 var overview_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => overview_default,
-	loader: () => loader$15,
-	meta: () => meta$14
+	loader: () => loader$16,
+	meta: () => meta$15
 });
 /** Latest-report rows a phone shows before its own button. */
 var REPORTS_PHONE = 3;
@@ -12603,7 +12651,7 @@ var RECENT_PHONE$1 = 3;
 * One loader for three addresses: `/` (the default workspace, else all),
 * `/all` (all workspaces) and `/w/:ws` (one workspace).
 */
-function loader$15({ context, request, params }) {
+function loader$16({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const read = (project, run) => context.run(project, run);
@@ -12614,7 +12662,7 @@ function loader$15({ context, request, params }) {
 		extras: only === void 0 ? null : workspaceExtras(only, read)
 	};
 }
-var meta$14 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
+var meta$15 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
 /** A path that may break after each slash, so a long checkout wraps at a folder. */
 function PathText({ path }) {
 	return path.split("/").map((part, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
@@ -12983,15 +13031,15 @@ function useHashTarget() {
 var vigils_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => vigils_default,
-	loader: () => loader$14,
-	meta: () => meta$13
+	loader: () => loader$15,
+	meta: () => meta$14
 });
 /** Rows of Waiting on an event before its fold. */
 var WAITING_SHOWN = 3;
 /** Closed vigils shown in their fold; a long-running workspace has dozens. */
 var CLOSED_SHOWN = 10;
 /** The Vigils section, for `/vigils` (all workspaces) and `/w/:ws/vigils`. */
-function loader$14({ context, request, params }) {
+function loader$15({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const closed = closedVigils(projects);
@@ -13007,7 +13055,7 @@ function loader$14({ context, request, params }) {
 		showProject: projects.length > 1
 	};
 }
-var meta$13 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
+var meta$14 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 	const { workspace, agenda, closed, closedCount, showProject } = loaderData;
@@ -13073,13 +13121,13 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 var rituals_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
 	default: () => rituals_default,
-	loader: () => loader$13,
-	meta: () => meta$12
+	loader: () => loader$14,
+	meta: () => meta$13
 });
 /** Recent runs a phone shows before its own button. */
 var RECENT_PHONE = 3;
 /** The Rituals section, for `/rituals` (all workspaces) and `/w/:ws/rituals`. */
-function loader$13({ context, request, params }) {
+function loader$14({ context, request, params }) {
 	const status = statusOf(context);
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const agenda = buildAgenda({
@@ -13094,7 +13142,7 @@ function loader$13({ context, request, params }) {
 		recent: activity(projects, { withImported: false }).filter((run) => run.kind === "ritual").slice(0, 10)
 	};
 }
-var meta$12 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Rituals | darius" : `Rituals · ${data.workspace} | darius` }];
+var meta$13 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Rituals | darius" : `Rituals · ${data.workspace} | darius` }];
 /** Rituals by day, the late ones first, then the recent runs and the way to all of them. */
 var rituals_default = withComponentProps(function Rituals({ loaderData }) {
 	const { workspace, agenda, active, recent } = loaderData;
@@ -13142,6 +13190,530 @@ var rituals_default = withComponentProps(function Rituals({ loaderData }) {
 			})
 		})]
 	});
+});
+//#endregion
+//#region app/components/chip-row.tsx
+/**
+* One row of filter chips, as the runs page and the findings page draw it.
+* On a phone the row scrolls sideways instead of wrapping, so the filter
+* stays a few lines tall; the chip that is on is scrolled into view, so the
+* row never hides the current filter.
+*/
+/** The class of a chip: `fchip`, lit when on; a toggle has a box in front. */
+function chipClass(isActive, isToggle = false) {
+	const kind = isToggle ? "fchip fchip-toggle" : "fchip";
+	return isActive ? `${kind} fchip-on` : kind;
+}
+function ChipRow({ label, current, children }) {
+	const row = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const element = row.current;
+		if (element === null) return;
+		const on = element.querySelector(".fchip-on:not(.fchip-toggle)");
+		if (on === null) return;
+		element.scrollLeft = Math.max(0, on.offsetLeft - (element.clientWidth - on.offsetWidth) / 2);
+	}, [current]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: row,
+		role: "group",
+		"aria-label": label,
+		className: "fchips",
+		children
+	});
+}
+//#endregion
+//#region app/lib/post.ts
+function failed(status, error) {
+	return {
+		ok: false,
+		status,
+		error
+	};
+}
+/** Read an answer: the endpoints send one JSON object, anything else is a failure. */
+function parse(status, text) {
+	let reply;
+	try {
+		reply = new Map(Object.entries(Object(JSON.parse(text))));
+	} catch {
+		return failed(status, `The host answered ${status} with text that is not JSON.`);
+	}
+	const error = reply.get("error");
+	if (reply.get("ok") !== true) return failed(status, error === void 0 || error === null || error === "" ? `The host answered ${status}.` : String(error));
+	const count = reply.get("count");
+	return {
+		ok: true,
+		status,
+		started: reply.get("started") === true,
+		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count)
+	};
+}
+/** POST `body` as JSON to `path` on this origin. */
+async function postJson(path, body) {
+	let response;
+	try {
+		response = await fetch(path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json"
+			},
+			body: JSON.stringify(body)
+		});
+	} catch {
+		return failed(0, "The host did not answer. Check the connection and try again.");
+	}
+	let text;
+	try {
+		text = await response.text();
+	} catch {
+		return failed(response.status, `The host answered ${response.status}, but the answer could not be read.`);
+	}
+	return parse(response.status, text);
+}
+//#endregion
+//#region app/components/findings.tsx
+/**
+* The findings of the findings page (0.62.0): one row per finding, drawn with
+* the shared `Row`. Every text in a finding comes from a run, so it is
+* rendered as plain text only. A row says how bad it is, where it is, which
+* ritual reported it and since when; under it a fold holds the detail, the
+* key and the short history. A finding that waits can be closed with the
+* "Close" button and an optional note, which posts to `/api/finding/close`
+* and then reloads the page data.
+*/
+/** The state word of a finding: its own state, unless the operator closed it. */
+function stateOf(row) {
+	if (row.status === "closed") return {
+		tone: "idle",
+		label: "closed"
+	};
+	const tag = itemStateTag(row.state);
+	return {
+		tone: tag.tone ?? "idle",
+		label: tag.text
+	};
+}
+function stepText(step, offset) {
+	return `${shortDate(hostDate(step.at, offset))}, ${step.severity}, ${itemStateTag(step.state).text}`;
+}
+/** The fold under a row: the detail, the key, why it is marked, who closed it, and the history with a link to each run. */
+function Details({ row }) {
+	const { offset } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+		summary: "Detail and history",
+		children: [
+			row.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-detail",
+				children: row.detail
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: `key ${row.key}${row.auto ? " (darius made this key: the run gave none)" : ""}`
+			}),
+			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: "Stale: the newest run of this ritual did not report it."
+			}) : null,
+			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: "Reopened: it came back after it was fixed or closed."
+			}) : null,
+			row.closed === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: `Closed by ${row.closed.who} on ${shortDate(hostDate(row.closed.at, offset))}${row.closed.note === void 0 ? "" : `: ${row.closed.note}`}`
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "fnd-history",
+				"aria-label": "History, oldest first",
+				children: row.history.map((step) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: runPath(row.project, step.run),
+					children: stepText(step, offset)
+				}) }, `${step.run}-${step.at}`))
+			})
+		]
+	});
+}
+/** The note field and the two buttons that close a finding. */
+function CloseForm({ row, onDone }) {
+	const { revalidate } = useRevalidator();
+	const id = (0, import_react.useId)();
+	const [note, setNote] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)(null);
+	const submit = async (event) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		const trimmed = note.trim();
+		const base = {
+			project: row.project,
+			ritual: row.ritual,
+			key: row.key
+		};
+		const result = await postJson("/api/finding/close", trimmed === "" ? base : {
+			...base,
+			note: trimmed
+		});
+		setBusy(false);
+		if (!result.ok) {
+			setError(result.error);
+			return;
+		}
+		onDone();
+		await revalidate();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "fnd-close-form",
+		onSubmit: (event) => void submit(event),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "fu-label",
+				htmlFor: id,
+				children: "Note (optional)"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id,
+				className: "st-input",
+				type: "text",
+				maxLength: 500,
+				value: note,
+				disabled: busy,
+				onChange: (event) => setNote(event.currentTarget.value)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fu-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-main",
+					disabled: busy,
+					children: busy ? "Closing…" : "Close finding"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-btn",
+					disabled: busy,
+					onClick: onDone,
+					children: "Cancel"
+				})]
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
+	});
+}
+function FindingItem({ row, showProject }) {
+	const { offset } = useClock();
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const canClose = row.status === "needs-you" || row.status === "open";
+	const where = [row.group, row.target].filter((part) => part !== void 0).join(" · ");
+	const state = stateOf(row);
+	const meta = [showProject ? row.project : null, `since ${shortDate(hostDate(row.firstSeen.at, offset))}`].filter((part) => part !== null);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+		kind: "ritual",
+		title: row.title,
+		rail: row.status === "needs-you" ? "wait" : null,
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag: {
+				text: row.severity,
+				tone: severityTone(row.severity)
+			} }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "kind-word c-ritual",
+				children: row.ritual
+			}),
+			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
+				color: "idle",
+				children: "stale"
+			}) : null,
+			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
+				color: "late",
+				children: "reopened"
+			}) : null
+		] }),
+		state,
+		meta,
+		detail: where === "" ? void 0 : where,
+		foot: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseForm, {
+			row,
+			onDone: () => setAsking(false)
+		}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fnd-foot",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "fnd-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: runPath(row.project, row.lastSeen.run),
+					children: "last report"
+				}), canClose ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-btn st-btn-small",
+					"aria-expanded": asking,
+					"aria-label": `Close the finding: ${row.title}`,
+					onClick: () => setAsking(!asking),
+					children: "Close"
+				}) : null]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Details, { row })]
+		})] })
+	});
+}
+function FindingList({ rows, showProject, empty }) {
+	if (rows.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: empty });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
+		bare: true,
+		className: "stagger",
+		children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindingItem, {
+			row,
+			showProject
+		}, `${row.project}/${row.ritual}/${row.key}`))
+	});
+}
+//#endregion
+//#region app/lib/findings.ts
+var VIEWS = [
+	{
+		view: "needs-you",
+		label: "needs you"
+	},
+	{
+		view: "open",
+		label: "open"
+	},
+	{
+		view: "all",
+		label: "all"
+	}
+];
+var SEVERITIES = [
+	"critical",
+	"high",
+	"medium",
+	"low",
+	"info"
+];
+var DEFAULT_QUERY = {
+	view: "needs-you",
+	project: "",
+	ritual: "",
+	severity: ""
+};
+function isView(text) {
+	return text === "needs-you" || text === "open" || text === "all";
+}
+function isSeverity(text) {
+	return SEVERITIES.some((severity) => severity === text);
+}
+/** The query of an address. */
+function readQuery(params) {
+	const view = params.get("view");
+	const severity = params.get("severity") ?? "";
+	return {
+		view: isView(view) ? view : DEFAULT_QUERY.view,
+		project: params.get("project") ?? "",
+		ritual: params.get("ritual") ?? "",
+		severity: isSeverity(severity) ? severity : ""
+	};
+}
+/** Whether a finding of this status shows in the view. */
+function inView(row, view) {
+	if (view === "all") return true;
+	if (view === "open") return row.status === "needs-you" || row.status === "open";
+	return row.status === "needs-you";
+}
+function narrows(row, query) {
+	return (query.project === "" || row.project === query.project) && (query.ritual === "" || row.ritual === query.ritual) && (query.severity === "" || row.severity === query.severity);
+}
+/** The findings of the query, in the order given (the host sorts worst first). */
+function filterFindings(rows, query) {
+	return rows.filter((row) => inView(row, query.view) && narrows(row, query));
+}
+/** How many findings a view would show with the other filters of the query on. */
+function viewCount(rows, query, view) {
+	return filterFindings(rows, {
+		...query,
+		view
+	}).length;
+}
+/**
+* The values a chip row offers for one filter: those that some finding in the
+* current view still has when the other filters are on, so no chip leads to
+* an empty page. The chosen value stays, even when nothing has it. Severities
+* come worst first, the rest by name.
+*/
+function facetOptions(rows, query, facet) {
+	const others = {
+		...query,
+		[facet]: ""
+	};
+	const values = new Set(filterFindings(rows, others).map((row) => row[facet]));
+	if (query[facet] !== "") values.add(query[facet]);
+	if (facet === "severity") return SEVERITIES.filter((severity) => values.has(severity));
+	return [...values].toSorted((left, right) => left.localeCompare(right));
+}
+/** The address of a query on `base`; a default value is left out. */
+function findingsHref(base, query) {
+	const params = new URLSearchParams();
+	if (query.view !== DEFAULT_QUERY.view) params.set("view", query.view);
+	if (query.project !== "") params.set("project", query.project);
+	if (query.ritual !== "") params.set("ritual", query.ritual);
+	if (query.severity !== "") params.set("severity", query.severity);
+	const text = params.toString();
+	return text === "" ? base : `${base}?${text}`;
+}
+var VIEW_WORDS = /* @__PURE__ */ new Map([
+	["needs-you", "Findings that need you"],
+	["open", "Open findings"],
+	["all", "All findings, with the closed and fixed ones"]
+]);
+/** The filter in words: "Findings that need you in acme-web, ritual site-check, severity high, worst first." */
+function filterText$1(query, scope) {
+	const where = scope !== null ? ` in ${scope}` : query.project === "" ? " of every project" : ` in ${query.project}`;
+	const ritual = query.ritual === "" ? "" : `, ritual ${query.ritual}`;
+	const severity = query.severity === "" ? "" : `, severity ${query.severity}`;
+	return `${VIEW_WORDS.get(query.view) ?? "Findings"}${where}${ritual}${severity}, worst first.`;
+}
+/** The line of an empty page. */
+function emptyText(query) {
+	if (query.project !== "" || query.ritual !== "" || query.severity !== "") return "No finding matches this filter.";
+	if (query.view === "needs-you") return "Nothing needs you.";
+	return query.view === "open" ? "No open findings." : "No findings yet.";
+}
+//#endregion
+//#region app/routes/findings.tsx
+var findings_exports = /* @__PURE__ */ __exportAll({
+	ErrorBoundary: () => RouteError,
+	default: () => findings_default,
+	loader: () => loader$13,
+	meta: () => meta$12
+});
+/**
+* The Findings page, for `/findings` (all workspaces, `?project=` narrows to
+* one) and `/w/:ws/findings` (one workspace). The filters are in the address:
+* view, project, ritual and severity (lib/findings.ts).
+*/
+async function loader$13({ context, request, params }) {
+	const status = statusOf(context);
+	const { projects } = scopeOfRequest(status, request, params.ws);
+	const query = readQuery(new URL(request.url).searchParams);
+	const named = params.ws === void 0 && query.project !== "" ? status.projects.filter((project) => project.name === query.project) : null;
+	const scoped = named === null || named.length === 0 ? projects : named;
+	const names = new Set(scoped.map((project) => project.name));
+	const scope = params.ws ?? null;
+	const rows = (await context.findings()).filter((row) => names.has(row.project));
+	const effective = scope === null ? query : {
+		...query,
+		project: ""
+	};
+	return {
+		scope,
+		query: effective,
+		shown: filterFindings(rows, effective),
+		counts: VIEWS.map(({ view }) => viewCount(rows, effective, view)),
+		projectOptions: scope === null ? facetOptions(rows, effective, "project") : [],
+		ritualOptions: facetOptions(rows, effective, "ritual"),
+		severityOptions: facetOptions(rows, effective, "severity"),
+		many: new Set(rows.map((row) => row.project)).size > 1
+	};
+}
+var meta$12 = ({ data }) => [{ title: data?.scope === null || data === void 0 ? "Findings | darius" : `Findings · ${data.scope} | darius` }];
+var findings_default = withComponentProps(function Findings({ loaderData }) {
+	const { scope, query, shown, counts, projectOptions, ritualOptions, severityOptions, many } = loaderData;
+	const base = scope === null ? "/findings" : `${workspacePath(scope)}/findings`;
+	const to = (change) => findingsHref(base, {
+		...query,
+		...change
+	});
+	const showProject = scope === null && query.project === "" && many;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+		className: "page-head",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+			className: "page-title",
+			children: "Findings"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "page-meta",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: filterText$1(query, scope) })
+		})]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "board",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "board-main",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "panel",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindingList, {
+					rows: shown,
+					showProject,
+					empty: emptyText(query)
+				})
+			})
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
+			className: "board-rail rail-first rail-filter",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				title: "Filter",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+					"aria-label": "Filter",
+					className: "filters panel panel-pad",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "View",
+							current: query.view,
+							children: VIEWS.map(({ view, label }, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ view }),
+								className: chipClass(view === query.view),
+								"aria-current": view === query.view ? "true" : void 0,
+								children: `${label} (${counts[index] ?? 0})`
+							}, view))
+						}),
+						projectOptions.length < 2 && query.project === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+							label: "Project",
+							current: query.project,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ project: "" }),
+								className: chipClass(query.project === ""),
+								"aria-current": query.project === "" ? "true" : void 0,
+								children: "all projects"
+							}), projectOptions.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ project: name }),
+								className: chipClass(query.project === name),
+								"aria-current": query.project === name ? "true" : void 0,
+								children: name
+							}, name))]
+						}),
+						ritualOptions.length < 2 && query.ritual === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+							label: "Ritual",
+							current: query.ritual,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ ritual: "" }),
+								className: chipClass(query.ritual === ""),
+								"aria-current": query.ritual === "" ? "true" : void 0,
+								children: "any ritual"
+							}), ritualOptions.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ ritual: name }),
+								className: chipClass(query.ritual === name),
+								"aria-current": query.ritual === name ? "true" : void 0,
+								children: name
+							}, name))]
+						}),
+						severityOptions.length < 2 && query.severity === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+							label: "Severity",
+							current: query.severity,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ severity: "" }),
+								className: chipClass(query.severity === ""),
+								"aria-current": query.severity === "" ? "true" : void 0,
+								children: "any severity"
+							}), severityOptions.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: to({ severity: name }),
+								className: chipClass(query.severity === name),
+								"aria-current": query.severity === name ? "true" : void 0,
+								children: name
+							}, name))]
+						})
+					]
+				})
+			})
+		})]
+	})] });
 });
 //#endregion
 //#region app/lib/milestones.ts
@@ -14493,56 +15065,6 @@ function shortSha(sha) {
 	return sha.slice(0, 12);
 }
 //#endregion
-//#region app/lib/post.ts
-function failed(status, error) {
-	return {
-		ok: false,
-		status,
-		error
-	};
-}
-/** Read an answer: the endpoints send one JSON object, anything else is a failure. */
-function parse(status, text) {
-	let reply;
-	try {
-		reply = new Map(Object.entries(Object(JSON.parse(text))));
-	} catch {
-		return failed(status, `The host answered ${status} with text that is not JSON.`);
-	}
-	const error = reply.get("error");
-	if (reply.get("ok") !== true) return failed(status, error === void 0 || error === null || error === "" ? `The host answered ${status}.` : String(error));
-	const count = reply.get("count");
-	return {
-		ok: true,
-		status,
-		started: reply.get("started") === true,
-		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count)
-	};
-}
-/** POST `body` as JSON to `path` on this origin. */
-async function postJson(path, body) {
-	let response;
-	try {
-		response = await fetch(path, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				accept: "application/json"
-			},
-			body: JSON.stringify(body)
-		});
-	} catch {
-		return failed(0, "The host did not answer. Check the connection and try again.");
-	}
-	let text;
-	try {
-		text = await response.text();
-	} catch {
-		return failed(response.status, `The host answered ${response.status}, but the answer could not be read.`);
-	}
-	return parse(response.status, text);
-}
-//#endregion
 //#region app/components/backups.tsx
 /**
 * The backups of one host (0.44.0), on the Backups tab of the settings. The
@@ -15845,32 +16367,6 @@ var STATE_WORDS = /* @__PURE__ */ new Map([
 function filterText(query) {
 	return `${STATE_WORDS.get(query.state) ?? `Runs that ended ${query.state}`}${query.project === "" ? " of every project" : ` in ${query.project}`}${query.withImported ? ", imported runs included" : ""}, newest first.`;
 }
-function chipClass(isActive, isToggle = false) {
-	const kind = isToggle ? "fchip fchip-toggle" : "fchip";
-	return isActive ? `${kind} fchip-on` : kind;
-}
-/**
-* One row of filter chips. On a phone the row scrolls sideways instead of
-* wrapping, so the filter stays two lines tall; the chip that is on is
-* scrolled into view, so the row never hides the current filter.
-*/
-function ChipRow({ label, current, children }) {
-	const row = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		const element = row.current;
-		if (element === null) return;
-		const on = element.querySelector(".fchip-on:not(.fchip-toggle)");
-		if (on === null) return;
-		element.scrollLeft = Math.max(0, on.offsetLeft - (element.clientWidth - on.offsetWidth) / 2);
-	}, [current]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		ref: row,
-		role: "group",
-		"aria-label": label,
-		className: "fchips",
-		children
-	});
-}
 var runs_default = withComponentProps(function Runs({ loaderData }) {
 	const { runs, project, state, withImported, projects } = loaderData;
 	const query = {
@@ -16832,18 +17328,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-e56Rhl5h.js",
+			"module": "/assets/root-B8FDhb3y.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/nav-icons-CVNBfdLd.js",
+				"/assets/nav-icons-DNHlNRR4.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/view-BXF-r1Za.js",
 				"/assets/agenda-u7fqVKHw.js",
 				"/assets/settings-YoGy02pU.js"
 			],
-			"css": ["/assets/root-BozdA5F6.css"],
+			"css": ["/assets/root-1ImFMMaU.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -16862,19 +17358,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-salqraYP.js",
+			"module": "/assets/overview-uGk_6dZM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-BXF-r1Za.js"
+				"/assets/view-BXF-r1Za.js",
+				"/assets/result-DxyU4GvE.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16895,19 +17392,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-salqraYP.js",
+			"module": "/assets/overview-uGk_6dZM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-BXF-r1Za.js"
+				"/assets/view-BXF-r1Za.js",
+				"/assets/result-DxyU4GvE.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16928,19 +17426,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-salqraYP.js",
+			"module": "/assets/overview-uGk_6dZM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-BXF-r1Za.js"
+				"/assets/view-BXF-r1Za.js",
+				"/assets/result-DxyU4GvE.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -16961,7 +17460,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-B-cllWlW.js",
+			"module": "/assets/vigils-mX9Pq4HK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -16969,9 +17468,9 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-B12xRITg.js",
+				"/assets/section-C_tKEp7E.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/agenda-u7fqVKHw.js"
 			],
@@ -16994,7 +17493,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-B-cllWlW.js",
+			"module": "/assets/vigils-mX9Pq4HK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17002,9 +17501,9 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-B12xRITg.js",
+				"/assets/section-C_tKEp7E.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/agenda-u7fqVKHw.js"
 			],
@@ -17027,20 +17526,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-BQWheDAK.js",
+			"module": "/assets/rituals-SUI81Vu0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-B12xRITg.js",
+				"/assets/section-C_tKEp7E.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/result-DxyU4GvE.js",
 				"/assets/agenda-u7fqVKHw.js"
 			],
 			"css": [],
@@ -17062,21 +17562,90 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-BQWheDAK.js",
+			"module": "/assets/rituals-SUI81Vu0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/section-B12xRITg.js",
+				"/assets/section-C_tKEp7E.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/result-DxyU4GvE.js",
 				"/assets/agenda-u7fqVKHw.js"
+			],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"findings-all": {
+			"id": "findings-all",
+			"parentId": "root",
+			"path": "findings",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": true,
+			"hasErrorBoundary": true,
+			"module": "/assets/findings-Drek05w2.js",
+			"imports": [
+				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
+				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/result-DxyU4GvE.js",
+				"/assets/ui-BdOT4Jxx.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/route-error-DMMzp2qt.js",
+				"/assets/chip-row-BMwu7pOw.js",
+				"/assets/post-BAUIktA6.js",
+				"/assets/kind-CbYiwFqF.js",
+				"/assets/view-BXF-r1Za.js"
+			],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"findings-workspace": {
+			"id": "findings-workspace",
+			"parentId": "root",
+			"path": "w/:ws/findings",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": true,
+			"hasErrorBoundary": true,
+			"module": "/assets/findings-Drek05w2.js",
+			"imports": [
+				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
+				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/clock-C06Q4GAu.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/result-DxyU4GvE.js",
+				"/assets/ui-BdOT4Jxx.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/route-error-DMMzp2qt.js",
+				"/assets/chip-row-BMwu7pOw.js",
+				"/assets/post-BAUIktA6.js",
+				"/assets/kind-CbYiwFqF.js",
+				"/assets/view-BXF-r1Za.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17097,15 +17666,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-B77cYcCR.js",
+			"module": "/assets/milestones-BNwqAYoD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-D_NpzYJS.js",
+				"/assets/milestones-eezmese4.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
 			"css": [],
@@ -17127,15 +17696,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-B77cYcCR.js",
+			"module": "/assets/milestones-BNwqAYoD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-D_NpzYJS.js",
+				"/assets/milestones-eezmese4.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
 			"css": [],
@@ -17157,16 +17726,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestone-DuG2rMaN.js",
+			"module": "/assets/milestone-BvWsL4Wm.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/milestones-D_NpzYJS.js",
+				"/assets/milestones-eezmese4.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js"
@@ -17268,16 +17837,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-BCHHnW6U.js",
+			"module": "/assets/settings-backups-Brrtj09i.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/nav-icons-CVNBfdLd.js",
+				"/assets/nav-icons-DNHlNRR4.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/ui-BdOT4Jxx.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/settings-ui-ChNT_lIl.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/post-BAUIktA6.js",
+				"/assets/settings-ui-ChNT_lIl.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17351,19 +17920,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BNFsB7JI.js",
+			"module": "/assets/runs-CYmob0yF.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/runs-WK8ZlKqs.js",
 				"/assets/ui-BdOT4Jxx.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
-				"/assets/kind-CbYiwFqF.js",
+				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/clock-C06Q4GAu.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
-				"/assets/pulse-4Id7uDMT.js",
-				"/assets/row-CzI7mG7X.js"
+				"/assets/result-DxyU4GvE.js",
+				"/assets/pulse-Akbvm5b6.js",
+				"/assets/row-CgOYoUJa.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -17453,17 +18024,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CTstTt3L.js",
+			"module": "/assets/ritual-DQ8tHDvq.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/result-DxyU4GvE.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
@@ -17486,17 +18058,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-Cp4kdUqT.js",
+			"module": "/assets/run-BAMVOGjp.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-C06Q4GAu.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-BXF-r1Za.js",
-				"/assets/runs-WK8ZlKqs.js",
-				"/assets/pulse-4Id7uDMT.js",
+				"/assets/result-DxyU4GvE.js",
+				"/assets/pulse-Akbvm5b6.js",
 				"/assets/ui-BdOT4Jxx.js",
-				"/assets/row-CzI7mG7X.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-9_m_ib2M.js",
 				"/assets/route-error-DMMzp2qt.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js"
@@ -17533,8 +18106,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-1da18de3.js",
-	"version": "1da18de3",
+	"url": "/assets/manifest-f01ceef8.js",
+	"version": "f01ceef8",
 	"sri": void 0
 };
 //#endregion
@@ -17623,6 +18196,22 @@ var routes = {
 		index: void 0,
 		caseSensitive: void 0,
 		module: rituals_exports
+	},
+	"findings-all": {
+		id: "findings-all",
+		parentId: "root",
+		path: "findings",
+		index: void 0,
+		caseSensitive: void 0,
+		module: findings_exports
+	},
+	"findings-workspace": {
+		id: "findings-workspace",
+		parentId: "root",
+		path: "w/:ws/findings",
+		index: void 0,
+		caseSensitive: void 0,
+		module: findings_exports
 	},
 	"milestones-all": {
 		id: "milestones-all",

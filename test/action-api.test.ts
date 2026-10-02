@@ -13,10 +13,12 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendLine } from "../src/core/ledger.ts";
+import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
-import { actionApi, LOOPBACK_FOLLOW_UP, type ActionDeps, type ActionRequest } from "../src/web/action-api.ts";
+import { actionApi, findingApi, LOOPBACK_CLOSE, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { collectFindings } from "../src/core/finding-index.ts";
+import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
 import type { FollowUpReadiness } from "../src/web/api.ts";
 
@@ -185,4 +187,118 @@ test("ready: it starts run follow-up detached with the approved numbers, the not
   assert.ok(existsSync(runDir), "the parent's run dir exists for the log");
   assert.ok(!(started?.argv ?? []).includes("--grant"), "never a grant line");
   assert.ok(!(started?.argv ?? []).includes("--headless"), "attended: the CLI opens a herdr tab");
+});
+
+// --- close a finding (0.62.0) --------------------------------------------------------------
+
+const FINDING_PROJECT = "closing";
+const seed = new Seeder(FINDING_PROJECT);
+seed.run("check", [
+  { key: "link-12", title: "Broken link", severity: "high", state: "needs-code" },
+  { key: "banner-3", title: "Old banner", severity: "medium" },
+  { key: "done-1", title: "Done thing", severity: "low", state: "fixed" },
+  { key: "shut-1", title: "Shut thing", severity: "low" },
+  { key: "--odd", title: "A key that looks like a flag", severity: "low" },
+]);
+seed.close("check", "shut-1");
+
+/** The real findings of the seeded project, and a CLI that records its argv. */
+function closeDeps(answer: CliAnswer = { code: 0, error: "" }): FindingDeps & { calls: string[][] } {
+  const calls: string[][] = [];
+  return {
+    calls,
+    findings: (project) => {
+      const opened = openProject(project);
+      return collectFindings(opened, readLedger(opened));
+    },
+    run: (argv) => {
+      calls.push([...argv]);
+      return Promise.resolve(answer);
+    },
+  };
+}
+
+function closeRequest(body: JsonValue, overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return post(body, { path: "/api/finding/close", ...overrides });
+}
+
+const CLOSE = { project: FINDING_PROJECT, ritual: "check", key: "link-12" };
+
+test("close: path 404, method 405, no or foreign Origin 403, other content 415, a large body 413, bad JSON 400, the loopback viewer 403", async () => {
+  const stub = closeDeps();
+  assert.equal((await findingApi(closeRequest(CLOSE, { path: "/api/finding/open" }), { who: "owner" }, stub)).status, 404);
+  assert.equal((await findingApi(closeRequest(CLOSE, { method: "GET" }), { who: "owner" }, stub)).status, 405);
+  const noOrigin = closeRequest(CLOSE, { headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  assert.equal((await findingApi(noOrigin, { who: "owner" }, stub)).status, 403);
+  const foreign = closeRequest(CLOSE, { headers: new Headers({ origin: "http://evil.example", host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  const refused = await findingApi(foreign, { who: "owner" }, stub);
+  assert.equal(refused.status, 403);
+  assert.match(errorOf(refused.body), /must come from the darius page/u);
+  const text = closeRequest(CLOSE, { headers: new Headers({ origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747", "content-type": "text/plain" }) });
+  assert.equal((await findingApi(text, { who: "owner" }, stub)).status, 415);
+  assert.equal((await findingApi(closeRequest({ ...CLOSE, note: "x".repeat(5000) }), { who: "owner" }, stub)).status, 413);
+  assert.equal((await findingApi(postRaw("{not json", { path: "/api/finding/close" }), { who: "owner" }, stub)).status, 400);
+  const local = await findingApi(closeRequest(CLOSE), { who: "this host", local: true }, stub);
+  assert.equal(local.status, 403);
+  assert.equal(errorOf(local.body), LOOPBACK_CLOSE);
+  assert.deepEqual(stub.calls, [], "nothing ran");
+});
+
+test("close: a body that is not project, ritual, key and a note is 400", async () => {
+  const stub = closeDeps();
+  const cases: [JsonValue, RegExp][] = [
+    [{ ...CLOSE, project: "../etc" }, /project must be a project name/u],
+    [{ ...CLOSE, ritual: "a b" }, /ritual must be a ritual slug/u],
+    [{ ...CLOSE, key: "" }, /key must be one line/u],
+    [{ ...CLOSE, key: "a\nb" }, /key must be one line/u],
+    [{ ...CLOSE, key: 5 }, /key must be one line/u],
+    [{ ...CLOSE, note: 7 }, /note must be text/u],
+    [{ ...CLOSE, note: "a\u0007b" }, /no control characters/u],
+    [{ ...CLOSE, who: "admin" }, /unknown field who/u],
+    [[1], /send \{ project, ritual, key, note\? \}/u],
+  ];
+  for (const [body, reason] of cases) {
+    const answer = await findingApi(closeRequest(body), { who: "owner" }, stub);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), reason, JSON.stringify(body));
+  }
+  assert.deepEqual(stub.calls, []);
+});
+
+test("close: an unknown project or finding is 400, a fixed or an already closed one is 409, and nothing runs", async () => {
+  const stub = closeDeps();
+  const unknownProject = await findingApi(closeRequest({ ...CLOSE, project: "nope" }), { who: "owner" }, stub);
+  assert.equal(unknownProject.status, 400);
+  assert.match(errorOf(unknownProject.body), /no project nope/u);
+  const unknownKey = await findingApi(closeRequest({ ...CLOSE, key: "ghost" }), { who: "owner" }, stub);
+  assert.equal(unknownKey.status, 400);
+  assert.match(errorOf(unknownKey.body), /no finding 'ghost' in ritual 'check'/u);
+  const otherRitual = await findingApi(closeRequest({ ...CLOSE, ritual: "other" }), { who: "owner" }, stub);
+  assert.equal(otherRitual.status, 400, "a key is scoped to its ritual");
+  const fixed = await findingApi(closeRequest({ ...CLOSE, key: "done-1" }), { who: "owner" }, stub);
+  assert.equal(fixed.status, 409);
+  assert.match(errorOf(fixed.body), /is fixed/u);
+  const closed = await findingApi(closeRequest({ ...CLOSE, key: "shut-1" }), { who: "owner" }, stub);
+  assert.equal(closed.status, 409);
+  assert.match(errorOf(closed.body), /already closed by op/u);
+  assert.deepEqual(stub.calls, []);
+});
+
+test("close: it runs finding close with the ritual, the project, the note and the viewer, and the key after --", async () => {
+  const stub = closeDeps();
+  const answer = await findingApi(closeRequest({ ...CLOSE, note: "  known\nissue " }), { who: "owner on phone" }, stub);
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.body, { ok: true });
+  assert.deepEqual(stub.calls, [["finding", "close", "--ritual", "check", "--project", FINDING_PROJECT, "--note", "known issue", "--who", "web:owner on phone", "--json", "--", "link-12"]]);
+  const flagLike = await findingApi(closeRequest({ ...CLOSE, key: "--odd" }), { who: "owner" }, stub);
+  assert.equal(flagLike.status, 200);
+  assert.deepEqual(stub.calls[1]?.slice(-2), ["--", "--odd"], "a key that looks like a flag stays a key");
+  assert.ok(!(stub.calls[1] ?? []).includes("--note"), "no note, no flag");
+});
+
+test("close: when the CLI refuses, the answer is 409 with its reason", async () => {
+  const stub = closeDeps({ code: 1, error: "finding 'link-12' of ritual 'check' is already closed by someone" });
+  const answer = await findingApi(closeRequest(CLOSE), { who: "owner" }, stub);
+  assert.equal(answer.status, 409);
+  assert.match(errorOf(answer.body), /already closed by someone/u);
 });
