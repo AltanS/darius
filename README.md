@@ -45,45 +45,64 @@ what stays on the machine.
 
 ```
 ~/projects/acme-web/
-  .darius.toml                  project name, time zone, rituals and policies
-  .claude/skills/
-    daily-report/SKILL.md       the steps of one ritual
-    weekly-audit/SKILL.md
-  .tracker/                     milestones, specs, worklogs and vigils (the older tracker format)
-    00-INDEX.md
-    M12-checkout-redesign/
-      00-README.md              the milestone
-      01-cart-page.md           one spec
-    vigils/
-      guard-soak.md             a one-shot check that waits for an event
-    worklog/
-  src/ ...                      your own code
+├── .darius.toml                    project name, time zone, rituals and policies
+├── .claude/
+│   └── skills/
+│       ├── daily-report/
+│       │   └── SKILL.md            the steps of one ritual
+│       └── weekly-audit/
+│           └── SKILL.md
+├── .tracker/                       milestones, specs, worklogs and vigils
+│   ├── 00-INDEX.md
+│   ├── M12-checkout-redesign/
+│   │   ├── 00-README.md            the milestone
+│   │   └── 01-cart-page.md         one spec
+│   ├── vigils/
+│   │   └── guard-soak.md           a one-shot check that waits for an event
+│   └── worklog/
+└── src/ ...                        your own code
 ```
 
 Git holds the definition of the work. A ritual is a table in `.darius.toml`. Its procedure is the
 skill file. Review both like code, in a pull request.
 
+The old `tracker` plugin is gone, but the `.tracker/` folder stays. It is the format darius still
+reads and writes for milestones, specs, worklogs and vigils, and it stays in git. The `/darius-*`
+skills and the `darius` command now do the work that the plugin did.
+
 ### On the host (never in git)
 
 ```
-~/.local/bin/darius             link to the installed release
-~/.local/opt/darius/
-  current -> versions/v0.58.0   the live release
-  versions/                     one shallow clone per release
+~/.local/
+├── bin/
+│   └── darius                      link to the installed release
+├── opt/darius/
+│   ├── current -> versions/v0.61.0 the live release
+│   └── versions/                   one shallow clone per release
+└── share/
+    ├── darius/                     the store
+    │   └── acme-web/
+    │       ├── items/
+    │       │   ├── rituals/        each ritual, mirrored from .darius.toml
+    │       │   └── vigils/
+    │       ├── runs/<id>/          one folder per run: prompt, policy, findings
+    │       ├── ledger/host-a/      the log of what happened, in chunks
+    │       ├── blobs/              older versions and large outputs
+    │       └── sync.json           what this host has pulled from the bucket
+    └── darius-snapshots/
+        └── darius-host-a-<time>.tar.gz   the daily backup of the store
+
 ~/.config/darius/
-  config.toml                   host name, [remote] bucket, which timers run
-  credentials                   this host's bucket key (mode 0600)
-  links.toml                    project -> checkout on this host, written by `darius link`
-~/.local/share/darius/          the store
-  acme-web/
-    items/rituals/              each ritual, mirrored from .darius.toml
-    items/vigils/
-    runs/<id>/                  one folder per run: prompt, policy, findings
-    ledger/host-a/              the log of what happened, in chunks
-    blobs/                      older versions and large outputs
-    sync.json                   what this host has pulled from the bucket
-~/.local/share/darius-snapshots/
-  darius-host-a-<time>.tar.gz   the daily backup of the store
+├── config.toml                     host name, [remote] bucket, which timers run
+├── credentials                     this host's bucket key (mode 0600)
+└── links.toml                      project -> checkout on this host, written by `darius link`
+
+~/.claude/                          written by `darius skill install`
+├── skills/
+│   ├── darius/SKILL.md             teaches a session the darius commands
+│   └── darius-work/SKILL.md        one of 11 procedure skills, called /darius-work
+└── agents/
+    └── darius.md
 ```
 
 ### A normal day
