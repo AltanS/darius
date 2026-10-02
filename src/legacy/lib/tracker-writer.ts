@@ -1719,6 +1719,27 @@ export function resolveMilestonePath(trackerRoot: string, milestoneArg: string):
 }
 
 /**
+ * Resolve an ACTIVE milestone folder, or null. Takes the full folder name or
+ * the bare slug, like `resolveMilestonePath`, but it also demands that the
+ * result is a real milestone folder directly under the tracker root. So
+ * `worklog`, `archive`, `..` and other non-milestone names resolve to null.
+ * It never looks in `.tracker/archive/`.
+ */
+export function findActiveMilestone(trackerRoot: string, milestoneArg: string): string | null {
+  let resolved: string;
+  try {
+    resolved = resolveMilestonePath(trackerRoot, milestoneArg);
+  } catch {
+    return null;
+  }
+  const abs = resolve(resolved);
+  if (dirname(abs) !== resolve(trackerRoot)) return null;
+  if (!MILESTONE_ID_RE.test(basename(abs))) return null;
+  if (!statSync(abs).isDirectory()) return null;
+  return abs;
+}
+
+/**
  * Find a spec file in a milestone directory whose name matches NN-<slug>.md.
  */
 function findSpecBySlug(milestonePath: string, slug: string): string | null {

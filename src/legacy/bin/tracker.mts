@@ -18,7 +18,7 @@
  *   (committed — it is the evidence behind each `[x]`). A Command that is a
  *   shell no-op (echo/printf/true/:) classifies as `manual`: nothing runs,
  *   nothing is auto-marked, and `mark --verified` on it requires --evidence.
- *   worklog open <thread-id> --spec <path> [--message "..."]
+ *   worklog open <milestone-slug> --spec <path> [--message "..."]
  *   worklog append <thread-id> --section "<s>" --message "..."
  *   worklog close <thread-id> --status <done|blocked|cancelled>
  *   worklog list [--active] [--milestone M1] [--json]
@@ -66,6 +66,7 @@ import {
   setVigilBody,
   closeVigil,
   resolveMilestonePath,
+  findActiveMilestone,
   SCAFFOLD_PLACEHOLDER_COMMAND,
 } from "../lib/tracker-writer.ts";
 import type {
@@ -1797,7 +1798,7 @@ function runWorklogOpen(args: string[]): void {
     allowPositionals: true,
   });
 
-  // The first positional is the slug (optional)
+  // The first positional is the milestone slug (required)
   const slug = positionals[0];
 
   // Only `planned` is a legal opening stage — later stages are reached via
@@ -1811,7 +1812,13 @@ function runWorklogOpen(args: string[]): void {
 
   const trackerRoot = requireTrackerRoot();
   const worklogDir = join(trackerRoot, "worklog");
-  const fileName = slug ? `${slug}.md` : `default.md`;
+  if (!slug) {
+    process.stderr.write(
+      "tracker worklog open: name the milestone: worklog open <milestone-slug>\n",
+    );
+    process.exit(1);
+  }
+  const fileName = `${slug}.md`;
 
   // Every worklog enumeration skips `00-` files as generated index docs, so a
   // thread opened into one would be written and then be invisible to list,
@@ -1822,6 +1829,17 @@ function runWorklogOpen(args: string[]): void {
       `tracker worklog open: "${fileName}" is a generated index name — ` +
         "00- files are excluded from every worklog listing, so this thread " +
         "would be unreachable. Pick a slug that does not start with 00-.\n",
+    );
+    process.exit(1);
+  }
+
+  // A worklog belongs to a milestone. Archived milestones take no new worklog,
+  // so only the active tree counts. The file name stays exactly as passed.
+  if (findActiveMilestone(trackerRoot, slug) === null) {
+    process.stderr.write(
+      `tracker worklog open: "${slug}" names no milestone in .tracker/. ` +
+        "A worklog belongs to a milestone: add it first (darius add milestone <name>), " +
+        "or put findings in a plain doc in the repo.\n",
     );
     process.exit(1);
   }

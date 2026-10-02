@@ -382,7 +382,7 @@ describe("claim / release CLI", () => {
   });
 
   it("worklog dispatch is unaffected when the thread carries no spec", () => {
-    runTracker(["worklog", "open", "nospec", "--message", "hi"]);
+    runTracker(["worklog", "open", "probe", "--message", "hi"]);
     // M7/01: threads live under `.threads` in the list JSON (see note above).
     const { threads } = JSON.parse(runTracker(["worklog", "list", "--json"]).stdout) as {
       threads: Array<{ threadId: string }>;

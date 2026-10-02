@@ -11,6 +11,8 @@ import {
   readFileSync,
   mkdirSync,
   existsSync,
+  readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -277,7 +279,7 @@ describe("worklog", () => {
         join(process.cwd(), "bin/tracker.mts"),
         "worklog",
         "open",
-        "my-slug",
+        "test-milestone",
         "--message",
         "hello",
       ],
@@ -290,6 +292,86 @@ describe("worklog", () => {
 
     expect(result.status).toBe(0);
     const threadId = result.stdout.trim();
-    expect(threadId).toMatch(/^[0-9A-Z]{20}-my-slug$/);
+    expect(threadId).toMatch(/^[0-9A-Z]{20}-test-milestone$/);
+  });
+
+  // -------------------------------------------------------------------------
+  // CLI: a worklog belongs to a milestone
+  // -------------------------------------------------------------------------
+
+  function runOpen(args: string[]): { stdout: string; stderr: string; exitCode: number } {
+    const result = spawnSync(
+      "node",
+      [
+        "--experimental-strip-types",
+        "--no-warnings",
+        join(process.cwd(), "bin/tracker.mts"),
+        "worklog",
+        "open",
+        ...args,
+      ],
+      { encoding: "utf-8", cwd: tmpDir, timeout: 30_000 },
+    );
+    return {
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      exitCode: result.status ?? -1,
+    };
+  }
+
+  it("CLI worklog open refuses a slug that names no milestone", () => {
+    const { stderr, exitCode } = runOpen(["acme-deploy-latency", "--message", "x"]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain(
+      'tracker worklog open: "acme-deploy-latency" names no milestone in .tracker/.',
+    );
+    expect(stderr).toContain("darius add milestone <name>");
+    expect(existsSync(join(worklogDir, "acme-deploy-latency.md"))).toBe(false);
+  });
+
+  it("CLI worklog open refuses a missing slug and writes no default.md", () => {
+    const { stderr, exitCode } = runOpen(["--message", "x"]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("name the milestone: worklog open <milestone-slug>");
+    expect(existsSync(join(worklogDir, "default.md"))).toBe(false);
+  });
+
+  it("CLI worklog open accepts the full milestone folder name", () => {
+    const folder = readdirSync(trackerRoot).find((e) => /^M\d+-test-milestone$/.test(e));
+    expect(folder).toBeDefined();
+
+    const { stdout, exitCode } = runOpen([folder!]);
+
+    expect(exitCode).toBe(0);
+    expect(stdout.trim().toLowerCase()).toMatch(new RegExp(`^[0-9a-z]{20}-${folder!.toLowerCase()}$`));
+    expect(existsSync(join(worklogDir, `${folder}.md`))).toBe(true);
+  });
+
+  it("CLI worklog open accepts the bare milestone slug", () => {
+    const { exitCode } = runOpen(["test-milestone"]);
+
+    expect(exitCode).toBe(0);
+    expect(existsSync(join(worklogDir, "test-milestone.md"))).toBe(true);
+  });
+
+  it("CLI worklog open refuses a milestone that exists only in the archive", () => {
+    mkdirSync(join(trackerRoot, "archive"), { recursive: true });
+    writeFileSync(join(trackerRoot, "archive", "M90-old-thing.md"), "# old\n", "utf-8");
+    mkdirSync(join(trackerRoot, "archive", "M91-older-thing"), { recursive: true });
+
+    for (const slug of ["old-thing", "M90-old-thing", "older-thing", "archive/M91-older-thing"]) {
+      const { stderr, exitCode } = runOpen([slug]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("names no milestone");
+    }
+  });
+
+  it("CLI worklog open refuses folders that are not milestones", () => {
+    for (const slug of ["worklog", "archive", ".."]) {
+      const { exitCode } = runOpen([slug]);
+      expect(exitCode).toBe(1);
+    }
   });
 });

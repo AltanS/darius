@@ -104,6 +104,7 @@ describe("worklog guards", () => {
   });
 
   it("still accepts a slug that merely contains 00-", () => {
+    mkdirSync(join(trackerRoot, "M7-run-00-baseline"), { recursive: true });
     const { stdout, exitCode } = runTracker(["worklog", "open", "M7-run-00-baseline"]);
 
     expect(exitCode).toBe(0);

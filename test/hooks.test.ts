@@ -43,6 +43,7 @@ function scratch(): string {
 function stuckCheckout(): string {
   const root = scratch();
   mkdirSync(join(root, ".tracker", "worklog"), { recursive: true });
+  mkdirSync(join(root, ".tracker", "M1-t-stuck"), { recursive: true });
   const opened = cli(["worklog", "open", "t-stuck", "--stage", "planned"], { cwd: root });
   assert.equal(opened.code, 0, opened.stderr);
   return root;

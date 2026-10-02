@@ -18,6 +18,7 @@ Internal skill for reading and writing worklog threads. Referenced by darius-wor
 
 ### `open`, start a new thread
 `!darius worklog open <milestone-slug> --spec <spec-path> [--message "<text>"]`
+A worklog belongs to a milestone. `open` needs a slug that names an active milestone folder (`M68-framework-quality` or `framework-quality`) and refuses any other slug, and an archived milestone. Findings with no milestone go in a plain doc in the repo, not in `.tracker/`.
 Returns the generated `thread-id`. The slug becomes the filename (`<slug>.md`) and the thread label; `--message` becomes the thread's first entry and is what the index shows as the file's hook, so make it describe the work. Slugs starting with `00-` are refused, see `index`.
 
 ### `append`, add an update to an existing thread
