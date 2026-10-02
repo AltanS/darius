@@ -60,7 +60,7 @@ test("no cookie renders the dark, comfortable theme", async () => {
 
 test("a light cookie renders data-theme=light on <html>, on every page", async () => {
   const light: Settings = { ...DEFAULT_SETTINGS, theme: "light", density: "compact", motion: "reduce" };
-  for (const path of ["/", "/runs", "/settings", "/profiles"]) {
+  for (const path of ["/all", "/runs", "/settings", "/profiles"]) {
     const body = await page(path, light);
     const tag = htmlTag(body);
     assert.ok(tag.includes('data-theme="light"'), `${path}: ${tag}`);

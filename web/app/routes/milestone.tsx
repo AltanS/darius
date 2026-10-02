@@ -5,7 +5,7 @@ import { DetailStrip, FileFold, SpecFold, worklogWords } from "../components/mil
 import { Markdown } from "../components/markdown.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Crumbs, Empty, Section, TitleText } from "../components/ui.tsx";
-import { sectionPath, workspacePath } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import { milestoneDetailView, omittedText } from "../lib/milestones.ts";
 import { statusOf } from "../lib/status.ts";
 
@@ -37,9 +37,9 @@ export default function Milestone({ loaderData }: Route.ComponentProps): React.R
     <div className="ms-page msd">
       <header className="ms-head">
         <Crumbs>
-          <Link to={workspacePath(project)}>{project}</Link>
+          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
           <span aria-hidden="true"> / </span>
-          <Link to={sectionPath(project, "milestones")}>Milestones</Link>
+          <Link to={href({ to: "section", ws: project, section: "milestones" })}>Milestones</Link>
         </Crumbs>
         <h1 className="ms-h1 msd-h1">
           <span className="ms-id msd-id">{head.id}</span>

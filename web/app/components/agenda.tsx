@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 
 import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
-import { shortDate, vigilAnchor } from "../lib/format.ts";
+import { shortDate } from "../lib/format.ts";
+import { vigilAnchor } from "../lib/paths.ts";
 import { FLAGGED, railOf } from "../lib/state-words.ts";
 import { KindWord } from "./chip.tsx";
 import { Row, RowList } from "./row.tsx";

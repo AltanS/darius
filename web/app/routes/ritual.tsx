@@ -10,7 +10,7 @@ import { StateWord } from "../components/row.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
 import { Chips, Crumbs, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
-import { runPath, workspacePath } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
@@ -20,8 +20,8 @@ import { asksYou, atText, cadenceText, isImported, nextStep, reportExcerpt, ritu
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 export function loader({ context, params }: Route.LoaderArgs) {
-  const ritual = context.ritual(params.project, params.slug);
-  if (ritual === null) throw data(`No ritual ${params.slug} in project ${params.project}.`, { status: 404 });
+  const ritual = context.ritual(params.ws, params.slug);
+  if (ritual === null) throw data(`No ritual ${params.slug} in workspace ${params.ws}.`, { status: 404 });
   const finished = ritual.runs.find((run) => run.findingsSha !== null && !isImported(run)) ?? null;
   const held = ritual.row.heldRun === null ? null : (ritual.runs.find((run) => run.run === ritual.row.heldRun) ?? null);
   const status = statusOf(context);
@@ -33,7 +33,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   return { ritual, held, finished, next, asks, report: reportExcerpt(detail) };
 }
 
-export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.project} | darius` }];
+export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
 
 interface HandoffCardProps {
   handoff: RitualHandoff;
@@ -75,7 +75,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
     <div>
       <header className="page-head">
         <Crumbs>
-          <Link to={workspacePath(project)}>{project}</Link>
+          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
         </Crumbs>
         <h1 className="page-title page-title-sans">
           <TitleText text={row.title} />
@@ -142,7 +142,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           )}
 
           {finished === null || asks.length === 0 ? null : (
-            <Section title="Needs you" aside={<Link to={runPath(project, finished.run)}>Open the run</Link>}>
+            <Section title="Needs you" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Open the run</Link>}>
               <ResultQuestions project={project} row={finished} questions={asks} />
             </Section>
           )}
@@ -154,7 +154,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           )}
 
           {finished === null || report === null ? null : (
-            <Section title="Latest report" aside={<Link to={runPath(project, finished.run)}>Read it all</Link>}>
+            <Section title="Latest report" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Read it all</Link>}>
               <div className={`card card-accent edge-${runState(finished).tone}`}>
                 <Report report={report} lines={4} fades={false} />
                 {finished.result === null || summaryTags(finished.result, finished.acknowledged !== null).length === 0 ? null : (
@@ -167,7 +167,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           )}
 
           {ritual.handoff === null ? null : (
-            <Section title="Note for the next run" aside={<Link to={runPath(project, ritual.handoff.run)}>From this run</Link>}>
+            <Section title="Note for the next run" aside={<Link to={href({ to: "run", ws: project, run: ritual.handoff.run })}>From this run</Link>}>
               <HandoffCard handoff={ritual.handoff} />
             </Section>
           )}
@@ -206,7 +206,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
                     { label: "May run", value: <Chips items={policy.may} none="only the read-only defaults" /> },
                     { label: "Stops at", value: <Chips items={policy.hold} none="nothing" /> },
                     { label: "Max turns", value: policy.maxTurns ?? <span className="text-muted">default</span> },
-                    { label: "Profile", value: policy.profile === null ? <span className="text-muted">default</span> : <Link to={`/profiles#profile-${policy.profile}`}>{policy.profile}</Link> },
+                    { label: "Profile", value: policy.profile === null ? <span className="text-muted">default</span> : <Link to={href({ to: "host", page: "profiles", hash: `profile-${policy.profile}` })}>{policy.profile}</Link> },
                     ...(policy.notes === null ? [] : [{ label: "Notes", value: policy.notes }]),
                   ]}
                 />

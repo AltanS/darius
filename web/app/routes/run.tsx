@@ -8,7 +8,8 @@ import { ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Crumbs, Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
-import { duration, itemPath, runPath, shortRun, workspacePath } from "../lib/format.ts";
+import { duration, shortRun } from "../lib/format.ts";
+import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
@@ -16,8 +17,8 @@ import { excerpt, itemLabel, nextStep, runFailure, runState, stuckFor, stuckText
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 export async function loader({ context, params }: Route.LoaderArgs) {
-  const run = context.run(params.project, params.run);
-  if (run === null) throw data(`No run ${params.run} in project ${params.project}.`, { status: 404 });
+  const run = context.run(params.ws, params.run);
+  if (run === null) throw data(`No run ${params.run} in workspace ${params.ws}.`, { status: 404 });
   const status = statusOf(context);
   const project = status.projects.find((candidate) => candidate.name === run.project);
   // Against the status time, not the browser clock, so the page hydrates with the same text.
@@ -30,7 +31,7 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   return { run, kind: itemKind(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
 }
 
-export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.project} | darius` }];
+export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { run, kind, manual, label, stuck, next, followUp } = loaderData;
@@ -47,17 +48,17 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
     <article>
       <header className="page-head">
         <Crumbs>
-          <Link to={workspacePath(project)}>{project}</Link>
+          <Link to={href({ to: "overview", ws: project })}>{project}</Link>
           {title === label ? null : (
             <>
               <span aria-hidden="true"> / </span>
-              <Link to={itemPath(project, row.item)}>{label}</Link>
+              <Link to={href(itemTarget(project, row.item))}>{label}</Link>
             </>
           )}
         </Crumbs>
         <h1 className="page-title page-title-run">
           {title === label ? (
-            <Link to={itemPath(project, row.item)} className="title-link">
+            <Link to={href(itemTarget(project, row.item))} className="title-link">
               <TitleText text={label} />
             </Link>
           ) : (
@@ -76,7 +77,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           <span>{row.who === "timer" ? "by timer" : `by ${row.who}`}</span>
           {run.followUpOf === null ? null : (
             <span>
-              follows up <Link to={runPath(project, run.followUpOf)}>run {shortRun(run.followUpOf)}</Link>
+              follows up <Link to={href({ to: "run", ws: project, run: run.followUpOf })}>run {shortRun(run.followUpOf)}</Link>
             </span>
           )}
         </p>
@@ -136,7 +137,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                   { label: "Item", value: <code>{row.item}</code> },
                   { label: "Ended", value: row.endedAt === null ? <span className="text-muted">not yet</span> : <Time iso={row.endedAt} /> },
                   ...(run.skillHash === null ? [] : [{ label: "Skill hash", value: <code title={run.skillHash}>{run.skillHash.slice(0, 12)}</code> }]),
-                  ...(run.followUpOf === null ? [] : [{ label: "Follows up", value: <Link to={runPath(project, run.followUpOf)}><code>{shortRun(run.followUpOf)}</code></Link> }]),
+                  ...(run.followUpOf === null ? [] : [{ label: "Follows up", value: <Link to={href({ to: "run", ws: project, run: run.followUpOf })}><code>{shortRun(run.followUpOf)}</code></Link> }]),
                   ...(run.followUps.length === 0
                     ? []
                     : [
@@ -145,7 +146,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                           value: (
                             <span className="fu-links">
                               {run.followUps.map((child) => (
-                                <Link key={child} to={runPath(project, child)}>
+                                <Link key={child} to={href({ to: "run", ws: project, run: child })}>
                                   <code>{shortRun(child)}</code>
                                 </Link>
                               ))}

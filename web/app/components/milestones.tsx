@@ -9,7 +9,8 @@
 
 import { Link } from "react-router";
 
-import { milestonePath, type MilestoneGroup, type MilestoneView, type SpecView, type WorkspaceMilestones } from "../lib/milestones.ts";
+import { href } from "../lib/paths.ts";
+import { type MilestoneGroup, type MilestoneView, type SpecView, type WorkspaceMilestones } from "../lib/milestones.ts";
 import { StateWord } from "./row.tsx";
 import { TitleText } from "./ui.tsx";
 
@@ -92,7 +93,7 @@ function MilestoneItem({ milestone, workspace }: MilestoneItemProps): React.Reac
             {target === null ? <span>no target</span> : target.past ? <span className="ms-late">{`target ${target.text}, past`}</span> : <span>{`target ${target.text}`}</span>}
           </p>
           <p className="ms-open">
-            <Link to={milestonePath(workspace, milestone.ref)}>{`Open ${milestone.id}: README, spec texts, worklogs`}</Link>
+            <Link to={href({ to: "milestone", ws: workspace, ref: milestone.ref })}>{`Open ${milestone.id}: README, spec texts, worklogs`}</Link>
           </p>
           {milestone.specs.length === 0 ? (
             <p className="ms-none">No specs yet.</p>
@@ -142,7 +143,7 @@ export function Workspace({ workspace, named }: WorkspaceProps): React.ReactNode
     <section className="ms-ws" aria-label={named ? undefined : `Milestones of ${workspace.name}`}>
       {named ? (
         <h2 className="ms-ws-name">
-          <Link to={`/w/${encodeURIComponent(workspace.name)}/milestones`}>{workspace.name}</Link>
+          <Link to={href({ to: "section", ws: workspace.name, section: "milestones" })}>{workspace.name}</Link>
         </h2>
       ) : null}
       {workspace.error === null ? null : <p className="ms-error">darius could not read this workspace: {workspace.error}</p>}

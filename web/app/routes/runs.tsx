@@ -1,10 +1,11 @@
-import { Link } from "react-router";
+import { data, Link, redirect } from "react-router";
 
 import type { Route } from "./+types/runs";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
 import { RunList } from "../components/runs.tsx";
 import { Section } from "../components/ui.tsx";
 import { scopeProjects } from "../lib/home.ts";
+import { href } from "../lib/paths.ts";
 import { readSettings } from "../lib/settings.ts";
 import { statusOf } from "../lib/status.ts";
 import { activity, type ActivityRun } from "../lib/view.ts";
@@ -19,12 +20,23 @@ function matches(run: ActivityRun, state: string): boolean {
   return run.phase === "closed" && run.outcome === state;
 }
 
-export function loader({ context, request }: Route.LoaderArgs) {
-  const params = new URL(request.url).searchParams;
-  const project = params.get("project") ?? "";
+/**
+ * The Runs list, for `/runs` (all workspaces) and `/w/:ws/runs` (one). The old
+ * `/runs?project=<ws>` redirects to the second; its other parameters stay.
+ */
+export function loader({ context, request, params: route }: Route.LoaderArgs) {
+  const url = new URL(request.url);
+  const params = url.searchParams;
+  const legacy = params.get("project") ?? "";
+  if (route.ws === undefined && legacy !== "") {
+    params.delete("project");
+    throw redirect(href({ to: "section", ws: legacy, section: "runs", query: Object.fromEntries(params) }), 301);
+  }
+  const project = route.ws ?? "";
   const state = params.get("state") ?? "";
   const withImported = params.get("imported") === "1";
   const status = statusOf(context);
+  if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this host.`, { status: 404 });
   // The self-test workspace stays out of the list of every project, as in all other lists, unless the settings show it (or the address names it).
   const { showSelftest } = readSettings(request.headers.get("cookie"));
   const projects = project === "" ? scopeProjects(status, { workspace: null, includeSelftest: showSelftest }) : status.projects;
@@ -35,7 +47,7 @@ export function loader({ context, request }: Route.LoaderArgs) {
   return { runs, project, state, withImported, projects: projects.map((candidate) => candidate.name) };
 }
 
-export const meta: Route.MetaFunction = () => [{ title: "Runs | darius" }];
+export const meta: Route.MetaFunction = ({ data: loaded }) => [{ title: loaded === undefined || loaded.project === "" ? "Runs | darius" : `Runs · ${loaded.project} | darius` }];
 
 interface Query {
   project: string;
@@ -43,13 +55,11 @@ interface Query {
   withImported: boolean;
 }
 
-function href(query: Query): string {
-  const params = new URLSearchParams();
-  if (query.project !== "") params.set("project", query.project);
-  if (query.state !== "") params.set("state", query.state);
-  if (query.withImported) params.set("imported", "1");
-  const text = params.toString();
-  return text === "" ? "/runs" : `/runs?${text}`;
+function runsHref(query: Query): string {
+  const extra: Record<string, string> = {};
+  if (query.state !== "") extra.state = query.state;
+  if (query.withImported) extra.imported = "1";
+  return href({ to: "section", ws: query.project === "" ? null : query.project, section: "runs", query: extra });
 }
 
 const STATE_WORDS = new Map([
@@ -64,7 +74,7 @@ const STATE_WORDS = new Map([
 /** The filter in words: "Held runs in acme-web, newest first." */
 function filterText(query: Query): string {
   const what = STATE_WORDS.get(query.state) ?? `Runs that ended ${query.state}`;
-  const where = query.project === "" ? " of every project" : ` in ${query.project}`;
+  const where = query.project === "" ? " of every workspace" : ` in ${query.project}`;
   const imported = query.withImported ? ", imported runs included" : "";
   return `${what}${where}${imported}, newest first.`;
 }
@@ -89,13 +99,13 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
         <aside className="board-rail rail-first rail-filter">
           <Section title="Filter">
             <nav aria-label="Filter" className="filters panel panel-pad">
-              {projects.length < 2 ? null : (
-                <ChipRow label="Project" current={project}>
-                  <Link to={href({ ...query, project: "" })} className={chipClass(project === "")} aria-current={project === "" ? "true" : undefined}>
-                    all projects
+              {project !== "" || projects.length < 2 ? null : (
+                <ChipRow label="Workspace" current={project}>
+                  <Link to={runsHref({ ...query, project: "" })} className={chipClass(project === "")} aria-current={project === "" ? "true" : undefined}>
+                    all workspaces
                   </Link>
                   {projects.map((name) => (
-                    <Link key={name} to={href({ ...query, project: name })} className={chipClass(project === name)} aria-current={project === name ? "true" : undefined}>
+                    <Link key={name} to={runsHref({ ...query, project: name })} className={chipClass(project === name)} aria-current={project === name ? "true" : undefined}>
                       {name}
                     </Link>
                   ))}
@@ -103,11 +113,11 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
               )}
               <ChipRow label="State" current={state}>
                 {["", ...STATES].map((name) => (
-                  <Link key={name} to={href({ ...query, state: name })} className={chipClass(name === state)} aria-current={name === state ? "true" : undefined}>
+                  <Link key={name} to={runsHref({ ...query, state: name })} className={chipClass(name === state)} aria-current={name === state ? "true" : undefined}>
                     {name === "" ? "any state" : name}
                   </Link>
                 ))}
-                <Link to={href({ ...query, withImported: !withImported })} className={chipClass(withImported, true)} aria-current={withImported ? "true" : undefined}>
+                <Link to={runsHref({ ...query, withImported: !withImported })} className={chipClass(withImported, true)} aria-current={withImported ? "true" : undefined}>
                   {withImported ? "with imported runs" : "show imported runs"}
                 </Link>
               </ChipRow>

@@ -4,7 +4,8 @@ import { Link } from "react-router";
 
 import type { Acknowledgement, RitualRow, RunRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
-import { answerCommand, clockTime, duration, hostDate, ritualPath, runPath, shortDate } from "../lib/format.ts";
+import { answerCommand, clockTime, duration, hostDate, shortDate } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import { summaryTags } from "../lib/result.ts";
 import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
@@ -53,7 +54,7 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
             key={`${run.project}/${run.run}`}
             kind={run.kind}
             manual={run.manual}
-            href={runPath(run.project, run.run)}
+            href={href({ to: "run", ws: run.project, run: run.run })}
             title={showLabel ? run.label : shortDate(hostDate(run.startedAt, offset))}
             rail={railOf(state)}
             live={run.phase === "running"}
@@ -160,7 +161,7 @@ export function ReportRow({ project, ritual, last, report, showProject, classNam
   return (
     <Row
       kind="ritual"
-      href={last === null ? ritualPath(project, ritual.slug) : runPath(project, last.run)}
+      href={last === null ? href({ to: "ritual", ws: project, slug: ritual.slug }) : href({ to: "run", ws: project, run: last.run })}
       title={ritual.title}
       rail={railOf(state)}
       live={state.tone === "run"}
@@ -168,7 +169,7 @@ export function ReportRow({ project, ritual, last, report, showProject, classNam
       state={state}
       meta={showProject ? [project] : []}
       time={time}
-      acts={<Link to={ritualPath(project, ritual.slug)}>History</Link>}
+      acts={<Link to={href({ to: "ritual", ws: project, slug: ritual.slug })}>History</Link>}
       note={seen === null ? undefined : seenText(last, seen, { today, offset })}
       excerpt={report === null ? undefined : <Report report={report} lines={3} fades={false} />}
       className={className}

@@ -5,7 +5,7 @@ import { Row, RowList } from "../components/row.tsx";
 import { SectionPageHead } from "../components/section.tsx";
 import { Fold } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
-import { vigilAnchor } from "../lib/format.ts";
+import { vigilAnchor } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { vigilWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";

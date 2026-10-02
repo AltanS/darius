@@ -8,6 +8,7 @@ import { Link } from "react-router";
 
 import type { BackupsStatus, SystemDisk, SystemHost, SystemProject, SystemStatus } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
+import { href } from "../lib/paths.ts";
 import { byteSize, momentText, relativeTime, uptimeText } from "../lib/format.ts";
 import type { Tone } from "../lib/tone.ts";
 import { Section, Time } from "./ui.tsx";
@@ -83,7 +84,7 @@ export function StatusStrip({ system, backups }: StripProps): React.ReactNode {
       <FactPill value={String(system.store.runs)} label="runs" tone="gold" />
       <FactPill value={byteSize(system.store.bytes)} label="store" tone="gold" />
       <FactPill value={sync === null ? "never" : since(sync, now)} label={sync === null ? "synced" : "since sync"} tone={syncTone} />
-      <FactPill value={backup.value} label={backup.label} tone={backup.tone} to="/settings/backups" />
+      <FactPill value={backup.value} label={backup.label} tone={backup.tone} to={href({ to: "host", page: "settings/backups" })} />
     </nav>
   );
 }

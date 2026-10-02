@@ -15,8 +15,9 @@ import { Link, useLocation } from "react-router";
 import type { RootData } from "../root.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
-import { clockTime, sectionPath, workspacePath } from "../lib/format.ts";
-import { placeOf, type Place, type Section, type TabCounts } from "../lib/scope.ts";
+import { clockTime } from "../lib/format.ts";
+import { href, placeOf, switchTarget, type Section } from "../lib/paths.ts";
+import type { TabCounts } from "../lib/scope.ts";
 
 interface SectionSpec {
   section: Section;
@@ -92,7 +93,10 @@ function closeMenu(event: React.MouseEvent<HTMLButtonElement>): void {
 
 interface SwitcherProps {
   data: RootData;
-  place: Place;
+  /** The scope: a workspace name, or null for all workspaces. */
+  workspace: string | null;
+  /** The page is the Overview of the scope. */
+  atOverview: boolean;
   /** The address of the scope's Overview. */
   overview: string;
   /** Where a click on the scope lands: the same section of it, or its Overview. */
@@ -102,7 +106,7 @@ interface SwitcherProps {
 
 /** A line of the switcher: a name, what it is, and what needs you there. */
 interface EntryProps {
-  href: string;
+  to: string;
   name: string;
   icon: "workspace" | "all" | "overview";
   note: string;
@@ -111,9 +115,9 @@ interface EntryProps {
   current: boolean;
 }
 
-function Entry({ href, name, icon, note, needs, unreadable = false, current }: EntryProps): React.ReactNode {
+function Entry({ to, name, icon, note, needs, unreadable = false, current }: EntryProps): React.ReactNode {
   return (
-    <Link to={href} className={current ? "sw-item on" : "sw-item"} aria-current={current ? "true" : undefined}>
+    <Link to={to} className={current ? "sw-item on" : "sw-item"} aria-current={current ? "true" : undefined}>
       <NavIcon name={icon} size={18} className="sw-ico" />
       <span className="sw-text">
         <span className="sw-name">{name}</span>
@@ -126,8 +130,7 @@ function Entry({ href, name, icon, note, needs, unreadable = false, current }: E
 }
 
 /** The workspace switcher: a button with the current scope; its list is a sheet on a phone, a menu on a desktop. */
-function Switcher({ data, place, overview, to, pathKey }: SwitcherProps): React.ReactNode {
-  const { workspace } = place;
+function Switcher({ data, workspace, atOverview, overview, to, pathKey }: SwitcherProps): React.ReactNode {
   const known = data.workspaces.some((entry) => entry.name === workspace);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
   const listed = workspace === null || known ? data.workspaces : [...data.workspaces, { name: workspace, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 } }];
@@ -151,11 +154,11 @@ function Switcher({ data, place, overview, to, pathKey }: SwitcherProps): React.
       <button type="button" className="sw-scrim" tabIndex={-1} aria-label="Close the workspace list" onClick={closeMenu} />
       <div className="sw-list">
         <p className="sw-group">{workspace === null ? "All workspaces" : "This workspace"}</p>
-        <Entry href={overview} name="Overview" icon="overview" note="Verdict, next, what needs you" needs={0} current={place.overview} />
+        <Entry to={overview} name="Overview" icon="overview" note="Verdict, next, what needs you" needs={0} current={atOverview} />
         <p className="sw-group">Workspaces</p>
-        <Entry href={to(null)} name="All workspaces" icon="all" note="Every workspace together" needs={data.needs} current={workspace === null} />
+        <Entry to={to(null)} name="All workspaces" icon="all" note="Every workspace together" needs={data.needs} current={workspace === null} />
         {listed.map((entry) => (
-          <Entry key={entry.name} href={to(entry.name)} name={entry.name} icon="workspace" note="" needs={entry.needs} unreadable={entry.error} current={workspace === entry.name} />
+          <Entry key={entry.name} to={to(entry.name)} name={entry.name} icon="workspace" note="" needs={entry.needs} unreadable={entry.error} current={workspace === entry.name} />
         ))}
       </div>
     </details>
@@ -170,14 +173,13 @@ interface ShellProps {
 export function Shell({ data, children }: ShellProps): React.ReactNode {
   useMenuDismiss();
   const location = useLocation();
-  const place = placeOf(location.pathname, location.search, data.defaultWorkspace);
-  const { workspace } = place;
+  const place = placeOf(location.pathname);
+  // Until the shell is rewritten: the pages with no scope (host pages, unknown paths) show the default workspace.
+  const workspace = place.kind === "host" || place.kind === "unknown" ? data.defaultWorkspace : place.scope;
+  const atOverview = place.kind === "overview";
   const tabs = workspace === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
-  // `/` is the default workspace, so all workspaces need an address of their own when one is set.
-  const allOverview = data.defaultWorkspace === null ? "/" : "/all";
-  const overviewOf = (name: string | null): string => (name === null ? allOverview : workspacePath(name));
-  const overview = overviewOf(workspace);
-  const scopeTo = (name: string | null): string => (place.section === null ? overviewOf(name) : sectionPath(name, place.section));
+  const overview = href({ to: "overview", ws: workspace });
+  const scopeTo = (name: string | null): string => href(switchTarget(place, name));
   const selectedTab = (section: Section): boolean => place.section === section;
   // The gear stays lit on every settings tab: `/settings` and `/settings/...`.
   const inSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
@@ -189,17 +191,17 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
             <Gem size={28} />
             <span className="brand-word">darius</span>
           </Link>
-          <Switcher data={data} place={place} overview={overview} to={scopeTo} pathKey={`${location.pathname}${location.search}`} />
-          <Link to="/status" className={location.pathname === "/status" ? "gear on" : "gear"} aria-label="Status" aria-current={location.pathname === "/status" ? "page" : undefined}>
+          <Switcher data={data} workspace={workspace} atOverview={atOverview} overview={overview} to={scopeTo} pathKey={`${location.pathname}${location.search}`} />
+          <Link to={href({ to: "host", page: "status" })} className={location.pathname === "/status" ? "gear on" : "gear"} aria-label="Status" aria-current={location.pathname === "/status" ? "page" : undefined}>
             <NavIcon name="status" size={22} />
           </Link>
-          <Link to="/settings" className={inSettings ? "gear on" : "gear"} aria-label="Settings" aria-current={inSettings ? "page" : undefined}>
+          <Link to={href({ to: "host", page: "settings" })} className={inSettings ? "gear on" : "gear"} aria-label="Settings" aria-current={inSettings ? "page" : undefined}>
             <NavIcon name="gear" size={22} />
           </Link>
         </div>
         <nav aria-label="Sections" className="dtabs wa">
           {SECTIONS.map(({ section, label, badge }) => (
-            <Link key={section} to={sectionPath(workspace, section)} className={selectedTab(section) ? "dt on" : "dt"} aria-current={selectedTab(section) ? "page" : undefined}>
+            <Link key={section} to={href({ to: "section", ws: workspace, section: section })} className={selectedTab(section) ? "dt on" : "dt"} aria-current={selectedTab(section) ? "page" : undefined}>
               <SectionIcon section={section} size={20} />
               {label}
               <TabBadge {...badge(tabs)} />
@@ -211,7 +213,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
       <footer className="wa">
         <div className="foot">
           <div className="foot-left">
-            {place.overview && workspace === null
+            {atOverview && workspace === null
               ? data.selftest.map((line) => (
                   <Link key={line.href} to={line.href} className="foot-selftest">
                     {line.text}
@@ -220,13 +222,13 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
               : null}
           </div>
           <p className="foot-host">
-            {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}. <Link to="/profiles">Profiles</Link>
+            {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}. <Link to={href({ to: "host", page: "profiles" })}>Profiles</Link>
           </p>
         </div>
       </footer>
       <nav aria-label="Tabs" className="tabbar">
         {SECTIONS.map(({ section, label, badge }) => (
-          <Link key={section} to={sectionPath(workspace, section)} className={selectedTab(section) ? "tab on" : "tab"} aria-current={selectedTab(section) ? "page" : undefined}>
+          <Link key={section} to={href({ to: "section", ws: workspace, section: section })} className={selectedTab(section) ? "tab on" : "tab"} aria-current={selectedTab(section) ? "page" : undefined}>
             <span className="tab-ico-wrap">
               <SectionIcon section={section} size={22} />
               <TabBadge {...badge(tabs)} />

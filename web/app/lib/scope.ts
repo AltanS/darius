@@ -1,8 +1,8 @@
 /**
  * Scope: which workspaces a page covers. A workspace is a darius project.
  * The scope is one workspace (`/w/<ws>/...`) or all of them (`/vigils`,
- * `/rituals`, `/milestones`, `/all`); `/` opens the operator's default
- * workspace, or all of them. The all-workspaces scope leaves out the
+ * `/rituals`, `/milestones`, `/all`); `/` redirects to the operator's default
+ * workspace, or to all of them. The all-workspaces scope leaves out the
  * self-test workspace unless the operator shows it in the settings.
  * Everything here is pure: loaders call it with the status and the settings,
  * the shell calls it with the path.
@@ -14,8 +14,6 @@ import type { HostStatus, ProjectStatus } from "../../../src/web/api.ts";
 import { buildAgenda } from "./agenda.ts";
 import { needCounts, scopeProjects, selftestLines, type HomeScope, type SelftestLine } from "./home.ts";
 import { readSettings, type Settings } from "./settings.ts";
-
-export type Section = "vigils" | "rituals" | "milestones" | "findings";
 
 /** The badges on the tabs: vigils due today or late, rituals late, findings that need the operator. */
 export interface TabCounts {
@@ -45,8 +43,8 @@ export interface Scoped {
 
 /**
  * The scope of a request. A `ws` param names a workspace (404 when this host
- * has none of that name). `/all` is all workspaces. `/` is the default
- * workspace. Any other path without a `ws` param is all workspaces.
+ * has none of that name). Any path without a `ws` param is all workspaces;
+ * `/` is a redirect and never gets here.
  */
 export function scopeOfRequest(status: HostStatus, request: Request, workspace: string | undefined): Scoped {
   const settings = readSettings(request.headers.get("Cookie"));
@@ -56,8 +54,7 @@ export function scopeOfRequest(status: HostStatus, request: Request, workspace: 
     const scope: HomeScope = { workspace, includeSelftest };
     return { settings, scope, projects: scopeProjects(status, scope) };
   }
-  const isRoot = new URL(request.url).pathname === "/";
-  const scope: HomeScope = { workspace: isRoot ? defaultWorkspaceOf(status, settings) : null, includeSelftest };
+  const scope: HomeScope = { workspace: null, includeSelftest };
   return { settings, scope, projects: scopeProjects(status, scope) };
 }
 
@@ -79,47 +76,6 @@ export function workspaceEntries(status: HostStatus, settings: Settings, needsBy
     needs: needsBy[project.name] ?? 0,
     tabs: tabCounts([project], status.today),
   }));
-}
-
-/** Where a path sits: its workspace (null for all), its section, and whether it is an Overview. */
-export interface Place {
-  workspace: string | null;
-  /** The section whose tab is lit; null on an Overview or a page outside the sections. */
-  section: Section | null;
-  overview: boolean;
-}
-
-function isSection(text: string | undefined): text is Section {
-  return text === "vigils" || text === "rituals" || text === "milestones" || text === "findings";
-}
-
-function decoded(text: string): string {
-  try {
-    return decodeURIComponent(text);
-  } catch {
-    return text;
-  }
-}
-
-/**
- * The place of a path, for the top bar and the tabs. `/` is the default
- * workspace. A ritual page and the runs pages belong to Rituals. Settings and
- * Profiles keep the default scope.
- */
-export function placeOf(pathname: string, search: string, defaultWorkspace: string | null): Place {
-  const parts = pathname.split("/").filter((part) => part !== "");
-  const [first, second, third] = parts;
-  if (parts.length === 0) return { workspace: defaultWorkspace, section: null, overview: true };
-  if (first === "all") return { workspace: null, section: null, overview: true };
-  if (first === "w" && second !== undefined) {
-    const workspace = decoded(second);
-    return isSection(third) ? { workspace, section: third, overview: false } : { workspace, section: null, overview: third === undefined };
-  }
-  if (first === "p" && second !== undefined) return { workspace: decoded(second), section: third === "rituals" ? "rituals" : null, overview: false };
-  if (isSection(first)) return { workspace: null, section: first, overview: false };
-  if (first === "findings") return { workspace: new URLSearchParams(search).get("project"), section: "findings", overview: false };
-  if (first === "runs") return { workspace: parts.length === 1 ? new URLSearchParams(search).get("project") : decoded(second ?? ""), section: "rituals", overview: false };
-  return { workspace: defaultWorkspace, section: null, overview: false };
 }
 
 /** What the top bar and the tabs need from the store, on every page. */

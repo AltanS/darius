@@ -1,8 +1,8 @@
 import { index, route, type RouteConfig } from "@react-router/dev/routes";
 
 export default [
-  // The Overview: `/` is the default workspace (else all), `/all` is all workspaces, `/w/:ws` is one.
-  index("routes/overview.tsx"),
+  // `/` is a redirect: to the default workspace, else to all workspaces. `/all` is all workspaces, `/w/:ws` is one.
+  index("routes/index.tsx"),
   route("all", "routes/overview.tsx", { id: "overview-all" }),
   route("w/:ws", "routes/overview.tsx", { id: "overview-workspace" }),
   // The sections, for all workspaces and for one. Findings (0.62.0) filters through its address.
@@ -14,7 +14,10 @@ export default [
   route("w/:ws/findings", "routes/findings.tsx", { id: "findings-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
-  // One milestone in full: README, spec texts, worklogs (0.42.0).
+  // The runs of one workspace, and the detail pages of a workspace: a ritual, a run, a milestone (README, spec texts, worklogs).
+  route("w/:ws/runs", "routes/runs.tsx", { id: "runs-workspace" }),
+  route("w/:ws/rituals/:slug", "routes/ritual.tsx"),
+  route("w/:ws/runs/:run", "routes/run.tsx"),
   route("w/:ws/milestones/:milestone", "routes/milestone.tsx"),
   // Settings is a layout with tabs: General, Notifications, Backups, About.
   route("settings", "routes/settings.tsx", [
@@ -25,13 +28,12 @@ export default [
   ]),
   // The machine, the store and the sync hosts of this host (0.44.0).
   route("status", "routes/status.tsx"),
-  route("runs", "routes/runs.tsx"),
-  // The URL of the first status page (0.9.0), kept so old links still work.
-  route("runs/:project/:run", "routes/legacy-run.tsx"),
+  route("runs", "routes/runs.tsx", { id: "runs-all" }),
   route("profiles", "routes/profiles.tsx"),
-  // The project page, now the workspace Overview: a redirect.
+  // Old addresses, kept as 301 redirects: the first status page (0.9.0) and the /p/ project pages.
+  route("runs/:project/:run", "routes/legacy-run.tsx", { id: "legacy-run-first" }),
   route("p/:project", "routes/project.tsx"),
-  route("p/:project/rituals/:slug", "routes/ritual.tsx"),
-  route("p/:project/runs/:run", "routes/run.tsx"),
+  route("p/:project/rituals/:slug", "routes/legacy-ritual.tsx"),
+  route("p/:project/runs/:run", "routes/legacy-run.tsx", { id: "legacy-run-project" }),
   route("*", "routes/not-found.tsx"),
 ] satisfies RouteConfig;

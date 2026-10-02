@@ -2,6 +2,8 @@
 
 import { isRouteErrorResponse, Link, useRouteError } from "react-router";
 
+import { href } from "../lib/paths.ts";
+
 export function RouteError(): React.ReactNode {
   const error = useRouteError();
   if (isRouteErrorResponse(error) && error.status === 404) {
@@ -12,7 +14,7 @@ export function RouteError(): React.ReactNode {
           <h1 className="page-title">Nothing here</h1>
           <p className="lede">{text}</p>
         </header>
-        <Link to="/" className="back">
+        <Link to={href({ to: "overview", ws: null })} className="back">
           Back home
         </Link>
       </div>
@@ -25,7 +27,7 @@ export function RouteError(): React.ReactNode {
         <h1 className="page-title ink-bad">This page failed</h1>
       </header>
       <pre className="code-block">{message}</pre>
-      <Link to="/" className="back">
+      <Link to={href({ to: "overview", ws: null })} className="back">
         Back home
       </Link>
     </div>

@@ -8,6 +8,7 @@ import { SectionPageHead } from "../components/section.tsx";
 import { SectHead } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
+import { href } from "../lib/paths.ts";
 import { statusOf } from "../lib/status.ts";
 import { activity } from "../lib/view.ts";
 import { RECENT } from "../lib/workspace.ts";
@@ -37,7 +38,7 @@ export const meta: Route.MetaFunction = ({ data }) => [{ title: data?.workspace 
 /** Rituals by day, the late ones first, then the recent runs and the way to all of them. */
 export default function Rituals({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { workspace, agenda, active, recent } = loaderData;
-  const runsPath = workspace === null ? "/runs" : `/runs?project=${encodeURIComponent(workspace)}`;
+  const runsPath = href({ to: "section", ws: workspace, section: "runs" });
   return (
     <div className="proj">
       <SectionPageHead title="Rituals" workspace={workspace} fact={`${active} active, ${agenda.overdue} late`} />

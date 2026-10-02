@@ -7,20 +7,22 @@
 
 import { NavLink, Outlet } from "react-router";
 
+import { href, type HostPage } from "../lib/paths.ts";
+
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 interface TabSpec {
-  to: string;
+  page: HostPage;
   label: string;
   /** General is `/settings` itself, so it must not stay lit on the tabs under it. */
   end: boolean;
 }
 
 const TABS: readonly TabSpec[] = [
-  { to: "/settings", label: "General", end: true },
-  { to: "/settings/notifications", label: "Notifications", end: false },
-  { to: "/settings/backups", label: "Backups", end: false },
-  { to: "/settings/about", label: "About", end: false },
+  { page: "settings", label: "General", end: true },
+  { page: "settings/notifications", label: "Notifications", end: false },
+  { page: "settings/backups", label: "Backups", end: false },
+  { page: "settings/about", label: "About", end: false },
 ];
 
 export default function SettingsLayout(): React.ReactNode {
@@ -31,8 +33,8 @@ export default function SettingsLayout(): React.ReactNode {
         <p className="lede">How darius looks on this device, and how this host backs up. The look stays in this browser.</p>
       </header>
       <nav aria-label="Settings sections" className="st-tabs">
-        {TABS.map(({ to, label, end }) => (
-          <NavLink key={to} to={to} end={end} className={({ isActive }) => (isActive ? "st-tab on" : "st-tab")}>
+        {TABS.map(({ page, label, end }) => (
+          <NavLink key={page} to={href({ to: "host", page })} end={end} className={({ isActive }) => (isActive ? "st-tab on" : "st-tab")}>
             {label}
           </NavLink>
         ))}

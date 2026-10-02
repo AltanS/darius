@@ -11,7 +11,7 @@
  */
 
 import type { MilestoneDetail, MilestoneFile, MilestoneRow, MilestoneWorklog, ProjectStatus, SpecRow } from "../../../src/web/api.ts";
-import { sectionPath, shortDate } from "./format.ts";
+import { shortDate } from "./format.ts";
 import type { Badge, Tone } from "./tone.ts";
 
 export type GroupKey = "progress" | "notstarted" | "complete" | "closed";
@@ -166,11 +166,6 @@ export function specView(spec: SpecRow, labels: ReadonlyMap<string, string>): Sp
 export function milestoneRef(rows: readonly MilestoneRow[], row: MilestoneRow): string {
   const shared = rows.filter((candidate) => candidate.id === row.id).length > 1;
   return shared ? `${row.id}-${row.slug}` : row.id;
-}
-
-/** The detail page of a milestone: `/w/<ws>/milestones/<ref>`. */
-export function milestonePath(workspace: string, ref: string): string {
-  return `${sectionPath(workspace, "milestones")}/${encodeURIComponent(ref)}`;
 }
 
 /** The labels of every spec of the workspace, for "depends on M12/01". */

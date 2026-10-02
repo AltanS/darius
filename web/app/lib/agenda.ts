@@ -17,7 +17,8 @@
  */
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { dayGap, dayName, ritualPath, shortDate, vigilPath } from "./format.ts";
+import { dayGap, dayName, shortDate } from "./format.ts";
+import { href } from "./paths.ts";
 import { type Kind, isManual } from "./kind.ts";
 import { ASKS_YOU, datePhrase, FAILED, FAILED_SEEN, FLAGGED, lateWord, railOf, type Rail, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import type { Badge } from "./tone.ts";
@@ -182,7 +183,7 @@ function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
     project: project.name,
     slug: ritual.slug,
     title: ritual.title,
-    href: ritualPath(project.name, ritual.slug),
+    href: href({ to: "ritual", ws: project.name, slug: ritual.slug }),
     date: at.date,
     rail: railOf(at.state),
     state: at.state,
@@ -212,7 +213,7 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
     project: project.name,
     slug: vigil.slug,
     title: vigil.title,
-    href: vigilPath(project.name, vigil.slug),
+    href: href({ to: "vigil", ws: project.name, slug: vigil.slug }),
     date: due,
     rail: railOf(state),
     state,
@@ -224,7 +225,7 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
 }
 
 function waitingRow(project: ProjectStatus, vigil: VigilRow): WaitingRow {
-  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: vigilPath(project.name, vigil.slug), until: vigil.until, flagged: vigil.flagged };
+  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: href({ to: "vigil", ws: project.name, slug: vigil.slug }), until: vigil.until, flagged: vigil.flagged };
 }
 
 // --- the agenda ----------------------------------------------------------------------------

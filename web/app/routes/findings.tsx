@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link, redirect } from "react-router";
 
 import type { Route } from "./+types/findings";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
@@ -7,26 +7,24 @@ import { Section } from "../components/ui.tsx";
 import { emptyText, facetOptions, filterFindings, filterText, findingsHref, readQuery, viewCount, VIEWS, type FindingQuery } from "../lib/findings.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { statusOf } from "../lib/status.ts";
-import { workspacePath } from "../lib/format.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 /**
- * The Findings page, for `/findings` (all workspaces, `?project=` narrows to
- * one) and `/w/:ws/findings` (one workspace). The filters are in the address:
- * view, project, ritual and severity (lib/findings.ts).
+ * The Findings page, for `/findings` (all workspaces) and `/w/:ws/findings`
+ * (one workspace). The filters are in the address: view, ritual and severity
+ * (lib/findings.ts). The old `/findings?project=<ws>` redirects to the second.
  */
 export async function loader({ context, request, params }: Route.LoaderArgs) {
   const status = statusOf(context);
   const { projects } = scopeOfRequest(status, request, params.ws);
   const query = readQuery(new URL(request.url).searchParams);
-  // A workspace page is one project: its own `project` filter is moot. A project named in the address of `/findings` is shown even when it is the hidden self-test one.
-  const named = params.ws === undefined && query.project !== "" ? status.projects.filter((project) => project.name === query.project) : null;
-  const scoped = named === null || named.length === 0 ? projects : named;
-  const names = new Set(scoped.map((project) => project.name));
+  if (params.ws === undefined && query.project !== "") throw redirect(findingsHref(query.project, { ...query, project: "" }), 301);
+  const names = new Set(projects.map((project) => project.name));
   const scope = params.ws ?? null;
   const rows = (await context.findings()).filter((row) => names.has(row.project));
-  const effective: FindingQuery = scope === null ? query : { ...query, project: "" };
+  // The page is one workspace or all of them; its own `project` filter is moot.
+  const effective: FindingQuery = { ...query, project: "" };
   return {
     scope,
     query: effective,
@@ -43,8 +41,7 @@ export const meta: Route.MetaFunction = ({ data }) => [{ title: data?.scope === 
 
 export default function Findings({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { scope, query, shown, counts, projectOptions, ritualOptions, severityOptions, many } = loaderData;
-  const base = scope === null ? "/findings" : `${workspacePath(scope)}/findings`;
-  const to = (change: Partial<FindingQuery>): string => findingsHref(base, { ...query, ...change });
+  const to = (change: Partial<FindingQuery>): string => findingsHref(scope, { ...query, ...change });
   const showProject = scope === null && query.project === "" && many;
   return (
     <div>
@@ -70,13 +67,13 @@ export default function Findings({ loaderData }: Route.ComponentProps): React.Re
                   </Link>
                 ))}
               </ChipRow>
-              {projectOptions.length < 2 && query.project === "" ? null : (
-                <ChipRow label="Project" current={query.project}>
-                  <Link to={to({ project: "" })} className={chipClass(query.project === "")} aria-current={query.project === "" ? "true" : undefined}>
-                    all projects
+              {projectOptions.length < 2 ? null : (
+                <ChipRow label="Workspace" current="">
+                  <Link to={to({})} className={chipClass(true)} aria-current="true">
+                    all workspaces
                   </Link>
                   {projectOptions.map((name) => (
-                    <Link key={name} to={to({ project: name })} className={chipClass(query.project === name)} aria-current={query.project === name ? "true" : undefined}>
+                    <Link key={name} to={findingsHref(name, query)} className={chipClass(false)}>
                       {name}
                     </Link>
                   ))}

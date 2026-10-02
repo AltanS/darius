@@ -1,8 +1,8 @@
 import { redirect } from "react-router";
 
 import type { Route } from "./+types/legacy-run";
-import { runPath } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 
 export function loader({ params }: Route.LoaderArgs) {
-  return redirect(runPath(params.project, params.run), 301);
+  return redirect(href({ to: "run", ws: params.project, run: params.run }), 301);
 }

@@ -6,6 +6,7 @@ import "./app.css";
 import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
 import { NonceContext } from "./lib/nonce.ts";
+import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { statusOf } from "./lib/status.ts";
 import { shellData } from "./lib/scope.ts";
@@ -141,7 +142,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactN
       <h1 className="page-title ink-bad">{title}</h1>
       {detail === "" ? null : <pre className="code-block">{detail}</pre>}
       <p className="text-muted">{data === undefined ? "The status read failed." : `Host ${data.host}.`}</p>
-      <Link to="/">Back home</Link>
+      <Link to={href({ to: "overview", ws: null })}>Back home</Link>
     </main>
   );
 }

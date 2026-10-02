@@ -13,7 +13,8 @@ import { Link, useRevalidator } from "react-router";
 
 import type { FindingRow, FindingStep } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
-import { hostDate, runPath, shortDate } from "../lib/format.ts";
+import { hostDate, shortDate } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { itemStateTag, severityTone } from "../lib/result.ts";
 import type { Badge } from "../lib/tone.ts";
@@ -52,7 +53,7 @@ function Details({ row }: DetailsProps): React.ReactNode {
       <ol className="fnd-history" aria-label="History, oldest first">
         {row.history.map((step) => (
           <li key={`${step.run}-${step.at}`}>
-            <Link to={runPath(row.project, step.run)}>{stepText(step, offset)}</Link>
+            <Link to={href({ to: "run", ws: row.project, run: step.run })}>{stepText(step, offset)}</Link>
           </li>
         ))}
       </ol>
@@ -145,7 +146,7 @@ function FindingItem({ row, showProject }: FindingItemProps): React.ReactNode {
           {asking ? <CloseForm row={row} onDone={() => setAsking(false)} /> : null}
           <div className="fnd-foot">
             <span className="fnd-acts">
-              <Link to={runPath(row.project, row.lastSeen.run)}>last report</Link>
+              <Link to={href({ to: "run", ws: row.project, run: row.lastSeen.run })}>last report</Link>
               {canClose ? (
                 <button type="button" className="st-btn st-btn-small" aria-expanded={asking} aria-label={`Close the finding: ${row.title}`} onClick={() => setAsking(!asking)}>
                   Close

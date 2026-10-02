@@ -5,6 +5,7 @@ import { Link, useRouteLoaderData } from "react-router";
 import type { Route } from "./+types/settings-about";
 import type { loader as rootLoader } from "../root.tsx";
 import { SettingRow, SettingsCard } from "../components/settings-ui.tsx";
+import { href } from "../lib/paths.ts";
 import { statusOf } from "../lib/status.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
@@ -31,7 +32,7 @@ export default function SettingsAbout({ loaderData }: Route.ComponentProps): Rea
           <span className="st-value">{root?.viewer}</span>
         </SettingRow>
         <SettingRow label="Profiles" help="Named presets for starting an agent harness.">
-          <Link to="/profiles" className="st-value st-value-link">
+          <Link to={href({ to: "host", page: "profiles" })} className="st-value st-value-link">
             {profiles === 0 ? "None yet" : `${profiles} ${profiles === 1 ? "profile" : "profiles"}`}
           </Link>
         </SettingRow>

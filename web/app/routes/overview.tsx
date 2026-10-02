@@ -7,6 +7,7 @@ import { RowList } from "../components/row.tsx";
 import { ReportRow, RunList } from "../components/runs.tsx";
 import { Empty, SectHead, Time } from "../components/ui.tsx";
 import { homeView } from "../lib/home.ts";
+import { href } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { statusOf } from "../lib/status.ts";
 import { workspaceExtras, type WorkspaceExtras } from "../lib/workspace.ts";
@@ -20,8 +21,8 @@ const REPORTS_PHONE = 3;
 const RECENT_PHONE = 3;
 
 /**
- * One loader for three addresses: `/` (the default workspace, else all),
- * `/all` (all workspaces) and `/w/:ws` (one workspace).
+ * One loader for two addresses: `/all` (all workspaces) and `/w/:ws` (one
+ * workspace). `/` redirects to one of them (routes/index.tsx).
  */
 export function loader({ context, request, params }: Route.LoaderArgs) {
   const status = statusOf(context);
@@ -111,7 +112,7 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
   const { recent } = extras;
   return (
     <section id="recent" className="section sec-recent">
-      <SectHead title="Recent runs" aside={<Link to={`/runs?project=${encodeURIComponent(extras.name)}`}>All runs</Link>} />
+      <SectHead title="Recent runs" aside={<Link to={href({ to: "section", ws: extras.name, section: "runs" })}>All runs</Link>} />
       <div className="panel">
         <PhoneMore hidden={recent.length - RECENT_PHONE} noun="run">
           <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
@@ -179,7 +180,7 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
           </p>
           {extras === null ? (
             <p className="rail-note sec-runs">
-              <Link to="/runs">All runs</Link>
+              <Link to={href({ to: "section", ws: null, section: "runs" })}>All runs</Link>
             </p>
           ) : null}
         </aside>

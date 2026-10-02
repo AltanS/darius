@@ -11,6 +11,7 @@ import { Link } from "react-router";
 import type { BackupsStatus } from "../../../src/web/api.ts";
 import type { Route } from "./+types/status";
 import { Hosts, Machine, Projects, StatusStrip } from "../components/system.tsx";
+import { href } from "../lib/paths.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -41,7 +42,7 @@ export default function StatusPage({ loaderData }: Route.ComponentProps): React.
       <StatusStrip system={system} backups={backups} />
       {trouble === null ? null : (
         <p className="page-warn tone-late" role="status">
-          {trouble} <Link to="/settings/backups">Open the backups</Link>
+          {trouble} <Link to={href({ to: "host", page: "settings/backups" })}>Open the backups</Link>
         </p>
       )}
       <div className="sy-grid">

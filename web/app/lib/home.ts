@@ -33,7 +33,8 @@
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, type Agenda, type NextLine } from "./agenda.ts";
-import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, ritualPath, roughDuration, runPath, sectionPath, shortDate, vigilPath, workspacePath } from "./format.ts";
+import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
+import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { ASKS_YOU, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
@@ -248,7 +249,7 @@ function blank(id: string, kind: CardKind, item: Kind | null, manual = false): C
 }
 
 function historyHref(run: ActivityRun): string {
-  return run.item.startsWith("vigil/") ? vigilPath(run.project, run.slug) : ritualPath(run.project, run.slug);
+  return run.item.startsWith("vigil/") ? href({ to: "vigil", ws: run.project, slug: run.slug }) : href({ to: "ritual", ws: run.project, slug: run.slug });
 }
 
 function heldCard(clock: Clock, run: ActivityRun): Card {
@@ -258,7 +259,7 @@ function heldCard(clock: Clock, run: ActivityRun): Card {
     word: { text: WAITING_FOR_YOU.label, ink: WAITING_FOR_YOU.tone },
     side: { text: when(clock, run.startedAt), ink: "plain" },
     title: run.label,
-    href: runPath(run.project, run.run),
+    href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [run.project, byText(run.who), run.questions.length === 0 ? null : plural(run.questions.length, "question")].filter((part) => part !== null),
     questions: run.questions.map((text, index) => ({ text, command: answerCommand(run.run, index + 1, run.project) })),
     actions: [{ text: "History", href: historyHref(run) }],
@@ -275,12 +276,12 @@ function asksCard(clock: Clock, readRun: ReadRun, run: ActivityRun): Card {
     word: { text: ASKS_YOU.label, ink: ASKS_YOU.tone },
     side: { text: when(clock, run.endedAt ?? run.startedAt), ink: "plain" },
     title: run.label,
-    href: runPath(run.project, run.run),
+    href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [run.project, byText(run.who), plural(count, "question")],
     meta2: result === null ? null : result.summary,
     ask: { questions: result === null ? [] : result.questions, command: decideCommand(run.run, run.project) },
     actions: [
-      { text: "Open the run", href: runPath(run.project, run.run) },
+      { text: "Open the run", href: href({ to: "run", ws: run.project, run: run.run }) },
       { text: "History", href: historyHref(run) },
     ],
   };
@@ -330,13 +331,13 @@ function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: Ac
     word: { text: badge.label, ink: badge.tone },
     side: { text: when(clock, run.startedAt), ink: "plain" },
     title: state.ritual.title,
-    href: runPath(run.project, run.run),
+    href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [state.project, byText(run.who), tookText(run)].filter((part) => part !== null),
     meta2: seenText(run, clock),
     ...report,
     actions: [
-      { text: run.findingsSha === null ? "Open the run" : "Read the report", href: runPath(run.project, run.run) },
-      { text: "History", href: ritualPath(state.project, state.ritual.slug) },
+      { text: run.findingsSha === null ? "Open the run" : "Read the report", href: href({ to: "run", ws: run.project, run: run.run }) },
+      { text: "History", href: href({ to: "ritual", ws: state.project, slug: state.ritual.slug }) },
     ],
   };
 }
@@ -348,10 +349,10 @@ function stuckCard(clock: Clock, run: ActivityRun, stuck: string): Card {
     word: { text: RUNNING.label, ink: RUNNING.tone },
     side: { text: `stuck, ${stuck}`, ink: "late" },
     title: run.label,
-    href: runPath(run.project, run.run),
+    href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [run.project, byText(run.who), `started ${startedText(clock, run.startedAt)}`],
     actions: [
-      { text: "Open the run", href: runPath(run.project, run.run) },
+      { text: "Open the run", href: href({ to: "run", ws: run.project, run: run.run }) },
       { text: "History", href: historyHref(run) },
     ],
   };
@@ -370,10 +371,10 @@ function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs
     edge: "bad",
     word: { text: FLAGGED.label, ink: FLAGGED.tone },
     title: vigil.title,
-    href: vigilPath(project.name, vigil.slug),
+    href: href({ to: "vigil", ws: project.name, slug: vigil.slug }),
     meta,
     meta2: check === undefined ? null : `A new check is running, ${byText(check.who)}, ${roughDuration(size)} so far.${stuckFor(check, generatedAt) === null ? "" : " It may be stuck."}`,
-    actions: [{ text: "Open the vigil", href: vigilPath(project.name, vigil.slug) }],
+    actions: [{ text: "Open the vigil", href: href({ to: "vigil", ws: project.name, slug: vigil.slug }) }],
   };
 }
 
@@ -383,10 +384,10 @@ function unreadableCard(project: ProjectStatus): Card {
     edge: "bad",
     word: { text: "Unreadable", ink: "bad" },
     title: project.name,
-    href: workspacePath(project.name),
+    href: href({ to: "overview", ws: project.name }),
     meta: ["darius could not read this project"],
     error: project.error,
-    actions: [{ text: "Open the workspace", href: workspacePath(project.name) }],
+    actions: [{ text: "Open the workspace", href: href({ to: "overview", ws: project.name }) }],
   };
 }
 
@@ -528,13 +529,13 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
  */
 function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null, findings: number): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
-  const findingsHref = workspace === null ? "/findings" : `/findings?project=${encodeURIComponent(workspace)}`;
+  const findingsHref = href({ to: "section", ws: workspace, section: "findings" });
   const findingsSegment: Segment[] = findings === 0 ? [] : [{ key: "findings", label: "findings", count: findings, tone: "wait", href: findingsHref, live: false, kind: null }];
   const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true, kind: null }];
   const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
   const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), live: false, kind: null }];
   const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: groupHref(agenda, "today", workspace), live: false, kind: null }];
-  const armedHref = `${sectionPath(workspace, "vigils")}#${agenda.waiting.length === 0 ? "coming-up" : "waiting"}`;
+  const armedHref = `${href({ to: "section", ws: workspace, section: "vigils" })}#${agenda.waiting.length === 0 ? "coming-up" : "waiting"}`;
   const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false, kind: "vigil" }];
   return [
     ...needSegment,
@@ -554,7 +555,7 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, wo
 function groupHref(agenda: Agenda, kind: "overdue" | "today", workspace: string | null): string {
   const rows = agenda.groups.find((group) => group.kind === kind)?.rows ?? [];
   const section = rows.some((row) => row.kind === "ritual") ? "rituals" : "vigils";
-  return `${sectionPath(workspace, section)}#coming-up`;
+  return `${href({ to: "section", ws: workspace, section: section })}#coming-up`;
 }
 
 function newest(left: ActivityRun, right: ActivityRun): number {
@@ -562,7 +563,7 @@ function newest(left: ActivityRun, right: ActivityRun): number {
 }
 
 function nowRun(run: ActivityRun): NowRun {
-  return { id: run.run, title: run.label, project: run.project, href: runPath(run.project, run.run), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual };
+  return { id: run.run, title: run.label, project: run.project, href: href({ to: "run", ws: run.project, run: run.run }), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual };
 }
 
 /** What an Overview covers: one workspace (whatever it is), or all of them without the self-test one unless it is shown. */
@@ -628,8 +629,8 @@ export function selftestLines(status: HostStatus): SelftestLine[] {
   return status.projects
     .filter((project) => isSelftest(project.name))
     .map((project) => {
-      const href = workspacePath(project.name);
-      if (project.error !== null) return { text: `Self-test: darius could not read ${project.name}.`, href };
+      const link = href({ to: "overview", ws: project.name });
+      if (project.error !== null) return { text: `Self-test: darius could not read ${project.name}.`, href: link };
       const last = project.runs.find((run) => run.who !== "import");
       const slug = last === undefined ? null : (last.item.split("/")[1] ?? last.item);
       const ran = (() => {
@@ -638,6 +639,6 @@ export function selftestLines(status: HostStatus): SelftestLine[] {
         return `${slug} ${runState(last).label.toLowerCase()}, started ${whenPhrase(clock, last.startedAt)}.`;
       })();
       const flagged = project.vigils.filter((vigil) => vigil.flagged).length;
-      return { text: `Self-test: ${ran} ${flagged === 0 ? "Nothing flagged." : `${plural(flagged, "vigil")} flagged.`}`, href };
+      return { text: `Self-test: ${ran} ${flagged === 0 ? "Nothing flagged." : `${plural(flagged, "vigil")} flagged.`}`, href: link };
     });
 }

@@ -320,11 +320,12 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 }
 
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["/", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
-  ["/findings", ["Findings", "Findings that need you of every project, worst first.", "needs you (2)", "open (4)", "all (6)", "Broken &lt;script&gt;alert(1)&lt;/script&gt; link", "Tax rate missing", "needs code", "reopened", `/p/demo/runs/${DONE}`, "Detail and history", "Close"]],
+  ["/all", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
+  ["/findings", ["Findings", "Findings that need you of every project, worst first.", "needs you (2)", "open (4)", "all (6)", "Broken &lt;script&gt;alert(1)&lt;/script&gt; link", "Tax rate missing", "needs code", "reopened", `/w/demo/runs/${DONE}`, "Detail and history", "Close"]],
   ["/w/demo/findings", ["Findings", "Findings that need you in demo, worst first.", "Tax rate missing"]],
-  ["/runs", ["Runs", `/p/demo/runs/${DONE}`, `/p/demo/runs/${FAILED}`, "Failed", "Complete"]],
-  ["/runs?project=demo&state=failed", [`/p/demo/runs/${FAILED}`]],
+  ["/runs", ["Runs", `/w/demo/runs/${DONE}`, `/w/demo/runs/${FAILED}`, "Failed", "Complete"]],
+  ["/w/demo/runs?state=failed", [`/w/demo/runs/${FAILED}`]],
+  ["/w/demo/runs", ["Runs", `/w/demo/runs/${DONE}`, "All runs in demo, newest first."]],
   ["/w/demo/milestones", ["Milestones", "In progress", "M7", "7 of 10 checks done", "<details", "M7/01", "6 of 6 checks", "M7/02", "Waiting", "depends on M7/01", "target 10 Sep, past", "3 archived", "Cart &lt;script&gt;alert(1)&lt;/script&gt; survives", 'href="/w/demo/milestones/M7"']],
   [
     "/w/demo/milestones/M7",
@@ -357,20 +358,20 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/milestones", ["demo", "/w/demo/milestones", "M7/02", "3 archived"]],
   ["/profiles", ["careful", "opus", "headless"]],
   ["/all", ["Two things need you.", "Needs you", "Guard soak"]],
-  ["/w/demo", ["/home/test/demo", "/p/demo/rituals/daily-report", "Latest reports", "Recent runs", "synced"]],
+  ["/w/demo", ["/home/test/demo", "/w/demo/rituals/daily-report", "Latest reports", "Recent runs", "synced"]],
   ["/vigils", ["Vigils", "Coming up", "Guard soak", "last check failed", "/w/demo/vigils#vigil-soak"]],
   ["/w/demo/vigils", ["Vigils", "Guard soak", "last check failed"]],
-  ["/rituals", ["Rituals", "Coming up", "/p/demo/rituals/daily-report", "Recent runs", "All runs"]],
-  ["/w/demo/rituals", ["Rituals", "/p/demo/rituals/daily-report", "/runs?project=demo"]],
+  ["/rituals", ["Rituals", "Coming up", "/w/demo/rituals/daily-report", "Recent runs", "All runs"]],
+  ["/w/demo/rituals", ["Rituals", "/w/demo/rituals/daily-report", "/w/demo/runs"]],
   ["/milestones", ["Milestones"]],
   ["/w/demo/milestones", ["Milestones"]],
   ["/settings", ["Settings", "Appearance"]],
   ["/settings/notifications", ["Settings", "Notifications"]],
   ["/settings/backups", ["Settings", "Backups", "Back up now"]],
   ["/settings/about", ["Settings", "About", "testhost"]],
-  ["/p/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
-  [`/p/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
-  [`/p/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
+  ["/w/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
+  [`/w/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
+  [`/w/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
 ];
 
 test("every page renders with the nonce on each script and store text as text", async () => {
@@ -382,9 +383,9 @@ test("every page renders with the nonce on each script and store text as text", 
     assertScriptsCarryNonce(page.body, path);
     assert.equal(page.body.includes(EVIL), false, `${path}: store text never becomes a script`);
   }
-  const run = await get(`/p/demo/runs/${DONE}`);
+  const run = await get(`/w/demo/runs/${DONE}`);
   assert.ok(run.body.includes("store text &lt;script&gt;alert(1)&lt;/script&gt; &amp; more"), "escaped findings");
-  const overview = await get("/");
+  const overview = await get("/all");
   assert.ok(overview.body.includes("may I push &lt;script&gt;alert(1)&lt;/script&gt;?"), "escaped question");
 });
 
@@ -397,8 +398,8 @@ test("milestone detail: a short spec starts open, a long one folded; worklogs st
 
 test("the run filter keeps only matching runs", async () => {
   const page = await get("/runs?state=held");
-  assert.ok(page.body.includes(`/p/demo/runs/${HELD}`));
-  assert.equal(page.body.includes(`/p/demo/runs/${DONE}`), false);
+  assert.ok(page.body.includes(`/w/demo/runs/${HELD}`));
+  assert.equal(page.body.includes(`/w/demo/runs/${DONE}`), false);
 });
 
 test("the home page shows a manual ritual as a late row of Coming up, and never imported runs", async () => {
@@ -406,7 +407,7 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 4, nextDue: "2026-09-24" };
   const imported = { ...RUNS[2]!, run: "01KDDDDDDDDDDDDDDDDDDDDDDD", item: "ritual/by-hand", who: "import" };
   const busy: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [...project.rituals, manual], runs: [...project.runs, imported] }] };
-  const response = await handler(new Request("http://darius.test/"), { ...context, status: () => busy });
+  const response = await handler(new Request("http://darius.test/all"), { ...context, status: () => busy });
   const body = await response.text();
   assert.equal(body.includes("<article id=\"done-demo-by-hand"), false, "no card for a manual ritual");
   assert.equal(body.includes(imported.run), false, "no imported run");
@@ -424,7 +425,7 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
 test("the ritual page of a repo ritual shows where git defines it, the schedule and the warnings, and points edits to git", async () => {
   const repo = { ...RITUAL.row, mode: "off", heldRun: null, source: "repo" as const, defCommit: "abcdef123456", defHost: "host-a", defAt: "2026-09-28T07:00:00.000Z", defDirty: true, at: "07:00", zone: "Europe/Berlin", args: "--site acme", timeout: "30m", nextDueAt: "2026-09-29T05:00:00.000Z", warnings: ["mirror is from host-b, this checkout differs: darius ritual reconcile"] };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: repo } : null) };
-  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
+  const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   const text = page.replaceAll(/<[^>]+>/gu, "");
   assert.ok(text.includes("Defined in .darius.toml at commit abcdef123456, host host-a"), "the source line");
   assert.ok(text.includes("(uncommitted changes)"), "dirty");
@@ -434,12 +435,12 @@ test("the ritual page of a repo ritual shows where git defines it, the schedule 
   assert.ok(text.includes("set mode = ") && text.includes("in .darius.toml and commit"), "the off notice points to git");
   assert.equal(text.includes("darius ritual set daily-report --mode"), false, "no edit command for a git-owned field");
   const unmanaged = { ...RITUAL.row, source: "unmanaged" as const };
-  const other = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), { ...context, ritual: () => ({ ...RITUAL, row: unmanaged }) })).text()).replaceAll("<!-- -->", "");
+  const other = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), { ...context, ritual: () => ({ ...RITUAL, row: unmanaged }) })).text()).replaceAll("<!-- -->", "");
   assert.ok(other.includes("Not in .darius.toml"), "unmanaged");
 });
 
 test("unknown projects, rituals, runs and paths answer a themed 404", async () => {
-  for (const path of ["/w/ghost", "/w/ghost/vigils", "/w/ghost/rituals", "/w/ghost/milestones", "/w/ghost/milestones/M7", "/w/demo/milestones/M99", "/w/demo/milestones/..%2FM7", "/p/demo/rituals/nope", "/p/ghost/rituals/daily-report", "/p/demo/runs/NOPE", "/nowhere", "/p/demo/runs"]) {
+  for (const path of ["/w/ghost", "/w/ghost/vigils", "/w/ghost/rituals", "/w/ghost/milestones", "/w/ghost/milestones/M7", "/w/demo/milestones/M99", "/w/demo/milestones/..%2FM7", "/w/demo/rituals/nope", "/w/ghost/rituals/daily-report", "/w/demo/runs/NOPE", "/w/ghost/runs", "/nowhere", "/p/demo/runs"]) {
     const page = await get(path);
     assert.equal(page.status, 404, path);
     assert.ok(page.body.includes("Nothing here"), path);
@@ -447,10 +448,10 @@ test("unknown projects, rituals, runs and paths answer a themed 404", async () =
   }
 });
 
-test("the 0.9 run URL redirects to the project run page", async () => {
+test("the 0.9 run URL redirects to the workspace run page", async () => {
   const response = await handler(new Request(`http://darius.test/runs/demo/${DONE}`), context);
   assert.equal(response.status, 301);
-  assert.equal(response.headers.get("location"), `/p/demo/runs/${DONE}`);
+  assert.equal(response.headers.get("location"), `/w/demo/runs/${DONE}`);
 });
 
 test("client navigation fetches route data from the same handler", async () => {
@@ -501,26 +502,26 @@ test("a run open far past the run timeout shows as possibly stuck, against the s
     },
   };
   const read = async (path: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), busyContext)).text()).replaceAll("<!-- -->", "");
-  const page = await read(`/p/demo/runs/${STUCK}`);
+  const page = await read(`/w/demo/runs/${STUCK}`);
   assert.ok(page.includes("Running for 12 h. Runs stop after 20 min, so this one may be stuck."), "the warning line");
   assert.ok(page.includes("May be stuck"), "the warning state");
-  const young = await read(`/p/demo/runs/${FRESH}`);
+  const young = await read(`/w/demo/runs/${FRESH}`);
   assert.equal(young.includes("may be stuck"), false, "a run half an hour old is just running");
-  const home = await read("/");
+  const home = await read("/all");
   const needs = home.slice(home.indexOf("Needs you"), home.indexOf('id="now"'));
   const nowRows = home.slice(home.indexOf('id="now"'), home.indexOf("<aside"));
-  assert.match(nowRows, new RegExp(`/p/demo/runs/${FRESH}`, "u"), "Now lists the fresh run");
+  assert.match(nowRows, new RegExp(`/w/demo/runs/${FRESH}`, "u"), "Now lists the fresh run");
   assert.doesNotMatch(nowRows, new RegExp(STUCK, "u"), "the stuck run has its card in Needs you, not a row in Now");
-  assert.match(needs, new RegExp(`id="stuck-${STUCK}".*href="/p/demo/runs/${STUCK}".*stuck, 12 h`, "su"), "a Needs you card that opens the run");
+  assert.match(needs, new RegExp(`id="stuck-${STUCK}".*href="/w/demo/runs/${STUCK}".*stuck, 12 h`, "su"), "a Needs you card that opens the run");
   assert.doesNotMatch(needs, new RegExp(FRESH, "u"), "none for the fresh run");
   assert.ok(home.includes("Three things need you."), "held, stuck and flagged count");
 });
 
 test("the run page title: the report heading for a complete run, the ritual title otherwise", async () => {
-  const done = await get(`/p/demo/runs/${DONE}`);
+  const done = await get(`/w/demo/runs/${DONE}`);
   assert.equal(h1Of(done.body), "Findings heading");
   for (const run of [FAILED, HELD]) {
-    const page = await get(`/p/demo/runs/${run}`);
+    const page = await get(`/w/demo/runs/${run}`);
     assert.equal(h1Of(page.body), "Daily &lt;script&gt;alert(1)&lt;/script&gt; report", run);
   }
 });
@@ -529,7 +530,7 @@ test("the switcher counts the things that need you, like the verdict: not questi
   const page = await get("/w/demo");
   assert.ok(page.body.includes("2 needs you") || page.body.includes("2 need you"), "the workspace entry names the number");
   assert.match(page.body, /<span class="sw-need">2 need you<\/span>/u, "All workspaces says 2 need you");
-  assert.equal(h1Of((await get("/")).body), "Two things need you.", "the same number as the verdict");
+  assert.equal(h1Of((await get("/all")).body), "Two things need you.", "the same number as the verdict");
 });
 
 /** The count of one segment of the home status strip, or null when the segment is absent. */
@@ -538,7 +539,7 @@ function segment(body: string, label: string): string | null {
 }
 
 test("the busy home page: the verdict in words, the status strip, one card per thing, the health line", async () => {
-  const body = (await get("/")).body.replaceAll("<!-- -->", "");
+  const body = (await get("/all")).body.replaceAll("<!-- -->", "");
   assert.equal(h1Of(body), "Two things need you.");
   assert.match(body, /<h1 class="verdict-h ink-bad">/u, "a flagged vigil makes the verdict red");
   assert.ok(body.includes('<a href="#needs" class="pill tone-wait">'), "the strip links the held card");
@@ -551,7 +552,7 @@ test("the busy home page: the verdict in words, the status strip, one card per t
   assert.equal(body.includes("Watch"), false, "no gauges");
   assert.equal(body.includes("Recent runs"), false, "the run list lives on /runs");
   assert.equal(body.match(/<article id="[a-z]+-/gu)?.length, 2, "one card per thing: the held run and the flagged vigil");
-  assert.equal(body.includes(`/p/demo/runs/${DONE}`), false, "an older run of a held djinn does not show");
+  assert.equal(body.includes(`/w/demo/runs/${DONE}`), false, "an older run of a held djinn does not show");
 });
 
 test("the quiet home page: Nothing needs you, the last night card, and the self-test as one footer line", async () => {
@@ -571,7 +572,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
       selftest,
     ],
   };
-  const body = (await (await handler(new Request("http://darius.test/"), { ...context, status: () => quiet })).text()).replaceAll("<!-- -->", "");
+  const body = (await (await handler(new Request("http://darius.test/all"), { ...context, status: () => quiet })).text()).replaceAll("<!-- -->", "");
   assert.equal(h1Of(body), "Nothing needs you.");
   assert.match(body, /<h1 class="verdict-h ink-ok">/u);
   assert.ok(body.includes('<p class="verdict-sub">Mon 28 Sep, 11:00</p>'), "the sub line is the host clock only");
@@ -611,23 +612,23 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   const read = async (path: string, ctx: WebContext): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), ctx)).text()).replaceAll("<!-- -->", "");
 
   const open = setup(null);
-  for (const path of [`/p/demo/runs/${FAILED}`, "/p/demo/rituals/daily-report"]) {
+  for (const path of [`/w/demo/runs/${FAILED}`, "/w/demo/rituals/daily-report"]) {
     const page = await read(path, open);
     assert.ok(page.includes("What happens next"), path);
     assert.ok(page.includes("This run failed. darius does not retry it today. The timer starts the ritual again when it is next due, tomorrow for a daily ritual."), path);
     assert.ok(page.includes("darius run now daily-report --project demo"), path);
     assert.ok(page.includes(`darius run ack ${FAILED} --project demo`), path);
   }
-  const done = await read(`/p/demo/runs/${DONE}`, open);
+  const done = await read(`/w/demo/runs/${DONE}`, open);
   assert.equal(done.includes("What happens next"), false, "a complete run has no next step");
   assert.match(await read("/w/demo", open), /id="reports".*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "the latest-report row shows an open failure in the failure colour, with a rail");
-  const needed = await read("/", open);
+  const needed = await read("/all", open);
   assert.equal(h1Of(needed), "One thing needs you.");
   assert.ok(needed.includes(`id="failed-demo-daily-report"`), "an open failure needs the operator");
   assert.match(comingOf(await read("/rituals", open)), /Tomorrow.*<li class="rw rw-rail tone-bad">.*<span class="rw-state tone-bad">Failed<\/span>/su, "Coming up puts the failed djinn tomorrow, in the failure colour");
 
   const seen = setup(ack);
-  for (const path of [`/p/demo/runs/${FAILED}`, "/p/demo/rituals/daily-report"]) {
+  for (const path of [`/w/demo/runs/${FAILED}`, "/w/demo/rituals/daily-report"]) {
     const page = await read(path, seen);
     assert.ok(page.includes("What happens next"), path);
     assert.ok(page.includes("Acknowledged by owner at 10:30: known &lt;script&gt;alert(1)&lt;/script&gt; outage."), path);
@@ -635,14 +636,14 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
     assert.equal(page.includes(EVIL), false, `${path}: the note stays text`);
   }
   // Every page shows an acknowledged failure quietly: grey "Failed, seen", never the failure colour.
-  for (const path of ["/", "/rituals", "/runs", "/w/demo", "/p/demo/rituals/daily-report", `/p/demo/runs/${FAILED}`]) {
+  for (const path of ["/all", "/rituals", "/runs", "/w/demo", "/w/demo/rituals/daily-report", `/w/demo/runs/${FAILED}`]) {
     const page = await read(path, seen);
     assert.match(page, /<span class="(?:status|rw-state) tone-idle">Failed, seen<\/span>/u, `${path}: the grey word`);
     for (const red of ["tone-bad", "edge-bad", "ink-bad"]) assert.equal(page.includes(red), false, `${path}: no ${red}`);
   }
   const card = await read("/w/demo", seen);
   assert.match(card, /id="reports".*<li class="rw">.*Failed, seen.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "the latest-report row is grey and has no rail, with the acknowledgement");
-  const home = await read("/", seen);
+  const home = await read("/all", seen);
   assert.equal(h1Of(home), "Nothing needs you.");
   const coming = comingOf(await read("/rituals", seen));
   assert.match(coming, /<li class="rw">.*<span class="rw-state tone-idle">Failed, seen<\/span>/su, "Coming up says so, in grey");
@@ -657,16 +658,16 @@ test("the ritual page says where a pinned ritual runs", async () => {
   const project = STATUS.projects[0]!;
   const pinned = { ...project.rituals[0]!, host: "host-b" };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: pinned } : null) };
-  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
+  const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   assert.ok(page.includes(`Runs on <code class="inline-code">host-b</code> only; the timer of any other host skips it.`));
-  assert.equal((await get("/p/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
+  assert.equal((await get("/w/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
 });
 
 test("a manual ritual reads \"manual ritual\" with the hand, has a note box with the way to automate it, and its instructions open", async () => {
   const project = STATUS.projects[0]!;
   const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 13, nextDue: "2026-09-15" };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "by-hand" ? { ...RITUAL, row: manual, policy: { ...RITUAL.policy, mode: "off" } } : null) };
-  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/by-hand"), ctx)).text()).replaceAll("<!-- -->", "");
+  const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/by-hand"), ctx)).text()).replaceAll("<!-- -->", "");
   assert.match(page, /<span class="kind-word c-manual"><svg class="kind-icon kind-manual"[^>]*>.*?<\/svg>manual ritual<\/span>/su, "one coloured word with the hand: manual ritual");
   assert.equal(page.includes("chip-x c-ritual"), false, "no kind chip boxes");
   assert.ok(page.includes('<span class="rw-state tone-late">13 days late</span>'), "the state word in the vocabulary");
@@ -675,7 +676,7 @@ test("a manual ritual reads \"manual ritual\" with the hand, has a note box with
   assert.ok(page.includes('<code class="inline-code">darius ritual set by-hand --mode report ...</code>'), "and the way to let darius run it");
   assert.match(page, /<details class="fold scroll-mt-20" open=""><summary>Instructions<\/summary>/u, "Instructions are open for a ritual done by hand");
   assert.match(page, /<details class="fold scroll-mt-20"><summary>Rules/u, "Rules stay closed");
-  const auto = (await get("/p/demo/rituals/daily-report")).body;
+  const auto = (await get("/w/demo/rituals/daily-report")).body;
   assert.ok(auto.includes('<span class="kind-word c-ritual">'), "an automatic ritual reads ritual");
   assert.equal(auto.includes("c-manual"), false, "and has no manual mark");
   assert.match(auto, /<details class="fold scroll-mt-20"><summary>Instructions/u, "its instructions stay closed");
@@ -691,12 +692,12 @@ test("the ritual page shows the note for the next run, with the operator's answe
     operator: { who: "owner", at: "2026-09-30T11:00:00.000Z", note: "yes, delete it" },
   };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
-  const page = (await (await handler(new Request("http://darius.test/p/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
+  const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   assert.ok(page.includes("Note for the next run"));
   assert.ok(page.includes("<p>Check post 7 again.</p>"));
   assert.ok(page.includes("Your answer, owner: yes, delete it"));
-  assert.ok(page.includes(`href="/p/demo/runs/${from}"`), "the card links the run that left the note");
-  assert.equal((await get("/p/demo/rituals/daily-report")).body.includes("Note for the next run"), false, "no handoff, no card");
+  assert.ok(page.includes(`href="/w/demo/runs/${from}"`), "the card links the run that left the note");
+  assert.equal((await get("/w/demo/rituals/daily-report")).body.includes("Note for the next run"), false, "no handoff, no card");
 });
 
 // --- run results (0.22.0) -------------------------------------------------------------
@@ -761,7 +762,7 @@ function textOf(html: string): string {
 
 test("a run with a result: the banner, tiles, the question with the ack command, grouped items and actions, above the report", async () => {
   const ctx = asksContext(null);
-  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   assert.equal(page.includes(EVIL), false, "result text never becomes a script");
   assert.equal(h1Of(page), "Findings heading", "the report heading stays the title");
   assert.ok(page.includes('<span class="rw-state tone-wait">Asks you</span>'), "the run state asks");
@@ -796,7 +797,7 @@ test("a run with a result: the banner, tiles, the question with the ack command,
   assert.ok(actions.includes("Removed the link from the price table") && actions.includes("site-a post 1039886") && actions.includes("done") && actions.includes("skipped"));
   assertScriptsCarryNonce(page, "run page with a result");
 
-  const calm = await readPage(`/p/demo/runs/${DONE}`, ctx);
+  const calm = await readPage(`/w/demo/runs/${DONE}`, ctx);
   assert.equal(calm.includes('<h2 class="label">Result</h2>'), false, "no result, no panel");
 });
 
@@ -831,7 +832,7 @@ function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: str
 
 test("a question's command lines show as written, and the follow-up card offers a button on this host", async () => {
   const ctx = followUpContext({ ready: true, host: "host-a", profile: "opus-skip", questions: [{ n: 1, commands: [COMMAND, "git push origin main"] }] });
-  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   assert.deepEqual(ctx.calls, [`demo/${ASKS}`]);
   assert.ok(page.includes("A yes runs, as written:"));
   assert.ok(page.includes("pnpm -C tools cli fc --post 12 --confirm &#x27;site &lt;b&gt;a&lt;/b&gt;&#x27;\ngit push origin main"), "the lines verbatim, as text");
@@ -849,19 +850,19 @@ test("a question's command lines show as written, and the follow-up card offers 
 
 test("the follow-up card says why it is off and gives the command; a run without commands asks nothing", async () => {
   const ctx = followUpContext({ ready: false, host: "host-a", reason: "gated profile: profile x has permissions gated" });
-  const card = textOf(await readPage(`/p/demo/runs/${ASKS}`, ctx));
+  const card = textOf(await readPage(`/w/demo/runs/${ASKS}`, ctx));
   assert.match(card, /off A follow-up cannot start from this page: gated profile: profile x has permissions gated/u);
   assert.ok(card.includes(`darius run follow-up ${ASKS} --approve 1 --project demo`));
   assert.equal(card.includes("Start follow-up on"), false);
   const plain = { ...asksContext(null), followUp: () => assert.fail("no readiness check without commands") };
-  const page = await readPage(`/p/demo/runs/${ASKS}`, plain);
+  const page = await readPage(`/w/demo/runs/${ASKS}`, plain);
   assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false);
 });
 
 test("on a host without the checkout the follow-up card names the right host and gives the ssh command to copy (0.50.0)", async () => {
   const command = `ssh host-b darius run follow-up ${ASKS} --approve 1 --project demo`;
   const ctx = followUpContext({ ready: false, host: "host-a", reason: `runs on host-b; open this page on host-b, or: ${command}`, rightHost: "host-b", command });
-  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   const card = textOf(page);
   assert.match(card, /off This ritual runs on host-b\. Open this page on host-b, or run:/u);
   assert.ok(card.includes(command), "the ssh command, in a copy box");
@@ -871,34 +872,34 @@ test("on a host without the checkout the follow-up card names the right host and
 
 test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
   const off: FollowUpReadiness = { ready: false, host: "host-a", reason: "x" };
-  const child = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT }));
-  assert.match(child, new RegExp(`follows up <a[^>]*href="/p/demo/runs/${PARENT}"[^>]*>run ${PARENT.slice(-8)}</a>`, "u"));
-  const parent = await readPage(`/p/demo/runs/${ASKS}`, followUpContext(off, { followUps: [CHILD] }));
+  const child = await readPage(`/w/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT }));
+  assert.match(child, new RegExp(`follows up <a[^>]*href="/w/demo/runs/${PARENT}"[^>]*>run ${PARENT.slice(-8)}</a>`, "u"));
+  const parent = await readPage(`/w/demo/runs/${ASKS}`, followUpContext(off, { followUps: [CHILD] }));
   assert.match(textOf(parent), new RegExp(`Follow-ups${CHILD.slice(-8)}`, "u"));
-  assert.ok(parent.includes(`href="/p/demo/runs/${CHILD}"`));
+  assert.ok(parent.includes(`href="/w/demo/runs/${CHILD}"`));
 });
 
 test("the run page shows the skill hash, 12 characters with the full value in the title, and no row without one", async () => {
   const hash = "0123456789abcdef".repeat(4);
   const withHash: WebContext = { ...context, run: (name, run) => (name === "demo" && run === DONE ? { ...runDetail(RUNS[2]!), skillHash: hash } : null) };
-  const shown = await readPage(`/p/demo/runs/${DONE}`, withHash);
+  const shown = await readPage(`/w/demo/runs/${DONE}`, withHash);
   assert.ok(shown.includes(`<code title="${hash}">${hash.slice(0, 12)}</code>`), "short code, full title");
   assert.match(textOf(shown), /Skill hash0123456789ab/u);
   const bare: WebContext = { ...context, run: (name, run) => (name === "demo" && run === DONE ? runDetail(RUNS[2]!) : null) };
-  assert.equal((await readPage(`/p/demo/runs/${DONE}`, bare)).includes("Skill hash"), false);
+  assert.equal((await readPage(`/w/demo/runs/${DONE}`, bare)).includes("Skill hash"), false);
 });
 
 test("a result without questions shows no question card and no ack command", async () => {
   const quiet: RunResult = { ...RESULT, status: "ok", questions: [], items: [], actions: [], metrics: [] };
   const ctx: WebContext = { ...context, run: (name, run) => (name === "demo" && run === DONE ? runDetail(RUNS[2]!, quiet) : null) };
-  const page = await readPage(`/p/demo/runs/${DONE}`, ctx);
+  const page = await readPage(`/w/demo/runs/${DONE}`, ctx);
   assert.match(page, /<div class="card card-accent result-banner edge-ok"><span class="status tone-ok">.*?Result ok<\/span>/su);
   for (const absent of ["Questions for you", "What it found", "What it changed", "darius run ack"]) assert.equal(page.includes(absent), false, absent);
 });
 
 test("a run that asks: an Asks you card on home, tags in the lists, and no page calls it complete", async () => {
   const ctx = asksContext(null);
-  const home = await readPage("/", ctx);
+  const home = await readPage("/all", ctx);
   assert.equal(h1Of(home), "One thing needs you.");
   assert.match(home, /<h1 class="verdict-h ink-wait">/u, "the waiting tone");
   assert.ok(home.includes('<a href="#needs" class="pill tone-wait">') && home.includes(`<article id="asks-${ASKS}"`), "the strip links the Needs you section, which holds the card");
@@ -906,7 +907,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   const card = between(home, cardAt, home.indexOf("</article>", cardAt));
   assert.ok(card.includes("card-accent edge-wait"), "a waiting edge");
   assert.ok(card.includes("Asks you"));
-  assert.ok(card.includes(`href="/p/demo/runs/${ASKS}"`), "it opens the run");
+  assert.ok(card.includes(`href="/w/demo/runs/${ASKS}"`), "it opens the run");
   assert.ok(card.includes("Daily &lt;script&gt;alert(1)&lt;/script&gt; report"), "the ritual label");
   assert.ok(card.includes("demo, by timer, 1 question"), "the question count");
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
@@ -920,7 +921,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(runs.includes('<span class="chip-x c-wait">1 question</span>'), "the question, waiting");
   assert.equal(runs.includes("critical open"), false, "no critical item is open");
 
-  const ritual = await readPage("/p/demo/rituals/daily-report", ctx);
+  const ritual = await readPage("/w/demo/rituals/daily-report", ctx);
   assert.ok(ritual.includes('<h2 class="label">Needs you</h2>'), "the ritual page leads with the question");
   assert.ok(ritual.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.ok(ritual.includes('<div class="card card-accent edge-wait">'), "the latest report card waits");
@@ -932,14 +933,14 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
 
 test("an answered result: the decision replaces the command, home is quiet, the tag says answered", async () => {
   const ctx = asksContext({ at: "2026-09-28T08:30:00.000Z", who: "owner", note: `yes, delete ${EVIL}` });
-  const page = await readPage(`/p/demo/runs/${ASKS}`, ctx);
+  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   assert.ok(page.includes("Answered by owner at 10:30: yes, delete &lt;script&gt;alert(1)&lt;/script&gt;."), "who, when and the decision");
   assert.equal(page.includes("darius run ack"), false, "no command once answered");
   assert.ok(page.includes("card card-accent next edge-idle"), "the question card is quiet");
   assert.ok(page.includes("Complete</span>"), "the run is complete again");
   assert.equal(page.includes(EVIL), false);
 
-  const home = await readPage("/", ctx);
+  const home = await readPage("/all", ctx);
   assert.equal(h1Of(home), "Nothing needs you.");
   assert.equal(home.includes(`id="asks-`), false);
   assert.match(home, /Last night.*<li id="done-demo-daily-report" class="rw">.*Answered by owner at 10:30/su, "a plain Last night row with the decision");
@@ -960,7 +961,7 @@ test("the app can be installed and get push notices: manifest, icons, service wo
   const worker = readFileSync(join(client, "sw.js"), "utf8");
   for (const event of ["push", "notificationclick"]) assert.match(worker, new RegExp(`addEventListener\\("${event}"`, "u"), event);
   assert.doesNotMatch(worker, /addEventListener\("fetch"/u, "no fetch handler: the page is never served from a cache");
-  const home = await readPage("/", context);
+  const home = await readPage("/all", context);
   assert.match(home, /<link [^>]*rel="manifest" href="\/manifest.webmanifest"/u);
   assert.match(home, /<link [^>]*rel="apple-touch-icon" href="\/apple-touch-icon.png"/u);
 });
@@ -980,7 +981,7 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
     assert.ok(waiting.includes("Event soak") && waiting.includes("the first deploy &lt;script&gt;"), `${path}: the event vigil waits, as text`);
     assert.equal(waiting.includes(EVIL), false, `${path}: store text stays text`);
   }
-  assert.match(await read("/"), /<a [^>]*href="\/vigils#waiting"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
+  assert.match(await read("/all"), /<a [^>]*href="\/vigils#waiting"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
 });
 
 // --- the information architecture (0.39.0): scopes, tabs, the switcher, settings -------------
@@ -1002,14 +1003,36 @@ function threeWorkspaces(): HostStatus {
   return { ...STATUS, projects: [demo, other, selftest] };
 }
 
-test("/p/<project> redirects to the workspace Overview, and the detail pages keep their addresses", async () => {
-  const response = await handler(new Request("http://darius.test/p/demo"), context);
-  assert.equal(response.status, 301);
-  assert.equal(response.headers.get("location"), "/w/demo");
-  const ghost = await handler(new Request("http://darius.test/p/ghost"), context);
-  assert.equal(ghost.headers.get("location"), "/w/ghost", "the redirect does not look the workspace up; the new address answers 404");
+/** The status and the location of a request that is not followed. */
+async function redirectOf(path: string): Promise<[number, string | null]> {
+  const response = await handler(new Request(`http://darius.test${path}`), context);
+  return [response.status, response.headers.get("location")];
+}
+
+test("the old addresses redirect with a 301 to the workspace forms; the query stays", async () => {
+  assert.deepEqual(await redirectOf("/p/demo"), [301, "/w/demo"]);
+  assert.deepEqual(await redirectOf("/p/ghost"), [301, "/w/ghost"], "the redirect does not look the workspace up; the new address answers 404");
+  assert.deepEqual(await redirectOf("/p/demo/rituals/daily-report"), [301, "/w/demo/rituals/daily-report"]);
+  assert.deepEqual(await redirectOf(`/p/demo/runs/${DONE}`), [301, `/w/demo/runs/${DONE}`]);
+  assert.deepEqual(await redirectOf(`/runs/demo/${DONE}`), [301, `/w/demo/runs/${DONE}`]);
+  assert.deepEqual(await redirectOf("/p/my%20project/rituals/a%20b"), [301, "/w/my%20project/rituals/a%20b"]);
+  assert.deepEqual(await redirectOf("/runs?project=demo"), [301, "/w/demo/runs"]);
+  assert.deepEqual(await redirectOf("/runs?project=demo&state=failed&imported=1"), [301, "/w/demo/runs?state=failed&imported=1"]);
+  assert.deepEqual(await redirectOf("/findings?project=demo"), [301, "/w/demo/findings"]);
+  assert.deepEqual(await redirectOf("/findings?project=demo&view=all&ritual=daily-report&severity=high"), [301, "/w/demo/findings?view=all&ritual=daily-report&severity=high"]);
+  assert.equal((await get("/runs?project=")).status, 200, "an empty project is no filter");
   assert.equal((await get("/w/ghost")).status, 404);
-  assert.equal((await get("/p/demo/rituals/daily-report")).status, 200);
+  assert.equal((await get("/w/demo/rituals/daily-report")).status, 200);
+});
+
+test("/ is a 302 to the default workspace, or to /all when there is none", async () => {
+  const status = threeWorkspaces();
+  const plain = await readWith("/", {}, status);
+  assert.deepEqual([plain.status, plain.location], [302, "/all"]);
+  const set = await readWith("/", { ws: "demo" }, status);
+  assert.deepEqual([set.status, set.location], [302, "/w/demo"]);
+  const ghost = await readWith("/", { ws: "gone" }, status);
+  assert.deepEqual([ghost.status, ghost.location], [302, "/all"], "a default that this host does not have is ignored");
 });
 
 /** The opening tag of the first link to an address, or null. */
@@ -1084,28 +1107,28 @@ test("showSelftest hides the self-test workspace from the switcher, the badges a
   assert.equal(off.body.includes("Self-test vigil"), false, "no row in the all-workspaces list");
   assert.equal(off.body.includes('<span class="sw-name">darius-selftest</span>'), false, "not in the switcher");
   assert.equal(off.body.includes("due today or late"), false, "not in the badge");
-  assert.equal(h1Of((await readWith("/", {}, status)).body), "Two things need you.", "not in the verdict");
-  assert.ok((await readWith("/", {}, status)).body.includes("Self-test:"), "the footer line stays");
+  assert.equal(h1Of((await readWith("/all", {}, status)).body), "Two things need you.", "not in the verdict");
+  assert.ok((await readWith("/all", {}, status)).body.includes("Self-test:"), "the footer line stays");
   const on = await readWith("/vigils", { selftest: "1" }, status);
   assert.ok(on.body.includes("Self-test vigil"), "the row shows");
   assert.ok(on.body.includes('<span class="sw-name">darius-selftest</span>'), "it is in the switcher");
   assert.match(on.body, /<span class="tab-bdg tone-wait" title="1 due today or late">/u, "it counts");
-  assert.equal(h1Of((await readWith("/", { selftest: "1" }, status)).body), "Three things need you.", "and needs you");
+  assert.equal(h1Of((await readWith("/all", { selftest: "1" }, status)).body), "Three things need you.", "and needs you");
   assert.equal((await readWith("/w/darius-selftest", {}, status)).status, 200, "its own address always works");
 });
 
-test("defaultWorkspace decides what / opens; /all is always all workspaces", async () => {
+test("/all is always all workspaces, whatever the default workspace is", async () => {
   const status = threeWorkspaces();
-  const plain = await readWith("/", {}, status);
+  const plain = await readWith("/all", {}, status);
   assert.match(plain.body, /<span class="sw-now">All workspaces<\/span>/u, "no default: all workspaces");
-  const set = await readWith("/", { ws: "demo" }, status);
+  const set = await readWith("/w/demo", { ws: "demo" }, status);
   assert.match(set.body, /<span class="sw-now">demo<\/span>/u, "the default workspace");
   assert.ok(set.body.includes("/home/test/demo"), "it is the workspace Overview, with its checkout");
-  assert.ok(linkTo(set.body, "/all") !== null, "all workspaces get an address of their own");
+  assert.ok(linkTo(set.body, "/all") !== null, "all workspaces have an address of their own");
   const all = await readWith("/all", { ws: "demo" }, status);
   assert.match(all.body, /<span class="sw-now">All workspaces<\/span>/u);
   assert.equal(h1Of(all.body), "Two things need you.");
-  const ghost = await readWith("/", { ws: "gone" }, status);
+  const ghost = await readWith("/all", { ws: "gone" }, status);
   assert.match(ghost.body, /<span class="sw-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
 });
 
@@ -1234,13 +1257,13 @@ test("the findings page: the view, project, ritual and severity filters, closed 
   assert.ok(all.body.includes("Closed by op"), "the fold says who closed it");
   const severe = await get("/findings?view=open&severity=critical");
   assert.ok(severe.body.includes("Tax rate missing") && !severe.body.includes("Old banner"));
-  const none = await get("/findings?project=demo&ritual=nothing");
+  const none = await get("/w/demo/findings?ritual=nothing");
   assert.ok(none.body.includes("No finding matches this filter."));
   const quiet = await handler(new Request("http://darius.test/findings"), { ...context, findings: () => Promise.resolve([]) });
   assert.ok((await quiet.text()).includes("Nothing needs you."));
-  const strip = (await get("/")).body.replaceAll("<!-- -->", "");
+  const strip = (await get("/all")).body.replaceAll("<!-- -->", "");
   assert.match(strip, /href="\/findings"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">findings<\/span>/su, "the status strip counts them and opens the page");
-  assert.match((await get("/w/demo")).body.replaceAll("<!-- -->", ""), /href="\/findings\?project=demo"/u);
+  assert.match((await get("/w/demo")).body.replaceAll("<!-- -->", ""), /href="\/w\/demo\/findings"/u);
   assert.ok((await get("/vigils")).body.includes('href="/findings"'), "the Findings tab");
 });
 
@@ -1254,7 +1277,7 @@ test("the run page shows an item's key and the needs-code state", async () => {
     questions: [],
     actions: [],
   };
-  const response = await handler(new Request(`http://darius.test/p/demo/runs/${DONE}`), { ...context, run: (project, run) => (project === "demo" && run === DONE ? runDetail(RUNS[2]!, result) : null) });
+  const response = await handler(new Request(`http://darius.test/w/demo/runs/${DONE}`), { ...context, run: (project, run) => (project === "demo" && run === DONE ? runDetail(RUNS[2]!, result) : null) });
   const body = (await response.text()).replaceAll("<!-- -->", "");
   assert.ok(body.includes("needs code") && body.includes("key link-12"));
 });
@@ -1277,9 +1300,38 @@ test("findings filter logic: views, narrowing, facet options, addresses and word
   assert.deepEqual(lib.facetOptions(FINDINGS, query, "severity"), ["critical", "high", "medium", "low"], "worst first, only those in the view");
   assert.deepEqual(lib.facetOptions(FINDINGS, read("severity=low"), "severity"), ["critical", "high", "low"], "a chosen value stays; the others come from the other filters");
   assert.deepEqual(lib.facetOptions(FINDINGS, read(""), "ritual"), ["daily-report"]);
-  assert.equal(lib.findingsHref("/findings", lib.DEFAULT_QUERY), "/findings");
-  assert.equal(lib.findingsHref("/w/demo/findings", { view: "open", project: "", ritual: "daily-report", severity: "high" }), "/w/demo/findings?view=open&ritual=daily-report&severity=high");
+  assert.equal(lib.findingsHref(null, lib.DEFAULT_QUERY), "/findings");
+  assert.equal(lib.findingsHref("demo", { view: "open", project: "", ritual: "daily-report", severity: "high" }), "/w/demo/findings?view=open&ritual=daily-report&severity=high");
   assert.equal(lib.filterText(read("view=open&project=demo&severity=high"), null), "Open findings in demo, severity high, worst first.");
   assert.equal(lib.filterText(read(""), "demo"), "Findings that need you in demo, worst first.");
   assert.deepEqual([lib.emptyText(read("")), lib.emptyText(read("view=open")), lib.emptyText(read("severity=low"))], ["Nothing needs you.", "No open findings.", "No finding matches this filter."]);
+});
+
+/** The opening tags of the links inside the `Filter` nav of a page, as [href, tag]. */
+function filterLinks(body: string): [string, string][] {
+  const from = body.indexOf('aria-label="Filter"');
+  const nav = body.slice(from, body.indexOf("</nav>", from));
+  return [...nav.matchAll(/<a\b[^>]*>/gu)].map((match): [string, string] => [/href="([^"]+)"/u.exec(match[0])?.[1] ?? "", match[0]]);
+}
+
+test("on the all-workspaces Findings and Runs pages the chip row is Workspace, and each chip changes scope", async () => {
+  const status = threeWorkspaces();
+  const atlas = status.projects[1]!;
+  const withAtlas: HostStatus = { ...status, projects: [status.projects[0]!, { ...atlas, runs: [{ ...RUNS[2]!, run: "01KHHHHHHHHHHHHHHHHHHHHHHH" }] }, status.projects[2]!] };
+  const ctx: WebContext = { ...context, status: () => withAtlas, findings: () => Promise.resolve([...FINDINGS, finding("atlas-1", { project: "atlas", severity: "high", status: "needs-you", state: "needs-code" })]) };
+  const read = async (path: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), ctx)).text()).replaceAll("<!-- -->", "");
+  const findings = await read("/findings?view=open");
+  assert.ok(findings.includes('aria-label="Workspace"') && !findings.includes('aria-label="Project"'), "the row is named Workspace");
+  const chips = new Set(filterLinks(findings).map(([link]) => link));
+  assert.ok(chips.has("/w/demo/findings?view=open") && chips.has("/w/atlas/findings?view=open"), "a chip opens the findings of that workspace, and keeps the view");
+  assert.ok(filterLinks(findings).some(([link, tag]) => link === "/findings?view=open" && tag.includes('aria-current="true"')), "all workspaces is the lit chip");
+  const workspace = await read("/w/atlas/findings");
+  assert.equal(workspace.includes('aria-label="Workspace"'), false, "a workspace page has no workspace row");
+  const runs = await read("/runs?state=failed");
+  assert.ok(runs.includes('aria-label="Workspace"') && !runs.includes('aria-label="Project"'));
+  const links = new Set(filterLinks(runs).map(([link]) => link));
+  assert.ok(links.has("/runs?state=failed") && links.has("/w/demo/runs?state=failed") && links.has("/w/atlas/runs?state=failed"), "the chips keep the state filter and change scope");
+  const one = await read("/w/atlas/runs");
+  assert.equal(one.includes('aria-label="Workspace"'), false, "no workspace row inside a workspace");
+  assert.ok(filterLinks(one).some(([link]) => link === "/w/atlas/runs?state=failed"), "the state chips stay in the workspace");
 });

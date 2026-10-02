@@ -12,6 +12,7 @@
  */
 
 import type { FindingRow, ResultSeverity } from "../../../src/web/api.ts";
+import { href } from "./paths.ts";
 
 export type FindingView = "needs-you" | "open" | "all";
 
@@ -91,15 +92,14 @@ export function facetOptions(rows: readonly FindingRow[], query: FindingQuery, f
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
-/** The address of a query on `base`; a default value is left out. */
-export function findingsHref(base: string, query: FindingQuery): string {
-  const params = new URLSearchParams();
-  if (query.view !== DEFAULT_QUERY.view) params.set("view", query.view);
-  if (query.project !== "") params.set("project", query.project);
-  if (query.ritual !== "") params.set("ritual", query.ritual);
-  if (query.severity !== "") params.set("severity", query.severity);
-  const text = params.toString();
-  return text === "" ? base : `${base}?${text}`;
+/** The address of a query on the Findings page of `ws` (null: all workspaces); a default value is left out. */
+export function findingsHref(ws: string | null, query: FindingQuery): string {
+  const extra: Record<string, string> = {};
+  if (query.view !== DEFAULT_QUERY.view) extra.view = query.view;
+  if (query.project !== "") extra.project = query.project;
+  if (query.ritual !== "") extra.ritual = query.ritual;
+  if (query.severity !== "") extra.severity = query.severity;
+  return href({ to: "section", ws, section: "findings", query: extra });
 }
 
 const VIEW_WORDS = new Map<FindingView, string>([

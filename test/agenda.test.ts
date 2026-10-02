@@ -126,7 +126,7 @@ test("the counts and the Next line: overdue first, then the first thing that is 
   assert.equal(agenda.overdue, 3, "two rituals and one dated vigil");
   assert.equal(agenda.dueToday, 3);
   assert.equal(agenda.next?.title, "due-djinn");
-  assert.deepEqual(nextLine(agenda, TODAY), { title: "due-djinn", href: "/p/shop/rituals/due-djinn", kind: "ritual", manual: false, when: "today", isToday: true });
+  assert.deepEqual(nextLine(agenda, TODAY), { title: "due-djinn", href: "/w/shop/rituals/due-djinn", kind: "ritual", manual: false, when: "today", isToday: true });
   const quiet = build([project("shop", [ritual("only", { nextDue: "2026-10-01" })])]);
   const tomorrow = nextLine(quiet, TODAY);
   assert.equal(tomorrow?.when, "tomorrow");

@@ -5,7 +5,8 @@ import { Link } from "react-router";
 
 import type { VigilRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
-import { duration, runPath } from "../lib/format.ts";
+import { duration } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import type { Kind } from "../lib/kind.ts";
 import { railOf } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
@@ -29,7 +30,7 @@ interface PillProps {
 }
 
 /** One count of the status strip. The whole segment is the link. */
-export function Pill({ label, value, tone, href, live = false, kind = null }: PillProps): React.ReactNode {
+export function Pill({ label, value, tone, href: target, live = false, kind = null }: PillProps): React.ReactNode {
   const on = value > 0;
   const className = `pill tone-${on ? tone : "idle"}`;
   const body = (
@@ -40,16 +41,16 @@ export function Pill({ label, value, tone, href, live = false, kind = null }: Pi
       <span className="pill-l">{label}</span>
     </>
   );
-  if (href === null) return <div className={className}>{body}</div>;
-  if (href.startsWith("#")) {
+  if (target === null) return <div className={className}>{body}</div>;
+  if (target.startsWith("#")) {
     return (
-      <a href={href} className={className}>
+      <a href={target} className={className}>
         {body}
       </a>
     );
   }
   return (
-    <Link to={href} className={className}>
+    <Link to={target} className={className}>
       {body}
     </Link>
   );
@@ -165,7 +166,7 @@ export function LivePanel({ live }: LivePanelProps): React.ReactNode {
                 key={run.run}
                 kind={run.kind}
                 manual={run.manual}
-                href={runPath(run.project, run.run)}
+                href={href({ to: "run", ws: run.project, run: run.run })}
                 title={run.label}
                 rail={stuck === null ? railOf(state) : "late"}
                 live={running}
