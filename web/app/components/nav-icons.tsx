@@ -1,7 +1,7 @@
 /**
- * The icons of the frame: the brand gem, the settings gear, the status pulse, the chevron and
- * check of the switcher, the two marks of its scopes, the milestone flag and the lock of a
- * setting the environment sets.
+ * The icons of the frame: the brand gem, the marks of Places (the settings gear, the status
+ * pulse, the profile, the overview house, the shield of a finding, the two marks of the scopes,
+ * the milestone flag), the chevron and check, and the lock of a setting the environment sets.
  * The eye and the two arrows of the vigil and ritual tabs are in `kind.tsx`.
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
  * from the text colour around them.
@@ -18,7 +18,9 @@ const PATHS = {
   all: ["M8 2L14.4 5.4L8 8.8L1.6 5.4Z", "M1.6 8.4L8 11.8L14.4 8.4", "M1.6 11.2L8 14.6L14.4 11.2"],
   status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],
   overview: ["M1.8 7.6L8 2.3L14.2 7.6", "M3.6 6.6V13.7H12.4V6.6", "M6.6 13.7V9.6H9.4V13.7"],
-  finding: ["M7 2.4A4.6 4.6 0 1 0 7 11.6A4.6 4.6 0 1 0 7 2.4Z", "M10.4 10.4L14 14"],
+  finding: ["M8 1.8L13 3.6V7.8C13 10.9 10.9 13.2 8 14.4C5.1 13.2 3 10.9 3 7.8V3.6Z", "M8 5.3V8.5", "M8 10.8H8.01"],
+  run: ["M5.2 3.2L12.6 8L5.2 12.8Z"],
+  profile: ["M8 2.6A2.6 2.6 0 1 0 8 7.8A2.6 2.6 0 1 0 8 2.6Z", "M2.8 14C3.2 11.2 5.2 9.8 8 9.8C10.8 9.8 12.8 11.2 13.2 14"],
   lock: ["M3.4 7.2H12.6V14.2H3.4Z", "M5.4 7.2V4.9A2.6 2.6 0 0 1 10.6 4.9V7.2"],
 } as const satisfies Record<string, readonly string[]>;
 

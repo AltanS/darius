@@ -526,10 +526,10 @@ test("the run page title: the report heading for a complete run, the ritual titl
   }
 });
 
-test("the switcher counts the things that need you, like the verdict: not questions", async () => {
+test("Places counts the things that need you, like the verdict: not questions", async () => {
   const page = await get("/w/demo");
   assert.ok(page.body.includes("2 needs you") || page.body.includes("2 need you"), "the workspace entry names the number");
-  assert.match(page.body, /<span class="sw-need">2 need you<\/span>/u, "All workspaces says 2 need you");
+  assert.match(page.body, /<span class="places-need">2 need you<\/span>/u, "All workspaces says 2 need you");
   assert.equal(h1Of((await get("/all")).body), "Two things need you.", "the same number as the verdict");
 });
 
@@ -555,7 +555,7 @@ test("the busy home page: the verdict in words, the status strip, one card per t
   assert.equal(body.includes(`/w/demo/runs/${DONE}`), false, "an older run of a held djinn does not show");
 });
 
-test("the quiet home page: Nothing needs you, the last night card, and the self-test as one footer line", async () => {
+test("the quiet home page: Nothing needs you, the last night card, and the self-test as one line in the host line of Places", async () => {
   const demo = STATUS.projects[0]!;
   const selftest = {
     ...demo,
@@ -584,7 +584,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.ok(body.includes("Findings heading"), "with its report excerpt");
   assert.equal(segment(body, "flagged"), null, "the self-test vigil does not count");
   assert.equal(segment(body, "need you"), null, "a zero segment does not render");
-  assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted footer line");
+  assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted line at the end of Places");
   assert.equal(body.includes("date failed"), false, "no card for the self-test vigil");
   const page = await (await handler(new Request("http://darius.test/w/darius-selftest"), { ...context, status: () => quiet })).text();
   assert.ok(page.includes("date failed") && page.includes("last check failed"), "its own Overview shows it in full");
@@ -914,7 +914,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
   assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
-  assert.match(home, /<span class="sw-need">1 needs you<\/span>/u, "the switcher counts the thing that needs you");
+  assert.match(home, /<span class="places-need">1 needs you<\/span>/u, "Places counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
   assert.ok(runs.includes('<span class="chip-x c-late">2 high open</span>'), "open high items");
@@ -984,7 +984,7 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
   assert.match(await read("/all"), /<a [^>]*href="\/vigils#waiting"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
 });
 
-// --- the information architecture (0.39.0): scopes, tabs, the switcher, settings -------------
+// --- the information architecture (0.39.0, reworked 0.63.0): scopes, Places, tabs, settings -------------
 
 const SETTINGS_COOKIE = "darius-settings";
 
@@ -1046,45 +1046,118 @@ function lateStatus(status: HostStatus = STATUS): HostStatus {
   return { ...status, projects: [{ ...demo!, rituals: [{ ...demo!.rituals[0]!, heldRun: null }] }, ...rest] };
 }
 
-test("the top bar has the gem, the switcher and the gear; the tabs are Vigils, Rituals, Findings, Milestones, in that order, and no Home or Runs link", async () => {
+/** The inside of the nav with an aria-label, or "" when the page has none. */
+function navOf(body: string, label: string): string {
+  const from = body.indexOf(`<nav aria-label="${label}"`);
+  return from === -1 ? "" : body.slice(from, body.indexOf("</nav>", from));
+}
+
+/** The opening tag of the row of a scope in Places (the brand and the Overview row go to the same address), or null. */
+function scopeRow(places: string, href: string): string | null {
+  return [...places.matchAll(/<a\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes("places-scope") && tag.includes(` href="${href}"`)) ?? null;
+}
+
+/** The addresses of the links in a piece of HTML, in order. */
+function hrefsOf(html: string): string[] {
+  return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => match[1] ?? "");
+}
+
+test("the frame: a drawer button naming the scope, Places, and five tabs: Overview, Vigils, Rituals, Findings, Milestones", async () => {
   const { body } = await readWith("/w/demo", {}, lateStatus());
-  assert.ok(linkTo(body, "/w/demo")?.includes('class="brand"'), "the gem opens the Overview of the scope");
-  assert.ok(linkTo(body, "/settings")?.includes('aria-label="Settings"'), "the gear opens Settings");
-  assert.match(body, /<span class="sw-now">demo<\/span>/u, "the switcher names the scope");
-  for (const nav of ["Sections", "Tabs"]) {
-    const from = body.indexOf(`aria-label="${nav}"`);
-    assert.ok(from !== -1, nav);
-    const links = [...body.slice(from, body.indexOf("</nav>", from)).matchAll(/href="([^"]+)"/gu)].map((match) => match[1]);
-    assert.deepEqual(links, ["/w/demo/vigils", "/w/demo/rituals", "/w/demo/findings", "/w/demo/milestones"], `${nav}: the four tabs in order`);
-  }
-  assert.equal(body.includes('aria-label="Main"'), false, "no Home and Runs links any more");
+  assert.match(body, /<details data-menu="true" class="drawer"><summary class="topbar">.*?<span class="topbar-cap">Workspace<\/span><span class="topbar-now">demo<\/span>/u, "the top bar is the drawer button");
+  assert.equal(body.includes("Sections"), false, "no section tabs under a top bar any more");
+  assert.equal(body.includes("<footer"), false, "no footer");
+  assert.equal(body.includes('class="gear'), false, "no gear in a bar");
+  const tabs = navOf(body, "Tabs");
+  assert.deepEqual(hrefsOf(tabs), ["/w/demo", "/w/demo/vigils", "/w/demo/rituals", "/w/demo/findings", "/w/demo/milestones"], "the five tabs in order, no Runs");
+  assert.ok(linkTo(tabs, "/w/demo")?.includes('aria-current="page"'), "the Overview tab is lit on the Overview");
+  assert.equal([...tabs.matchAll(/aria-current/gu)].length, 1, "one tab is lit");
   const all = await get("/milestones");
-  const tabs = all.body.slice(all.body.indexOf('aria-label="Sections"'));
-  assert.ok(linkTo(tabs, "/vigils") !== null && linkTo(tabs, "/rituals") !== null, "the tabs of all workspaces have plain addresses");
-  assert.ok(linkTo(tabs, "/milestones")?.includes('aria-current="page"'), "the Milestones tab is lit");
+  const allTabs = navOf(all.body, "Tabs");
+  assert.deepEqual(hrefsOf(allTabs), ["/all", "/vigils", "/rituals", "/findings", "/milestones"], "the tabs of all workspaces have plain addresses");
+  assert.ok(linkTo(allTabs, "/milestones")?.includes('aria-current="page"'), "the Milestones tab is lit");
   // The badges: vigils due today or late, rituals late.
   const rituals = await readWith("/rituals", {}, lateStatus());
-  assert.match(rituals.body, /<span class="tab-bdg tone-late" title="1 late">/u, "the ritual is one day late");
-  assert.ok(linkTo(rituals.body.slice(rituals.body.indexOf('aria-label="Sections"')), "/rituals")?.includes('aria-current="page"'), "the Rituals tab is lit");
+  assert.match(navOf(rituals.body, "Tabs"), /<span class="tab-bdg tone-late" title="1 late">/u, "the ritual is one day late");
+  assert.ok(linkTo(navOf(rituals.body, "Tabs"), "/rituals")?.includes('aria-current="page"'), "the Rituals tab is lit");
   assert.equal(rituals.body.includes("due today or late"), false, "no vigil is due today or late");
-  assert.match(rituals.body, /<span class="tab-bdg tone-wait" title="2 need you">/u, "the Findings tab counts what needs you");
+  assert.match(navOf(rituals.body, "Tabs"), /<span class="tab-bdg tone-wait" title="2 need you">/u, "the Findings tab counts what needs you");
 });
 
-test("the switcher lists Overview, All workspaces and each workspace with what needs you, and marks the current one", async () => {
+test("both navs are in the HTML: the tab bar for a phone and Places for a desktop; the host line ends Places", async () => {
+  const { body } = await readWith("/w/demo", {}, lateStatus());
+  assert.ok(body.indexOf('aria-label="Places"') !== -1 && body.indexOf('aria-label="Tabs"') !== -1);
+  const places = navOf(body, "Places");
+  const hostLine = places.slice(places.indexOf('class="places-foot"'));
+  assert.match(hostLine.replaceAll(/<[^>]+>/gu, ""), /testhost, darius [^,]+, updated \d\d:\d\d, seen by [^.]+\./u, "host, version, time, viewer");
+  assert.ok(places.indexOf('class="places-foot"') > places.indexOf("This host"), "after the host pages");
+});
+
+test("Places lists All workspaces and each workspace with what needs you; the scope is expanded to its six places, one lit", async () => {
   const status = threeWorkspaces();
   const { body } = await readWith("/w/demo/rituals", {}, status);
-  const from = body.indexOf('class="sw-list"');
-  const list = body.slice(from, body.indexOf("</details>", from));
-  const names = [...list.matchAll(/<span class="sw-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["Overview", "All workspaces", "demo", "atlas"], "the self-test workspace is not listed");
-  assert.ok(linkTo(list, "/w/demo") !== null && linkTo(list, "/rituals") !== null, "Overview, and All workspaces on the same section");
-  assert.ok(linkTo(list, "/w/atlas/rituals") !== null, "switching keeps the section");
-  assert.ok(linkTo(list, "/w/demo/rituals")?.includes('aria-current="true"'), "the current workspace is marked");
-  assert.match(list, /<span class="sw-need">2 need you<\/span>/u, "the count of a workspace");
-  assert.match(list, /<span class="sw-clear">all clear<\/span>/u, "a quiet workspace says so");
-  assert.equal(body.includes('class="sw-dot"'), false, "no red square: the workspace you are in is the one that needs you");
+  const places = navOf(body, "Places");
+  const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
+  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Milestones", "Runs", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
+  assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
+  assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
+  assert.ok(linkTo(places, "/w/demo/rituals")?.includes('aria-current="page"'), "the Rituals row is lit");
+  assert.equal([...places.matchAll(/aria-current="page"/gu)].length, 1, "one row is lit");
+  assert.match(places, /<span class="places-need">2 need you<\/span>/u, "the count of a workspace");
+  assert.match(places, /<span class="places-clear">all clear<\/span>/u, "a quiet workspace says so");
+  assert.match(places, /<span class="tab-bdg tone-wait" title="2 need you">/u, "the section rows carry the badges of the tabs");
+  assert.deepEqual(hrefsOf(places.slice(places.indexOf("This host"))).slice(0, 3), ["/status", "/profiles", "/settings"]);
+  assert.equal(body.includes('class="topbar-dot"'), false, "no red square: the workspace you are in is the one that needs you");
   const other = await readWith("/w/atlas", {}, status);
-  assert.ok(other.body.includes('class="sw-dot"'), "a red square on the button when another workspace needs you");
+  assert.ok(other.body.includes('class="topbar-dot"'), "a red square on the button when another workspace needs you");
+  const all = await readWith("/all", {}, status);
+  assert.equal(all.body.includes('class="topbar-dot"'), false, "All workspaces already holds every workspace");
+});
+
+test("the lit row of Places follows the page: a run lights its item's section, a host page lights its own row", async () => {
+  const lit = (body: string): string[] => [...navOf(body, "Places").matchAll(/<a\b[^>]*aria-current="page"[^>]*href="([^"]+)"/gu)].map((match) => match[1] ?? "");
+  const litTabs = (body: string): string[] => [...navOf(body, "Tabs").matchAll(/<a\b[^>]*aria-current="page"[^>]*href="([^"]+)"/gu)].map((match) => match[1] ?? "");
+  const ritualRun = await get(`/w/demo/runs/${DONE}`);
+  assert.deepEqual(lit(ritualRun.body), ["/w/demo/rituals"], "a ritual run lights Rituals");
+  assert.deepEqual(litTabs(ritualRun.body), ["/w/demo/rituals"]);
+  const runs = await get("/w/demo/runs");
+  assert.deepEqual(lit(runs.body), ["/w/demo/runs"], "the Runs list lights Runs");
+  assert.deepEqual(litTabs(runs.body), [], "Runs is not a tab");
+  const ritual = await get("/w/demo/rituals/daily-report");
+  assert.deepEqual(lit(ritual.body), ["/w/demo/rituals"]);
+  const milestone = await get("/w/demo/milestones/M7");
+  assert.deepEqual(litTabs(milestone.body), ["/w/demo/milestones"]);
+  const status = await get("/status");
+  assert.deepEqual(lit(status.body), ["/status"], "Status lights its row");
+  assert.deepEqual(litTabs(status.body), [], "no tab on a host page");
+  assert.deepEqual(lit((await get("/settings/backups")).body), ["/settings"], "every settings tab lights Settings");
+});
+
+test("a host page points the tabs and Places at the last scope: the cookie darius_scope", async () => {
+  const status = threeWorkspaces();
+  const read = async (path: string, scope: string | null): Promise<string> => {
+    const headers = scope === null ? undefined : { Cookie: `darius_scope=${encodeURIComponent(scope)}` };
+    return (await (await handler(new Request(`http://darius.test${path}`, { headers }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
+  };
+  const atlas = await read("/status", "atlas");
+  assert.deepEqual(hrefsOf(navOf(atlas, "Tabs")), ["/w/atlas", "/w/atlas/vigils", "/w/atlas/rituals", "/w/atlas/findings", "/w/atlas/milestones"]);
+  assert.ok(scopeRow(navOf(atlas, "Places"), "/w/atlas")?.includes('aria-current="true"'), "the last scope is the marked one");
+  assert.match(atlas, /<span class="topbar-cap">Host<\/span><span class="topbar-now">testhost<\/span>/u, "a host page names the host");
+  assert.deepEqual(hrefsOf(navOf(await read("/profiles", "*"), "Tabs")), ["/all", "/vigils", "/rituals", "/findings", "/milestones"], "* is all workspaces");
+  const ghost = await read("/settings", "gone");
+  assert.equal(hrefsOf(navOf(ghost, "Tabs"))[0], "/all", "a workspace this host lacks is ignored: no default, so all workspaces");
+  const withDefault = await readWith("/status", { ws: "demo" }, status);
+  assert.equal(hrefsOf(navOf(withDefault.body, "Tabs"))[0], "/w/demo", "no cookie: the default workspace");
+  assert.equal(hrefsOf(navOf((await get("/nope")).body, "Tabs"))[0], "/all", "an unknown path has no scope: the last one");
+});
+
+test("an error page offers a way back to the last scope", async () => {
+  const response = await handler(new Request("http://darius.test/nope", { headers: { Cookie: "darius_scope=demo" } }), context);
+  const body = (await response.text()).replaceAll("<!-- -->", "");
+  assert.match(body, /<a class="back" href="\/w\/demo"/u, "the link goes to the Overview of the last scope");
+  assert.ok(body.includes("Back to demo"));
+  assert.ok((await get("/nope")).body.includes("Back to All workspaces"));
 });
 
 test("a section page covers one scope: a workspace, or all of them", async () => {
@@ -1101,17 +1174,17 @@ test("a section page covers one scope: a workspace, or all of them", async () =>
   assert.equal(vigils.body.includes("Self-test vigil"), false, "never the self-test workspace");
 });
 
-test("showSelftest hides the self-test workspace from the switcher, the badges and the all-workspaces lists", async () => {
+test("showSelftest hides the self-test workspace from Places, the badges and the all-workspaces lists", async () => {
   const status = threeWorkspaces();
   const off = await readWith("/vigils", {}, status);
   assert.equal(off.body.includes("Self-test vigil"), false, "no row in the all-workspaces list");
-  assert.equal(off.body.includes('<span class="sw-name">darius-selftest</span>'), false, "not in the switcher");
+  assert.equal(off.body.includes('<span class="places-name">darius-selftest</span>'), false, "not in Places");
   assert.equal(off.body.includes("due today or late"), false, "not in the badge");
   assert.equal(h1Of((await readWith("/all", {}, status)).body), "Two things need you.", "not in the verdict");
-  assert.ok((await readWith("/all", {}, status)).body.includes("Self-test:"), "the footer line stays");
+  assert.ok(navOf((await readWith("/all", {}, status)).body, "Places").includes("Self-test:"), "its line stays in the host line of Places");
   const on = await readWith("/vigils", { selftest: "1" }, status);
   assert.ok(on.body.includes("Self-test vigil"), "the row shows");
-  assert.ok(on.body.includes('<span class="sw-name">darius-selftest</span>'), "it is in the switcher");
+  assert.ok(on.body.includes('<span class="places-name">darius-selftest</span>'), "it is in Places");
   assert.match(on.body, /<span class="tab-bdg tone-wait" title="1 due today or late">/u, "it counts");
   assert.equal(h1Of((await readWith("/all", { selftest: "1" }, status)).body), "Three things need you.", "and needs you");
   assert.equal((await readWith("/w/darius-selftest", {}, status)).status, 200, "its own address always works");
@@ -1120,16 +1193,16 @@ test("showSelftest hides the self-test workspace from the switcher, the badges a
 test("/all is always all workspaces, whatever the default workspace is", async () => {
   const status = threeWorkspaces();
   const plain = await readWith("/all", {}, status);
-  assert.match(plain.body, /<span class="sw-now">All workspaces<\/span>/u, "no default: all workspaces");
+  assert.match(plain.body, /<span class="topbar-now">All workspaces<\/span>/u, "no default: all workspaces");
   const set = await readWith("/w/demo", { ws: "demo" }, status);
-  assert.match(set.body, /<span class="sw-now">demo<\/span>/u, "the default workspace");
+  assert.match(set.body, /<span class="topbar-now">demo<\/span>/u, "the default workspace");
   assert.ok(set.body.includes("/home/test/demo"), "it is the workspace Overview, with its checkout");
   assert.ok(linkTo(set.body, "/all") !== null, "all workspaces have an address of their own");
   const all = await readWith("/all", { ws: "demo" }, status);
-  assert.match(all.body, /<span class="sw-now">All workspaces<\/span>/u);
+  assert.match(all.body, /<span class="topbar-now">All workspaces<\/span>/u);
   assert.equal(h1Of(all.body), "Two things need you.");
   const ghost = await readWith("/all", { ws: "gone" }, status);
-  assert.match(ghost.body, /<span class="sw-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
+  assert.match(ghost.body, /<span class="topbar-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
 });
 
 test("the status page: strip, machine, hosts, a link to the backups, and no backup controls", async () => {
@@ -1147,8 +1220,8 @@ test("the status page: strip, machine, hosts, a link to the backups, and no back
   assert.ok(body.includes("One thing blocks backups."), "the backup problem shows as a one line notice");
   assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
   assert.equal(body.includes(SECRET), false, "no secret on the page");
-  assert.ok(linkTo(body, "/status")?.includes('aria-current="page"'), "the status link of the top bar is lit");
-  assert.ok(linkTo(await get("/settings").then((reply) => reply.body), "/status") !== undefined, "the status link is on every page");
+  assert.ok(linkTo(navOf(body, "Places"), "/status")?.includes('aria-current="page"'), "the Status row of Places is lit");
+  assert.ok(linkTo(navOf((await get("/settings")).body, "Places"), "/status") !== null, "the Status row is on every page");
   assertScriptsCarryNonce(body, "/status");
 });
 
@@ -1171,7 +1244,7 @@ test("the settings tabs: a row of four, one lit, the other tabs' content not dra
   const backups = (await get("/settings/backups")).body;
   assert.ok(settingsTab(backups, "/settings/backups")?.includes('aria-current="page"'), "Backups is lit on /settings/backups");
   assert.equal(settingsTab(backups, "/settings")?.includes("aria-current"), false, "General is not lit under it");
-  assert.ok(linkTo(backups, "/settings")?.includes('class="gear on"'), "the gear is lit on a settings tab");
+  assert.ok(linkTo(navOf(backups, "Places"), "/settings")?.includes('aria-current="page"'), "the Settings row of Places is lit on a settings tab");
   for (const text of ["Appearance", "Default workspace", "Seen by"]) assert.equal(backups.includes(text), false, `Backups leaves out: ${text}`);
 
   const notifications = (await get("/settings/notifications")).body;

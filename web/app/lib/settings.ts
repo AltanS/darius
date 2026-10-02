@@ -32,7 +32,7 @@ const DENSITIES: ReadonlySet<string> = new Set(["comfortable", "compact"]);
 const MOTIONS: ReadonlySet<string> = new Set(["system", "reduce"]);
 
 /** The value of one cookie in a `Cookie` header, or null. */
-function cookieValue(header: string | null, name: string): string | null {
+export function cookieValue(header: string | null, name: string): string | null {
   if (header === null) return null;
   for (const part of header.split(";")) {
     const at = part.indexOf("=");
@@ -81,4 +81,24 @@ export function readSettings(cookieHeader: string | null): Settings {
 export function settingsValue(settings: Settings): string {
   const text = [`theme=${settings.theme}`, `density=${settings.density}`, `ws=${settings.defaultWorkspace ?? ""}`, `selftest=${settings.showSelftest ? "1" : "0"}`, `motion=${settings.motion}`].join("&");
   return encodeURIComponent(text);
+}
+
+/** The cookie that remembers the last scope you were in: a workspace name, or `*` for all workspaces. */
+export const SCOPE_COOKIE = "darius_scope";
+
+/** The scope cookie as `document.cookie` takes it. */
+export function scopeCookieText(scope: string | null): string {
+  return `${SCOPE_COOKIE}=${encodeURIComponent(scope ?? "*")}; path=/; max-age=${SETTINGS_MAX_AGE}; SameSite=Lax`;
+}
+
+/** What the scope cookie says: `undefined` when it is missing or unreadable, null for all workspaces, else a workspace name. */
+export function readScopeCookie(cookieHeader: string | null): string | null | undefined {
+  const raw = cookieValue(cookieHeader, SCOPE_COOKIE);
+  if (raw === null) return undefined;
+  try {
+    const value = decodeURIComponent(raw);
+    return value === "*" ? null : value === "" ? undefined : value;
+  } catch {
+    return undefined;
+  }
 }

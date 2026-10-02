@@ -1,11 +1,28 @@
 /** The error boundary of every page: a 404 or a failure, inside the frame. */
 
-import { isRouteErrorResponse, Link, useRouteError } from "react-router";
+import { isRouteErrorResponse, Link, useRouteError, useRouteLoaderData } from "react-router";
 
+import type { loader as rootLoader } from "../root.tsx";
 import { href } from "../lib/paths.ts";
+
+interface BackProps {
+  /** The scope to go back to: a workspace name, or null for all workspaces. */
+  scope: string | null;
+}
+
+/** The way out of an error page: the Overview of the scope you were last in. */
+function Back({ scope }: BackProps): React.ReactNode {
+  return (
+    <Link to={href({ to: "overview", ws: scope })} className="back">
+      {`Back to ${scope ?? "All workspaces"}`}
+    </Link>
+  );
+}
 
 export function RouteError(): React.ReactNode {
   const error = useRouteError();
+  // A page outside the root loader has no last scope: it goes back to all workspaces.
+  const scope = useRouteLoaderData<typeof rootLoader>("root")?.lastScope ?? null;
   if (isRouteErrorResponse(error) && error.status === 404) {
     const text = error.data === undefined || error.data === null || error.data === "" ? "No page lives at this address." : String(error.data);
     return (
@@ -14,9 +31,7 @@ export function RouteError(): React.ReactNode {
           <h1 className="page-title">Nothing here</h1>
           <p className="lede">{text}</p>
         </header>
-        <Link to={href({ to: "overview", ws: null })} className="back">
-          Back home
-        </Link>
+        <Back scope={scope} />
       </div>
     );
   }
@@ -27,9 +42,7 @@ export function RouteError(): React.ReactNode {
         <h1 className="page-title ink-bad">This page failed</h1>
       </header>
       <pre className="code-block">{message}</pre>
-      <Link to={href({ to: "overview", ws: null })} className="back">
-        Back home
-      </Link>
+      <Back scope={scope} />
     </div>
   );
 }

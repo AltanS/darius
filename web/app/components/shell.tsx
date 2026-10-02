@@ -1,166 +1,81 @@
 /**
- * The frame around every page. The top bar has four things: the brand gem
- * (it opens the Overview of the scope you are in), the workspace switcher, the
- * status pulse and the settings gear. The scope is one workspace or all of them. The switcher
- * opens as a sheet under the bar on a phone and as a menu on a desktop; its
- * first entry is the Overview of the current scope, then All workspaces, then
- * each workspace with what needs you. The three sections of the scope, Vigils,
- * Rituals, Findings and Milestones, are the tabs: at the bottom of a phone, under the
- * bar on a desktop. One footer line holds the host facts.
+ * The frame around every page. It has four parts. A phone has a top bar that
+ * is also the button of the drawer (the caption and the name of the scope, a
+ * chevron, a dot when another scope needs you), and a bar of five tabs at the
+ * bottom: Overview, Vigils, Rituals, Findings, Milestones. A desktop (1024 px
+ * and wider) has neither: a fixed sidebar takes their place. Both are in the
+ * page always; CSS decides which one shows. The third part is Places (the
+ * tree, `places.tsx`), the fourth is `<main>`.
+ *
+ * The scope is one workspace or all of them. A host page (Status, Profiles,
+ * Settings) is in no scope, so the tabs and Places point at the last scope you
+ * were in: it is kept in the cookie `darius_scope`, written here.
  */
 
 import { useEffect } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useRouteLoaderData } from "react-router";
 
 import type { RootData } from "../root.tsx";
-import { KindIcon } from "./kind.tsx";
+import type { loader as runLoader } from "../routes/run.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
-import { clockTime } from "../lib/format.ts";
-import { href, placeOf, switchTarget, type Section } from "../lib/paths.ts";
-import type { TabCounts } from "../lib/scope.ts";
+import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
+import type { Kind } from "../lib/kind.ts";
+import { href, placeOf, type Place, type Section } from "../lib/paths.ts";
+import { effectiveScope, type TabCounts } from "../lib/scope.ts";
+import { scopeCookieText } from "../lib/settings.ts";
 
-interface SectionSpec {
-  section: Section;
-  label: string;
-  /** The badge counts these: the sentence reads "3 late". */
-  badge: (tabs: TabCounts) => { count: number; tone: "wait" | "late"; text: string };
+/** The section a page belongs to, for the lit state: a ritual page is in Rituals, a run page in the section of its item. */
+function sectionOf(place: Place, runKind: Kind | undefined): Section | null {
+  if (place.kind === "overview" || place.kind === "host" || place.kind === "unknown") return null;
+  if (place.kind === "detail" && place.section === "runs") return runKind === undefined ? null : runKind === "ritual" ? "rituals" : "vigils";
+  return place.section;
 }
 
-/** The tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late. */
-const SECTIONS: readonly SectionSpec[] = [
-  { section: "vigils", label: "Vigils", badge: (tabs) => ({ count: tabs.vigils, tone: "wait", text: "due today or late" }) },
-  { section: "rituals", label: "Rituals", badge: (tabs) => ({ count: tabs.rituals, tone: "late", text: "late" }) },
-  { section: "findings", label: "Findings", badge: (tabs) => ({ count: tabs.findings, tone: "wait", text: "need you" }) },
-  { section: "milestones", label: "Milestones", badge: () => ({ count: 0, tone: "wait", text: "" }) },
-];
-
-interface SectionIconProps {
-  section: Section;
-  size: number;
+/** The host page of a path, for the lit row of Places. */
+function hostRowOf(pathname: string): LitRow | null {
+  if (pathname === "/status") return "status";
+  if (pathname === "/profiles") return "profiles";
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
+  return null;
 }
 
-function SectionIcon({ section, size }: SectionIconProps): React.ReactNode {
-  if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
-  if (section === "findings") return <NavIcon name="finding" size={size} className="tab-ico" />;
-  return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;
+interface TopBarProps {
+  data: RootData;
+  scope: string | null;
+  host: boolean;
+  /** Keyed by the address, so the drawer closes after each navigation. */
+  pathKey: string;
 }
 
-interface BadgeProps {
-  count: number;
-  tone: "wait" | "late";
-  text: string;
-}
-
-/** The count on a tab: a small solid square with the number; screen readers hear what it counts. */
-function TabBadge({ count, tone, text }: BadgeProps): React.ReactNode {
-  if (count === 0) return null;
-  return (
-    <span className={`tab-bdg tone-${tone}`} title={`${count} ${text}`}>
-      <span aria-hidden="true">{count}</span>
-      <span className="sr-only">{`${count} ${text}`}</span>
-    </span>
-  );
-}
-
-/** Closes open menus on a press outside them and on Escape; a link inside closes one by changing the path. */
-function useMenuDismiss(): void {
-  useEffect(() => {
-    const close = (except: EventTarget | null): void => {
-      for (const menu of document.querySelectorAll<HTMLDetailsElement>("details[data-menu][open]")) {
-        if (except === null || !(except instanceof Node) || !menu.contains(except)) menu.open = false;
-      }
-    };
-    const onPress = (event: Event): void => close(event.target);
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") close(null);
-    };
-    document.addEventListener("pointerdown", onPress);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPress);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-}
-
-/** The scrim behind the switcher sheet: a press on it shuts the menu it sits in. */
-function closeMenu(event: React.MouseEvent<HTMLButtonElement>): void {
+/** A press on the scrim shuts the drawer it sits in. */
+function closeDrawer(event: React.MouseEvent<HTMLButtonElement>): void {
   const menu = event.currentTarget.closest<HTMLDetailsElement>("details");
   if (menu === null) return;
   menu.open = false;
   menu.querySelector("summary")?.focus();
 }
 
-interface SwitcherProps {
-  data: RootData;
-  /** The scope: a workspace name, or null for all workspaces. */
-  workspace: string | null;
-  /** The page is the Overview of the scope. */
-  atOverview: boolean;
-  /** The address of the scope's Overview. */
-  overview: string;
-  /** Where a click on the scope lands: the same section of it, or its Overview. */
-  to: (workspace: string | null) => string;
-  pathKey: string;
-}
-
-/** A line of the switcher: a name, what it is, and what needs you there. */
-interface EntryProps {
-  to: string;
-  name: string;
-  icon: "workspace" | "all" | "overview";
-  note: string;
-  needs: number;
-  unreadable?: boolean;
-  current: boolean;
-}
-
-function Entry({ to, name, icon, note, needs, unreadable = false, current }: EntryProps): React.ReactNode {
+/** The phone top bar: one button that opens Places as a drawer. A desktop does not show it. */
+function TopBar({ data, scope, host, pathKey }: TopBarProps): React.ReactNode {
+  // A dot when a scope other than this one needs you: another workspace, or on a host page any workspace. All workspaces already holds them all.
+  const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
   return (
-    <Link to={to} className={current ? "sw-item on" : "sw-item"} aria-current={current ? "true" : undefined}>
-      <NavIcon name={icon} size={18} className="sw-ico" />
-      <span className="sw-text">
-        <span className="sw-name">{name}</span>
-        {note === "" ? null : <span className="sw-note">{note}</span>}
-      </span>
-      {unreadable ? <span className="sw-need tone-bad">unreadable</span> : needs > 0 ? <span className="sw-need">{`${needs} ${needs === 1 ? "needs" : "need"} you`}</span> : icon === "overview" ? null : <span className="sw-clear">all clear</span>}
-      {current && icon !== "overview" ? <NavIcon name="check" size={18} className="sw-check" /> : null}
-    </Link>
-  );
-}
-
-/** The workspace switcher: a button with the current scope; its list is a sheet on a phone, a menu on a desktop. */
-function Switcher({ data, workspace, atOverview, overview, to, pathKey }: SwitcherProps): React.ReactNode {
-  const known = data.workspaces.some((entry) => entry.name === workspace);
-  // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
-  const listed = workspace === null || known ? data.workspaces : [...data.workspaces, { name: workspace, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 } }];
-  const others = workspace !== null && data.workspaces.some((entry) => entry.name !== workspace && entry.needs > 0);
-  return (
-    // Keyed by the address, so the menu closes after each navigation.
-    <details key={pathKey} data-menu className="switcher">
-      <summary className="sw-btn">
-        <span className="sw-lab">
-          <span className="sw-cap">Workspace</span>
-          <span className="sw-now">{workspace ?? "All workspaces"}</span>
+    <details key={pathKey} data-menu className="drawer">
+      <summary className="topbar">
+        <Gem size={28} />
+        <span className="topbar-lab">
+          <span className="topbar-cap">{host ? "Host" : "Workspace"}</span>
+          <span className="topbar-now">{host ? data.host : (scope ?? "All workspaces")}</span>
         </span>
-        <NavIcon name="chevron" size={16} className="sw-chev" />
+        <NavIcon name="chevron" size={16} className="topbar-chev" />
         {others ? (
           <>
-            <i className="sw-dot" aria-hidden="true" />
+            <i className="topbar-dot" aria-hidden="true" />
             <span className="sr-only">Another workspace needs you</span>
           </>
         ) : null}
       </summary>
-      <button type="button" className="sw-scrim" tabIndex={-1} aria-label="Close the workspace list" onClick={closeMenu} />
-      <div className="sw-list">
-        <p className="sw-group">{workspace === null ? "All workspaces" : "This workspace"}</p>
-        <Entry to={overview} name="Overview" icon="overview" note="Verdict, next, what needs you" needs={0} current={atOverview} />
-        <p className="sw-group">Workspaces</p>
-        <Entry to={to(null)} name="All workspaces" icon="all" note="Every workspace together" needs={data.needs} current={workspace === null} />
-        {listed.map((entry) => (
-          <Entry key={entry.name} to={to(entry.name)} name={entry.name} icon="workspace" note="" needs={entry.needs} unreadable={entry.error} current={workspace === entry.name} />
-        ))}
-      </div>
+      <button type="button" className="drawer-scrim" tabIndex={-1} aria-label="Close Places" onClick={closeDrawer} />
     </details>
   );
 }
@@ -173,64 +88,36 @@ interface ShellProps {
 export function Shell({ data, children }: ShellProps): React.ReactNode {
   useMenuDismiss();
   const location = useLocation();
+  // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind.
+  const runKind = useRouteLoaderData<typeof runLoader>("routes/run")?.kind;
   const place = placeOf(location.pathname);
-  // Until the shell is rewritten: the pages with no scope (host pages, unknown paths) show the default workspace.
-  const workspace = place.kind === "host" || place.kind === "unknown" ? data.defaultWorkspace : place.scope;
-  const atOverview = place.kind === "overview";
-  const tabs = workspace === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === workspace)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
-  const overview = href({ to: "overview", ws: workspace });
-  const scopeTo = (name: string | null): string => href(switchTarget(place, name));
-  const selectedTab = (section: Section): boolean => place.section === section;
-  // The gear stays lit on every settings tab: `/settings` and `/settings/...`.
-  const inSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
+  const scope = effectiveScope(place, data.lastScope);
+  const host = place.kind === "host";
+  const section = sectionOf(place, runKind);
+  const tabLit = section === "runs" ? null : section;
+  const lit: LitRow | null = host ? hostRowOf(location.pathname) : place.kind === "overview" ? "overview" : section;
+  const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
+  // Remember the scope you are in, for the host pages and the error pages. A path with no scope (a 404) says nothing.
+  const remembered = host || (place.kind === "unknown" && place.scope === null) ? undefined : place.scope;
+  useEffect(() => {
+    if (remembered !== undefined) document.cookie = scopeCookieText(remembered);
+  }, [remembered]);
   return (
     <div className="app">
-      <header className="bar">
-        <div className="bar-in wa">
-          <Link to={overview} className="brand" aria-label="darius, the Overview">
-            <Gem size={28} />
-            <span className="brand-word">darius</span>
-          </Link>
-          <Switcher data={data} workspace={workspace} atOverview={atOverview} overview={overview} to={scopeTo} pathKey={`${location.pathname}${location.search}`} />
-          <Link to={href({ to: "host", page: "status" })} className={location.pathname === "/status" ? "gear on" : "gear"} aria-label="Status" aria-current={location.pathname === "/status" ? "page" : undefined}>
-            <NavIcon name="status" size={22} />
-          </Link>
-          <Link to={href({ to: "host", page: "settings" })} className={inSettings ? "gear on" : "gear"} aria-label="Settings" aria-current={inSettings ? "page" : undefined}>
-            <NavIcon name="gear" size={22} />
-          </Link>
-        </div>
-        <nav aria-label="Sections" className="dtabs wa">
-          {SECTIONS.map(({ section, label, badge }) => (
-            <Link key={section} to={href({ to: "section", ws: workspace, section: section })} className={selectedTab(section) ? "dt on" : "dt"} aria-current={selectedTab(section) ? "page" : undefined}>
-              <SectionIcon section={section} size={20} />
-              {label}
-              <TabBadge {...badge(tabs)} />
-            </Link>
-          ))}
-        </nav>
-      </header>
+      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} />
+      <Places data={data} scope={scope} lit={lit} />
       <main className="wa page-main">{children}</main>
-      <footer className="wa">
-        <div className="foot">
-          <div className="foot-left">
-            {atOverview && workspace === null
-              ? data.selftest.map((line) => (
-                  <Link key={line.href} to={line.href} className="foot-selftest">
-                    {line.text}
-                  </Link>
-                ))
-              : null}
-          </div>
-          <p className="foot-host">
-            {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}. <Link to={href({ to: "host", page: "profiles" })}>Profiles</Link>
-          </p>
-        </div>
-      </footer>
       <nav aria-label="Tabs" className="tabbar">
-        {SECTIONS.map(({ section, label, badge }) => (
-          <Link key={section} to={href({ to: "section", ws: workspace, section: section })} className={selectedTab(section) ? "tab on" : "tab"} aria-current={selectedTab(section) ? "page" : undefined}>
+        <Link to={href({ to: "overview", ws: scope })} className={lit === "overview" ? "tab on" : "tab"} aria-current={lit === "overview" ? "page" : undefined}>
+          <span className="tab-ico-wrap">
+            <NavIcon name="overview" size={22} className="tab-ico" />
+          </span>
+          <span>Overview</span>
+        </Link>
+        {TAB_SECTIONS.map(({ section: tab, label, badge }) => (
+          <Link key={tab} to={href({ to: "section", ws: scope, section: tab })} className={tabLit === tab ? "tab on" : "tab"} aria-current={tabLit === tab ? "page" : undefined}>
             <span className="tab-ico-wrap">
-              <SectionIcon section={section} size={22} />
+              <SectionIcon section={tab} size={22} />
               <TabBadge {...badge(tabs)} />
             </span>
             <span>{label}</span>

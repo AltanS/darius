@@ -26,14 +26,14 @@ export function loader({ context, request }: Route.LoaderArgs) {
     generatedAt: status.generatedAt,
     today: status.today,
     utcOffset: status.utcOffset,
-    // The workspaces, the tab badges and the footer line: what the top bar and the tabs show (lib/scope.ts).
+    // The workspaces, the tab badges, the last scope and the host line: what Places and the tabs show (lib/scope.ts).
     ...shellData(status, request),
   };
 }
 
 export type RootData = Awaited<ReturnType<typeof loader>>;
 
-// The top bar and the tab badges count what needs the operator, so they reload with every page.
+// Places and the tab badges count what needs the operator, so they reload with every page.
 export function shouldRevalidate(): boolean {
   return true;
 }
@@ -131,7 +131,7 @@ export default function App({ loaderData }: Route.ComponentProps): React.ReactNo
   );
 }
 
-/** The last resort, when even the top bar data failed. Pages have their own boundary. */
+/** The last resort, when even the frame data failed. Pages have their own boundary. */
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactNode {
   const data = useRouteLoaderData<typeof loader>("root");
   const title = isRouteErrorResponse(error) ? `${error.status} ${error.statusText}` : "darius could not show this page";
@@ -142,7 +142,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactN
       <h1 className="page-title ink-bad">{title}</h1>
       {detail === "" ? null : <pre className="code-block">{detail}</pre>}
       <p className="text-muted">{data === undefined ? "The status read failed." : `Host ${data.host}.`}</p>
-      <Link to={href({ to: "overview", ws: null })}>Back home</Link>
+      <Link to={href({ to: "overview", ws: data?.lastScope ?? null })}>{`Back to ${data?.lastScope ?? "All workspaces"}`}</Link>
     </main>
   );
 }

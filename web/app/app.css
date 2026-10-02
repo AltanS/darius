@@ -138,10 +138,26 @@
 @layer components {
   /* --- frame ------------------------------------------------------------------------ */
 
+  /*
+   * The frame. A phone: a column (top bar, main) with the tab bar fixed over the bottom
+   * and Places as a drawer. A desktop (1024 px and wider): Places is a fixed column at the
+   * left, main takes the rest, and neither the top bar nor the tab bar shows.
+   */
+
   .app {
+    --sidebar-w: 264px;
+    --tabbar-h: 64px;
     display: flex;
     flex-direction: column;
     min-height: 100dvh;
+  }
+
+  @media (min-width: 1024px) {
+    .app {
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+      align-items: start;
+    }
   }
 
   /* The page width: a 12-column board that widens to 1600 px. */
@@ -157,65 +173,11 @@
     flex: 1;
   }
 
-  .foot {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 8px 16px;
-    margin-top: 56px;
-    padding: 16px 0 32px;
-    border-top: 1px solid var(--color-sand);
-  }
+  /* The tab bar is fixed over the bottom of a phone: main leaves room for it and for the home indicator. */
 
-  .foot-left {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .foot-selftest {
-    font-size: 13px;
-    color: var(--color-muted);
-  }
-
-  .foot-host {
-    font-size: 12px;
-    color: var(--color-faint);
-  }
-
-  .foot-host a {
-    color: var(--color-muted);
-  }
-
-  /* The tab bar is fixed over the bottom 56 px: the footer, not main, leaves room for it. */
-
-  @media (max-width: 639px) {
-    footer.wa {
-      padding-bottom: calc(56px + env(safe-area-inset-bottom));
-    }
-
-    .foot {
-      flex-direction: column;
-      gap: 12px;
-      margin-top: 32px;
-      padding-bottom: 24px;
-    }
-
-    .foot-left {
-      gap: 8px;
-    }
-
-  /* Links in the footer are 44 px targets: the padding of an inline link takes hits without moving the text. */
-
-    .foot-selftest {
-      display: block;
-      padding-block: 12px;
-      margin-block: -12px;
-    }
-
-    .foot-host a {
-      padding: 14px 8px;
-      margin: 0 -8px;
+  @media (max-width: 1023px) {
+    .page-main {
+      padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 32px);
     }
   }
 
@@ -2828,28 +2790,6 @@
 
   /* --- ia: shell --------------------------------------------------------------------- */
 
-  /*
-   * The frame. The top bar: the gem, the workspace switcher, the settings gear. The
-   * three sections are the tabs: a bar at the bottom of a phone, a row under the
-   * top bar on a desktop. The whole header sticks; its height is --bar-h plus the
-   * tab row on a desktop.
-   */
-
-  .bar {
-    position: sticky;
-    top: 0;
-    z-index: 40;
-    border-bottom: 1px solid var(--color-sand);
-    background: var(--color-deep);
-  }
-
-  .bar-in {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    height: 56px;
-  }
-
   .brand {
     display: flex;
     flex: none;
@@ -2895,214 +2835,11 @@
     fill: var(--gem-d, var(--color-gold-hi));
   }
 
-  /* The switcher: a button with the current scope. */
-
-  .switcher {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .sw-btn {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 44px;
-    padding: 0 8px 0 10px;
-    border: 1px solid var(--color-sand-hi);
-    background: var(--color-surface);
-    list-style: none;
-    color: var(--color-parchment);
-    cursor: pointer;
-  }
-
-  .sw-btn::-webkit-details-marker {
-    display: none;
-  }
-
-  .sw-btn:hover,
-  .switcher[open] > .sw-btn {
-    border-color: var(--color-gold);
-  }
-
-  .sw-lab {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-    line-height: 1.15;
-  }
-
-  .sw-cap {
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-muted);
-  }
-
-  .sw-now {
-    overflow: hidden;
-    font-size: 15px;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sw-chev {
-    flex: none;
-    color: var(--color-muted);
-    transition: transform 0.15s ease;
-  }
-
-  .switcher[open] .sw-chev {
-    transform: rotate(180deg);
-  }
-
-  /* A small red square when another workspace needs you. */
-
-  .sw-dot {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 10px;
-    height: 10px;
-    border: 2px solid var(--color-deep);
-    background: var(--color-bad);
-  }
-
-  .sw-scrim {
-    display: none;
-  }
-
-  .sw-list {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 20;
-    min-width: 400px;
-    max-height: 70vh;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    border: 1px solid var(--color-sand-hi);
-    background: var(--color-surface);
-    box-shadow: 0 12px 28px var(--shadow);
-  }
-
-  .sw-group {
-    padding: 10px 16px 6px;
-    background: var(--color-raised);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-muted);
-  }
-
-  .sw-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 52px;
-    padding: 8px 16px;
-    border-top: 1px solid var(--color-sand);
-    color: var(--color-parchment);
-  }
-
-  .sw-item:hover {
-    background: var(--color-raised);
-    text-decoration: none;
-  }
-
-  .sw-ico {
-    flex: none;
-    color: var(--color-muted);
-  }
-
-  .sw-text {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .sw-name {
-    overflow-wrap: anywhere;
-    font-weight: 500;
-  }
-
-  .sw-note {
-    font-size: 12.5px;
-    color: var(--color-muted);
-  }
-
-  .sw-item.on .sw-name,
-  .sw-check {
-    color: var(--color-gold);
-  }
-
-  .sw-check {
-    flex: none;
-  }
-
-  .sw-need {
-    flex: none;
-    padding: 2px 7px;
-    background: var(--tone, var(--color-wait));
-    font-size: 12px;
-    font-weight: 700;
-    white-space: nowrap;
-    color: var(--on-solid, var(--color-night));
-  }
-
-  .sw-clear {
-    flex: none;
-    font-size: 12px;
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-
-  /* The settings gear: 44 px, at the right of the bar. */
-
-  .gear {
-    position: relative;
-    display: grid;
-    flex: none;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    margin-left: auto;
-    color: var(--color-muted);
-  }
-
-  /* Two links at the right of the bar: the first takes the free space, the second sits next to it. */
-
-  .gear + .gear {
-    margin-left: 0;
-  }
-
-  .gear:hover {
-    color: var(--color-parchment);
-    text-decoration: none;
-  }
-
-  .gear.on {
-    color: var(--color-gold);
-  }
-
-  .gear.on::after {
-    content: "";
-    position: absolute;
-    inset: auto 8px 0;
-    height: 2px;
-    background: var(--gold-bar, var(--color-gold));
-  }
-
   .nav-icon {
     display: block;
   }
 
-  /* The tabs: a row under the top bar on a desktop, the bar at the bottom on a phone. */
+  /* The badge on a tab or on a row of Places. */
 
   .tab-bdg {
     display: grid;
@@ -3116,131 +2853,372 @@
     color: var(--on-solid, var(--color-night));
   }
 
-  .dtabs {
-    display: none;
-  }
-
-  .tabbar {
-    display: none;
-  }
-
   .tab-ico {
     stroke-width: 1.3;
   }
 
-  .dt .kind-icon,
-  .tab .kind-icon {
+  .tab .kind-icon,
+  .places-row .kind-icon {
     color: inherit;
   }
 
-  @media (min-width: 640px) {
-    .brand-word {
-      display: inline;
+  /* A link from the address bar lands below the top bar of a phone. */
+
+  .section,
+  .card,
+  .target-row {
+    scroll-margin-top: 72px;
+  }
+
+  /* --- Places: the sidebar of a desktop, the drawer of a phone --- */
+
+  .places {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-deep);
+    border-right: 1px solid var(--color-sand);
+    overscroll-behavior: contain;
+    overflow-y: auto;
+  }
+
+  .places-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 56px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-sand);
+  }
+
+  .places-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    font: 600 18px/1 var(--font-display);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--color-gold);
+  }
+
+  .places-brand:hover {
+    text-decoration: none;
+  }
+
+  .places-hostname {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .places-group {
+    padding: 14px 16px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .places-tree,
+  .places-sub {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .places-empty {
+    padding: 4px 16px 12px;
+    font-size: 13.5px;
+    color: var(--color-muted);
+  }
+
+  .places-empty code {
+    font-size: 12.5px;
+    color: var(--color-parchment);
+  }
+
+  .places-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 12px 6px 13px;
+    border-left: 3px solid transparent;
+    color: var(--color-parchment);
+  }
+
+  .places-row:hover {
+    background: var(--color-raised);
+    text-decoration: none;
+  }
+
+  .places-ico {
+    flex: none;
+    color: var(--color-muted);
+  }
+
+  .places-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 500;
+  }
+
+  /* A scope: its name, and under it what needs you there. */
+
+  .places-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 0;
+    padding-block: 2px;
+  }
+
+  .places-text .places-name {
+    flex: none;
+    max-width: 100%;
+  }
+
+  .places-scope.on .places-name {
+    font-weight: 600;
+  }
+
+  .places-check {
+    flex: none;
+    color: var(--color-gold);
+  }
+
+  .places-need {
+    flex: none;
+    padding: 2px 6px;
+    background: var(--tone, var(--color-wait));
+    font-size: 11.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    color: var(--on-solid, var(--color-night));
+  }
+
+  .places-clear {
+    flex: none;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  /* The places of the scope you are in: indented under its row. */
+
+  .places-sub {
+    padding-bottom: 6px;
+  }
+
+  .places-leaf {
+    color: var(--color-muted);
+  }
+
+  .places-sub .places-leaf {
+    padding-left: 32px;
+    font-size: 14.5px;
+  }
+
+  .places-leaf:hover {
+    color: var(--color-parchment);
+  }
+
+  .places-leaf .places-name {
+    font-weight: 400;
+  }
+
+  .places-leaf .tab-bdg {
+    flex: none;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    font-size: 12.5px;
+  }
+
+  /* The lit row: gold text and a bar of 3 px at the left. The corners stay square. */
+
+  .places-leaf.lit {
+    border-left-color: var(--gold-bar, var(--color-gold));
+    background: var(--color-surface);
+    color: var(--color-gold);
+  }
+
+  .places-leaf.lit .places-ico {
+    color: inherit;
+  }
+
+  .places-leaf.lit .places-name {
+    font-weight: 600;
+  }
+
+  /* The host line: host, version, update time, viewer, small, at the end of the tree. */
+
+  .places-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: auto;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .places-hostline {
+    font-size: 12px;
+    color: var(--color-faint);
+  }
+
+  .places-selftest {
+    display: block;
+    padding-block: 4px;
+    font-size: 12.5px;
+    color: var(--color-muted);
+  }
+
+  .drawer,
+  .tabbar {
+    display: none;
+  }
+
+  /* Desktop: the sidebar is fixed in its column and scrolls by itself. */
+
+  @media (min-width: 1024px) {
+    .places {
+      position: sticky;
+      top: 0;
+      grid-column: 1;
+      grid-row: 1;
+      height: 100dvh;
     }
 
-    .switcher {
-      flex: none;
-      width: 300px;
-      margin-left: 8px;
+    .places-row {
+      min-height: 38px;
     }
 
-    .dtabs {
-      display: flex;
-      height: 52px;
-      border-top: 1px solid var(--color-sand);
-    }
-
-    .dt {
-      position: relative;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 20px;
-      font-size: 17px;
-      font-weight: 500;
-      color: var(--color-muted);
-    }
-
-    .dt:hover {
-      color: var(--color-parchment);
-      text-decoration: none;
-    }
-
-    .dt:hover::after {
-      content: "";
-      position: absolute;
-      inset: auto 12px 0;
-      height: 3px;
-      background: var(--color-sand-hi);
-    }
-
-    .dt.on {
-      color: var(--color-gold);
-    }
-
-    .dt.on::after {
-      content: "";
-      position: absolute;
-      inset: auto 12px 0;
-      height: 3px;
-      background: var(--gold-bar, var(--color-gold));
-    }
-
-    .dt:first-child {
-      margin-left: -20px;
-    }
-
-    .dt .tab-bdg {
-      min-width: 20px;
-      height: 20px;
-      padding: 0 5px;
-      font-size: 12.5px;
-    }
-
-    /* A link from the address bar lands below the two bars. */
-
-    .section,
-    .card,
-    .target-row {
-      scroll-margin-top: 120px;
+    .page-main {
+      grid-column: 2;
+      grid-row: 1;
     }
   }
 
-  @media (max-width: 639px) {
-    .bar-in {
-      gap: 8px;
-      padding-inline: 4px 4px;
-    }
+  /* Phone: a bar of five tabs at the bottom, a top bar that opens Places as a sheet at the left. */
 
-    .brand {
-      justify-content: center;
-      width: 44px;
-    }
-
-    /* The list is a sheet under the bar, on a scrim that covers the page and the tabs. */
-
-    .sw-scrim {
-      position: fixed;
-      inset: 56px 0 0;
-      z-index: 1;
+  @media (max-width: 1023px) {
+    .drawer {
+      position: sticky;
+      top: 0;
+      z-index: 40;
       display: block;
+      padding-top: env(safe-area-inset-top);
+      border-bottom: 1px solid var(--color-sand);
+      background: var(--color-deep);
+    }
+
+    .topbar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 56px;
+      padding: 0 16px;
+      list-style: none;
+      color: var(--color-parchment);
+      cursor: pointer;
+    }
+
+    .topbar::-webkit-details-marker {
+      display: none;
+    }
+
+    .topbar-lab {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-width: 0;
+      line-height: 1.15;
+    }
+
+    .topbar-cap {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+    }
+
+    .topbar-now {
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar-chev {
+      flex: none;
+      color: var(--color-muted);
+      transition: transform 0.15s ease;
+    }
+
+    .drawer[open] .topbar-chev {
+      transform: rotate(-90deg);
+    }
+
+    /* A small red square when another workspace needs you. */
+
+    .topbar-dot {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--color-deep);
+      background: var(--color-bad);
+    }
+
+    .drawer-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
       border: 0;
       background: var(--scrim);
-      animation: sw-fade 0.18s ease-out;
+      animation: drawer-fade 0.18s ease-out;
     }
 
-    .sw-list {
+    body:has(.drawer[open]) {
+      overflow: hidden;
+    }
+
+    /* Places is beside the button in the page, so the open state reaches it with a sibling selector. */
+
+    .places {
       position: fixed;
-      inset: 56px 0 auto;
-      z-index: 2;
-      min-width: 0;
-      max-height: calc(100dvh - 56px - 72px);
-      border-width: 0 0 1px;
-      animation: sw-drop 0.2s ease-out;
+      inset: 0 auto 0 0;
+      z-index: 50;
+      width: 86%;
+      max-width: 380px;
+      padding-top: env(safe-area-inset-top);
+      border-right: 1px solid var(--color-sand-hi);
+      box-shadow: 12px 0 28px var(--shadow);
+      visibility: hidden;
+      transform: translateX(-102%);
+      transition:
+        transform 0.2s ease-out,
+        visibility 0s linear 0.2s;
     }
 
-    .sw-item {
-      padding-block: 10px;
+    .drawer[open] ~ .places {
+      visibility: visible;
+      transform: none;
+      transition-delay: 0s;
     }
 
     .tabbar {
@@ -3248,7 +3226,7 @@
       inset: auto 0 0;
       z-index: 30;
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       padding-bottom: env(safe-area-inset-bottom);
       border-top: 1px solid var(--color-sand);
       background: var(--color-deep);
@@ -3260,12 +3238,13 @@
       align-items: center;
       justify-content: center;
       gap: 4px;
-      height: 56px;
+      min-height: 44px;
+      height: var(--tabbar-h);
       margin-top: -1px;
       border-top: 2px solid transparent;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 500;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.02em;
       color: var(--color-muted);
     }
 
@@ -3289,14 +3268,7 @@
       left: 14px;
     }
 
-    @keyframes sw-drop {
-      from {
-        opacity: 0;
-        transform: translateY(-8px);
-      }
-    }
-
-    @keyframes sw-fade {
+    @keyframes drawer-fade {
       from {
         opacity: 0;
       }
@@ -3304,9 +3276,9 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sw-scrim,
-    .sw-list,
-    .sw-chev {
+    .drawer-scrim,
+    .places,
+    .topbar-chev {
       animation: none;
       transition: none;
     }
@@ -3999,10 +3971,6 @@
 
     .pulse-home .pill {
       min-height: 40px;
-    }
-
-    .foot {
-      margin-top: 32px;
     }
 
     @media (max-width: 639px) {
@@ -4935,6 +4903,12 @@
     gap: 8px;
   }
 
+  @media (max-width: 1023px) {
+    .bk-savebar {
+      bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+    }
+  }
+
   @media (max-width: 639px) {
     .bk-state > div,
     .bk-snap,
@@ -4948,7 +4922,6 @@
     }
 
     .bk-savebar {
-      bottom: calc(56px + env(safe-area-inset-bottom) + 8px);
       padding: 12px 16px;
     }
 
@@ -5268,13 +5241,13 @@
   /* Compact density for the shell and the milestones. Every target stays 44 px on a phone. */
 
   :where([data-density="compact"]) {
-    .sw-item {
+    .places-row {
       min-height: 44px;
-      padding-block: 6px;
+      padding-block: 4px;
     }
 
-    .sw-group {
-      padding-block: 7px 4px;
+    .places-group {
+      padding-block: 10px 4px;
     }
 
     .ms-page {
@@ -5307,19 +5280,15 @@
       padding-bottom: 12px;
     }
 
-    @media (min-width: 640px) {
-      .dtabs {
-        height: 44px;
+    @media (max-width: 639px) {
+      .ms-sum {
+        min-height: 44px;
       }
     }
 
-    @media (max-width: 639px) {
-      .sw-item {
-        padding-block: 4px;
-      }
-
-      .ms-sum {
-        min-height: 44px;
+    @media (min-width: 1024px) {
+      .places-row {
+        min-height: 34px;
       }
     }
   }

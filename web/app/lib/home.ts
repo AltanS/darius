@@ -12,13 +12,13 @@
  *
  * Three filters keep noise off the page. Only djinns (rituals darius runs
  * that follow a repo skill) get a line. Imported and acceptance runs never
- * show. The projects that test darius itself shrink to one footer line, and
+ * show. The projects that test darius itself shrink to one line in the host line of Places, and
  * their flagged vigils never count as "needs you".
  *
  * The verdict counts things that need a person: held runs, runs whose result
  * asks a question, unacknowledged failures, stuck runs, flagged vigils and
  * unreadable projects. `needCounts` gives the same number per project and in
- * total, so the switcher counts and the verdict cannot drift apart.
+ * total, so the Places counts and the verdict cannot drift apart.
  *
  * A failed run that a person acknowledged (`darius run ack`) needs nobody
  * any more: it leaves Needs you and shows as a plain Last night card with
