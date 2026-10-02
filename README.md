@@ -356,7 +356,7 @@ nix flake check        # the suite in the sandbox, and a NixOS VM test of every 
 ```
 
 With home-manager, add the input and enable the module. It installs darius, writes
-`~/.config/darius/config.toml`, and configures the four timers (sync, vigil sweep, run-due, snapshot) with the same schedules as above:
+`~/.config/darius/config.toml`, configures the four timers (sync, vigil sweep, run-due, snapshot) with the same schedules as above, and runs `darius skill install` on each activation:
 
 ```nix
 # flake.nix
@@ -388,6 +388,10 @@ inputs.darius = {
   assigns the process to a systemd slice.
 - The run-due timer fires every 15 minutes by default (`runDue.onCalendar = "*:05/15"`: :05, :20, :35, :50),
   offset from the sync timer. Set `runDue.onCalendar` to change it.
+- `services.darius.skills.enable` (default true) installs and refreshes the Claude Code skills and
+  agent under `~/.claude` on each activation. A failure, such as an unstamped file in the way,
+  prints a warning and never fails the activation. It never writes `settings.json`. Set it to
+  `false` to manage the skills yourself.
 - Timers require systemd lingering to fire without an active login: `users.users.<name>.linger = true`.
 - Vigil `Command:` lines run in a login shell, where `/etc/profile` resets PATH on NixOS.
   Checks search your login PATH first, matching interactive shells, then the unit directories; `darius`

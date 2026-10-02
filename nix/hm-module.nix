@@ -6,6 +6,11 @@
 # the same schedules as systemd/*.timer, plus the standing darius-web.service
 # (services.darius.web) that runs the read-only status page.
 #
+# On activation it also runs `darius skill install` (services.darius.skills),
+# which installs and refreshes the Claude Code skills and agent under ~/.claude.
+# A failure there prints a warning and never fails the activation. It never
+# writes settings.json.
+#
 # The unit PATH is spelled out here, not inherited. A user unit's environment
 # is whatever the user manager has, and on NixOS that is not the login PATH.
 # The units need bash (vigil checks), darius itself (the hook, and the model's
@@ -251,6 +256,16 @@ in
       };
     };
 
+    skills.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install and refresh the darius Claude Code skills and agent under
+        ~/.claude on activation (`darius skill install`). A failure prints a
+        warning and never fails the activation. It never writes settings.json.
+      '';
+    };
+
     web = {
       enable = mkOption {
         type = types.bool;
@@ -303,6 +318,17 @@ in
           }
         ];
       }
+
+      (mkIf cfg.skills.enable {
+        # `darius skill install` is safe to repeat: it writes only what
+        # changed, and refuses a file in the way that darius did not stamp.
+        # Activation must not fail on that, so a non-zero exit is a warning.
+        home.activation.dariusSkills = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+          if ! run ${cfg.package}/bin/darius skill install; then
+            echo "darius: skill install failed. Activation continues. Run darius skill status to see why." >&2
+          fi
+        '';
+      })
 
       (mkIf (cfg.settings != null) {
         home.file.".config/darius/config.toml".text = configText cfg.settings;
