@@ -99,6 +99,7 @@ let
     fileset = lib.fileset.unions [
       ../../bin
       ../../scripts
+      ../../skills
       ../../src
       ../../systemd
       ../../package.json

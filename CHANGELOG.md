@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.61.0] - 2026-10-02
+
+### Added
+
+- `darius skill status` checks the three hooks in `settings.json` after the file lines: `ok`, `differs`, `missing` or `unreadable`. When one is not ok, it says to paste the output of `darius skill hook`. It only reads `settings.json`. The exit code still depends on the generated skill only. `--json` adds the hook entries to the same array.
+- The home-manager module has `services.darius.skills.enable` (default true). Activation runs `darius skill install`. A failure prints a warning and never fails the activation.
+
+### Changed
+
+- `darius setup` (and so `darius update`) installs a file of the skill set that is missing, such as a skill a new release adds, when the generated skill is installed and stamped at user level. With no such skill it installs nothing, as before. On such a host it also names the hooks that are not ok.
+- `darius worklog open` needs a slug that names an active milestone folder (`M68-framework-quality` or `framework-quality`). It refuses no slug, an unknown slug and an archived milestone, so it no longer writes `default.md`. Findings with no milestone belong in a plain doc. The `darius-worklog` skill says so.
+
+### Fixed
+
+- The Nix test derivation and the VM test checkout include `skills/`. Since 0.60.0 the skill tests and the VM test failed in `nix flake check`.
+
 ## [0.60.0] - 2026-10-01
 
 ### Added

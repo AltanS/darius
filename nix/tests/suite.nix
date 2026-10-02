@@ -20,6 +20,8 @@ stdenvNoCC.mkDerivation {
     fileset = lib.fileset.unions [
       (src + "/bin")
       (src + "/scripts")
+      # The static skill text: test/skill*.test.ts install it.
+      (src + "/skills")
       (src + "/src")
       (src + "/systemd")
       (src + "/test")
