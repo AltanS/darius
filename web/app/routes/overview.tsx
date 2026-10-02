@@ -6,7 +6,8 @@ import { PhoneMore } from "../components/pulse.tsx";
 import { RowList } from "../components/row.tsx";
 import { ReportRow, RunList } from "../components/runs.tsx";
 import { Empty, SectHead, Time } from "../components/ui.tsx";
-import { homeView } from "../lib/home.ts";
+import { WorkspaceList } from "../components/workspaces.tsx";
+import { homeView, workspaceRows } from "../lib/home.ts";
 import { href } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { statusOf } from "../lib/status.ts";
@@ -32,6 +33,7 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
   return {
     workspace: scope.workspace,
     home: homeView(status, read, scope),
+    workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
     extras: only === undefined ? null : workspaceExtras(only, read),
   };
 }
@@ -57,25 +59,28 @@ interface WorkspaceMetaProps {
   extras: WorkspaceExtras;
 }
 
-/** Under the verdict of a workspace: its limits, its last sync and where its checkout is. */
+/** The facts of a workspace, at the end of the rail: its limits, its last sync and where its checkout is. */
 function WorkspaceMeta({ extras }: WorkspaceMetaProps): React.ReactNode {
   return (
-    <div className="ws-meta">
-      <p className="page-meta meta-dots">
-        {extras.maxMode === null ? null : <span>at most {extras.maxMode} mode</span>}
-        <span>
-          synced <Time iso={extras.lastSync} />
-        </span>
-        {extras.checkout === null ? <span>not linked on this host</span> : null}
-      </p>
-      {extras.checkout === null ? null : (
-        <p className="ws-path">
-          <code>
-            <PathText path={extras.checkout} />
-          </code>
+    <section className="section sec-facts">
+      <SectHead title="Workspace" />
+      <div className="ws-meta">
+        <p className="page-meta meta-dots">
+          {extras.maxMode === null ? null : <span>at most {extras.maxMode} mode</span>}
+          <span>
+            synced <Time iso={extras.lastSync} />
+          </span>
+          {extras.checkout === null ? <span>not linked on this host</span> : null}
         </p>
-      )}
-    </div>
+        {extras.checkout === null ? null : (
+          <p className="ws-path">
+            <code>
+              <PathText path={extras.checkout} />
+            </code>
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -127,14 +132,15 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
  * top (the strip only has the segments above zero). Then Needs you (only when
  * something needs you), Now (only when something runs) and Last night. A
  * workspace adds its latest reports, its recent runs and where its checkout
- * is; all workspaces add one link to the list of all runs. What is coming up
+ * is, at the end of the rail; all workspaces add the Workspaces list after
+ * Needs you and one link to the list of all runs. What is coming up
  * lives in the Rituals and Vigils sections: the Next line and the strip link
  * there. On a phone the sections stack in the order of the day; on a desktop
  * the wide column holds Needs you, Now and the reports, the rail holds Last
  * night and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { home, extras } = loaderData;
+  const { home, extras, workspaces } = loaderData;
   const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
   return (
     <div className="proj ov">
@@ -143,7 +149,6 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
         <p className="verdict-sub">{sub}</p>
         {next === null ? null : <NextUp next={next} />}
       </section>
-      {extras === null ? null : <WorkspaceMeta extras={extras} />}
       <StatusStrip segments={strip} />
       <div className="board board-home">
         <div className="board-main">
@@ -157,6 +162,7 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
               </div>
             </section>
           )}
+          {workspaces === null ? null : <WorkspaceList rows={workspaces} />}
           {now.length === 0 ? null : (
             <section className="section sec-now" id="now">
               <SectHead title="Now" />
@@ -182,7 +188,9 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
             <p className="rail-note sec-runs">
               <Link to={href({ to: "section", ws: null, section: "runs" })}>All runs</Link>
             </p>
-          ) : null}
+          ) : (
+            <WorkspaceMeta extras={extras} />
+          )}
         </aside>
       </div>
     </div>

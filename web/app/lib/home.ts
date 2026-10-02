@@ -36,7 +36,7 @@ import { buildAgenda, nextLine, type Agenda, type NextLine } from "./agenda.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
-import { ASKS_YOU, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
+import { ASKS_YOU, datePhrase, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
 import { ackText, activity, asksYou, decisionText, excerpt, isDjinn, runState, stuckFor, type ActivityRun, type Excerpt } from "./view.ts";
 
@@ -614,6 +614,44 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     agenda,
     health: [timerPiece(clock, status, states), syncPiece(clock, status), ...lastRunPiece(clock, states)],
   };
+}
+
+// --- the workspace rows --------------------------------------------------------------------
+
+/** The next dated item of a workspace: what it is, the YYYY-MM-DD it comes up on, and that day in words. */
+export interface WorkspaceNext {
+  title: string;
+  date: string;
+  /** "today", "tomorrow", "Fri 2 Oct" or "15 Nov". */
+  when: string;
+}
+
+/** One row of the Workspaces list on the all-workspaces Overview. */
+export interface WorkspaceRow {
+  name: string;
+  /** The things that need the operator here: the same count as the verdict and the badges. */
+  needs: number;
+  /** darius could not read the workspace; `needs` then counts it as one. */
+  unreadable: boolean;
+  /** The first dated item that is not late; null when there is none. */
+  next: WorkspaceNext | null;
+  /** The Overview of the workspace. */
+  href: string;
+}
+
+/**
+ * One row per workspace in the scope, the ones that need you first (most
+ * first), then by name. A workspace that cannot be read has no next item.
+ */
+export function workspaceRows(status: HostStatus, scope: HomeScope = ALL_WORKSPACES): WorkspaceRow[] {
+  const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
+  const rows = scopeProjects(status, scope).map((project): WorkspaceRow => {
+    const needs = projectNeeds(clock, status.generatedAt, project);
+    const row = project.error === null ? buildAgenda({ projects: [project], today: clock.today }).next : null;
+    const next = row === null || row.date === null ? null : { title: row.title, date: row.date, when: datePhrase(clock.today, row.date) };
+    return { name: project.name, needs: needsSize(needs), unreadable: needs.unreadable, next, href: href({ to: "overview", ws: project.name }) };
+  });
+  return rows.toSorted((left, right) => right.needs - left.needs || left.name.localeCompare(right.name));
 }
 
 // --- the self-test line --------------------------------------------------------------------

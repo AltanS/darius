@@ -1475,3 +1475,59 @@ test("on the all-workspaces Findings and Runs pages the chip row is Workspace, a
   assert.equal(one.includes('aria-label="Workspace"'), false, "no workspace row inside a workspace");
   assert.ok(filterLinks(one).some(([link]) => link === "/w/atlas/runs?state=failed"), "the state chips stay in the workspace");
 });
+
+/** The part of a page from one section's opening tag to the next section. */
+function sectionOf(body: string, id: string): string {
+  const from = body.indexOf(`id="${id}"`);
+  assert.ok(from !== -1, `the page has a section ${id}`);
+  const next = body.indexOf("<section", from);
+  return body.slice(from, next === -1 ? undefined : next);
+}
+
+function homesStatus(): HostStatus {
+  const demo = STATUS.projects[0]!;
+  const atlas = { ...demo, name: "atlas", rituals: [{ ...demo.rituals[0]!, slug: "sweep", title: "Atlas sweep", heldRun: null, overdueDays: 0, isDue: false, nextDue: "2026-10-02" }], runs: [], vigils: [], checkout: null };
+  const spaced = { ...demo, name: "my shop", rituals: [], runs: [], vigils: [], checkout: null };
+  const broken = { ...demo, name: "broken", rituals: [], runs: [], vigils: [], checkout: null, error: "cannot read the store" };
+  const selftest = { ...demo, name: "darius-selftest", rituals: [], runs: [], vigils: [], checkout: null };
+  return { ...STATUS, projects: [demo, atlas, spaced, broken, selftest] };
+}
+
+test("/all lists each workspace but the self-test one, the ones that need you first, each with a working link", async () => {
+  const status = homesStatus();
+  const { body } = await readWith("/all", {}, status);
+  const list = sectionOf(body, "workspaces");
+  assert.ok(body.indexOf('id="needs"') < body.indexOf('id="workspaces"'), "after Needs you");
+  assert.ok(list.includes(">Workspaces<"));
+  const names = [...list.matchAll(/<a [^>]*class="rw-title"[^>]*>([^<]*)<\/a>/gu)].map((match) => match[1]);
+  assert.deepEqual(names, ["demo", "broken", "atlas", "my shop"], "needs first (demo 2, broken 1), then by name; no self-test workspace");
+  assert.match(list, />2 need you</u, "a count in the wait tone");
+  assert.match(list, /rw-state tone-wait">2 need you</u);
+  assert.match(list, /rw-state tone-bad">unreadable</u);
+  assert.match(list, /rw-state tone-idle">all clear</u);
+  assert.ok(list.includes("Next: Atlas sweep, Fri 2 Oct"), "one quiet line for what is next");
+  assert.equal(/class="rw-title"[^>]*>darius-selftest/u.test(list), false);
+  for (const link of ["/w/demo", "/w/broken", "/w/atlas", "/w/my%20shop"]) {
+    assert.ok(linkTo(list, link)?.includes('class="rw-title"'), `${link} is the name of a row`);
+    const page = await readWith(link, {}, status);
+    assert.equal(page.status, 200, `${link} opens`);
+  }
+});
+
+test("/all with no workspace says how to link one", async () => {
+  const { body } = await readWith("/all", {}, { ...STATUS, projects: [] });
+  assert.ok(sectionOf(body, "workspaces").includes("No workspace is linked on this host. Run darius link in a checkout."));
+});
+
+test("a workspace Overview has no Workspaces list; its facts end the rail and All runs opens its runs", async () => {
+  const { body } = await readWith("/w/demo", {}, homesStatus());
+  assert.equal(body.includes('id="workspaces"'), false);
+  const rail = body.slice(body.indexOf('<aside class="board-rail">'));
+  const facts = rail.indexOf("sec-facts");
+  assert.ok(facts !== -1, "the facts are in the rail");
+  assert.ok(facts > rail.indexOf('class="health'), "below the health line");
+  assert.ok(rail.slice(facts).includes("/home/test/demo") && rail.slice(facts).includes("at most report mode") && rail.slice(facts).includes("synced"));
+  assert.equal(body.slice(0, body.indexOf('<aside class="board-rail">')).includes("/home/test/demo"), false, "nothing of it under the verdict");
+  assert.ok(linkTo(body, "/w/demo/runs")?.length, "All runs opens the runs of the workspace");
+  assert.ok(body.includes(">All runs<"));
+});

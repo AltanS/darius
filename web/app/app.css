@@ -3279,6 +3279,38 @@
     font: inherit;
   }
 
+  /* --- homes: the Workspaces list and the workspace facts (chunk E) ------------------ */
+
+  /* A workspace row has no icon: one column. The name is the stretched link. */
+
+  .rw.ws-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ws-next {
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-faint);
+    overflow-wrap: anywhere;
+  }
+
+  /* The facts sit at the end of the rail, under the health line. */
+
+  .sec-facts .ws-meta {
+    margin: 0;
+  }
+
+  @media (max-width: 900px) {
+    .board.board-home .sec-workspaces {
+      order: 2;
+    }
+
+    .ov .sec-facts {
+      order: 10;
+    }
+  }
+
   @media (max-width: 900px) {
     .ov .sec-reports {
       order: 6;
