@@ -1531,3 +1531,128 @@ test("a workspace Overview has no Workspaces list; its facts end the rail and Al
   assert.ok(linkTo(body, "/w/demo/runs")?.length, "All runs opens the runs of the workspace");
   assert.ok(body.includes(">All runs<"));
 });
+
+// --- the navigation crawl (0.63.0): every link a page offers leads somewhere real ---------------------
+
+const crawlPaths = await import("../web/app/lib/paths.ts");
+
+/** Decode the entities React writes into an attribute. */
+function unescapeAttribute(value: string): string {
+  return value.replaceAll("&amp;", "&").replaceAll("&quot;", '"').replaceAll("&#x27;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+}
+
+/** The addresses of the links in a piece of HTML, entities decoded. */
+function anchorsOf(html: string): string[] {
+  return [...html.matchAll(/<a\b[^>]*?\shref="([^"]*)"/gu)].map((match) => unescapeAttribute(match[1] ?? ""));
+}
+
+/** The inside of main, or "". */
+function mainOf(body: string): string {
+  const from = body.indexOf("<main");
+  return from === -1 ? "" : body.slice(from, body.indexOf("</main>", from));
+}
+
+/** Every id in a page. */
+function idsOf(body: string): Set<string> {
+  return new Set([...body.matchAll(/\sid="([^"]+)"/gu)].map((match) => unescapeAttribute(match[1] ?? "")));
+}
+
+/** The scope a page belongs to: its own, or the one in the cookie for a page with none. */
+function crawlScopeOf(path: string, cookieScope: string): string | null {
+  const place = crawlPaths.placeOf(new URL(path, "http://darius.test").pathname);
+  return place.kind === "host" || place.kind === "unknown" ? cookieScope : place.scope;
+}
+
+interface Crawl {
+  path: string;
+  /** How many tabs must be lit, and the address of the lit one when it is one. */
+  lit: string | null;
+}
+
+const CRAWL: Crawl[] = [
+  { path: "/all", lit: "/all" },
+  { path: "/w/demo", lit: "/w/demo" },
+  { path: "/w/demo/rituals", lit: "/w/demo/rituals" },
+  { path: "/w/demo/findings?view=all", lit: "/w/demo/findings" },
+  { path: "/w/demo/runs", lit: null },
+  { path: "/w/demo/rituals/daily-report", lit: "/w/demo/rituals" },
+  { path: `/w/demo/runs/${DONE}`, lit: "/w/demo/rituals" },
+  { path: `/w/demo/runs/${HELD}`, lit: "/w/demo/rituals" },
+  { path: "/w/demo/milestones/M7", lit: "/w/demo/milestones" },
+  { path: "/status", lit: null },
+  { path: "/settings/backups", lit: null },
+  { path: "/profiles", lit: null },
+  { path: "/nope", lit: null },
+];
+
+test("the navigation crawl: every link in Places, Tabs, Breadcrumb and main leads to a real page in the same scope", async () => {
+  const status = threeWorkspaces();
+  const request = (path: string): Promise<Response> => handler(new Request(`http://darius.test${path}`, { headers: { Cookie: "darius_scope=demo" } }), { ...context, status: () => status });
+  const pages = new Map<string, { status: number; body: string; location: string | null }>();
+  const read = async (path: string): Promise<{ status: number; body: string; location: string | null }> => {
+    const known = pages.get(path);
+    if (known !== undefined) return known;
+    const response = await request(path);
+    const page = { status: response.status, body: (await response.text()).replaceAll("<!-- -->", ""), location: response.headers.get("location") };
+    pages.set(path, page);
+    return page;
+  };
+  const checked = new Set<string>();
+
+  for (const { path, lit } of CRAWL) {
+    const { body } = await read(path);
+    const places = navOf(body, "Places");
+    const tabs = navOf(body, "Tabs");
+    const crumbs = navOf(body, "Breadcrumb");
+    const scope = crawlScopeOf(path, "demo");
+
+    for (const [region, html] of [["Places", places], ["Tabs", tabs], ["Breadcrumb", crumbs], ["main", mainOf(body)]] as const) {
+      for (const address of anchorsOf(html)) {
+        if (/^(?:https?:|mailto:)/u.test(address)) continue;
+        const target = address.startsWith("#") ? path.split("#")[0]! : address.split("#")[0]!;
+        const fragment = address.includes("#") ? decodeURIComponent(address.slice(address.indexOf("#") + 1)) : "";
+        const key = `${path} ${region} ${address}`;
+        if (checked.has(key)) continue;
+        checked.add(key);
+        let landed = await read(target);
+        // 1) 200, or a 301 to a URL that answers 200.
+        if (landed.status === 301) {
+          assert.ok(landed.location !== null, `${key}: a 301 names a place`);
+          landed = await read(landed.location);
+        }
+        assert.equal(landed.status, 200, `${key}: the link answers 200`);
+        // 2) a #fragment is an id on the page it opens.
+        if (fragment !== "") assert.ok(idsOf(landed.body).has(fragment), `${key}: #${fragment} is an id on ${target}`);
+      }
+    }
+
+    // 3) tabs and breadcrumbs keep the scope of the page (host and error pages: the cookie scope).
+    for (const [region, html] of [["Tabs", tabs], ["Breadcrumb", crumbs]] as const) {
+      for (const address of anchorsOf(html)) {
+        const place = crawlPaths.placeOf(address.split(/[?#]/u)[0]!);
+        assert.equal(place.scope, scope, `${path} ${region} ${address}: the scope stays ${scope ?? "All workspaces"}`);
+      }
+    }
+
+    // 4) one lit tab, or none.
+    const litTabs = [...tabs.matchAll(/<a\b[^>]*aria-current="page"[^>]*\shref="([^"]+)"|<a\b[^>]*\shref="([^"]+)"[^>]*aria-current="page"/gu)].map((match) => match[1] ?? match[2] ?? "");
+    assert.deepEqual(litTabs, lit === null ? [] : [lit], `${path}: the lit tab`);
+    assert.ok(tabs !== "", `${path}: the tab bar is there`);
+
+    // 5) Places lists every workspace but the self-test one, and marks the current scope.
+    const rows = [...places.matchAll(/<a\b[^>]*places-scope[^>]*>/gu)].map((match) => match[0]);
+    const scopeHrefs = rows.map((row) => /\shref="([^"]+)"/u.exec(row)?.[1] ?? "").filter((address) => address === "/all" || /^\/w\/[^/]+$/u.test(address));
+    assert.deepEqual(new Set(scopeHrefs), new Set(["/all", "/w/demo", "/w/atlas"]), `${path}: Places lists All workspaces and each workspace, not the self-test one`);
+    const marked = rows.filter((row) => row.includes('aria-current="true"')).map((row) => /\shref="([^"]+)"/u.exec(row)?.[1]);
+    assert.deepEqual(marked, [scope === null ? "/all" : crawlPaths.href({ to: "overview", ws: scope })], `${path}: Places marks the current scope`);
+    assert.ok([...places.matchAll(/aria-current="page"/gu)].length <= 1, `${path}: at most one row is lit`);
+  }
+  assert.ok(checked.size > 100 && [...checked].some((key) => key.includes("#")), "the crawl follows many links, fragments among them");
+});
+
+test("the crawl reads the scope from the cookie on a host page, and a section page ignores it", async () => {
+  const status = threeWorkspaces();
+  const read = async (path: string, scope: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`, { headers: { Cookie: `darius_scope=${scope}` } }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
+  assert.equal(anchorsOf(navOf(await read("/status", "atlas"), "Tabs"))[0], "/w/atlas");
+  assert.equal(anchorsOf(navOf(await read("/w/demo/vigils", "atlas"), "Tabs"))[0], "/w/demo", "the page wins over the cookie");
+});
