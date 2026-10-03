@@ -13,6 +13,11 @@
  * its ritual that handed in a result did not report it. A follow-up never
  * makes a finding stale: it reports only what it changed.
  *
+ * RESET (0.66.0). `finding.reset` (src/cli/finding.ts) hides every run
+ * result that completed before it: for its ritual when the line names one
+ * (`item: ritual/<slug>`), else for all rituals. The newest matching reset
+ * counts. Ledger lines sync, so a reset on one host applies on every host.
+ *
  * CLOSE. `finding.closed` closes a finding at the severity of its newest
  * report at that time. The close stays in force while later reports have the
  * same or a lower severity. A report at a higher severity ends it and sets
@@ -223,9 +228,30 @@ function operatorLine(line: LedgerLine): { ritual: string; key: string } | null 
   return { ritual: item.slice(RITUAL_PREFIX.length), key };
 }
 
+/** The ledger line type `darius finding reset` writes (0.66.0). */
+export const FINDING_RESET = "finding.reset";
+
+/** The time of the newest `finding.reset` per ritual slug; "" holds the newest reset of all rituals. */
+function resetTimes(ledger: readonly LedgerLine[]): Map<string, string> {
+  const times = new Map<string, string>();
+  for (const line of ledger) {
+    if (line.type !== FINDING_RESET) continue;
+    const ritual = isText(line.item) && line.item.startsWith(RITUAL_PREFIX) ? line.item.slice(RITUAL_PREFIX.length) : "";
+    const known = times.get(ritual);
+    if (known === undefined || line.at > known) times.set(ritual, line.at);
+  }
+  return times;
+}
+
+/** True when a reset hides a result of `ritual` that completed at `at`: a reset for the ritual, or for all, came later. */
+function isHiddenByReset(resets: ReadonlyMap<string, string>, ritual: string, at: string): boolean {
+  return [resets.get(""), resets.get(ritual)].some((reset) => reset !== undefined && at < reset);
+}
+
 /** The findings of every ritual of the project, worst first (see the sort rules in docs/concept.md). */
 export function collectFindings(project: Project, ledger: readonly LedgerLine[]): Finding[] {
   const followUps = followUpRuns(ledger);
+  const resets = resetTimes(ledger);
   const tracks = new Map<string, Track>();
   const newestFull = new Map<string, number>();
   ledger.forEach((line, order) => {
@@ -244,9 +270,10 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
       return;
     }
     if (line.type !== "run.completed" || !isText(line.item) || !line.item.startsWith(RITUAL_PREFIX) || !isText(line.run)) return;
+    const ritual = line.item.slice(RITUAL_PREFIX.length);
+    if (isHiddenByReset(resets, ritual, line.at)) return;
     const result = resultOf(project, line);
     if (result === null) return;
-    const ritual = line.item.slice(RITUAL_PREFIX.length);
     if (line.outcome === "complete" && !followUps.has(line.run)) newestFull.set(ritual, order);
     const seen: FindingSeen = { run: line.run, at: line.at };
     for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order }, key, entry);

@@ -18,6 +18,8 @@ import {
   PROMPT_CLOSED_MAX,
   PROMPT_OPEN_MAX,
 } from "../src/core/finding-index.ts";
+import { writeRemoteChunk } from "../src/core/ledger.ts";
+import { ulid } from "../src/core/ulid.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-finding-index-"));
@@ -285,4 +287,43 @@ test("the prompt lines cap open findings at 40 and closed keys at 20", () => {
   assert.equal(lines.filter((line) => line.startsWith("- {open-")).length, PROMPT_OPEN_MAX);
   assert.ok(lines.includes("- (5 more)"));
   assert.equal((lines.at(-1) ?? "").match(/\{closed-/gu)?.length, PROMPT_CLOSED_MAX);
+});
+
+// --- reset (0.66.0) -------------------------------------------------------------------
+
+test("a reset hides every result before it; a later run's findings show", () => {
+  const seed = new Seeder("fi-reset");
+  seed.run("check", [{ key: "a", severity: "high", state: "needs-code" }, { key: "b" }]);
+  seed.close("check", "b");
+  seed.reset();
+  assert.deepEqual(seed.findings(), [], "nothing from before the reset");
+  assert.deepEqual(findingPromptLines(seed.findings()), []);
+  seed.run("check", [{ key: "b" }]);
+  const [b] = seed.findings();
+  assert.equal(seed.findings().length, 1);
+  assert.equal(b?.key, "b");
+  assert.equal(b?.runs, 1, "the history starts after the reset");
+  assert.equal(b?.status, "open", "a close before the reset is gone with it");
+});
+
+test("a reset for one ritual leaves the others; the newest reset counts", () => {
+  const seed = new Seeder("fi-reset-ritual");
+  seed.run("one", [{ key: "a" }]);
+  seed.run("two", [{ key: "b" }]);
+  seed.reset("one");
+  assert.deepEqual(seed.findings().map((finding) => `${finding.ritual}/${finding.key}`), ["two/b"]);
+  seed.run("one", [{ key: "c" }]);
+  seed.reset("two");
+  assert.deepEqual(seed.findings().map((finding) => `${finding.ritual}/${finding.key}`), ["one/c"]);
+  seed.reset();
+  assert.deepEqual(seed.findings(), [], "a reset without a ritual is for all");
+});
+
+test("a reset line from another host's ledger chunk applies like a local one", () => {
+  const seed = new Seeder("fi-reset-sync");
+  seed.run("check", [{ key: "a" }]);
+  const at = seed.tick();
+  const line = { v: 1, id: ulid(Date.parse(at)), at, host: "host-b", who: "op", project: seed.project.name, type: "finding.reset", item: "ritual/check" };
+  assert.equal(writeRemoteChunk(seed.project, { host: "host-b", name: `${ulid(Date.parse(at))}.jsonl`, text: `${JSON.stringify(line)}\n` }), "written");
+  assert.deepEqual(seed.findings(), []);
 });

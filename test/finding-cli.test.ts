@@ -157,3 +157,40 @@ test("the finding verb is registered and listed for sessions", async () => {
   registerCommands();
   assert.equal(getCommand("finding")?.audience, "session");
 });
+
+// --- reset (0.66.0) ------- ---------------------------------------------------------
+
+test("finding reset hides every finding from before it and says how many; list --all shows nothing from before", async () => {
+  seeded("fc-reset");
+  const reset = await finding("fc-reset", ["reset", "--note", "fresh start"]);
+  assert.equal(reset.code, 0);
+  assert.equal(reset.stdout, "✓ reset the findings of all rituals in fc-reset: hid 4 finding(s), 3 of them open");
+  assert.equal((await finding("fc-reset", ["list", "--all"])).stdout, "no findings");
+  const line = readLedger(new Seeder("fc-reset").project).findLast((entry) => entry.type === "finding.reset");
+  assert.deepEqual([line?.note, line?.item], ["fresh start", undefined]);
+  assert.ok(line?.host !== undefined && line.host !== "" && line.at !== "", "the line names the host and the time");
+});
+
+test("finding reset --ritual leaves the other rituals; --json names the counts", async () => {
+  const seed = seeded("fc-reset-ritual");
+  seed.run("other", [{ key: "x", severity: "high", state: "needs-decision" }]);
+  const json = JSON.parse((await finding("fc-reset-ritual", ["reset", "--ritual", "check", "--json"])).stdout);
+  assert.deepEqual(json, { ok: true, project: "fc-reset-ritual", hidden: 4, waiting: 3, ritual: "check" });
+  const left = JSON.parse((await finding("fc-reset-ritual", ["list", "--all", "--json"])).stdout).findings;
+  assert.deepEqual(left.map((one: { ritual: string; key: string }) => `${one.ritual}/${one.key}`), ["other/x"]);
+  assert.equal(readLedger(seed.project).findLast((entry) => entry.type === "finding.reset")?.item, "ritual/check");
+});
+
+test("finding reset needs a project: refused outside a linked checkout without --project", async () => {
+  const cwd = process.cwd();
+  const project = process.env.DARIUS_PROJECT;
+  delete process.env.DARIUS_PROJECT;
+  process.chdir(mkdtempSync(join(SANDBOX, "nowhere-")));
+  try {
+    await assert.rejects(runCli(findingCommand, ["reset"]), UsageError);
+    await assert.rejects(finding("fc-reset-key", ["reset", "some-key"]), /finding reset takes no <key>/u);
+  } finally {
+    process.chdir(cwd);
+    if (project !== undefined) process.env.DARIUS_PROJECT = project;
+  }
+});

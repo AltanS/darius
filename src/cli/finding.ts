@@ -1,9 +1,9 @@
 /**
- * `darius finding list|show|close|reopen`: the findings the rituals of a
- * project report across runs (docs/concept.md, "Findings (0.62.0)"). A
+ * `darius finding list|show|close|reopen|reset`: the findings the rituals of
+ * a project report across runs (docs/concept.md, "Findings (0.62.0)"). A
  * finding is derived from the ledger and the result blobs
  * (src/core/finding-index.ts); the only thing written is the operator's
- * close or reopen, as one ledger line.
+ * close, reopen or reset, as one ledger line.
  *
  *   finding list [--ritual SLUG] [--open | --all] [--json]
  *                  default: the findings that need the operator (needs-you);
@@ -13,19 +13,22 @@
  *                  refuses a fixed or an already closed finding
  *   finding reopen <key> [--ritual SLUG] [--who NAME]
  *                  refuses a finding that is not closed
+ *   finding reset [--ritual SLUG] [--note TEXT] [--who NAME] (0.66.0)
+ *                  hides every run result that completed before now, for
+ *                  one ritual or for all; prints how many findings it hid
  *
  * A key is scoped to its ritual. A key found in more than one ritual needs
  * `--ritual` (a usage error, exit 2, that names them). An unknown key is a
  * usage error too. A refused close or reopen exits 1.
  */
 
-import { collectFindings, type Finding, type FindingStatus } from "../core/finding-index.ts";
+import { collectFindings, FINDING_RESET, type Finding, type FindingStatus } from "../core/finding-index.ts";
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "list | show | close | reopen";
+const VERBS = "list | show | close | reopen | reset";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -181,11 +184,51 @@ function findingChange(args: ParsedArgs, verb: "close" | "reopen"): number {
   return 0;
 }
 
+// --- reset ------------------------------------------------------------------------
+
+/** What a reset hid: every finding of its scope, and how many of them waited (needs-you or open). */
+interface ResetResult {
+  hidden: number;
+  waiting: number;
+  ritual?: string;
+}
+
+/**
+ * `finding reset` (0.66.0): one `finding.reset` ledger line, under the
+ * project lock. collectFindings then ignores every result that completed
+ * before it, for the ritual it names or for all. Nothing is deleted: the
+ * results stay in the ledger and the blobs, and the line syncs like any
+ * other.
+ */
+function findingReset(args: ParsedArgs): number {
+  if (args.positional.length > 1) throw new UsageError("finding reset takes no <key>; pass --ritual SLUG to reset one ritual");
+  const project = currentProject(args);
+  const ritual = stringFlag(args, "ritual");
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const note = stringFlag(args, "note");
+  const result = project.withLock((): ResetResult => {
+    const before = collectFindings(project, readLedger(project)).filter((finding) => ritual === undefined || finding.ritual === ritual);
+    const line: LedgerLineInput = { who, type: FINDING_RESET };
+    if (ritual !== undefined) line.item = itemRef("ritual", ritual);
+    if (note !== undefined && note.trim() !== "") line.note = note.trim();
+    appendLine(project, line);
+    const after = new Set(collectFindings(project, readLedger(project)).map((finding) => `${finding.ritual}\u0000${finding.key}`));
+    const hidden = before.filter((finding) => !after.has(`${finding.ritual}\u0000${finding.key}`));
+    const reset: ResetResult = { hidden: hidden.length, waiting: hidden.filter((finding) => finding.status === "needs-you" || finding.status === "open").length };
+    if (ritual !== undefined) reset.ritual = ritual;
+    return reset;
+  });
+  const scope = result.ritual === undefined ? "all rituals" : `ritual '${result.ritual}'`;
+  if (args.json) printJson({ ok: true, project: project.name, ...result });
+  else console.log(`✓ reset the findings of ${scope} in ${project.name}: hid ${String(result.hidden)} finding(s), ${String(result.waiting)} of them open`);
+  return 0;
+}
+
 // --- dispatch ---------------------------------------------------------------------
 
 export const findingCommand: Command = {
   name: "finding",
-  summary: "list, show, close and reopen the findings rituals report across runs",
+  summary: "list, show, close, reopen and reset the findings rituals report across runs",
   audience: "session",
   usage: `finding ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
@@ -199,6 +242,8 @@ export const findingCommand: Command = {
         return findingChange(args, "close");
       case "reopen":
         return findingChange(args, "reopen");
+      case "reset":
+        return findingReset(args);
       default:
         throw new UsageError(`finding needs a verb: ${VERBS}`);
     }
