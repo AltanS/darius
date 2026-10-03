@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.63.1] - 2026-10-03
+
+### Fixed
+
+- The Findings and Rituals pages did not load on a host and kept reloading. The ignore rule `result-*` (for Nix build links) also hid the build chunk `web/build/client/assets/result-<hash>.js` from the commit, so 0.63.0 shipped without it. The rule now matches the repo root only.
+- A test fails when a `.gitignore` rule hides a file of `web/build/`.
+
 ## [0.63.0] - 2026-10-03
 
 ### Added

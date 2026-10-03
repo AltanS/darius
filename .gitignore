@@ -29,6 +29,6 @@ CLAUDE.local.md
 .darius.toml
 .tracker/
 
-# nix build out-links
-result
-result-*
+# nix build out-links (at the repo root only: web/build has a chunk named result-<hash>.js)
+/result
+/result-*
