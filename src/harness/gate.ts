@@ -19,9 +19,11 @@
  *
  * A decision is allow, deny or hold. `hold` is for what needs a person: a
  * `hold` pattern, a report-mode write verb, any call after the run is held.
- * A policy with `on_hold: "deny"` (0.66.0) turns a `hold` pattern match into
- * a deny that names the pattern: the call is refused, the run goes on, and
- * the model records the command as a needs-decision item.
+ * A policy with `on_hold: "deny"` (0.66.0) turns a `hold` pattern match and
+ * a report-mode write verb into a deny that names the rule: the call is
+ * refused, the run goes on, and the model records the command as a
+ * needs-decision item. Then no gate verdict holds a run that is not held
+ * yet; only the run's own `darius run hold` does.
  * The run is then held and the model must stop. A match only inside quoted
  * text is a deny instead (holdView, 0.64.0). `deny` is for a call the
  * policy does not allow (outside `may`, a file write, a subagent): the model
@@ -758,12 +760,19 @@ function quotedOnlyDeny(pattern: string, command: string): GateDecision {
   );
 }
 
-/** The deny reason of a hold-list match under `on_hold: "deny"` (0.66.0). The model reads it and goes on. */
-export function onHoldDenyReason(pattern: string): string {
+/** The deny reason of a hold under `on_hold: "deny"` (0.66.0): `hold rule: <pattern>` or `report mode: <verb>`. The model reads it and goes on. */
+export function onHoldDenyReason(pattern: string, cause: HoldCause = "hold-rule"): string {
+  const rule = cause === "hold-rule" ? "hold rule" : "report mode";
   return (
-    `outside this run's scope (hold rule: ${pattern}). Do not try another form of this command. ` +
+    `outside this run's scope (${rule}: ${pattern}). Do not try another form of this command. ` +
     "Record it as a needs-decision item with the exact command, and go on with the rest of the work."
   );
+}
+
+/** A hold for `pattern` of `cause`, or under `on_hold: "deny"` the deny in its place. */
+function holdOrDeny(policy: RunPolicy, cause: HoldCause, pattern: string, holdReason: string): GateDecision {
+  if (policy.on_hold === "deny") return { verdict: "deny", reason: onHoldDenyReason(pattern, cause), holdPattern: pattern, holdCause: cause };
+  return { verdict: "hold", reason: holdReason, holdPattern: pattern, holdCause: cause };
 }
 
 function clip(command: string): string {
@@ -771,11 +780,17 @@ function clip(command: string): string {
 }
 
 /**
- * What the gate decided. `holdPattern` names the hold-list pattern that
- * matched, on a hold and on the deny of an `on_hold: "deny"` policy, so the
- * gate log can count them.
+ * Why a call was held, or denied in its place under `on_hold: "deny"`
+ * (0.66.0): a `hold` pattern, or a report-mode write verb.
  */
-export type GateDecision = { verdict: "allow" } | { verdict: "deny" | "hold"; reason: string; holdPattern?: string };
+export type HoldCause = "hold-rule" | "report-mode";
+
+/**
+ * What the gate decided. On a hold, and on the deny an `on_hold: "deny"`
+ * policy gives in its place, `holdCause` names the cause and `holdPattern`
+ * the pattern that matched, so the gate log can count them.
+ */
+export type GateDecision = { verdict: "allow" } | { verdict: "deny" | "hold"; reason: string; holdPattern?: string; holdCause?: HoldCause };
 
 const ALLOW: GateDecision = { verdict: "allow" };
 
@@ -811,15 +826,14 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (isGranted(command, policy, call)) return ALLOW;
   const held = holdMatch(command, policy.hold);
   if (held?.quotedOnly === true) return quotedOnlyDeny(held.pattern, command);
-  if (held !== undefined && policy.on_hold === "deny") return { verdict: "deny", reason: onHoldDenyReason(held.pattern), holdPattern: held.pattern };
-  if (held !== undefined) return { verdict: "hold", reason: `the command matches the hold pattern /${held.pattern}/: ${clip(command)}`, holdPattern: held.pattern };
+  if (held !== undefined) return holdOrDeny(policy, "hold-rule", held.pattern, `the command matches the hold pattern /${held.pattern}/: ${clip(command)}`);
   const refusal = scope === "full" ? mayRefusal(command, policy.may) : undefined;
   if (refusal !== undefined) return deny(`the command is not allowed by the policy's may rules (${refusal}): ${clip(command)}`);
   if (policy.mode !== "report") return ALLOW;
   const verb = holdMatch(command, REPORT_MODE_WRITE_VERBS);
   if (verb === undefined) return ALLOW;
   if (verb.quotedOnly) return quotedOnlyDeny(verb.pattern, command);
-  return hold(`report mode denies write verbs (/${verb.pattern}/): ${clip(command)}`);
+  return holdOrDeny(policy, "report-mode", verb.pattern, `report mode denies write verbs (/${verb.pattern}/): ${clip(command)}`);
 }
 
 /** The `full` scope's decision for a call that is not a shell command. */

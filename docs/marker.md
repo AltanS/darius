@@ -96,7 +96,7 @@ Root keys:
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)` or an MCP tool name such as `mcp__some-server__get_thing`. A tool name may hold `-` after its first character. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
-| `on_hold` | no | `stop` (default) or `deny`: what a `hold` match does in a run. `stop` holds the run until a person answers. `deny` refuses that one call with a reason that names the pattern, and the run goes on; the model records the command as a needs-decision item. The command never runs either way. A run can still hold itself with `darius run hold`. |
+| `on_hold` | no | `stop` (default) or `deny`: what a `hold` match or a report-mode write verb does in a run. `stop` holds the run until a person answers. `deny` refuses that one call with a reason that names the pattern or the verb, and the run goes on; the model records the command as a needs-decision item. The command never runs either way. A run can still hold itself with `darius run hold`. |
 | `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. With a `policy`, the policy's notes come first, then a blank line, then these. |
 | `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
 | `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |

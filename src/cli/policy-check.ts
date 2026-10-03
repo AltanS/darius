@@ -15,7 +15,7 @@
  * Allow: print nothing, exit 0 (src/harness/gate.ts, "allow, deny or hold").
  *
  * Every decision also goes to `<run>/gate.jsonl` next to the policy file,
- * one line each: `{at, tool, class, verdict, reason?, command?, agent?, hold_pattern?}`. The gate
+ * one line each: `{at, tool, class, verdict, reason?, command?, agent?, hold_pattern?, hold_cause?}`. The gate
  * check per harness version reads it (src/runner/harness-check.ts). A line
  * that cannot be written never changes the decision.
  *
@@ -43,7 +43,7 @@ import type { JsonValue, LedgerLine } from "../core/model.ts";
 import { openProject, sha256Hex } from "../core/store.ts";
 import { claudeHarness } from "../harness/claude.ts";
 import type { HarnessAdapter, ToolCall } from "../harness/contract.ts";
-import { decide, grantRefusal, type DariusBinCheck, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
+import { decide, grantRefusal, type DariusBinCheck, type GateDecision, type GateScope, type HoldCause, type RunPolicy } from "../harness/gate.ts";
 import { HARNESS_IDS, harnessById } from "../harness/registry.ts";
 import { errorMessage } from "../runtime.ts";
 import { recordHold } from "../runner/hold.ts";
@@ -212,8 +212,10 @@ interface GateLogLine {
   command?: string;
   /** The subagent that made the call, when one did. */
   agent?: string;
-  /** The hold-list pattern that matched (0.66.0): on a hold, and on the deny of an `on_hold = "deny"` policy. */
+  /** The pattern that matched (0.66.0): on a hold, and on the deny of an `on_hold = "deny"` policy. */
   hold_pattern?: string;
+  /** What matched (0.66.0): `hold-rule` or `report-mode`, next to hold_pattern. */
+  hold_cause?: HoldCause;
 }
 
 /** Appends the decision to `<run>/gate.jsonl`. Best effort: the decision stands whatever happens here. */
@@ -222,6 +224,7 @@ function logDecision(policyFile: string, call: ToolCall, decision: GateDecision)
   if (decision.verdict !== "allow") {
     line.reason = decision.reason;
     if (decision.holdPattern !== undefined) line.hold_pattern = decision.holdPattern;
+    if (decision.holdCause !== undefined) line.hold_cause = decision.holdCause;
   }
   if (call.command !== undefined) line.command = call.command.slice(0, 300);
   if (call.agentId !== undefined) line.agent = call.agentId;

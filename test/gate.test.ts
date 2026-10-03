@@ -232,19 +232,49 @@ test("on_hold deny: a hold-list match denies the one call, names the pattern, an
     verdict: "hold",
     reason: String.raw`the command matches the hold pattern /\bwp\s/: wp db drop`,
     holdPattern: String.raw`\bwp\s`,
+    holdCause: "hold-rule",
   });
   assert.deepEqual(gateDecide(shell("cd tools && wp db drop"), { policy: denies, isHeld: false }), {
     verdict: "deny",
     reason: String.raw`outside this run's scope (hold rule: \bwp\s). Do not try another form of this command. Record it as a needs-decision item with the exact command, and go on with the rest of the work.`,
     holdPattern: String.raw`\bwp\s`,
+    holdCause: "hold-rule",
   });
   assert.equal(verdict(shell("wp db drop"), policy({ gate: "full", may: ["Bash(wp *)"], hold: [String.raw`\bwp\s`], on_hold: "deny" })), "deny", "full scope too");
   assert.equal(verdict(shell("date"), denies, true), "hold", "a held run stays held");
   assert.equal(verdict(shell(`darius run hold ${RUN} --question "may I run wp db drop?"`), denies), "allow", "the run may still hold itself");
-  assert.equal(verdict(shell("git push"), policy({ mode: "report", hold: [], on_hold: "deny" })), "hold", "report-mode write verbs still hold");
   const quoted = gateDecide(shell(`jq '.wp // 1' /tmp/a`), { policy: denies, isHeld: false });
   assert.equal(quoted.verdict, "deny");
   assert.ok(quoted.verdict === "deny" && quoted.holdPattern === undefined, "a quoted-only match is the 0.64.0 deny, not a hold rule");
+});
+
+test("on_hold deny: a report-mode write verb is a deny too, naming the verb; without it the verb holds as before (0.66.0)", () => {
+  const verb = String.raw`\bgit\b.*\s(commit|push)\b`;
+  const denies = policy({ mode: "report", hold: [], on_hold: "deny" });
+  assert.deepEqual(gateDecide(shell("git push origin main"), { policy: denies, isHeld: false }), {
+    verdict: "deny",
+    reason: `outside this run's scope (report mode: ${verb}). Do not try another form of this command. Record it as a needs-decision item with the exact command, and go on with the rest of the work.`,
+    holdPattern: verb,
+    holdCause: "report-mode",
+  });
+  assert.equal(verdict(shell("cd /tmp && rm stale.txt"), policy({ gate: "full", mode: "report", may: ["Bash(cd *)", "Bash(rm *)"], hold: [], on_hold: "deny" })), "deny", "full scope too");
+  const stops = gateDecide(shell("git push origin main"), { policy: policy({ mode: "report", hold: [] }), isHeld: false });
+  assert.deepEqual([stops.verdict, stops.verdict === "allow" ? undefined : stops.holdCause], ["hold", "report-mode"]);
+});
+
+test("on_hold deny: no gate verdict holds a run that is not held yet; only the run's own darius run hold does (0.66.0)", () => {
+  const verbs = ["git push x", "git commit -m y", "rm a", "deploy now", "trellis up", "curl -X POST https://example.com", "pnpm cli fc x --confirm"];
+  const lines = [...verbs, "wp db drop", `bash -c "wp db drop"`, "echo $(wp db drop)", "ls; wp x", "jq '.wp // 1' /tmp/a", "ls /srv", "darius run follow-up X", "env -u DARIUS_RUN date"];
+  const tools = [tool("write", "Write"), tool("agent", "Agent"), tool("web", "WebSearch"), tool("other", "mcp__x__y"), tool("read", "Read"), { class: "shell", name: "Bash" } as const];
+  for (const scope of ["shell", "full"] as const) {
+    for (const mode of ["report", "act"] as const) {
+      const denies = policy({ gate: scope, mode, hold: [String.raw`\bwp\s`, String.raw`\bdeploy\b`], on_hold: "deny" });
+      for (const line of lines) assert.notEqual(verdict(shell(line), denies), "hold", `${scope} ${mode}: ${line}`);
+      for (const call of tools) assert.notEqual(verdict(call, denies), "hold", `${scope} ${mode}: ${call.name}`);
+      assert.equal(verdict(shell(`darius run hold ${RUN} --question "may I deploy?"`), denies), "allow", "the run may hold itself");
+      assert.equal(verdict(shell("date"), denies, true), "hold", "once the run is held, it stays held");
+    }
+  }
 });
 
 test("hold is for what needs a person; a call outside the policy is only denied", () => {

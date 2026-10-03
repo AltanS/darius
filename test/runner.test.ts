@@ -2061,7 +2061,7 @@ test("policy-check with on_hold deny: the call is denied, the run is not held, g
   assert.deepEqual([after.code, after.stdout], [0, ""], "the run goes on");
   const lines = readFileSync(join(dirname(policyFile), "gate.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const row = lines.find((line) => line.command === "wp db drop");
-  assert.deepEqual([row?.verdict, row?.hold_pattern], ["deny", "\\bwp\\s"]);
+  assert.deepEqual([row?.verdict, row?.hold_pattern, row?.hold_cause], ["deny", "\\bwp\\s", "hold-rule"]);
   writeFileSync(policyFile, JSON.stringify({ ...policy, on_hold: "stop" }));
   assert.throws(() => readRunPolicy(policyFile), /on_hold must be "deny" or absent/u);
 });
