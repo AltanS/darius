@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.64.1] - 2026-10-03
+
+### Fixed
+
+- `cd <dir> && darius run complete <run> ...` was not seen as the run's protocol, so the hold list read its findings text. A real run was held because its findings named "gate overrides". A leading `cd <dir> &&` now keeps the line the protocol.
+- The body of a quoted heredoc (`<<'EOF'`) counts as quoted text for the hold check: a hold word only in the body denies the call instead of holding the run. `bash <<'EOF'` and an unquoted heredoc still hold.
+
 ## [0.64.0] - 2026-10-03
 
 ### Changed

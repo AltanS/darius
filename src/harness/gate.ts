@@ -92,10 +92,17 @@ export function isProtocolCommand(command: string, run: string): boolean {
   return protocolVerb(command, run) !== undefined;
 }
 
+/**
+ * A leading `cd <dir> &&` (0.64.1). Models often write it before the
+ * protocol; it changes nothing the protocol does. The dir is one plain word
+ * or one single-quoted word, so no operator or substitution can hide in it.
+ */
+const CD_PREFIX = /^\s*cd\s+(?:'[^'\n]*'|[^\s;&|`$()<>'"\\]+)\s*&&\s*/u;
+
 /** `hold` or `complete` when the command is the protocol of THIS run (isProtocolCommand), else undefined. */
 function protocolVerb(command: string, run: string): string | undefined {
   const lines = command.replace(/\n+$/u, "").split("\n");
-  const first = lines[0] ?? "";
+  const first = (lines[0] ?? "").replace(CD_PREFIX, "");
   if (lines.length === 1) {
     const match = PROTOCOL_HEAD.exec(first);
     return match !== null && match[2] === run ? match[1] : undefined;
@@ -580,6 +587,22 @@ export function holdView(command: string): string | undefined {
 }
 
 /**
+ * A line that ends in a quoted heredoc (`cmd <<'EOF'`, body, `EOF`): the
+ * shell never expands that body, so it is text the command reads, like
+ * quoted text (0.64.1). Returns the command before `<<`, or undefined. The
+ * hold check reads only that command (holdView), so a body that names a
+ * hold word denies instead of holding, and `bash <<'EOF'` still holds.
+ */
+function heredocHead(command: string): string | undefined {
+  const lines = command.replace(/\n+$/u, "").split("\n");
+  const head = /^([^\n]*?)<<-?(['"])(\w+)\2[ \t]*$/u.exec(lines[0] ?? "");
+  if (head === null) return undefined;
+  // The body ends at the first line that is the delimiter; that must be the last line.
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === head[3]);
+  return end === lines.length - 1 ? head[1] : undefined;
+}
+
+/**
  * What a hold list does with a line (0.64.0): undefined when no pattern
  * matches it. A pattern that matches the line as the hold check reads it
  * (holdView) holds, so `"wp" plugin list` holds too. A pattern that matches
@@ -587,7 +610,8 @@ export function holdView(command: string): string | undefined {
  * is denied, not held. The call does not run either way, and the run goes on.
  */
 function holdMatch(command: string, patterns: readonly string[]): { pattern: string; quotedOnly: boolean } | undefined {
-  const view = holdView(command);
+  const head = heredocHead(command);
+  const view = holdView(head ?? command);
   const inView = view === undefined ? undefined : firstMatch(view, patterns);
   if (inView !== undefined) return { pattern: inView, quotedOnly: false };
   const pattern = firstMatch(command, patterns);

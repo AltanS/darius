@@ -139,6 +139,20 @@ test("a hold pattern that matches only inside quoted text denies the call and le
   assert.equal(verdict(shell("git push origin main"), report), "hold");
 });
 
+test("a cd before the protocol keeps it the protocol; a quoted heredoc body denies, not holds (0.64.1)", () => {
+  const scoped = policy({ hold: ["gate override", String.raw`\bwp\s`] });
+  // The line that held a real run: findings that name "gate overrides", after a cd.
+  const complete = `cd /srv/checkout && darius run complete ${RUN} --project p --outcome complete --findings-stdin <<'FINDINGS'\nthree gate overrides are active\nFINDINGS`;
+  assert.equal(verdict(shell(complete), scoped), "allow");
+  assert.equal(verdict(shell(`cd '/srv/my checkout' && darius run hold ${RUN} --question "wp db drop?"`), scoped), "allow");
+  assert.equal(verdict(shell(`cd /srv && wp db drop && darius run hold ${RUN} --question x`), scoped), "hold", "a second command is not a cd prefix");
+  assert.equal(verdict(shell(`cd $(wp x) && darius run hold ${RUN} --question x`), scoped), "hold");
+  assert.equal(verdict(shell("cat > /tmp/notes.md <<'EOF'\nthe gate override list\nEOF"), scoped), "deny", "a body is text");
+  assert.equal(verdict(shell("bash <<'EOF'\nwp db drop\nEOF"), scoped), "hold", "a shell runs its body");
+  assert.equal(verdict(shell("cat <<'EOF'\nx\nEOF\nwp db drop\nEOF"), scoped), "hold", "the body ends at the first delimiter");
+  assert.equal(verdict(shell('cat <<EOF\nwp db drop\nEOF'), scoped), "hold", "an unquoted heredoc expands, so it is read as written");
+});
+
 test("holdView blanks quoted text with a blank, unquotes the rest, and gives up on a line that runs its arguments", () => {
   assert.equal(holdView(`jq -c '.a // .wp // null' /tmp/x`), "jq -c _ /tmp/x");
   assert.equal(holdView(`git commit -m "ship it" && "wp" cli`), "git commit -m _ && wp cli");
