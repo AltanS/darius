@@ -293,6 +293,8 @@ function refuseResume(args: ParsedArgs, run: string, reason: string): number {
 export async function runResume(args: ParsedArgs): Promise<number> {
   const run = args.positional[1];
   if (run === undefined || run === "") throw new UsageError("run resume: missing <run>");
+  // 0.66.0: a resume has no dry run. It used to launch a real run anyway.
+  if (args.flags["dry-run"] !== undefined) throw new UsageError("run resume has no dry run: it starts the run again; drop --dry-run, or read the run with darius run show <run>");
   const project = resolveProject(stringFlag(args, "project"));
   const forwarded = forwardOn(args, project, "resume");
   if (forwarded !== undefined) return forwarded;

@@ -25,6 +25,11 @@
  * newer run of the same ritual has started, or when the run ended more than
  * 48 hours ago. A held run's tab is never closed that way: the run is not
  * finished.
+ *
+ * A resumed run starts a new agent in a new tab (0.66.0). herdr keeps an
+ * agent's name while its pane is open, so each launch of a run gets its own
+ * name: `d-<run>` first, then `d-<run>-r2`, `-r3`. `herdr.json` keeps every
+ * tab of the run, so closeFinishedTabs closes them all.
  */
 
 import { spawn } from "node:child_process";
@@ -171,9 +176,31 @@ export interface HerdrPlan {
   hold(question: string): void;
 }
 
-/** A herdr agent name for a run: lowercase, starts with a letter, at most 32 characters. */
-export function agentName(run: string): string {
-  return `d-${run.toLowerCase()}`.slice(0, 32);
+/** The longest herdr agent name. */
+const AGENT_NAME_MAX = 32;
+
+/**
+ * A herdr agent name for one launch of a run: lowercase, starts with a
+ * letter, at most 32 characters. The first launch is `d-<run>`; a later one
+ * adds `-r<launch>`, and the run part is cut to make room, never the suffix.
+ */
+export function agentName(run: string, launch = 1): string {
+  const suffix = launch <= 1 ? "" : `-r${String(launch)}`;
+  return `d-${run.toLowerCase()}`.slice(0, AGENT_NAME_MAX - suffix.length) + suffix;
+}
+
+/**
+ * The tab ids `herdr.json` in `runDir` records: the `tabs` list, or the one
+ * `tab` a file written before 0.66.0 holds. Empty when there is none.
+ */
+export function recordedTabs(runDir: string): string[] {
+  const file = join(runDir, TAB_FILE);
+  if (!existsSync(file)) return [];
+  const parsed = parseJson(readFileSync(file, "utf8"));
+  if (!isRecord(parsed)) return [];
+  const { tabs, tab } = parsed;
+  if (Array.isArray(tabs)) return tabs.filter((entry) => isText(entry));
+  return isText(tab) ? [tab] : [];
 }
 
 async function runsWorkspace(plan: HerdrPlan): Promise<string> {
@@ -307,13 +334,14 @@ async function waitUntilReady(plan: HerdrPlan, name: string, started: number): P
 /** Runs the harness in a new herdr tab until the run ends. Never throws: a herdr failure comes back as `spawnError`. */
 export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
   const started = Date.now();
-  const name = agentName(plan.run);
+  const earlier = recordedTabs(plan.runDir);
+  const name = agentName(plan.run, earlier.length + 1);
   let tab: string | undefined;
   try {
     const workspace = await runsWorkspace(plan);
     const opened = await openTab(plan, workspace);
     tab = opened.tab;
-    writeFileSync(join(plan.runDir, TAB_FILE), `${JSON.stringify({ tab, agent: name })}\n`);
+    writeFileSync(join(plan.runDir, TAB_FILE), `${JSON.stringify({ tabs: [...earlier, tab], agent: name })}\n`);
     if ((await startAgent(plan, name, opened.pane)) === "blocked") {
       const ready = await waitUntilReady(plan, name, started);
       if (!ready.ready) {
@@ -355,8 +383,8 @@ export function isTabDue(run: TabRun, all: readonly TabRun[], now: number): bool
 }
 
 /**
- * Closes the herdr tab of every finished run in `runsDir` that isTabDue, and
- * forgets it. A running or held run keeps its tab. Best effort: a tab the
+ * Closes the herdr tabs of every finished run in `runsDir` that isTabDue
+ * (each launch of a resumed run has one), and forgets them. A running or held run keeps its tab. Best effort: a tab the
  * person already closed, or a herdr that is gone, is not an error.
  */
 export async function closeFinishedTabs(
@@ -369,9 +397,7 @@ export async function closeFinishedTabs(
   for (const run of runs) {
     const file = join(runsDir, run.run, TAB_FILE);
     if (!existsSync(file) || !isTabDue(run, runs, now)) continue;
-    const parsed = parseJson(readFileSync(file, "utf8"));
-    const tab = isRecord(parsed) && isText(parsed.tab) ? parsed.tab : undefined;
-    if (tab !== undefined) {
+    for (const tab of recordedTabs(join(runsDir, run.run))) {
       const output = await runHerdr(target, ["tab", "close", tab]);
       if (output.code === 0) closed += 1;
     }

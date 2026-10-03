@@ -138,7 +138,9 @@ process.env.DARIUS_HERDR = join(SANDBOX, "no-herdr");
  * starts the fake claude in the background with the env the tab was
  * created with. `agent get` reports $FAKE_HERDR_DIR/status (default
  * working), or agent_not_found when that file says gone. Every call is
- * logged to $FAKE_HERDR_DIR/calls, one line each.
+ * logged to $FAKE_HERDR_DIR/calls, one line each. Tabs count up from w9:t2;
+ * an agent name that started once is taken (agent_name_taken), as in herdr
+ * while the old pane is open.
  */
 const FAKE_HERDR = join(BIN, "fake-herdr");
 const FAKE_HERDR_DIR = join(SANDBOX, "herdr");
@@ -159,8 +161,12 @@ case "$1 \${2:-}" in
       if [ "$1" = "--env" ]; then printf 'export %q\n' "$2" >> "$dir/tab.env"; shift; fi
       shift
     done
-    printf '{"result":{"tab":{"tab_id":"w9:t2"},"root_pane":{"pane_id":"w9:p2"}}}\n' ;;
+    n=$(( $(cat "$dir/tab-count" 2>/dev/null || echo 1) + 1 )); echo "$n" > "$dir/tab-count"
+    printf '{"result":{"tab":{"tab_id":"w9:t%s"},"root_pane":{"pane_id":"w9:p%s"}}}\n' "$n" "$n" ;;
   "agent start")
+    if grep -qx "$3" "$dir/agents" 2>/dev/null; then
+      printf '{"error":{"code":"agent_name_taken","message":"agent name %s is taken"}}\n' "$3" >&2; exit 1
+    fi
     if [ -e "$dir/start-blocked" ]; then
       printf '{"error":{"code":"agent_not_ready","message":"agent is blocked during startup"}}\n' >&2; exit 1
     fi
@@ -168,6 +174,7 @@ case "$1 \${2:-}" in
       : > "$dir/shell-ready"
       printf '{"error":{"code":"agent_pane_busy","message":"agent target pane is not an available shell"}}\n' >&2; exit 1
     fi
+    printf '%s\n' "$3" >> "$dir/agents"
     printf '{"result":{"type":"agent_started"}}\n' ;;
   "agent prompt")
     ( set +u; . "$dir/tab.env"; "$FAKE_CLAUDE" -p >/dev/null 2>&1 ) &
@@ -1250,8 +1257,12 @@ function herdrCalls(): string[] {
 }
 
 /** Runs `fn` with the fake herdr on, a fast poll, and a clean call log. */
-async function withFakeHerdr<T>(opts: { status?: string; graceMs?: number; startBlocked?: boolean }, fn: () => Promise<T>): Promise<T> {
+async function withFakeHerdr<T>(opts: { status?: string; graceMs?: number; startBlocked?: boolean; keepAgents?: boolean }, fn: () => Promise<T>): Promise<T> {
   writeFileSync(join(FAKE_HERDR_DIR, "calls"), "");
+  if (opts.keepAgents !== true) {
+    rmSync(join(FAKE_HERDR_DIR, "agents"), { force: true });
+    rmSync(join(FAKE_HERDR_DIR, "tab-count"), { force: true });
+  }
   rmSync(join(FAKE_HERDR_DIR, "shell-ready"), { force: true });
   if (opts.startBlocked === true) writeFileSync(join(FAKE_HERDR_DIR, "start-blocked"), "");
   else rmSync(join(FAKE_HERDR_DIR, "start-blocked"), { force: true });
@@ -1292,7 +1303,7 @@ test("herdr surface: a tab in darius-runs, the harness started with its interact
   assert.match(start, /--append-system-prompt-file /u);
   assert.match(calls.find((line) => line.startsWith("agent prompt")) ?? "", new RegExp(`Run ritual heartbeat now\\. Run id ${run}\\.`, "u"));
   assert.equal(calls.some((line) => line.startsWith("tab close")), false, "a finished run's tab stays open");
-  assert.equal(JSON.parse(readFileSync(join(openProject(project).root, "runs", run, "herdr.json"), "utf8")).tab, "w9:t2");
+  assert.deepEqual(JSON.parse(readFileSync(join(openProject(project).root, "runs", run, "herdr.json"), "utf8")).tabs, ["w9:t2"]);
 
   await withFakeHerdr({}, () => runDueJson(project));
   assert.equal(herdrCalls().includes("tab close w9:t2"), false, "no newer run of the ritual and under 48 hours: the tab stays");
@@ -1318,6 +1329,46 @@ test("herdr surface: an agent that waits for input past the grace time holds the
   assert.equal(held.length, 1);
   assert.match(JSON.stringify(held[0]?.questions), /the agent waits for input in herdr tab \\"heartbeat [0-9a-z]{6}\\" \(blocked/u);
   assert.equal(held[0]?.who, `herdr:${entry?.run ?? ""}`);
+});
+
+test("herdr surface: a resume starts its agent under a new name in a new tab, and both tabs close later (0.66.0)", async () => {
+  await addProfile("rd-watch-resume", ["--surface", "herdr"]);
+  const project = "rd-herdr-resume";
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-watch-resume" } });
+  process.env.FAKE_CLAUDE_MODE = "silent";
+  const { report } = await withFakeHerdr({ status: "blocked", graceMs: 100 }, () => runDueJson(project));
+  const run = ritualsOf(report)[0]?.run ?? "";
+  assert.equal(ritualsOf(report)[0]?.end, "held", JSON.stringify(report));
+  assert.equal((await runCli(runCommand, ["answer", run, "1", "go on", "--project", project])).code, 0);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const resumed = await withFakeHerdr({ keepAgents: true }, () => runCli(runCommand, ["resume", run, "--project", project, "--json"]));
+  assert.equal(resumed.code, 0, resumed.stdout + resumed.stderr);
+  const start = herdrCalls().find((line) => line.startsWith("agent start")) ?? "";
+  assert.match(start, new RegExp(`^agent start ${agentName(run, 2)} `, "u"), "the second launch has its own name");
+  assert.equal(agentName(run, 2), `d-${run.toLowerCase()}-r2`);
+  const file = join(openProject(project).root, "runs", run, "herdr.json");
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).tabs, ["w9:t2", "w9:t3"], "both tabs are kept");
+  const newer = ulid();
+  appendLine(openProject(project), { who: "test", type: "run.started", item: "ritual/heartbeat", run: newer });
+  appendLine(openProject(project), { who: "test", type: "run.completed", item: "ritual/heartbeat", run: newer, outcome: "complete", findings_sha: null });
+  await withFakeHerdr({}, () => runDueJson(project));
+  assert.ok(herdrCalls().includes("tab close w9:t2") && herdrCalls().includes("tab close w9:t3"), herdrCalls().join("\n"));
+  assert.equal(existsSync(file), false);
+});
+
+test("agentName: d-<run> first, then a -r<n> suffix that is never cut; the run part is cut to 32", () => {
+  const run = "01K6ABCDEFGHJKMNPQRSTVWXYZ";
+  assert.equal(agentName(run), `d-${run.toLowerCase()}`);
+  assert.equal(agentName(run, 1), agentName(run));
+  assert.equal(agentName(run, 3), `d-${run.toLowerCase()}-r3`);
+  assert.equal(agentName(run, 10).length, 32);
+  assert.ok(agentName(run, 10).endsWith("-r10"));
+  assert.equal(agentName(run, 123).length, 32);
+  assert.ok(agentName(run, 123).endsWith("-r123"), "the suffix stays; the run part is cut");
+});
+
+test("run resume --dry-run is a usage error: a resume has no dry run", async () => {
+  await assert.rejects(runCli(runCommand, ["resume", "01RUN", "--dry-run", "--project", "rd-resume-dry"]), /run resume has no dry run/u);
 });
 
 test("herdr surface: a run past its timeout fails and its tab is closed; an agent that exits fails the run", async () => {
