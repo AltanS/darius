@@ -153,7 +153,7 @@ const RITUAL: RitualDetail = {
   project: "demo",
   row: STATUS.projects[0]!.rituals[0]!,
   anchor: "due",
-  policy: { mode: "report", may: ["git fetch"], hold: ["git push"], notes: "Be brief.", model: null, maxTurns: 40, profile: "careful" },
+  policy: { mode: "report", may: ["git fetch"], hold: ["git push"], onHold: "stop", notes: "Be brief.", model: null, maxTurns: 40, profile: "careful" },
   body: [
     { kind: "heading", level: 1, content: [{ kind: "text", text: "Steps" }] },
     { kind: "list", ordered: true, start: 1, items: [[{ kind: "text", text: "Read the log" }], [{ kind: "code", text: "darius due" }]] },
@@ -728,6 +728,14 @@ test("the ritual page says where a pinned ritual runs", async () => {
   const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   assert.ok(page.includes(`Runs on <code class="inline-code">host-b</code> only; the timer of any other host skips it.`));
   assert.equal((await get("/w/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
+});
+
+test("the ritual page says what a hold match does: holds the run, or with on_hold deny refuses the command (0.66.0)", async () => {
+  const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, policy: { ...RITUAL.policy, onHold: "deny" } } : null) };
+  const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
+  assert.ok(page.includes("On a match"));
+  assert.ok(page.includes("refuses the command; the run goes on and records it for a decision"));
+  assert.ok((await get("/w/demo/rituals/daily-report")).body.includes("holds the run until someone answers"), "the default");
 });
 
 test("a manual ritual reads \"manual ritual\" with the hand, has a note box with the way to automate it, and its instructions open", async () => {

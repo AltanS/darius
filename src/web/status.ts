@@ -410,6 +410,7 @@ export function ritualDetail(projectName: string, slug: string, now: Date = new 
       mode: policy.mode,
       may: [...policy.may],
       hold: [...policy.hold],
+      onHold: policy.on_hold ?? "stop",
       notes: policy.notes ?? null,
       model: policy.model ?? null,
       maxTurns: policy.max_turns ?? null,

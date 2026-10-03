@@ -511,6 +511,8 @@ export interface RitualPolicy {
   mode: string;
   may: string[];
   hold: string[];
+  /** What a hold match does (0.66.0): "stop" holds the run, "deny" refuses the call and the run goes on. */
+  onHold: "stop" | "deny";
   notes: string | null;
   model: string | null;
   maxTurns: number | null;

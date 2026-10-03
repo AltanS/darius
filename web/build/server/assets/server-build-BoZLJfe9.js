@@ -15219,6 +15219,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 									})
 								},
 								{
+									label: "On a match",
+									value: policy.onHold === "deny" ? "refuses the command; the run goes on and records it for a decision" : "holds the run until someone answers"
+								},
+								{
 									label: "Max turns",
 									value: policy.maxTurns ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "text-muted",
@@ -18394,7 +18398,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-A9Yim8XR.js",
+			"module": "/assets/ritual-BhdU7YXn.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18830,8 +18834,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-e7d9a99f.js",
-	"version": "e7d9a99f",
+	"url": "/assets/manifest-3e2a3823.js",
+	"version": "3e2a3823",
 	"sri": void 0
 };
 //#endregion
