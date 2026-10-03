@@ -2,6 +2,33 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.66.0] - 2026-10-03
+
+### Added
+
+- `on_hold = "stop" | "deny"` on a v3 ritual or a `[policies.*]` table. `stop` is the default and holds the run as before. With `deny`, a hold-list match or a report-mode write verb refuses that one call and the run goes on. The reason reads `outside this run's scope (hold rule: <pattern>)` or `(report mode: <verb>)` and tells the model to record the exact command as a needs-decision item. The command never runs either way. Only the run's own `darius run hold` can then hold the run. Next to `policy = "<name>"` the key is an error; a ritual takes its policy's value. Every host must run 0.66.0 before a marker uses it.
+- The gate log row of a hold, and of the deny in its place, names the pattern in `hold_pattern` and the cause in `hold_cause` (`hold-rule` or `report-mode`).
+- `on_hold` shows in `ritual show`, `ritual show --json`, `marker check --resolved` (text and JSON), `ritual export`, `marker factor`, the run prompt and the web ritual page (row "On a match").
+- `darius finding reset [--ritual R] [--note TEXT]` writes one `finding.reset` ledger line. Findings then ignore every run result that completed before it, for that ritual or for all. The verb prints how many findings it hid. The line syncs like any ledger line.
+- A run with the full gate gets a `## Shell commands` section in its prompt. It lists the shell forms the gate refuses and says not to try another form of a denied call.
+
+### Changed
+
+- A hold pattern matches each command of a line apart, never across `|`, `;`, `&&` or `||`. So `curl URL | tr -d x` no longer matches a `curl ... -d` pattern. A match in any command holds as before. A line the shell split refuses is read whole, as before.
+- Only the program word of a command decides whether it runs its arguments. The `.` in `find . -name x | jq '.a // .b'` no longer makes the jq part read as written.
+- A finding that two full runs in a row left out is `lapsed`. It leaves the default list, the needs-you count, the run prompt and the web. `finding list --all` shows it. A new report of its key opens it again.
+- A `may` rule `Bash(prog *)` also allows the bare `prog`, as `Bash(prog:*)` does. Rules with more words, such as `Bash(pnpm cli *)`, do not change.
+
+### Fixed
+
+- The tool check before a run looked up a relative `may` path such as `./tools/x.sh` in the process dir. The timer runs in `$HOME`, so the ritual was skipped as `tool-missing`. The path now resolves against the checkout.
+- The run's own `darius run hold` and `darius run complete` calls are never held for their text. Operators inside quotes are text. An absolute path counts when it resolves to the darius binary the hook runs from. `run complete` may use an unquoted heredoc whose body has no `$(`, backtick or `$[`.
+- The heredoc body of the protocol now ends at its first delimiter line, as the shell reads it. Before, a second delimiter line could hide a command after the body.
+- A resumed run on the herdr surface failed with `agent_name_taken` while the old pane was open. Each launch now gets its own agent name (`d-<run>`, then `d-<run>-r2`), and `herdr.json` keeps every tab of the run, so all of them close later.
+- `darius run resume --dry-run` started a real run. It is now a usage error.
+- `doctor` without `--fix` stamped an unstamped index. It now writes nothing and warns that the index needs a rebuild with `--fix`.
+- A `may` tool name may hold `-` after its first character, so an MCP tool such as `mcp__some-server__get_thing` validates.
+
 ## [0.65.0] - 2026-10-03
 
 ### Added
