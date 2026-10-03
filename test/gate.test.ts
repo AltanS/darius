@@ -161,6 +161,54 @@ test("holdView blanks quoted text with a blank, unquotes the rest, and gives up 
   assert.equal(holdView(`echo $(wp cli)`), undefined, "scanShell refuses it");
 });
 
+test("a hold pattern matches each command of a line apart, never across | ; && (0.66.0)", () => {
+  const curl = String.raw`\bcurl\b(?![^|;&]*\s(-G|--get)\s)[^|;&]*\s(-d|--data\S*)\s`;
+  const scoped = policy({ hold: [curl, String.raw`\bwp\s`, String.raw`\bcurl\b.*\s-d\s`] });
+  for (const line of [
+    String.raw`curl -s URL > /tmp/a.json; jq keys /tmp/a.json | tr -d '\n'`,
+    "curl https://example.com/x | tr -d x",
+    "find . -name x | jq '.wp // null'",
+    "grep -rn 'wp cli' . | head",
+  ]) {
+    assert.notEqual(verdict(shell(line), scoped), "hold", line);
+  }
+  assert.equal(verdict(shell("curl https://example.com/x | tr -d x"), scoped), "allow", "no command matches, so nothing is refused");
+  assert.equal(verdict(shell("find . -name x | jq '.wp // null'"), scoped), "deny", "quoted text only: denied, as in 0.64.0");
+  for (const line of [
+    "curl -s -d 'x=1' URL",
+    "cd tools && wp post delete 1",
+    "ls; wp db drop",
+    "date || wp db drop",
+    "if true; then wp db drop; fi",
+    "! bash -c 'wp db drop'",
+    "find . -name x | bash -c 'wp db drop'",
+    "bash <<'EOF'\nwp db drop\nEOF",
+  ]) {
+    assert.equal(verdict(shell(line), scoped), "hold", line);
+  }
+  // A line the split refuses is read whole, as written, as before.
+  assert.equal(verdict(shell("curl URL | tr -d x < /tmp/in"), scoped), "hold", "an input redirection: the whole line");
+  assert.equal(verdict(shell("echo $(curl URL | tr -d x)"), scoped), "hold", "a substitution: the whole line");
+  // A pattern anchored at a command start matches a command that starts with the program.
+  const rm = policy({ hold: [String.raw`(^|[\s;&|(])rm\s`] });
+  assert.equal(verdict(shell("ls && rm x"), rm), "hold");
+  assert.equal(verdict(shell("rm x"), rm), "hold");
+  // Report-mode verbs are read the same way.
+  const report = policy({ mode: "report", hold: [] });
+  assert.equal(verdict(shell("git log --oneline | grep push"), report), "allow");
+  assert.equal(verdict(shell("git add x && git commit -m y"), report), "hold");
+});
+
+test("the quoted-text relief is lost only by a command whose program runs its arguments (0.66.0)", () => {
+  assert.equal(holdView(`find . -name x | jq '.wp // null'`), "find . -name x | jq _", "a . that names a dir is not the loader");
+  assert.equal(holdView(`ls && sudo "wp cron"`), undefined);
+  assert.equal(holdView(`FOO=1 bash -c "wp x"`), undefined, "an assignment prefix does not hide the program");
+  assert.equal(holdView(`/usr/bin/env "wp x"`), undefined);
+  const scoped = policy({ hold: [String.raw`\bwp\s`] });
+  assert.equal(verdict(shell(`ssh web1 "wp cache flush" ; jq '.wp // 1' /tmp/a`), scoped), "hold", "the ssh part is read as written");
+  assert.equal(verdict(shell(`ssh web1 uptime ; jq '.wp // 1' /tmp/a`), scoped), "deny", "the jq part keeps its relief");
+});
+
 test("hold is for what needs a person; a call outside the policy is only denied", () => {
   const act = policy({ gate: "full" });
   const report = policy({ gate: "full", mode: "report", may: ["Bash(git *)", "Bash(ls *)"] });

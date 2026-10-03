@@ -548,17 +548,31 @@ const RUNS_ARGUMENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The line as the hold check reads it (0.64.0), or undefined when only the
- * line as written will do. Quoted text with a blank in it is one argument
- * (a jq filter, a commit message, a search text) and becomes `_`: the
- * program gets it as data, so `jq '.posts // .wp // null'` does not read as
- * a `wp` command. Quoted text without a blank loses its quotes, so
- * `"wp" plugin list` still reads `wp plugin list`. Undefined when scanShell
- * refuses the line, or when a word outside quotes runs its arguments
- * (RUNS_ARGUMENTS: `bash -c "..."`, `ssh host "..."`).
+ * Words the shell reads before the program of a command: a negation, a
+ * group brace, and the keywords of `if`, `while`, `until` and `for` bodies.
+ * The hold check looks past them for the program (holdProgram).
  */
-export function holdView(command: string): string | undefined {
-  if ("refused" in scanShell(command)) return undefined;
+const SHELL_KEYWORDS: ReadonlySet<string> = new Set(["!", "{", "}", "if", "then", "elif", "else", "fi", "do", "done", "while", "until"]);
+
+/** The program of one split command for the hold check: programWord, after any SHELL_KEYWORDS. */
+function holdProgram(part: string): string {
+  let rest = stripAssignments(part.trim()).rest.trim();
+  for (let word = rest.split(/\s+/u)[0] ?? ""; SHELL_KEYWORDS.has(word); word = rest.split(/\s+/u)[0] ?? "") {
+    rest = stripAssignments(rest.slice(word.length).trim()).rest.trim();
+  }
+  return programWord(rest);
+}
+
+/** True when one split command runs its arguments (RUNS_ARGUMENTS), so its quoted text is a command after all. */
+function runsArguments(part: string): boolean {
+  return RUNS_ARGUMENTS.has(holdProgram(part));
+}
+
+/**
+ * Quoted text with a blank in it becomes `_`; quoted text without a blank
+ * loses its quotes (holdView).
+ */
+function blankQuotes(command: string): string {
   let out = "";
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i] ?? "";
@@ -579,43 +593,79 @@ export function holdView(command: string): string | undefined {
     }
     out += /\s/u.test(text) ? "_" : text;
   }
-  const words = out.split(/[\s;&|]+/u).map((word) => {
-    const bare = word.replaceAll("\\", "");
-    return bare.slice(bare.lastIndexOf("/") + 1);
-  });
-  return words.some((word) => RUNS_ARGUMENTS.has(word)) ? undefined : out;
+  return out;
+}
+
+/**
+ * The line as the hold check reads it (0.64.0), or undefined when only the
+ * line as written will do. Quoted text with a blank in it is one argument
+ * (a jq filter, a commit message, a search text) and becomes `_`: the
+ * program gets it as data, so `jq '.posts // .wp // null'` does not read as
+ * a `wp` command. Quoted text without a blank loses its quotes, so
+ * `"wp" plugin list` still reads `wp plugin list`. Undefined when scanShell
+ * refuses the line, or when the program of one of its commands runs its
+ * arguments (RUNS_ARGUMENTS: `bash -c "..."`, `ssh host "..."`). Since
+ * 0.66.0 only the program word of each command counts, so a `.` that names
+ * a dir (`find . -name x`) is not the `.` loader. The gate reads each
+ * command apart (holdMatch); this is the view of a whole line.
+ */
+export function holdView(command: string): string | undefined {
+  const scan = scanShell(command);
+  if ("refused" in scan) return undefined;
+  return scan.parts.some((part) => runsArguments(part)) ? undefined : blankQuotes(command);
 }
 
 /**
  * A line that ends in a quoted heredoc (`cmd <<'EOF'`, body, `EOF`): the
  * shell never expands that body, so it is text the command reads, like
- * quoted text (0.64.1). Returns the command before `<<`, or undefined. The
- * hold check reads only that command (holdView), so a body that names a
- * hold word denies instead of holding, and `bash <<'EOF'` still holds.
+ * quoted text (0.64.1). Returns the command before `<<` and the body, or
+ * undefined. The hold check reads only that command, so a body that names
+ * a hold word denies instead of holding, and `bash <<'EOF'` still holds.
  */
-function heredocHead(command: string): string | undefined {
+function heredocHead(command: string): { head: string; body: string } | undefined {
   const lines = command.replace(/\n+$/u, "").split("\n");
   const head = /^([^\n]*?)<<-?(['"])(\w+)\2[ \t]*$/u.exec(lines[0] ?? "");
   if (head === null) return undefined;
   // The body ends at the first line that is the delimiter; that must be the last line.
   const end = lines.findIndex((line, index) => index > 0 && line.trim() === head[3]);
-  return end === lines.length - 1 ? head[1] : undefined;
+  return end === lines.length - 1 ? { head: head[1] ?? "", body: lines.slice(1, -1).join("\n") } : undefined;
 }
 
 /**
- * What a hold list does with a line (0.64.0): undefined when no pattern
- * matches it. A pattern that matches the line as the hold check reads it
- * (holdView) holds, so `"wp" plugin list` holds too. A pattern that matches
- * only the line as written matched inside quoted text: `quotedOnly`, which
- * is denied, not held. The call does not run either way, and the run goes on.
+ * What a hold list does with a line: undefined when no pattern matches it.
+ * Since 0.66.0 the line is split into its commands (scanShell) and each is
+ * read apart, so a pattern never matches across `|`, `;`, `&&` or `||`:
+ * `curl URL | tr -d x` is not `curl ... -d`. Per command, as in 0.64.0: a
+ * pattern that matches the command as the hold check reads it (blankQuotes)
+ * holds, so `"wp" plugin list` holds too; one that matches only the
+ * command as written matched inside quoted text: `quotedOnly`, which is
+ * denied, not held. A command whose program runs its arguments (`bash -c`,
+ * `ssh`, `eval`, `xargs`, `sudo`) is read as written and holds. A line the
+ * split refuses is read whole and as written, as before 0.64.0. A quoted
+ * heredoc body is text for the command before `<<`: quoted text, unless
+ * that command runs its arguments (`bash <<'EOF'`).
  */
 function holdMatch(command: string, patterns: readonly string[]): { pattern: string; quotedOnly: boolean } | undefined {
-  const head = heredocHead(command);
-  const view = holdView(head ?? command);
-  const inView = view === undefined ? undefined : firstMatch(view, patterns);
-  if (inView !== undefined) return { pattern: inView, quotedOnly: false };
-  const pattern = firstMatch(command, patterns);
-  return pattern === undefined ? undefined : { pattern, quotedOnly: view !== undefined };
+  const heredoc = heredocHead(command);
+  const parts = splitShell(heredoc?.head ?? command);
+  if (parts === null) {
+    const whole = firstMatch(command, patterns);
+    return whole === undefined ? undefined : { pattern: whole, quotedOnly: false };
+  }
+  let quoted: string | undefined;
+  for (const part of parts) {
+    const strict = runsArguments(part);
+    const held = firstMatch(strict ? part : blankQuotes(part), patterns);
+    if (held !== undefined) return { pattern: held, quotedOnly: false };
+    quoted ??= strict ? undefined : firstMatch(part, patterns);
+  }
+  if (heredoc !== undefined) {
+    const reader = parts.at(-1) ?? "";
+    const inBody = firstMatch(heredoc.body, patterns);
+    if (inBody !== undefined && runsArguments(reader)) return { pattern: inBody, quotedOnly: false };
+    quoted ??= inBody;
+  }
+  return quoted === undefined ? undefined : { pattern: quoted, quotedOnly: true };
 }
 
 function quotedOnlyDeny(pattern: string, command: string): GateDecision {
