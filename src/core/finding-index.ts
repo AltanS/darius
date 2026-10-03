@@ -13,6 +13,11 @@
  * its ritual that handed in a result did not report it. A follow-up never
  * makes a finding stale: it reports only what it changed.
  *
+ * LAPSED (0.66.0). A stale finding that the full run before that one did not
+ * report either is lapsed: two full runs in a row left it out. It leaves the
+ * default list, the needs-you count and the run prompt; `--all` still shows
+ * it. A later report of its key makes it open again.
+ *
  * RESET (0.66.0). `finding.reset` (src/cli/finding.ts) hides every run
  * result that completed before it: for its ritual when the line names one
  * (`item: ritual/<slug>`), else for all rituals. The newest matching reset
@@ -41,7 +46,7 @@ export interface FindingStep {
   severity: Severity;
 }
 
-export type FindingStatus = "needs-you" | "open" | "fixed" | "closed";
+export type FindingStatus = "needs-you" | "open" | "fixed" | "closed" | "lapsed";
 
 export interface Finding {
   /** The ritual slug, from the run's item `ritual/<slug>`. */
@@ -100,6 +105,8 @@ interface Track {
   lastSeen: FindingSeen;
   /** The ledger index of the newest report. */
   lastOrder: number;
+  /** The ledger index of the newest complete, non-follow-up run that reported it; -1 for none. */
+  lastFullOrder: number;
   runs: number;
   history: FindingStep[];
   /** Some step so far was fixed. */
@@ -125,7 +132,12 @@ function itemsByKey(items: readonly ResultItem[]): Map<string, { item: ResultIte
   return byKey;
 }
 
-function report(tracks: Map<string, Track>, at: { ritual: string; seen: FindingSeen; order: number }, key: string, entry: { item: ResultItem; auto: boolean }): void {
+function report(
+  tracks: Map<string, Track>,
+  at: { ritual: string; seen: FindingSeen; order: number; isFull: boolean },
+  key: string,
+  entry: { item: ResultItem; auto: boolean },
+): void {
   const { item } = entry;
   const step: FindingStep = { run: at.seen.run, at: at.seen.at, state: item.state, severity: item.severity };
   const id = trackId(at.ritual, key);
@@ -139,6 +151,7 @@ function report(tracks: Map<string, Track>, at: { ritual: string; seen: FindingS
       firstSeen: at.seen,
       lastSeen: at.seen,
       lastOrder: at.order,
+      lastFullOrder: at.isFull ? at.order : -1,
       runs: 1,
       history: [step],
       everFixed: item.state === "fixed",
@@ -157,6 +170,7 @@ function report(tracks: Map<string, Track>, at: { ritual: string; seen: FindingS
   known.auto = entry.auto;
   known.lastSeen = at.seen;
   known.lastOrder = at.order;
+  if (at.isFull) known.lastFullOrder = at.order;
   known.runs += 1;
   known.history.push(step);
 }
@@ -166,18 +180,27 @@ function report(tracks: Map<string, Track>, at: { ritual: string; seen: FindingS
  * key the run gave (not auto): an auto key is a guess, and the results from
  * before keys existed would flood the list with findings long fixed.
  */
-function statusOf(track: Track, stale: boolean): FindingStatus {
+function statusOf(track: Track, stale: boolean, lapsed: boolean): FindingStatus {
   const { state, severity } = track.latest;
   if (state === "fixed") return "fixed";
   if (track.closed !== undefined) return "closed";
+  if (lapsed) return "lapsed";
   if (stale || track.auto) return "open";
   if (state === "needs-decision" || state === "needs-code" || severity === "critical" || severity === "high") return "needs-you";
   return "open";
 }
 
-function toFinding(track: Track, newestFull: ReadonlyMap<string, number>): Finding {
+/**
+ * `fullRuns` holds the ledger index of each complete, non-follow-up run with
+ * a result, per ritual, oldest first. Stale: the newest of them did not
+ * report it. Lapsed: the one before did not either.
+ */
+function toFinding(track: Track, fullRuns: ReadonlyMap<string, readonly number[]>): Finding {
   const { latest } = track;
-  const stale = track.lastOrder < (newestFull.get(track.ritual) ?? -1);
+  const full = fullRuns.get(track.ritual) ?? [];
+  const stale = track.lastOrder < (full.at(-1) ?? -1);
+  const previous = full.at(-2);
+  const lapsed = stale && previous !== undefined && track.lastFullOrder < previous;
   const reopened = (track.fixedBefore && latest.state !== "fixed") || track.reopenedBySeverity;
   const finding: Finding = {
     ritual: track.ritual,
@@ -192,7 +215,7 @@ function toFinding(track: Track, newestFull: ReadonlyMap<string, number>): Findi
     history: track.history.slice(-HISTORY_MAX),
     stale,
     reopened,
-    status: statusOf(track, stale),
+    status: statusOf(track, stale, lapsed),
   };
   if (latest.group !== undefined) finding.group = latest.group;
   if (latest.target !== undefined) finding.target = latest.target;
@@ -201,7 +224,7 @@ function toFinding(track: Track, newestFull: ReadonlyMap<string, number>): Findi
   return finding;
 }
 
-const STATUS_ORDER: readonly FindingStatus[] = ["needs-you", "open", "closed", "fixed"];
+const STATUS_ORDER: readonly FindingStatus[] = ["needs-you", "open", "closed", "lapsed", "fixed"];
 
 function compareFindings(a: Finding, b: Finding): number {
   const byStatus = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status);
@@ -253,7 +276,7 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
   const followUps = followUpRuns(ledger);
   const resets = resetTimes(ledger);
   const tracks = new Map<string, Track>();
-  const newestFull = new Map<string, number>();
+  const fullRuns = new Map<string, number[]>();
   ledger.forEach((line, order) => {
     if (line.type === "finding.closed" || line.type === "finding.reopened") {
       const target = operatorLine(line);
@@ -274,11 +297,12 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
     if (isHiddenByReset(resets, ritual, line.at)) return;
     const result = resultOf(project, line);
     if (result === null) return;
-    if (line.outcome === "complete" && !followUps.has(line.run)) newestFull.set(ritual, order);
+    const isFull = line.outcome === "complete" && !followUps.has(line.run);
+    if (isFull) fullRuns.set(ritual, [...(fullRuns.get(ritual) ?? []), order]);
     const seen: FindingSeen = { run: line.run, at: line.at };
-    for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order }, key, entry);
+    for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order, isFull }, key, entry);
   });
-  return [...tracks.values()].map((track) => toFinding(track, newestFull)).toSorted(compareFindings);
+  return [...tracks.values()].map((track) => toFinding(track, fullRuns)).toSorted(compareFindings);
 }
 
 /** What the dashboard counts: `open` is needs-you plus open. */

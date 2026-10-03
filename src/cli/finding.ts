@@ -7,7 +7,8 @@
  *
  *   finding list [--ritual SLUG] [--open | --all] [--json]
  *                  default: the findings that need the operator (needs-you);
- *                  --open adds the open ones; --all adds closed and fixed
+ *                  --open adds the open ones; --all adds closed, lapsed
+ *                  and fixed
  *   finding show <key> [--ritual SLUG] [--json]
  *   finding close <key> [--ritual SLUG] [--note TEXT] [--who NAME]
  *                  refuses a fixed or an already closed finding
@@ -70,7 +71,7 @@ function findingLine(finding: Finding): string {
 // --- list -------------------------------------------------------------------------
 
 function shownStatuses(args: ParsedArgs): readonly FindingStatus[] {
-  if (args.flags.all === true) return ["needs-you", "open", "closed", "fixed"];
+  if (args.flags.all === true) return ["needs-you", "open", "closed", "lapsed", "fixed"];
   if (args.flags.open === true) return ["needs-you", "open"];
   return ["needs-you"];
 }

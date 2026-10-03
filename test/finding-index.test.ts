@@ -327,3 +327,34 @@ test("a reset line from another host's ledger chunk applies like a local one", (
   assert.equal(writeRemoteChunk(seed.project, { host: "host-b", name: `${ulid(Date.parse(at))}.jsonl`, text: `${JSON.stringify(line)}\n` }), "written");
   assert.deepEqual(seed.findings(), []);
 });
+
+// --- lapsed (0.66.0) ------------------------------------------------------------------
+
+test("a finding two full runs in a row left out is lapsed: out of the counts and the prompt; a new report opens it", () => {
+  const seed = new Seeder("fi-lapsed");
+  seed.run("check", [{ key: "a", severity: "high", state: "needs-code" }, { key: "b" }]);
+  seed.run("check", [{ key: "b" }]);
+  assert.deepEqual([seed.find("check", "a").stale, seed.find("check", "a").status], [true, "open"], "one miss: stale, still open");
+  seed.run("check", [{ key: "b" }]);
+  assert.equal(seed.find("check", "a").status, "lapsed");
+  assert.deepEqual(findingCounts(seed.findings()), { needsYou: 0, open: 1 });
+  assert.equal(findingPromptLines(seed.findings()).some((line) => line.includes("{a}")), false);
+  seed.run("check", [{ key: "a", severity: "high", state: "needs-code" }, { key: "b" }]);
+  assert.equal(seed.find("check", "a").status, "needs-you", "reported again: open again");
+});
+
+test("not lapsed: reported by the full run before the newest, or only one full run since; a follow-up is not a full run", () => {
+  const seed = new Seeder("fi-lapsed-not");
+  seed.run("check", [{ key: "a" }, { key: "b" }]);
+  seed.run("check", [{ key: "b" }]);
+  const parent = seed.run("check", [{ key: "a" }, { key: "b" }]);
+  seed.run("check", [{ key: "b" }]);
+  assert.deepEqual([seed.find("check", "a").stale, seed.find("check", "a").status], [true, "open"], "the run before the newest reported it");
+  seed.run("check", [{ key: "b", state: "fixed" }], { followUpOf: parent });
+  assert.equal(seed.find("check", "a").status, "open", "a follow-up does not count as a second miss");
+  const fixed = new Seeder("fi-lapsed-fixed");
+  fixed.run("check", [{ key: "a", state: "fixed" }, { key: "b" }]);
+  fixed.run("check", [{ key: "b" }]);
+  fixed.run("check", [{ key: "b" }]);
+  assert.equal(fixed.find("check", "a").status, "fixed", "fixed stays fixed");
+});

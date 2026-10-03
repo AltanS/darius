@@ -158,7 +158,7 @@ test("the finding verb is registered and listed for sessions", async () => {
   assert.equal(getCommand("finding")?.audience, "session");
 });
 
-// --- reset (0.66.0) ------- ---------------------------------------------------------
+// --- reset and lapsed (0.66.0) -------------------------------------------------------
 
 test("finding reset hides every finding from before it and says how many; list --all shows nothing from before", async () => {
   seeded("fc-reset");
@@ -193,4 +193,12 @@ test("finding reset needs a project: refused outside a linked checkout without -
     process.chdir(cwd);
     if (project !== undefined) process.env.DARIUS_PROJECT = project;
   }
+});
+
+test("finding list: a lapsed finding shows only under --all, marked lapsed", async () => {
+  const seed = seeded("fc-lapsed");
+  seed.run("check", [{ key: "link-12", title: "Broken link", severity: "high", state: "needs-code" }]);
+  seed.run("check", [{ key: "link-12", title: "Broken link", severity: "high", state: "needs-code" }]);
+  assert.equal((await finding("fc-lapsed", ["list", "--open"])).stdout.includes("{banner-3}"), false);
+  assert.match((await finding("fc-lapsed", ["list", "--all"])).stdout, /^lapsed medium open: Old banner \{banner-3\} stale since/mu);
 });
