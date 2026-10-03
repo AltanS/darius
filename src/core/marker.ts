@@ -177,8 +177,12 @@ const TIMEOUT_TEXT = /^(\d+)(m|h)$/u;
 const MAX_TIMEOUT_MINUTES = 12 * 60;
 /** The longest `args` text of a ritual, in characters. */
 export const MAX_ARGS_LENGTH = 256;
-/** A Claude Code permission rule: a bare tool name, or `Tool(pattern)`. */
-export const PERMISSION_RULE_RE = /^[A-Za-z_][A-Za-z0-9_]*(\([^]*\))?$/u;
+/**
+ * A Claude Code permission rule: a bare tool name, or `Tool(pattern)`. A
+ * name may hold `-` after its first character (0.66.0), as an MCP tool of a
+ * server with a hyphen in its name does: `mcp__some-server__get_thing`.
+ */
+export const PERMISSION_RULE_RE = /^[A-Za-z_][A-Za-z0-9_-]*(\([^]*\))?$/u;
 const MODES: readonly Mode[] = ["off", "report", "act"];
 const MAX_SEARCH_DEPTH = 64;
 

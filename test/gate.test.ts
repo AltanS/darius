@@ -438,6 +438,13 @@ test("a rule of one program word and * also allows the bare program; a rule with
   assert.equal(mayAllowsShell("pnpm", longer), false);
 });
 
+test("an MCP tool name with a hyphen in may allows exactly that tool (0.66.0)", () => {
+  const scoped = policy({ gate: "full", may: ["mcp__some-server__get_thing"] });
+  assert.equal(decide(tool("other", "mcp__some-server__get_thing"), scoped), undefined);
+  assert.match(decide(tool("other", "mcp__some-server__get_other"), scoped) ?? "", /not in the policy's may rules/u);
+  assert.match(decide(tool("other", "mcp__some-server__get"), scoped) ?? "", /not in the policy's may rules/u, "no prefix match");
+});
+
 // --- the Claude Code adapter ----------------------------------------------------------
 
 test("the Claude adapter classifies tool names and reads the command and session", () => {

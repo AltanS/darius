@@ -384,6 +384,8 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["model not a string", v3(`${RITUAL}model = 3\n`), /:9: model must be a non-empty string/u],
   ["bad mode", v3(`${RITUAL}mode = "yolo"\n`), /:9: mode must be "off", "report" or "act"/u],
   ["bad may rule", v3(`${RITUAL}may = ["not a rule"]\n`), /:9: may must be a list of Claude Code permission rules .* got "not a rule"/u],
+  ["may rule that starts with -", v3(`${RITUAL}may = ["-mcp__x__y"]\n`), /:9: may must be a list of Claude Code permission rules .* got "-mcp__x__y"/u],
+  ["may tool name with a blank", v3(`${RITUAL}may = ["mcp__some server__get_thing"]\n`), /:9: may must be a list of Claude Code permission rules .* got "mcp__some server__get_thing"/u],
   ["may not a list", v3(`${RITUAL}may = "Bash"\n`), /:9: may must be a list of strings/u],
   ["hold that does not compile", v3(`${RITUAL}hold = ['(']\n`), /:9: hold must be a list of regular expressions that compile, got "\("/u],
   ["hold that needs the u flag", v3(`${RITUAL}hold = ['\\p{Nope}']\n`), /:9: hold must be a list of regular expressions that compile/u],
@@ -500,6 +502,11 @@ test("the hash changes when the own notes next to a policy change, and ignores h
 test("--resolved leaves notes out, with or without own notes", () => {
   const ritual = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Own."\n`);
   assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report"]);
+});
+
+test("may accepts an MCP tool name with a hyphen in the server name (0.66.0)", () => {
+  const ritual = firstRitual(`${RITUAL}mode = "report"\nmay = ["mcp__some-server__get_thing", "Bash(date *)"]\n`);
+  assert.deepEqual(ritual.policy.may, ["mcp__some-server__get_thing", "Bash(date *)"]);
 });
 
 // --- on_hold (0.66.0) --------------------------------------------------------------

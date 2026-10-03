@@ -94,7 +94,7 @@ Root keys:
 | `profile`, `model`, `max_turns` | no | As on a v2 ritual. |
 | `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold` or `on_hold`. Its `notes` may be combined with it. |
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
-| `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
+| `may` | no | A list of Claude Code permission rules, such as `Bash(date *)` or an MCP tool name such as `mcp__some-server__get_thing`. A tool name may hold `-` after its first character. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
 | `on_hold` | no | `stop` (default) or `deny`: what a `hold` match does in a run. `stop` holds the run until a person answers. `deny` refuses that one call with a reason that names the pattern, and the run goes on; the model records the command as a needs-decision item. The command never runs either way. A run can still hold itself with `darius run hold`. |
 | `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. With a `policy`, the policy's notes come first, then a blank line, then these. |
