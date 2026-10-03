@@ -36,7 +36,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { findMarker, holdOverlap, MARKER_FILE, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
+import { findMarker, holdOverlap, MARKER_FILE, shellOperatorIn, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
 import { planFactor, type FactorGroup } from "../core/marker-factor.ts";
 import { markerDirty } from "../core/reconcile.ts";
 import { unifiedDiff } from "../core/text-diff.ts";
@@ -102,6 +102,29 @@ function notesWarnings(marker: Marker): string[] {
   return warnings;
 }
 
+/**
+ * A warning for each hold pattern with a literal shell operator (0.66.0):
+ * in a policy, in a ritual's own hold, and in its hold_extra. A pattern
+ * that a ritual takes from its policy is reported once, at the policy.
+ */
+function operatorWarnings(marker: Marker): string[] {
+  const warnings: string[] = [];
+  const tell = (section: string, patterns: readonly string[]): void => {
+    for (const pattern of patterns) {
+      const operator = shellOperatorIn(pattern);
+      if (operator === undefined) continue;
+      warnings.push(
+        `[${section}] hold pattern '${pattern}' holds the shell operator ${operator}: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)`,
+      );
+    }
+  };
+  for (const [name, policy] of Object.entries(marker.policies)) tell(`policies.${name}`, policy.hold);
+  for (const ritual of marker.rituals) {
+    tell(`rituals.${ritual.slug}`, ritual.policyName === undefined ? ritual.policy.hold : (ritual.policyExtra?.hold ?? []));
+  }
+  return warnings;
+}
+
 /** The warnings for a parsed marker. */
 function warningsFor(marker: Marker): string[] {
   const warnings: string[] = [];
@@ -111,7 +134,7 @@ function warningsFor(marker: Marker): string[] {
   for (const name of Object.keys(marker.policies)) {
     if (!used.has(name)) warnings.push(`[policies.${name}] is not used by any ritual`);
   }
-  return [...warnings, ...overlapWarnings(marker), ...notesWarnings(marker)];
+  return [...warnings, ...overlapWarnings(marker), ...notesWarnings(marker), ...operatorWarnings(marker)];
 }
 
 interface Target {

@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
 import { linksFile, readLinks, writeLink } from "../src/core/links.ts";
-import { definitionHash, findMarker, isAboveCap, readMarker, resolvedLines, resolvedPolicy, type Marker, type RepoRitual } from "../src/core/marker.ts";
+import { definitionHash, findMarker, isAboveCap, readMarker, resolvedLines, resolvedPolicy, shellOperatorIn, type Marker, type RepoRitual } from "../src/core/marker.ts";
 import { resolveProject } from "../src/core/paths.ts";
 import type { Document, LedgerLine, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
@@ -507,6 +507,17 @@ test("--resolved leaves notes out, with or without own notes", () => {
 test("may accepts an MCP tool name with a hyphen in the server name (0.66.0)", () => {
   const ritual = firstRitual(`${RITUAL}mode = "report"\nmay = ["mcp__some-server__get_thing", "Bash(date *)"]\n`);
   assert.deepEqual(ritual.policy.may, ["mcp__some-server__get_thing", "Bash(date *)"]);
+});
+
+test("shellOperatorIn finds an escaped pipe, ; and && outside a class, not an alternation or a class (0.66.0)", () => {
+  assert.equal(shellOperatorIn(String.raw`curl.*\|\s*sh`), "\\|");
+  assert.equal(shellOperatorIn("a;b"), ";");
+  assert.equal(shellOperatorIn(String.raw`a\;b`), ";");
+  assert.equal(shellOperatorIn("make && x"), "&&");
+  assert.equal(shellOperatorIn(String.raw`a\&\&b`), "&&");
+  for (const clean of [String.raw`(^|[;&|(]\s*)wp\s`, String.raw`\bcurl\b(?![^|;&]*\s-G\s)`, "a|b", String.raw`[]|;]x`, String.raw`[^]|;&]x`, String.raw`a\\|b`, "a&b", String.raw`\bdeploy\b`]) {
+    assert.equal(shellOperatorIn(clean), undefined, clean);
+  }
 });
 
 // --- on_hold (0.66.0) --------------------------------------------------------------

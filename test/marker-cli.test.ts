@@ -337,3 +337,19 @@ test("marker check: short notes and unrelated hold lists give no warning", async
   const run = await runCli(markerCommand, ["check", dir]);
   assert.equal(run.stdout, "ok: v3, 2 rituals, 0 policies");
 });
+
+test("marker check warns about a hold pattern with a literal shell operator, once, and never for a class (0.66.0)", async () => {
+  const policy = `[policies.p]\nmode = "report"\nhold = ['curl.*\\|\\s*(ba)?sh', '(^|[;&|(]\\s*)wp\\s']\n`;
+  const dir = withSkills(
+    `${ROOT}${policy}[rituals.a]\ntitle = "a"\nskill = "a"\npolicy = "p"\nhold_extra = ['make && make install']\n${inlineRitual("b", ["a;b", "\\bcurl\\b(?![^|;&]*\\s-G\\s)", "x|y"])}`,
+    ["a", "b"],
+  );
+  const run = await runCli(markerCommand, ["check", dir]);
+  assert.equal(run.code, 0, run.stderr);
+  const lines = run.stdout.split("\n").filter((line) => line.includes("shell operator"));
+  assert.deepEqual(lines, [
+    "warning: [policies.p] hold pattern 'curl.*\\|\\s*(ba)?sh' holds the shell operator \\|: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)",
+    "warning: [rituals.a] hold pattern 'make && make install' holds the shell operator &&: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)",
+    "warning: [rituals.b] hold pattern 'a;b' holds the shell operator ;: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)",
+  ]);
+});

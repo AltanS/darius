@@ -682,6 +682,43 @@ export function definitionHash(ritual: RepoRitual): string {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+/**
+ * The first literal shell operator in a hold pattern, outside a character
+ * class: `\|`, `;` or `&&` (0.66.0). Undefined when there is none. An
+ * unescaped `|` is an alternation, and `[^|;&]` or `[;&|(]` is a class, so
+ * neither counts. Since 0.66.0 a pattern is matched per command, so such a
+ * pattern can match only a line that is read whole (one with a loader).
+ */
+export function shellOperatorIn(pattern: string): string | undefined {
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i] ?? "";
+    if (ch === "\\") {
+      const next = pattern[i + 1] ?? "";
+      i += 1;
+      if (inClass) continue;
+      if (next === "|") return "\\|";
+      if (next === ";") return ";";
+      if (next === "&" && (pattern.slice(i + 1, i + 2) === "&" || pattern.slice(i + 1, i + 3) === "\\&")) return "&&";
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      // A `]` right after `[` or `[^` is a literal member of the class.
+      if (pattern[i + 1] === "^") i += 1;
+      if (pattern[i + 1] === "]") i += 1;
+      continue;
+    }
+    if (ch === ";") return ";";
+    if (ch === "&" && pattern[i + 1] === "&") return "&&";
+  }
+  return undefined;
+}
+
 /** A ritual's effective policy, sorted: what `marker check --resolved` prints. */
 export interface ResolvedView {
   mode: Mode;

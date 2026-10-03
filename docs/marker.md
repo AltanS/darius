@@ -125,6 +125,12 @@ code: a policy no ritual uses, a v3 marker with no rituals, two rituals that sha
 over 300 characters. The overlap warning reads `[rituals.a] and [rituals.b] share 5 of 6 hold
 patterns: factor into [policies.<name>] with hold_extra`, once per pair, and skips two rituals that
 name the same `policy`. The notes warning says procedure belongs in the skill and rules in `hold`.
+A hold pattern with a literal shell operator outside a character class (`\|`, `;` or `&&`)
+gets a warning too (0.66.0). Since 0.66.0 the gate matches a pattern against each command of a
+line apart, so such a pattern cannot span commands. It still matches a line that is read whole:
+one where a command may run code from its arguments, such as a pipe into `bash` or `sh`, or a
+line the shell split refuses. A class such as `[^|;&]` or `[;&|(]` is fine. Each pattern is
+reported once, at the policy that holds it, or at the ritual for its own `hold` and `hold_extra`.
 `--resolved <slug>` prints `mode:`, then `on_hold: deny` when the policy sets it, then
 one `may:` and one `hold:` line per entry, each list sorted. An inline policy and a factored
 one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
