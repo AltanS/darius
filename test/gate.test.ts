@@ -153,6 +153,22 @@ test("a cd before the protocol keeps it the protocol; a quoted heredoc body deni
   assert.equal(verdict(shell('cat <<EOF\nwp db drop\nEOF'), scoped), "hold", "an unquoted heredoc expands, so it is read as written");
 });
 
+/** The installed darius in the protocol tests (0.66.0). */
+function isOwnDarius(path: string): boolean {
+  return path === "/opt/app/bin/darius";
+}
+
+test("the protocol is never held for its text: quoted operators, the installed binary's path, an unquoted heredoc (0.66.0)", () => {
+  const scoped = policy({ gate: "full", may: [], hold: [String.raw`\bdeploy\b`, String.raw`\bwp\s`] });
+  const allowed = (command: string): string => gateDecide(shell(command), { policy: scoped, isHeld: false, isDariusBin: isOwnDarius }).verdict;
+  assert.equal(allowed(`darius run hold ${RUN} --project p --question "may I deploy (prod) && wp db drop; a|b > c?"`), "allow");
+  assert.equal(allowed(`darius run complete ${RUN} --project p --outcome complete --note 'deploy; wp x (later) $5'`), "allow");
+  assert.equal(allowed(`/opt/app/bin/darius run hold ${RUN} --project p --question "deploy?"`), "allow");
+  assert.equal(allowed(`/tmp/darius run hold ${RUN} --project p --question "deploy?"`), "hold", "not the installed binary: read as any command");
+  assert.equal(allowed(`darius run complete ${RUN} --project p --outcome complete --findings-stdin <<F\nwe should deploy (now); wp x\nF`), "allow");
+  assert.equal(allowed(`darius run complete ${RUN} --project p --outcome complete --findings-stdin <<F\n$(wp db drop)\nF`), "hold");
+});
+
 test("holdView blanks quoted text with a blank, unquotes the rest, and gives up on a line that runs its arguments", () => {
   assert.equal(holdView(`jq -c '.a // .wp // null' /tmp/x`), "jq -c _ /tmp/x");
   assert.equal(holdView(`git commit -m "ship it" && "wp" cli`), "git commit -m _ && wp cli");

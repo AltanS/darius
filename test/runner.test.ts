@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseArgs } from "../src/cli/args.ts";
-import { policyCheckCommand } from "../src/cli/policy-check.ts";
+import { installedDarius, policyCheckCommand } from "../src/cli/policy-check.ts";
 import { profileCommand } from "../src/cli/profile.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
@@ -690,6 +690,56 @@ test("isProtocolCommand accepts only this run's plain hold/complete forms", () =
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<'EOF'\nok\nEOF\ngit push`, run), false);
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<'EOF'\nok\nEOF`, run), true);
   assert.ok(REPORT_MODE_WRITE_VERBS.length <= 8);
+});
+
+/** The installed darius in the protocol tests (0.66.0). */
+function isOwnDarius(path: string): boolean {
+  return path === "/opt/app/bin/darius";
+}
+
+test("isProtocolCommand reads quotes, takes the installed darius by its path, and an unquoted heredoc without substitution (0.66.0)", () => {
+  const run = "01RUN";
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "may I run a | b; c && (d) > e < f?"`, run), true, "operators in double quotes");
+  assert.equal(isProtocolCommand(`darius run complete ${run} --outcome complete --note 'costs $5 (net); a|b \`x\`'`, run), true, "anything in single quotes");
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "costs $5"`, run), false, "a $ in double quotes expands");
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "x \\\\$5"`, run), false);
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "x \\$5"`, run), true, "an escaped $ is text");
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "a (b)" ; git push`, run), false);
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question "unclosed`, run), false);
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question 'a' && (git push)`, run), false);
+  // An absolute path, only to the installed binary.
+  assert.equal(isProtocolCommand(`/opt/app/bin/darius run hold ${run} --question x`, run, isOwnDarius), true);
+  assert.equal(isProtocolCommand(`/opt/app/bin/darius run hold ${run} --question x`, run), false, "no check given: the bare word only");
+  assert.equal(isProtocolCommand(`/tmp/darius run hold ${run} --question x`, run, isOwnDarius), false);
+  assert.equal(isProtocolCommand(`/opt/app/bin/darius-x run hold ${run} --question x`, run, () => true), false);
+  assert.equal(isProtocolCommand(`/opt/x/../app/bin/darius run hold ${run} --question x`, run, () => true), false);
+  assert.equal(isProtocolCommand(`"/opt/app/bin/darius" run hold ${run} --question x`, run, () => true), false);
+  assert.equal(isProtocolCommand(`cd /srv && /opt/app/bin/darius run complete ${run} --outcome complete`, run, isOwnDarius), true);
+  // Heredocs: an unquoted delimiter only for run complete, only without substitution.
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\nwe should deploy (now) | later; $HOME\nF`, run), true);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin << "F"\nx\nF`, run), true);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n$(git push)\nF`, run), false);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n\`git push\`\nF`, run), false);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n$[x]\nF`, run), false);
+  assert.equal(isProtocolCommand(`darius run hold ${run} --question x <<F\nbody\nF`, run), false, "run hold takes no heredoc");
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<'EOF'\nok\nEOF\ngit push\nEOF`, run), false, "the body ends at the first delimiter");
+  assert.equal(isProtocolCommand(`darius run complete ${run} --note "a << b" --findings-stdin <<'EOF'\nok\nEOF`, run), true);
+});
+
+test("installedDarius accepts a path that resolves to the binary the hook runs from, nothing else", () => {
+  const dir = mkdtempSync(join(tmpdir(), "darius-bin-"));
+  const own = join(dir, "app", "bin", "darius");
+  mkdirSync(join(dir, "app", "bin"), { recursive: true });
+  writeFileSync(own, "#!/bin/sh\n");
+  mkdirSync(join(dir, "local", "bin"), { recursive: true });
+  symlinkSync(own, join(dir, "local", "bin", "darius"));
+  mkdirSync(join(dir, "tmp"));
+  writeFileSync(join(dir, "tmp", "darius"), "#!/bin/sh\n");
+  const check = installedDarius(own);
+  assert.equal(check(own), true);
+  assert.equal(check(join(dir, "local", "bin", "darius")), true, "a symlink to it");
+  assert.equal(check(join(dir, "tmp", "darius")), false, "another file named darius");
+  assert.equal(check(join(dir, "missing", "darius")), false);
 });
 
 test("policy-check reads real stdin in a child process and prints the deny decision", async () => {

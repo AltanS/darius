@@ -75,21 +75,83 @@ export const REPORT_MODE_WRITE_VERBS: readonly string[] = [
   String.raw`\bpnpm\s+cli\b.*\s--confirm\b`,
 ];
 
-const PROTOCOL_HEAD = /^\s*darius\s+run\s+(hold|complete)\s+(\S+)\s[^;&|`$()<>\n]*$/u;
-
 /** True when `may` lets the run start subagents (0.21.0): it names the subagent tool, `Agent`. */
 export function allowsSubagents(may: readonly string[]): boolean {
   return may.includes("Agent");
 }
-const HEREDOC_HEAD = /^\s*(darius\s+run\s+complete\s+\S+\s[^;&|`$()<>\n]*)<<-?(['"])(\w+)\2\s*$/u;
 
 /**
- * True for `darius run hold|complete <run> ...` of THIS run with no shell
- * operators, optionally feeding findings through a quoted heredoc
- * (`<<'EOF'`, whose body the shell never expands) that ends the command.
+ * Tells whether an absolute path is the darius binary the hook itself runs
+ * (0.66.0). policy-check passes one that compares resolved paths; without
+ * one, only the bare word `darius` names the binary.
  */
-export function isProtocolCommand(command: string, run: string): boolean {
-  return protocolVerb(command, run) !== undefined;
+export type DariusBinCheck = (path: string) => boolean;
+
+/** The program, the verb, the run id and the rest of a protocol line. The rest starts with a blank. */
+const PROTOCOL_START = /^\s*(\S+)\s+run\s+(hold|complete)\s+(\S+)(\s.*)$/u;
+/** An absolute path to a file named `darius`, as one plain word. */
+const DARIUS_PATH = /^\/(?:[\w.+,@%:=-]+\/)*darius$/u;
+
+/**
+ * True when `text` is plain arguments: no shell operator, no substitution,
+ * no newline outside quotes (0.66.0). Inside single quotes anything but a
+ * newline is text. Inside double quotes `( ) ; & | < >` are text, but `$`
+ * and a backtick expand, so they are refused unless escaped. An unclosed
+ * quote or a trailing backslash is refused.
+ */
+function plainArguments(text: string): boolean {
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? "";
+    if (ch === "\n") return false;
+    if (quote === "'") {
+      if (ch === "'") quote = undefined;
+      continue;
+    }
+    if (ch === "\\") {
+      const next = text[i + 1] ?? "";
+      if (next === "" || next === "\n") return false;
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = undefined;
+      else if (ch === "$" || ch === "`") return false;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (/[;&|`$()<>]/u.test(ch)) return false;
+  }
+  return quote === undefined;
+}
+
+/**
+ * The verb when `line` is `darius run hold|complete <run> ...` of THIS run
+ * with plain arguments (plainArguments), else undefined. The program is the
+ * word `darius`, or an absolute path whose last part is `darius` and that
+ * `isDariusBin` accepts.
+ */
+function protocolHead(line: string, run: string, isDariusBin: DariusBinCheck): string | undefined {
+  const match = PROTOCOL_START.exec(line);
+  if (match === null || match[3] !== run || !plainArguments(match[4] ?? "")) return undefined;
+  const program = match[1] ?? "";
+  if (program !== "darius" && !(DARIUS_PATH.test(program) && !program.split("/").includes("..") && isDariusBin(program))) return undefined;
+  return match[2];
+}
+
+/** A heredoc at the end of a `run complete` line: the head, the quote around the delimiter (may be empty), the delimiter. */
+const HEREDOC_HEAD = /^(.*)<<-?[ \t]*(['"]?)(\w+)\2\s*$/u;
+
+/** Text an unquoted heredoc body may not hold: a substitution or arithmetic the shell would run. */
+const EXPANDS_TO_COMMAND = /\$\(|`|\$\[/u;
+
+/**
+ * True for `darius run hold|complete <run> ...` of THIS run with plain
+ * arguments, optionally feeding findings through a heredoc that ends the
+ * command (protocolVerb).
+ */
+export function isProtocolCommand(command: string, run: string, isDariusBin: DariusBinCheck = () => false): boolean {
+  return protocolVerb(command, run, isDariusBin) !== undefined;
 }
 
 /**
@@ -99,18 +161,25 @@ export function isProtocolCommand(command: string, run: string): boolean {
  */
 const CD_PREFIX = /^\s*cd\s+(?:'[^'\n]*'|[^\s;&|`$()<>'"\\]+)\s*&&\s*/u;
 
-/** `hold` or `complete` when the command is the protocol of THIS run (isProtocolCommand), else undefined. */
-function protocolVerb(command: string, run: string): string | undefined {
+/**
+ * `hold` or `complete` when the command is the protocol of THIS run, else
+ * undefined. One line (protocolHead), or `run complete` with a heredoc
+ * whose body ends at its first delimiter line, the last line. A quoted
+ * delimiter (`<<'EOF'`) keeps the body as text; an unquoted one (`<<EOF`,
+ * 0.66.0) passes only when the body holds no `$(`, backtick or `$[`, so the
+ * shell expands nothing that runs.
+ */
+function protocolVerb(command: string, run: string, isDariusBin: DariusBinCheck): string | undefined {
   const lines = command.replace(/\n+$/u, "").split("\n");
   const first = (lines[0] ?? "").replace(CD_PREFIX, "");
-  if (lines.length === 1) {
-    const match = PROTOCOL_HEAD.exec(first);
-    return match !== null && match[2] === run ? match[1] : undefined;
-  }
+  if (lines.length === 1) return protocolHead(first, run, isDariusBin);
   const heredoc = HEREDOC_HEAD.exec(first);
-  if (heredoc === null || lines.at(-1)?.trim() !== heredoc[3]) return undefined;
-  const head = PROTOCOL_HEAD.exec(heredoc[1] ?? "");
-  return head !== null && head[2] === run ? head[1] : undefined;
+  if (heredoc === null) return undefined;
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === heredoc[3]);
+  if (end !== lines.length - 1) return undefined;
+  if (heredoc[2] === "" && EXPANDS_TO_COMMAND.test(lines.slice(1, -1).join("\n"))) return undefined;
+  const verb = protocolHead(heredoc[1] ?? "", run, isDariusBin);
+  return verb === "complete" ? verb : undefined;
 }
 
 // --- `may` rules ---------------------------------------------------------------------
@@ -700,9 +769,9 @@ function hold(reason: string): GateDecision {
  * follow-up or clears the run's markers is denied in every run, whatever
  * `may` says (0.47.1).
  */
-function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall): GateDecision {
+function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall, isDariusBin: DariusBinCheck): GateDecision {
   const { agentId } = call;
-  const protocol = protocolVerb(command, policy.run);
+  const protocol = protocolVerb(command, policy.run, isDariusBin);
   if (protocol === "complete" && agentId !== undefined) {
     return deny("only the main session completes the run; return your findings to it");
   }
@@ -760,11 +829,11 @@ function decideSubagent(call: ToolCall, policy: RunPolicy): GateDecision {
 }
 
 /** What the gate does with this tool call. Throws on an invalid regex. */
-export function decide(call: ToolCall, context: { policy: RunPolicy; isHeld: boolean }): GateDecision {
+export function decide(call: ToolCall, context: { policy: RunPolicy; isHeld: boolean; isDariusBin?: DariusBinCheck }): GateDecision {
   const { policy } = context;
   const scope = policy.gate ?? "shell";
   if (scope === "shell" && (call.class !== "shell" || call.command === undefined)) return ALLOW;
   if (context.isHeld) return hold(`run ${policy.run} is held; stop now and wait for an operator`);
-  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call);
+  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call, context.isDariusBin ?? (() => false));
   return decideTool(call, policy);
 }

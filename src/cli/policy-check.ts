@@ -43,10 +43,11 @@ import type { JsonValue, LedgerLine } from "../core/model.ts";
 import { openProject, sha256Hex } from "../core/store.ts";
 import { claudeHarness } from "../harness/claude.ts";
 import type { HarnessAdapter, ToolCall } from "../harness/contract.ts";
-import { decide, grantRefusal, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
+import { decide, grantRefusal, type DariusBinCheck, type GateDecision, type GateScope, type RunPolicy } from "../harness/gate.ts";
 import { HARNESS_IDS, harnessById } from "../harness/registry.ts";
 import { errorMessage } from "../runtime.ts";
 import { recordHold } from "../runner/hold.ts";
+import { dariusBin } from "../runner/launch.ts";
 import { viewRun } from "../runner/run-due.ts";
 import { readStdin } from "./args.ts";
 import type { Command, ParsedArgs } from "./registry.ts";
@@ -164,6 +165,16 @@ function canonicalDir(dir: string): string {
   }
 }
 
+/**
+ * The protocol may name darius by an absolute path (0.66.0), but only one
+ * that resolves to the binary this hook runs from: a `darius` under /tmp
+ * that the run wrote itself is not darius.
+ */
+export function installedDarius(own: string = dariusBin()): DariusBinCheck {
+  const target = canonicalDir(own);
+  return (path) => existsSync(path) && canonicalDir(path) === target;
+}
+
 // --- the command ------------------------------------------------------------------
 
 function textFlag(args: ParsedArgs, name: string): string | undefined {
@@ -221,12 +232,12 @@ function check(args: ParsedArgs, harness: HarnessAdapter): number {
   if (call.cwd !== undefined) call.cwd = canonicalDir(call.cwd);
   // The preflight runs before run.started exists, so it cannot check the sha; it denies anyway.
   if (args.flags.preflight === true) {
-    decide(call, { policy, isHeld: false });
+    decide(call, { policy, isHeld: false, isDariusBin: installedDarius() });
     return deny(harness, "preflight");
   }
   const ledger = readLedger(openProject(policy.project));
   checkPolicySha(policy, text, ledger);
-  const decision = decide(call, { policy, isHeld: isRunHeld(policy, ledger) });
+  const decision = decide(call, { policy, isHeld: isRunHeld(policy, ledger), isDariusBin: installedDarius() });
   logDecision(policyFile, call, decision);
   if (decision.verdict === "allow") return EXIT_ALLOW;
   if (decision.verdict === "deny") return deny(harness, decision.reason, false);
