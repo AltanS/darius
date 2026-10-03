@@ -112,6 +112,7 @@ function ritualTable(ritual: Ritual, skill: string): string {
   lines.push(`mode = ${tomlString(policy.mode)}`);
   lines.push(...listLines("may", policy.may, tomlString));
   lines.push(...listLines("hold", policy.hold, tomlLiteral));
+  if (policy.on_hold !== undefined) lines.push(`on_hold = ${tomlString(policy.on_hold)}`);
   if (policy.notes !== undefined && policy.notes !== "") lines.push(`notes = ${tomlText(policy.notes)}`);
   return lines.join("\n");
 }

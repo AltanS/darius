@@ -340,3 +340,20 @@ test("export writes args and a multi-line note in the \"\"\" form, and the marke
   assert.equal(ritual?.policy.notes, note, "the note survives the export and the parse");
   assert.doesNotMatch(result.stdout, /\[rituals\.daily-report\][^[]*args =/u, "a ritual without args gets no args line");
 });
+
+test("export writes on_hold = \"deny\" and the marker reads it back; a store item keeps it (0.66.0)", async () => {
+  const { project } = setup();
+  project.writeItem(
+    { header: ritualHeader("denies", { skill: "audit", policy: { mode: "report", may: [], hold: ["\\bwp\\s"], on_hold: "deny" } }), body: "ignored\n" },
+    { who: "test" },
+  );
+  assert.equal(project.readItem<Ritual>("ritual", "denies")?.header.policy.on_hold, "deny", "the store item round-trips");
+  const result = await run(project.name, []);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /\[rituals\.denies\][^[]*hold = \['\\bwp\\s'\]\non_hold = "deny"\n/u);
+  assert.doesNotMatch(result.stdout, /\[rituals\.daily-report\][^[]*on_hold/u, "the default writes no line");
+  const target = join(SANDBOX, `check-on-hold-${String(counter)}`);
+  mkdirSync(target);
+  writeFileSync(join(target, ".darius.toml"), result.stdout);
+  assert.equal(readMarker(target)?.rituals.find((item) => item.slug === "denies")?.policy.on_hold, "deny");
+});

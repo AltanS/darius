@@ -225,6 +225,28 @@ test("the quoted-text relief is lost only by a command whose program runs its ar
   assert.equal(verdict(shell(`ssh web1 uptime ; jq '.wp // 1' /tmp/a`), scoped), "deny", "the jq part keeps its relief");
 });
 
+test("on_hold deny: a hold-list match denies the one call, names the pattern, and the run goes on (0.66.0)", () => {
+  const stop = policy({ hold: [String.raw`\bwp\s`] });
+  const denies = policy({ hold: [String.raw`\bwp\s`], on_hold: "deny" });
+  assert.deepEqual(gateDecide(shell("wp db drop"), { policy: stop, isHeld: false }), {
+    verdict: "hold",
+    reason: String.raw`the command matches the hold pattern /\bwp\s/: wp db drop`,
+    holdPattern: String.raw`\bwp\s`,
+  });
+  assert.deepEqual(gateDecide(shell("cd tools && wp db drop"), { policy: denies, isHeld: false }), {
+    verdict: "deny",
+    reason: String.raw`outside this run's scope (hold rule: \bwp\s). Do not try another form of this command. Record it as a needs-decision item with the exact command, and go on with the rest of the work.`,
+    holdPattern: String.raw`\bwp\s`,
+  });
+  assert.equal(verdict(shell("wp db drop"), policy({ gate: "full", may: ["Bash(wp *)"], hold: [String.raw`\bwp\s`], on_hold: "deny" })), "deny", "full scope too");
+  assert.equal(verdict(shell("date"), denies, true), "hold", "a held run stays held");
+  assert.equal(verdict(shell(`darius run hold ${RUN} --question "may I run wp db drop?"`), denies), "allow", "the run may still hold itself");
+  assert.equal(verdict(shell("git push"), policy({ mode: "report", hold: [], on_hold: "deny" })), "hold", "report-mode write verbs still hold");
+  const quoted = gateDecide(shell(`jq '.wp // 1' /tmp/a`), { policy: denies, isHeld: false });
+  assert.equal(quoted.verdict, "deny");
+  assert.ok(quoted.verdict === "deny" && quoted.holdPattern === undefined, "a quoted-only match is the 0.64.0 deny, not a hold rule");
+});
+
 test("hold is for what needs a person; a call outside the policy is only denied", () => {
   const act = policy({ gate: "full" });
   const report = policy({ gate: "full", mode: "report", may: ["Bash(git *)", "Bash(ls *)"] });

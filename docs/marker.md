@@ -27,6 +27,7 @@ may = [
   "Bash(date *)",
 ]
 hold = ['\bdeploy\b', '--confirm\b']
+on_hold = "deny"
 
 [rituals.daily-report]
 title = "Daily site report"
@@ -91,15 +92,17 @@ Root keys:
 | `from` | no | `YYYY-MM-DD`. The first date of the cadence grid. |
 | `timeout` | no | `<N>m` or `<N>h`, from `1m` to `12h`. The budget of one run. |
 | `profile`, `model`, `max_turns` | no | As on a v2 ritual. |
-| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may` or `hold`. Its `notes` may be combined with it. |
+| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold` or `on_hold`. Its `notes` may be combined with it. |
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)`. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
+| `on_hold` | no | `stop` (default) or `deny`: what a `hold` match does in a run. `stop` holds the run until a person answers. `deny` refuses that one call with a reason that names the pattern, and the run goes on; the model records the command as a needs-decision item. The command never runs either way. A run can still hold itself with `darius run hold`. |
 | `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. With a `policy`, the policy's notes come first, then a blank line, then these. |
 | `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
 | `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |
 
-`[policies.<name>]` takes `mode` (required), `may`, `hold` and `notes`, with the same rules.
+`[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes` and `on_hold`, with the same rules.
+A policy's `on_hold` applies to every ritual that names the policy.
 `may_extra` and `hold_extra` only add. The effective `may` is the base `may` and then the
 extra rules; `hold` works the same way. A rule that is already there appears once. An extra can
 never remove a rule, so a ritual never has fewer `hold` patterns than its policy. The mode stays
@@ -122,13 +125,14 @@ code: a policy no ritual uses, a v3 marker with no rituals, two rituals that sha
 over 300 characters. The overlap warning reads `[rituals.a] and [rituals.b] share 5 of 6 hold
 patterns: factor into [policies.<name>] with hold_extra`, once per pair, and skips two rituals that
 name the same `policy`. The notes warning says procedure belongs in the skill and rules in `hold`.
-`--resolved <slug>` prints `mode:`, then
+`--resolved <slug>` prints `mode:`, then `on_hold: deny` when the policy sets it, then
 one `may:` and one `hold:` line per entry, each list sorted. An inline policy and a factored
 one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
 
 Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`, and 0.57.0
-or later before it uses `args` or a `"""` string: an older host refuses an unknown ritual key,
-and it cannot read a mirrored item that has `args` or a note with a newline.
+or later before it uses `args` or a `"""` string, and 0.66.0 or later before it uses `on_hold`:
+an older host refuses an unknown ritual key, and it cannot read a mirrored item that has `args`,
+`on_hold` or a note with a newline.
 
 ## Factor shared rules
 
@@ -140,7 +144,8 @@ darius marker factor --write  # write .darius.toml; never runs git
 ```
 
 It groups rituals with an inline policy (no `policy = "<name>"`) that have the same mode and
-pass the overlap rule above. A group is every ritual linked to another by that rule, in file
+the same `on_hold`, and pass the overlap rule above. A group's `on_hold = "deny"` moves into its
+new policy table. A group is every ritual linked to another by that rule, in file
 order, with at least 2 rituals. The shared `may` and `hold` rules (the ones every member has) go
 into a new `[policies.<mode>-base]` table, placed right before the first member's table. Each
 member then names that policy and keeps only its own rules in `may_extra` and `hold_extra`. Its

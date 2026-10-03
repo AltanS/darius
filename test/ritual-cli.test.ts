@@ -866,3 +866,15 @@ test("a ritual's args are mirrored, shown by show and list --json, rehashed on c
   assert.equal("args" in readRitual(project, "daily"), false, "dropping args from git clears the mirror");
   assert.doesNotMatch((await runCli(ritualCommand, project, ["show", "daily"])).stdout, /^args:/mu);
 });
+
+test("ritual show prints on_hold: deny in text and JSON, and nothing for the default (0.66.0)", async () => {
+  const project = "ritual-on-hold";
+  await addRitual(project, "heartbeat", []);
+  const store = openProject(project);
+  const doc = store.readItem<Ritual>("ritual", "heartbeat");
+  assert.ok(doc !== null);
+  assert.equal((await runCli(ritualCommand, project, ["show", "heartbeat"])).stdout.includes("on_hold"), false);
+  store.writeItem({ header: { ...doc.header, policy: { ...doc.header.policy, on_hold: "deny" } }, body: doc.body }, { who: "test" });
+  assert.match((await runCli(ritualCommand, project, ["show", "heartbeat"])).stdout, /^ {2}on_hold: deny \(a hold-list match refuses the call; the run goes on\)$/mu);
+  assert.equal(JSON.parse((await runCli(ritualCommand, project, ["show", "heartbeat", "--json"])).stdout).header.policy.on_hold, "deny");
+});

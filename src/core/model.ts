@@ -26,6 +26,8 @@ export interface Policy {
   may: string[];
   hold: string[];
   notes?: string;
+  /** "deny" (0.66.0): a hold-list match refuses the one call and the run goes on. Absent: it holds the run. */
+  on_hold?: "deny";
   model?: string;
   max_turns?: number;
   /** A harness profile by name (docs/concept.md, "Profiles"). */

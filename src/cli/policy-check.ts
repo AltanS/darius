@@ -15,7 +15,7 @@
  * Allow: print nothing, exit 0 (src/harness/gate.ts, "allow, deny or hold").
  *
  * Every decision also goes to `<run>/gate.jsonl` next to the policy file,
- * one line each: `{at, tool, class, verdict, reason?, command?, agent?}`. The gate
+ * one line each: `{at, tool, class, verdict, reason?, command?, agent?, hold_pattern?}`. The gate
  * check per harness version reads it (src/runner/harness-check.ts). A line
  * that cannot be written never changes the decision.
  *
@@ -94,7 +94,7 @@ function readPolicyText(path: string): string {
 export function parseRunPolicy(text: string, path: string): RunPolicy {
   const parsed = parseJsonText(text, path);
   if (!isJsonRecord(parsed)) throw new Error(`${path}: not a JSON object`);
-  const { project, ritual, run, mode, may, hold, gate, result, grants, follow_up_of: followUpOf, cwd } = parsed;
+  const { project, ritual, run, mode, may, hold, gate, result, grants, follow_up_of: followUpOf, cwd, on_hold: onHold } = parsed;
   const knownMode = MODES.find((candidate) => candidate === mode);
   if (!isJsonText(project) || !isJsonText(ritual) || !isJsonText(run) || knownMode === undefined) {
     throw new Error(`${path}: needs project, ritual, run and mode`);
@@ -107,6 +107,10 @@ export function parseRunPolicy(text: string, path: string): RunPolicy {
     policy.gate = scope;
   }
   if (result === "required") policy.result = "required";
+  if (onHold !== undefined) {
+    if (onHold !== "deny") throw new Error(`${path}: on_hold must be "deny" or absent`);
+    policy.on_hold = onHold;
+  }
   if (followUpOf !== undefined) {
     if (!isJsonText(followUpOf) || followUpOf === "") throw new Error(`${path}: follow_up_of must be a run id`);
     policy.follow_up_of = followUpOf;
@@ -208,12 +212,17 @@ interface GateLogLine {
   command?: string;
   /** The subagent that made the call, when one did. */
   agent?: string;
+  /** The hold-list pattern that matched (0.66.0): on a hold, and on the deny of an `on_hold = "deny"` policy. */
+  hold_pattern?: string;
 }
 
 /** Appends the decision to `<run>/gate.jsonl`. Best effort: the decision stands whatever happens here. */
 function logDecision(policyFile: string, call: ToolCall, decision: GateDecision): void {
   const line: GateLogLine = { at: new Date().toISOString(), tool: call.name, class: call.class, verdict: decision.verdict };
-  if (decision.verdict !== "allow") line.reason = decision.reason;
+  if (decision.verdict !== "allow") {
+    line.reason = decision.reason;
+    if (decision.holdPattern !== undefined) line.hold_pattern = decision.holdPattern;
+  }
   if (call.command !== undefined) line.command = call.command.slice(0, 300);
   if (call.agentId !== undefined) line.agent = call.agentId;
   try {

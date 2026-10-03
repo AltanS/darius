@@ -388,6 +388,10 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["hold that does not compile", v3(`${RITUAL}hold = ['(']\n`), /:9: hold must be a list of regular expressions that compile, got "\("/u],
   ["hold that needs the u flag", v3(`${RITUAL}hold = ['\\p{Nope}']\n`), /:9: hold must be a list of regular expressions that compile/u],
   ["notes not a string", v3(`${RITUAL}notes = 3\n`), /:9: notes must be a string/u],
+  ["on_hold not stop or deny", v3(`${RITUAL}on_hold = "pause"\n`), /:9: on_hold must be "stop" or "deny"/u],
+  ["on_hold not a string", v3(`${RITUAL}on_hold = true\n`), /:9: on_hold must be "stop" or "deny"/u],
+  ["on_hold bad in a policy table", v3('[policies.p]\nmode = "off"\non_hold = "Deny"\n'), /:7: on_hold must be "stop" or "deny"/u],
+  ["policy with on_hold", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\non_hold = "deny"\n`), /:12: on_hold cannot be combined with policy = "p"/u],
   ["args not a string", v3(`${RITUAL}args = ["--site", "acme"]\n`), /:9: args must be a string: args = "--site acme"/u],
   ["args empty", v3(`${RITUAL}args = ""\n`), /:9: args must be not empty/u],
   ["args with a newline", v3(`${RITUAL}args = "--site acme\\n--dry"\n`), /:9: args must be one line, with no newline/u],
@@ -496,6 +500,31 @@ test("the hash changes when the own notes next to a policy change, and ignores h
 test("--resolved leaves notes out, with or without own notes", () => {
   const ritual = firstRitual(`${POLICY_NOTES}${RITUAL}policy = "p"\nnotes = "Own."\n`);
   assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report"]);
+});
+
+// --- on_hold (0.66.0) --------------------------------------------------------------
+
+test("on_hold: deny on a ritual or on the policy it names; stop is the default and stored as no key", () => {
+  const inline = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\non_hold = "deny"\n`);
+  assert.equal(inline.policy.on_hold, "deny");
+  const named = firstRitual(`[policies.p]\nmode = "report"\nhold = ['x']\non_hold = "deny"\n${RITUAL}policy = "p"\nhold_extra = ['y']\n`);
+  assert.equal(named.policy.on_hold, "deny", "a ritual takes its policy's on_hold");
+  assert.deepEqual(named.policy.hold, ["x", "y"]);
+  const plain = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\n`);
+  const stop = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\non_hold = "stop"\n`);
+  assert.equal(plain.policy.on_hold, undefined);
+  assert.equal(stop.policy.on_hold, undefined, "stop is the default: no key");
+  assert.equal(definitionHash(plain), definitionHash(stop), "the hash of a ritual without on_hold does not change");
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\non_hold = "deny"\n`)));
+});
+
+test("--resolved shows on_hold: deny after the mode, and nothing for the default", () => {
+  const deny = firstRitual(`[policies.p]\nmode = "report"\nhold = ['x']\non_hold = "deny"\n${RITUAL}policy = "p"\n`);
+  assert.deepEqual(resolvedLines(resolvedPolicy(deny)), ["mode: report", "on_hold: deny", "hold: x"]);
+  assert.equal(resolvedPolicy(deny).on_hold, "deny");
+  const stop = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\n`);
+  assert.deepEqual(resolvedLines(resolvedPolicy(stop)), ["mode: report", "hold: x"]);
+  assert.equal(resolvedPolicy(stop).on_hold, "stop");
 });
 
 // --- may_extra and hold_extra -----------------------------------------------------

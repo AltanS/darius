@@ -20,11 +20,11 @@
  * zone), `[policies.<name>]` and `[rituals.<slug>]`:
  *
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
- *   [policies.read-only]               mode, may, hold, notes
+ *   [policies.read-only]               mode, may, hold, notes, on_hold
  *   [rituals.daily-report]             title, skill, and optionally cadence,
  *   at = "07:00"                       anchor, at, tz, from, args, timeout,
  *   skill = "daily-report"             profile, model, max_turns, and either
- *   args = "--site acme"               `policy` or mode, may, hold, notes
+ *   args = "--site acme"               `policy` or mode, may, hold, notes, on_hold
  *   policy = "read-only"
  *   notes = "Reports only."            optional next to `policy`, see below
  *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
@@ -41,6 +41,14 @@
  * rule, so a ritual never has fewer `hold` patterns than its base policy.
  * The ritual's `policy` holds the effective lists, so reconcile, the hash,
  * the run, export and the web all read one resolved policy.
+ *
+ * `on_hold = "stop" | "deny"` (0.66.0) says what a hold-list match does in
+ * a run. "stop", the default, holds the run until a person answers. "deny"
+ * refuses that one call and the run goes on; the model records it as a
+ * needs-decision item. It is part of the policy: a ritual that names a
+ * `policy` takes the policy's, and setting it next to `policy` is an error,
+ * as for `mode`, `may` and `hold`. "stop" is stored as no key, so the
+ * definition hash of a ritual without it does not change.
  *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
@@ -80,12 +88,17 @@ const REPO_VERSION = 3;
 
 export type Mode = Policy["mode"];
 
+/** What a hold-list match does in a run (0.66.0): absent or "stop" holds the run, "deny" refuses the one call. */
+export type OnHold = "stop" | "deny";
+
 /** A `[policies.<name>]` table, or the policy a repo ritual resolves to. */
 export interface MarkerPolicy {
   mode: Mode;
   may: string[];
   hold: string[];
   notes?: string;
+  /** Only "deny" is kept; "stop" is the default and is stored as no key. */
+  on_hold?: "deny";
 }
 
 /** A ritual's `may_extra` and `hold_extra` as written: rules it adds to its base policy. */
@@ -150,9 +163,9 @@ const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort",
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
-  "policy", "mode", "may", "hold", "notes", "may_extra", "hold_extra",
+  "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
 ]);
-const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes"]);
+const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes", "on_hold"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 /** A repo ritual's slug. No dots: the TOML subset allows one dot in a header, the table separator. */
 export const REPO_SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
@@ -263,12 +276,13 @@ function validRegex(pattern: string): boolean {
   }
 }
 
-/** The `[policies.*]` and `[rituals.*]` shared fields: mode, may, hold, notes. */
+/** The `[policies.*]` and `[rituals.*]` shared fields: mode, may, hold, notes, on_hold. */
 interface Rules {
   mode?: Mode;
   may?: string[];
   hold?: string[];
   notes?: string;
+  onHold?: "deny";
 }
 
 type Fail = (key: string, expected: string) => Error;
@@ -296,7 +310,7 @@ function decodeHold(value: TomlValue, key: string, fail: Fail): string[] {
 function decodeRules(table: Table, section: string, source: Source): Rules {
   const fail = failAt(section, source);
   const rules: Rules = {};
-  const { mode, may, hold, notes } = table;
+  const { mode, may, hold, notes, on_hold: onHold } = table;
   if (mode !== undefined) {
     if (!isMode(mode)) throw fail("mode", '"off", "report" or "act"');
     rules.mode = mode;
@@ -306,6 +320,10 @@ function decodeRules(table: Table, section: string, source: Source): Rules {
   if (notes !== undefined) {
     if (!isText(notes)) throw fail("notes", "a string");
     rules.notes = notes;
+  }
+  if (onHold !== undefined) {
+    if (onHold !== "stop" && onHold !== "deny") throw fail("on_hold", '"stop" or "deny"');
+    if (onHold === "deny") rules.onHold = onHold;
   }
   return rules;
 }
@@ -319,6 +337,7 @@ function decodePolicyTable(table: Table, section: string, source: Source): Marke
   }
   const policy: MarkerPolicy = { mode: rules.mode, may: rules.may ?? [], hold: rules.hold ?? [] };
   if (rules.notes !== undefined) policy.notes = rules.notes;
+  if (rules.onHold !== undefined) policy.on_hold = rules.onHold;
   return policy;
 }
 
@@ -392,6 +411,7 @@ function decodeExtra(table: Table, section: string, source: Source): PolicyExtra
 function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined): ResolvedPolicy {
   const policy: MarkerPolicy = { mode: base.mode, may: addRules(base.may, extra?.may ?? []), hold: addRules(base.hold, extra?.hold ?? []) };
   if (base.notes !== undefined) policy.notes = base.notes;
+  if (base.on_hold !== undefined) policy.on_hold = base.on_hold;
   return extra === undefined ? { policy } : { policy, policyExtra: { may: [...extra.may], hold: [...extra.hold] } };
 }
 
@@ -411,11 +431,12 @@ function resolveRitualPolicy(
   if (named === undefined) {
     const base: MarkerPolicy = { mode: own.mode ?? "off", may: own.may ?? [], hold: own.hold ?? [] };
     if (own.notes !== undefined) base.notes = own.notes;
+    if (own.onHold !== undefined) base.on_hold = own.onHold;
     return withExtra(base, extra);
   }
   const line = source.lines[`${section}.policy`];
   if (!isText(named) || named === "") throw new Error(`${where(source.file, line)}: policy must name a [policies.<name>] table`);
-  const clash = ["mode", "may", "hold"].find((key) => table[key] !== undefined);
+  const clash = ["mode", "may", "hold", "on_hold"].find((key) => table[key] !== undefined);
   if (clash !== undefined) {
     throw new Error(`${where(source.file, source.lines[`${section}.${clash}`])}: ${clash} cannot be combined with policy = "${named}"; put it in [policies.${named}]`);
   }
@@ -660,6 +681,8 @@ export function definitionHash(ritual: RepoRitual): string {
 /** A ritual's effective policy, sorted: what `marker check --resolved` prints. */
 export interface ResolvedView {
   mode: Mode;
+  /** The effective on_hold (0.66.0): "stop" when the policy sets none. */
+  on_hold: OnHold;
   may: string[];
   hold: string[];
 }
@@ -694,13 +717,22 @@ export function byCodeUnit(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** The effective mode, may and hold of `ritual`, each list sorted by code unit. Two forms of one policy give the same view. */
+/** The effective mode, on_hold, may and hold of `ritual`, each list sorted by code unit. Two forms of one policy give the same view. */
 export function resolvedPolicy(ritual: RepoRitual): ResolvedView {
-  const { mode, may, hold } = ritual.policy;
-  return { mode, may: may.toSorted(byCodeUnit), hold: hold.toSorted(byCodeUnit) };
+  const { mode, may, hold, on_hold: onHold } = ritual.policy;
+  return { mode, on_hold: onHold ?? "stop", may: may.toSorted(byCodeUnit), hold: hold.toSorted(byCodeUnit) };
 }
 
-/** The resolved view as plain lines: `mode: <mode>`, then `may: <rule>` and `hold: <pattern>`, one per line. */
+/**
+ * The resolved view as plain lines: `mode: <mode>`, `on_hold: deny` when
+ * set (the default "stop" prints nothing), then `may: <rule>` and
+ * `hold: <pattern>`, one per line.
+ */
 export function resolvedLines(view: ResolvedView): string[] {
-  return [`mode: ${view.mode}`, ...view.may.map((rule) => `may: ${rule}`), ...view.hold.map((pattern) => `hold: ${pattern}`)];
+  return [
+    `mode: ${view.mode}`,
+    ...(view.on_hold === "deny" ? ["on_hold: deny"] : []),
+    ...view.may.map((rule) => `may: ${rule}`),
+    ...view.hold.map((pattern) => `hold: ${pattern}`),
+  ];
 }

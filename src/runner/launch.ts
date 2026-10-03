@@ -127,10 +127,22 @@ function subagentSection(ritual: Ritual): string[] {
 export function buildPrompt(input: PromptInput): string {
   const { project, run, ritual } = input;
   const scope = `--project ${project}`;
+  // on_hold = "deny" (0.66.0): a hold-list match is refused and the run goes on.
+  const denies = ritual.policy.on_hold === "deny";
+  const holdEffect = denies ? "Anything on the hold list is refused, and the run goes on." : "Anything on the hold list stops the run.";
   const modeLine =
     ritual.policy.mode === "report"
       ? "Mode: report. Read and investigate only. Every write verb is denied. Put proposed fixes in the findings. Scratch files may go under /tmp only."
-      : "Mode: act. You may run the commands the policy allows. Anything on the hold list stops the run. Scratch files may go under /tmp only.";
+      : `Mode: act. You may run the commands the policy allows. ${holdEffect} Scratch files may go under /tmp only.`;
+  const holdStep = denies
+    ? [
+        "2. A step that matches the hold list is refused by the policy hook. Do not try another form of it. Record it as a needs-decision item with the exact command, and go on with the rest of the work.",
+        "   When you need a person for anything else, hold the run, then stop. Do not run anything after a hold:",
+      ]
+    : ["2. When you need a person, or a step matches the hold list, do not do it. Hold the run, then stop. Do not run anything after a hold:"];
+  const holdListHeader = denies
+    ? "Hold list (regexes over the Bash command line; a match is refused and the run goes on, see step 2):"
+    : "Hold list (regexes over the Bash command line; a match holds the run, a match only inside quoted text is just denied):";
   return [
     `# Unattended darius run: ritual ${ritual.slug} (${ritual.title})`,
     "",
@@ -144,7 +156,7 @@ export function buildPrompt(input: PromptInput): string {
     "## Protocol",
     "",
     "1. Do the procedure below. Nobody is watching this session; no one answers questions in the chat.",
-    "2. When you need a person, or a step matches the hold list, do not do it. Hold the run, then stop. Do not run anything after a hold:",
+    ...holdStep,
     "",
     "```bash",
     `darius run hold ${run} ${scope} --question "<one question, no $ or backticks>"`,
@@ -170,7 +182,7 @@ export function buildPrompt(input: PromptInput): string {
     "Allowed tool rules:",
     bulletList(ritual.policy.may),
     "",
-    "Hold list (regexes over the Bash command line; a match holds the run, a match only inside quoted text is just denied):",
+    holdListHeader,
     bulletList(ritual.policy.hold),
     ...(ritual.policy.notes === undefined ? [] : ["", "Notes:", ritual.policy.notes]),
     "",
@@ -214,6 +226,7 @@ export function writeRunFiles(projectRoot: string, input: PromptInput, scope: Ga
     runPolicy.cwd = granted.cwd;
   }
   if (scope !== "shell") runPolicy.gate = scope;
+  if (policy.on_hold === "deny") runPolicy.on_hold = "deny";
   // Every run darius launches hands in a result (0.22.0); a by-hand run may.
   runPolicy.result = "required";
   writeFileSync(files.policy, `${JSON.stringify(policyFile(runPolicy), null, 2)}\n`);

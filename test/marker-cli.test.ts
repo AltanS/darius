@@ -187,6 +187,15 @@ test("marker check --resolved --json: the sorted view, with the policy name when
   const inline = JSON.parse((await runCli(markerCommand, ["check", policyCheckout("inline"), "--resolved", "fact-check", "--json"])).stdout);
   assert.equal(inline.policy, undefined);
   assert.deepEqual([inline.mode, inline.may, inline.hold], [json.mode, json.may, json.hold]);
+  assert.equal(json.on_hold, "stop", "the effective on_hold, the default when unset");
+});
+
+test("marker check --resolved prints on_hold: deny, in text and JSON (0.66.0)", async () => {
+  const dir = checkout(`v = 3\nproject = "acme-web"\ntz = "UTC"\n[policies.p]\nmode = "report"\nhold = ['x']\non_hold = "deny"\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "p"\n`);
+  const text = await runCli(markerCommand, ["check", dir, "--resolved", "daily"]);
+  assert.equal(text.stdout, "mode: report\non_hold: deny\nhold: x");
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--resolved", "daily", "--json"])).stdout);
+  assert.equal(json.on_hold, "deny");
 });
 
 test("marker check --resolved: an unknown slug is a usage error naming the known slugs; a bad file exits 1", async () => {

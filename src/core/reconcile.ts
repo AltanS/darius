@@ -140,6 +140,7 @@ function timeoutText(ms: number): string {
 function mirroredPolicy(ritual: RepoRitual): Policy {
   const policy: Policy = { mode: ritual.policy.mode, may: [...ritual.policy.may], hold: [...ritual.policy.hold] };
   if (ritual.policy.notes !== undefined) policy.notes = ritual.policy.notes;
+  if (ritual.policy.on_hold !== undefined) policy.on_hold = ritual.policy.on_hold;
   if (ritual.model !== undefined) policy.model = ritual.model;
   if (ritual.maxTurns !== undefined) policy.max_turns = ritual.maxTurns;
   if (ritual.profile !== undefined) policy.profile = ritual.profile;

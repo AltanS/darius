@@ -5,7 +5,8 @@
  * so every ritual resolves to the same policy as before.
  *
  * Grouping. Only rituals with an inline policy take part; a ritual that names
- * a `policy` is never touched. Two rituals of the same mode are linked when
+ * a `policy` is never touched. Two rituals of the same mode and the same
+ * `on_hold` (0.66.0) are linked when
  * their resolved `hold` lists overlap by the `marker check` rule
  * (`holdOverlap`: the shorter list has at least 5 patterns, and at least 80
  * percent of them are in the other). A group is a connected component of
@@ -19,7 +20,7 @@
  *
  * The edit is on the text, not a rewrite from the parsed model. Comments, key
  * order, blank lines and every table that is not a member stay byte for byte.
- * In a member table the `mode`, `may`, `hold`, `may_extra` and `hold_extra`
+ * In a member table the `mode`, `may`, `hold`, `on_hold`, `may_extra` and `hold_extra`
  * keys go; `policy = "<name>"` and the new extras take the place of the first
  * of them. `notes` and comments above a removed key stay. A new policy table
  * goes right before its first member's table, above the comment lines that
@@ -51,6 +52,8 @@ export interface FactorMember {
 export interface FactorGroup {
   policy: string;
   mode: Mode;
+  /** The members' `on_hold` when it is "deny"; they all share it. */
+  onHold?: "deny";
   may: string[];
   hold: string[];
   members: FactorMember[];
@@ -67,7 +70,7 @@ export class FactorRefusal extends Error {
 export type FactorPlan = { ok: true; groups: FactorGroup[]; proposed: string } | { ok: false; error: string };
 
 /** The keys a member table loses: a ritual that names a policy may not set the first three, and the extras are written anew. */
-const MOVED_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "may_extra", "hold_extra"]);
+const MOVED_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "on_hold", "may_extra", "hold_extra"]);
 
 function nextName(mode: Mode, taken: Set<string>): string {
   let name = `${mode}-base`;
@@ -86,7 +89,7 @@ function components(inline: readonly RepoRitual[]): RepoRitual[][] {
   };
   inline.forEach((first, i) => {
     inline.slice(i + 1).forEach((second, offset) => {
-      if (first.policy.mode !== second.policy.mode) return;
+      if (first.policy.mode !== second.policy.mode || first.policy.on_hold !== second.policy.on_hold) return;
       if (holdOverlap(first.policy.hold, second.policy.hold) === undefined) return;
       const [a, b] = [root(i), root(i + 1 + offset)];
       // The lower index stays the root, so a component is named by its first ritual.
@@ -112,8 +115,8 @@ export function findGroups(marker: Marker): FactorGroup[] {
     const hold = first.policy.hold.filter((pattern) => rest.every((other) => other.policy.hold.includes(pattern)));
     if (hold.length === 0) continue;
     const may = first.policy.may.filter((rule) => rest.every((other) => other.policy.may.includes(rule)));
-    const { mode } = first.policy;
-    groups.push({
+    const { mode, on_hold: onHold } = first.policy;
+    const group: FactorGroup = {
       policy: nextName(mode, taken),
       mode,
       may,
@@ -123,7 +126,9 @@ export function findGroups(marker: Marker): FactorGroup[] {
         mayExtra: ritual.policy.may.filter((rule) => !may.includes(rule)),
         holdExtra: ritual.policy.hold.filter((pattern) => !hold.includes(pattern)),
       })),
-    });
+    };
+    if (onHold !== undefined) group.onHold = onHold;
+    groups.push(group);
   }
   return groups;
 }
@@ -228,6 +233,7 @@ function policyTable(group: FactorGroup): string[] {
   return [
     `[policies.${group.policy}]`,
     `mode = ${tomlString(group.mode)}`,
+    ...(group.onHold === undefined ? [] : [`on_hold = ${tomlString(group.onHold)}`]),
     ...listLines("may", group.may, tomlString),
     ...listLines("hold", group.hold, tomlLiteral),
   ];
@@ -282,6 +288,7 @@ function ritualFields(ritual: RepoRitual): Map<string, string> {
   fields.set("resolved may", fieldText(policy.may.toSorted(byCodeUnit)));
   fields.set("resolved hold", fieldText(policy.hold.toSorted(byCodeUnit)));
   fields.set("notes", fieldText(policy.notes));
+  fields.set("on_hold", fieldText(policy.on_hold ?? "stop"));
   return fields;
 }
 
@@ -296,7 +303,7 @@ function ritualDifference(before: RepoRitual, after: RepoRitual): string | undef
 }
 
 function policyText(policy: MarkerPolicy | undefined): string {
-  return policy === undefined ? "unset" : JSON.stringify([policy.mode, policy.may, policy.hold, policy.notes ?? null]);
+  return policy === undefined ? "unset" : JSON.stringify([policy.mode, policy.may, policy.hold, policy.notes ?? null, policy.on_hold ?? "stop"]);
 }
 
 function profilesText(profiles: Readonly<Record<string, ProfileFields>>): string {

@@ -403,6 +403,7 @@ function runShow(args: ParsedArgs): number {
   console.log(`policy: ${formatPolicy(doc.header.policy)}`);
   if (doc.header.policy.may.length > 0) console.log(`  may: ${doc.header.policy.may.join(", ")}`);
   if (doc.header.policy.hold.length > 0) console.log(`  hold: ${doc.header.policy.hold.join(", ")}`);
+  if (doc.header.policy.on_hold !== undefined) console.log(`  on_hold: ${doc.header.policy.on_hold} (a hold-list match refuses the call; the run goes on)`);
   if (doc.header.policy.notes !== undefined) console.log(`  notes: ${doc.header.policy.notes}`);
   if (handoff !== null) console.log(`\nhandoff to the next run:\n${handoffLines(handoff).join("\n")}`);
   console.log(`\n${doc.body}`);

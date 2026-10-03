@@ -276,7 +276,7 @@ const RITUAL_KEYS: readonly string[] = [
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
   "source", "at", "tz", "from", "args", "timeout", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
-const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "model", "max_turns", "profile"];
+const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "tags",
   "harness", "model", "effort", "permissions", "surface", "max_turns", "args",
@@ -373,10 +373,15 @@ function decodePolicy(reader: FieldReader | undefined, where: string): Policy {
     hold: reader.stringList("hold"),
   };
   const notes = reader.optionalString("notes");
+  const onHold = reader.optionalString("on_hold");
   const model = reader.optionalString("model");
   const maxTurns = reader.optionalInteger("max_turns");
   const profile = reader.optionalString("profile");
   if (notes !== undefined) policy.notes = notes;
+  if (onHold !== undefined && onHold !== "stop") {
+    if (onHold !== "deny") throw new Error(`${where}: 'policy.on_hold' must be stop or deny, got '${onHold}'`);
+    policy.on_hold = onHold;
+  }
   if (model !== undefined) policy.model = model;
   if (maxTurns !== undefined) policy.max_turns = maxTurns;
   if (profile !== undefined) policy.profile = profile;
@@ -503,6 +508,7 @@ function encodePolicy(policy: Policy): FrontmatterMap {
   entries.may = [...policy.may];
   entries.hold = [...policy.hold];
   putIfSet(entries, "notes", policy.notes);
+  putIfSet(entries, "on_hold", policy.on_hold);
   putIfSet(entries, "model", policy.model);
   putIfSet(entries, "max_turns", policy.max_turns === undefined ? undefined : String(policy.max_turns));
   putIfSet(entries, "profile", policy.profile);

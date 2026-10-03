@@ -14,7 +14,7 @@ import { appendLine, readLedger } from "../src/core/ledger.ts";
 import { definitionHash, readMarker, resolvedPolicy } from "../src/core/marker.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
 import { mirrorHash, reconcileProject, RITUAL_DEFINED, skillDirty } from "../src/core/reconcile.ts";
-import { buildPrompt } from "../src/runner/launch.ts";
+import { buildPrompt, writeRunFiles } from "../src/runner/launch.ts";
 import { itemRef, openProject, readItemText, type Project } from "../src/core/store.ts";
 import { commitAll, dirty, initRepo, NO_GIT } from "./helpers/git.ts";
 
@@ -417,4 +417,20 @@ test("a ritual with a policy and its own notes mirrors the joined notes, changes
   const second = reconcileProject(project, dir, HOST, T2);
   assert.deepEqual(second.updated, ["daily"]);
   assert.notEqual(ritual(project, "daily").def_hash, before);
+});
+
+test("on_hold deny mirrors into the store item, and the prompt and policy.json carry it (0.66.0)", { skip: NO_GIT }, () => {
+  const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\n[policies.guarded]\nmode = "report"\nhold = [\'\\bwp\\s\']\non_hold = "deny"\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "guarded"\n';
+  const { project, dir } = setup({ git: true, marker });
+  assert.equal(reconcileProject(project, dir, HOST, T1).ok, true);
+  const mirrored = ritual(project, "daily");
+  assert.equal(mirrored.policy.on_hold, "deny");
+  assert.match(readItemText(project, "ritual", "daily") ?? "", /on_hold: deny/u);
+  const prompt = buildPrompt({ project: project.name, run: "r1", ritual: mirrored, body: "Do it." });
+  assert.ok(prompt.includes("a match is refused and the run goes on"), "the prompt says what a hold match does");
+  assert.ok(prompt.includes("Record it as a needs-decision item with the exact command"));
+  const files = writeRunFiles(project.root, { project: project.name, run: "r1", ritual: mirrored, body: "Do it." });
+  assert.equal(JSON.parse(readFileSync(files.policy, "utf8")).on_hold, "deny");
+  const plain = buildPrompt({ project: project.name, run: "r2", ritual: { ...mirrored, policy: { mode: "report", may: [], hold: [] } }, body: "Do it." });
+  assert.ok(plain.includes("a match holds the run"), "the default prompt is as before");
 });

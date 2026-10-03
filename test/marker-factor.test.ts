@@ -226,6 +226,20 @@ test("factor: a name an existing [policies.*] table has is skipped; two groups o
   assert.equal(decodeMarker(plan.proposed, FILE).rituals.find((ritual) => ritual.slug === "c")?.policyName, "report-base-3");
 });
 
+test("factor: on_hold links only rituals with the same value, and a shared deny moves into the policy (0.66.0)", () => {
+  const deny = (slug: string): string => inlineRitual(slug, HOLDS).replace(/\n$/u, '\non_hold = "deny"\n');
+  const mixed = `${ROOT}${deny("a")}${inlineRitual("b", HOLDS)}`;
+  assert.equal(planFactor(mixed, FILE).groups.length, 0, "deny and stop are not one policy");
+  const text = `${ROOT}${deny("a")}${deny("b")}`;
+  const plan = planFactor(text, FILE);
+  assert.ok(plan.ok, plan.ok ? "" : plan.error);
+  assert.equal(plan.groups[0]?.onHold, "deny");
+  assert.match(tableText(plan.proposed, "policies.report-base"), /on_hold = "deny"/u);
+  const after = decodeMarker(plan.proposed, FILE);
+  assert.deepEqual(after.rituals.map((ritual) => [ritual.policyName, ritual.policy.on_hold]), [["report-base", "deny"], ["report-base", "deny"]]);
+  assert.doesNotMatch(tableText(plan.proposed, "rituals.a"), /on_hold/u, "the key left the ritual table");
+});
+
 /** The error of a plan that must fail. */
 function errorOf(text: string, render: FactorRender = renderFactored): string {
   const plan = planFactor(text, FILE, render);

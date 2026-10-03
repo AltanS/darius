@@ -19,11 +19,11 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseArgs } from "../src/cli/args.ts";
-import { installedDarius, policyCheckCommand } from "../src/cli/policy-check.ts";
+import { installedDarius, policyCheckCommand, readRunPolicy } from "../src/cli/policy-check.ts";
 import { profileCommand } from "../src/cli/profile.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
@@ -1978,6 +1978,25 @@ test("policy-check writes every decision to gate.jsonl next to the policy file",
   assert.deepEqual([lines[0].tool, lines[0].class, lines[0].verdict, lines[0].command], ["Bash", "shell", "allow", "date"]);
   assert.equal(lines[1].verdict, "hold");
   assert.match(lines[1].reason, /report mode denies write verbs/u);
+});
+
+test("policy-check with on_hold deny: the call is denied, the run is not held, gate.jsonl names the pattern (0.66.0)", async () => {
+  const project = "pc-on-hold-deny";
+  const { policyFile } = seedRunningRun(project, "act");
+  const policy = JSON.parse(readFileSync(policyFile, "utf8"));
+  writeFileSync(policyFile, JSON.stringify({ ...policy, hold: ["\\bwp\\s"], on_hold: "deny" }));
+  const denied = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("wp db drop"));
+  assert.equal(denied.code, 2);
+  assert.match(denied.stdout, /outside this run's scope \(hold rule: \\\\bwp\\\\s\)/u);
+  assert.doesNotMatch(denied.stdout, /is held/u);
+  assert.equal(linesOf(project, "run.held").length, 0, "no hold");
+  const after = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("date"));
+  assert.deepEqual([after.code, after.stdout], [0, ""], "the run goes on");
+  const lines = readFileSync(join(dirname(policyFile), "gate.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const row = lines.find((line) => line.command === "wp db drop");
+  assert.deepEqual([row?.verdict, row?.hold_pattern], ["deny", "\\bwp\\s"]);
+  writeFileSync(policyFile, JSON.stringify({ ...policy, on_hold: "stop" }));
+  assert.throws(() => readRunPolicy(policyFile), /on_hold must be "deny" or absent/u);
 });
 
 test("the text report names each gate check, and a check is never all quiet", () => {
