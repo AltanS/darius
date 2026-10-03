@@ -827,7 +827,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
     }
     const { mode, may } = doc.header.policy;
-    const missing = missingTools(may, process.env.PATH ?? "");
+    const missing = missingTools(may, process.env.PATH ?? "", where.dir);
     if (missing.length > 0) {
       return skipped(slug, "tool-missing", `${missing.join(", ")} not on the runner PATH; add the dir, then darius setup --systemd`);
     }

@@ -1514,7 +1514,14 @@ test("namedTools reads the program of each Bash rule; builtins, patterns and oth
     ["pnpm", "curl", "date", "/opt/x/bin/tool"],
   );
   const dirs = new Set(["/a/pnpm", "/b/curl"]);
-  assert.deepEqual(missingTools(["Bash(pnpm cli *)", "Bash(curl *)", "Bash(jq .)", "Bash(cd x)"], "/a:/b:relative", (path) => dirs.has(path)), ["jq"]);
+  assert.deepEqual(missingTools(["Bash(pnpm cli *)", "Bash(curl *)", "Bash(jq .)", "Bash(cd x)"], "/a:/b:relative", "/repo", (path) => dirs.has(path)), ["jq"]);
+});
+
+test("missingTools looks up a relative path in the checkout, not in the process dir", () => {
+  const files = new Set(["/repo/tools/x.sh", "/opt/y"]);
+  const found = (path: string): boolean => files.has(path);
+  assert.deepEqual(missingTools(["Bash(./tools/x.sh *)", "Bash(tools/x.sh)", "Bash(/opt/y)"], "", "/repo", found), []);
+  assert.deepEqual(missingTools(["Bash(./tools/z.sh *)", "Bash(../repo/tools/x.sh)"], "", "/repo", found), ["./tools/z.sh"]);
 });
 
 test("a ritual whose may names a program the runner PATH lacks is skipped as tool-missing, before any run, and fails the batch", async () => {

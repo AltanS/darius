@@ -8,7 +8,7 @@
  */
 
 import { accessSync, constants, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 /** Shell builtins and keywords: never on PATH, always there. */
 const BUILTINS: ReadonlySet<string> = new Set([
@@ -44,8 +44,16 @@ function isExecutable(path: string): boolean {
   }
 }
 
-/** The tools of `may` that `envPath` does not find. A tool with a `/` is looked up as a path. */
-export function missingTools(may: readonly string[], envPath: string, found: (path: string) => boolean = isExecutable): string[] {
-  const dirs = envPath.split(":").filter((dir) => dir.startsWith("/"));
-  return namedTools(may).filter((tool) => (tool.includes("/") ? !found(tool) : !dirs.some((dir) => found(join(dir, tool)))));
+/**
+ * The tools of `may` that `envPath` does not find. A tool with a `/` is
+ * looked up as a path; a relative one (`./tools/x.sh`) against `dir`, the
+ * run's checkout, because the run starts there and the timer does not
+ * (0.66.0: the timer runs in $HOME).
+ */
+export function missingTools(may: readonly string[], envPath: string, dir: string, found: (path: string) => boolean = isExecutable): string[] {
+  const dirs = envPath.split(":").filter((entry) => entry.startsWith("/"));
+  return namedTools(may).filter((tool) => {
+    if (!tool.includes("/")) return !dirs.some((entry) => found(join(entry, tool)));
+    return !found(isAbsolute(tool) ? tool : resolve(dir, tool));
+  });
 }
