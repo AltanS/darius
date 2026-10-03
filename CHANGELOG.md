@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.65.0] - 2026-10-03
+
+### Added
+
+- Decision follow-up: `darius run follow-up <run> --note TEXT` starts a follow-up that carries only the operator's decision, with no granted line. The run follows its own `may` and `hold`. With no `--approve`, `--grant` or `--note`, the verb exits 2 with `nothing to do: pass --approve N, --grant LINE or --note TEXT`.
+- The follow-up prompt of a decision follow-up prints `Operator decision: <note>` and a rule to carry it out within the run's policy, instead of the granted lines.
+- The web endpoint `POST /api/run/follow-up` accepts `approve: []` when `note` is not empty. The run page shows the follow-up card for any closed complete ritual run that passes the readiness checks, with or without command questions. The note field is `Operator decision for the follow-up`.
+
 ## [0.64.1] - 2026-10-03
 
 ### Fixed

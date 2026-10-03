@@ -15264,13 +15264,15 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 * may add a note, and presses "Start follow-up on <host>". A second press
 * on the confirm box, which lists every line the run will be granted, posts
 * to `/api/run/follow-up`. The page sends question numbers only, never a
-* command line. When this host cannot start one, the card says why and
+* command line. When no question lists commands, or none is picked, the
+* note is the operator's decision and the run is granted no line (0.65.0).
+* When this host cannot start one, the card says why and
 * gives the command for a host that can. When the ritual runs on another
 * host (0.50.0), the card names it and gives the ssh command for it.
 */
 /** The CLI command for the same follow-up, for a host where the button is off. */
 function followUpCommand(run, project, numbers) {
-	return `darius run follow-up ${run} ${numbers.length === 0 ? "--approve N" : numbers.map((n) => `--approve ${n}`).join(" ")} --project ${project}`;
+	return `darius run follow-up ${run} ${numbers.length === 0 ? "--note \"<decision>\"" : numbers.map((n) => `--approve ${n}`).join(" ")} --project ${project}`;
 }
 /** The numbers of the questions that list commands, from 1. */
 function commandQuestions(questions) {
@@ -15325,6 +15327,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 	});
 	const chosen = offered.filter((question) => picked.has(question.n));
 	const lines = [...new Set(chosen.flatMap((question) => question.commands))];
+	const decision = note.trim();
 	const toggle = (n) => {
 		const next = new Set(picked);
 		if (next.has(n)) next.delete(n);
@@ -15335,9 +15338,8 @@ function FollowUpCard({ project, run, readiness, questions }) {
 	const start = async () => {
 		setBusy(true);
 		setNotice(null);
-		const trimmed = note.trim();
 		const approve = chosen.map((question) => question.n);
-		const result = await postJson("/api/run/follow-up", trimmed === "" ? {
+		const result = await postJson("/api/run/follow-up", decision === "" ? {
 			project,
 			run,
 			approve
@@ -15345,7 +15347,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 			project,
 			run,
 			approve,
-			note: trimmed
+			note: decision
 		});
 		setBusy(false);
 		setAsking(false);
@@ -15365,7 +15367,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card fu",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+			offered.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
 				className: "fu-picks",
 				disabled: busy,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
@@ -15390,22 +15392,35 @@ function FollowUpCard({ project, run, readiness, questions }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
 				className: "fu-label",
 				htmlFor: `fu-note-${run}`,
-				children: "Note for the follow-up (optional)"
+				children: "Operator decision for the follow-up"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				id: `fu-note-${run}`,
 				className: "st-input",
 				type: "text",
 				maxLength: 500,
+				required: chosen.length === 0,
 				value: note,
 				disabled: busy,
-				onChange: (event) => setNote(event.currentTarget.value)
+				onChange: (event) => {
+					setNote(event.currentTarget.value);
+					setAsking(false);
+				}
 			})] }),
 			asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fu-ask",
 				role: "group",
 				"aria-label": "Confirm the follow-up",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					lines.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "fu-ask-q",
+						children: [
+							"Start a new run on ",
+							readiness.host,
+							" (profile ",
+							readiness.profile,
+							") that carries out this decision within the ritual's policy?"
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "fu-ask-q",
 						children: [
 							"Start a new run on ",
@@ -15417,10 +15432,11 @@ function FollowUpCard({ project, run, readiness, questions }) {
 							" as written?"
 						]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					lines.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "q-cmds",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: lines.join("\n") }) })
 					}),
+					decision === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["Decision: ", decision] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "fu-acts",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -15443,7 +15459,7 @@ function FollowUpCard({ project, run, readiness, questions }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "st-btn st-btn-main",
-					disabled: busy || chosen.length === 0,
+					disabled: busy || chosen.length === 0 && decision === "",
 					onClick: () => setAsking(true),
 					children: ["Start follow-up on ", readiness.host]
 				})
@@ -15479,7 +15495,10 @@ async function loader$10({ context, params }) {
 		offset: status.utcOffset
 	});
 	const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
-	const followUp = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0) ? await context.followUp(run.project, run.row.run) : null;
+	const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
+	const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
+	const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
+	const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
 	return {
 		run,
 		kind: itemKind(run.row.item),
@@ -18411,7 +18430,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-Cq_nwWco.js",
+			"module": "/assets/run-7MFFvomm.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18811,8 +18830,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-949f54cc.js",
-	"version": "949f54cc",
+	"url": "/assets/manifest-e7d9a99f.js",
+	"version": "e7d9a99f",
 	"sri": void 0
 };
 //#endregion

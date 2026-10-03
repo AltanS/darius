@@ -77,6 +77,8 @@ export interface FollowUpRequest {
   parent: string;
   approve: readonly number[];
   grant: readonly string[];
+  /** The operator's note. With no lines granted, a non-empty note is the decision the run carries out (0.65.0). */
+  note?: string;
 }
 
 /**
@@ -88,8 +90,9 @@ export type FollowUpPlan = { grants: string[] } | { usage: string } | { refused:
 /**
  * Checks the parent and the request: the parent is a ritual run, closed
  * complete; each approved question exists and lists commands; each line is
- * one plain command; at least one line is granted; no follow-up of the
- * parent is still open; no run of the project is running (a held run is
+ * one plain command; something to do is given: a granted line or, since
+ * 0.65.0, a non-empty note (a decision follow-up, whose `grants` is empty);
+ * no follow-up of the parent is still open; no run of the project is running (a held run is
  * fine), so a granted line never races a run that is in the middle of its
  * work. Duplicate lines are granted once.
  */
@@ -115,11 +118,8 @@ export function planFollowUp(ledger: readonly LedgerLine[], result: RunResult | 
     if (refused !== undefined) return { usage: `--grant "${line.slice(0, 80)}" is not one plain command: ${refused}` };
     grants.push(line.trim());
   }
-  if (grants.length === 0) {
-    const slug = view.item.slice("ritual/".length);
-    return {
-      usage: `nothing to grant: pass --approve N or --grant LINE. A follow-up with nothing granted is run now with a note: darius run ack ${parent} --note TEXT, then darius run now ${slug}`,
-    };
+  if (grants.length === 0 && (request.note ?? "").trim() === "") {
+    return { usage: "nothing to do: pass --approve N, --grant LINE or --note TEXT" };
   }
   const open = followUpsOf(ledger, parent).find((run) => viewRun(ledger, run).phase !== "closed");
   if (open !== undefined) return { refused: `follow-up ${open} of run '${parent}' is still open; finish it first` };
@@ -152,22 +152,28 @@ export function followUpSection(followUp: FollowUp, result: RunResult | null): s
     const rec = question.recommendation === undefined ? "" : ` Recommended: ${question.recommendation}`;
     lines.push(`Approved question ${String(n)}: ${question.text}${rec}`);
   }
-  if (followUp.note !== undefined) lines.push(`Operator note: ${followUp.note}`);
-  lines.push(
-    "",
-    "Granted lines. The gate passes each exactly as written, for you, not for a subagent, and only in the dir this run started in. Do not cd: a granted line names its dir with a flag.",
-    "",
-    "```bash",
-    ...followUp.grants,
-    "```",
-    "",
-  );
+  const isDecision = followUp.grants.length === 0;
+  if (followUp.note !== undefined) lines.push(`${isDecision ? "Operator decision" : "Operator note"}: ${followUp.note}`);
+  lines.push("");
+  if (!isDecision) {
+    lines.push(
+      "Granted lines. The gate passes each exactly as written, for you, not for a subagent, and only in the dir this run started in. Do not cd: a granted line names its dir with a flag.",
+      "",
+      "```bash",
+      ...followUp.grants,
+      "```",
+      "",
+    );
+  }
   const open = (result?.items ?? [])
     .filter((item) => item.state !== "fixed")
     .map((item) => `- ${item.severity} ${item.state}: ${item.title}${item.target === undefined ? "" : ` [${item.target}]`}${item.key === undefined ? "" : ` {${item.key}}`}`);
   if (open.length > 0) lines.push("Open items of that run:", ...clipped(open), "");
   const actions = (result?.actions ?? []).map((action) => `- ${action.state}: ${action.text}${action.target === undefined ? "" : ` [${action.target}]`}`);
   if (actions.length > 0) lines.push("Actions of that run:", ...clipped(actions), "");
-  lines.push("Run the granted lines as written, then verify each result. Anything else holds as usual. In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one. Do not repeat the parent's other items.", "");
+  const rule = isDecision
+    ? "No lines are granted. Carry out the operator's decision within this run's policy: may and hold apply as usual, and the procedure's rules for writes (checks before a write, before-states, verify after) still hold. Verify each change. In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one. Do not repeat the parent's other items."
+    : "Run the granted lines as written, then verify each result. Anything else holds as usual. In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one. Do not repeat the parent's other items.";
+  lines.push(rule, "");
   return lines;
 }

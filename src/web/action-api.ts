@@ -2,6 +2,7 @@
  * The run page's one action (0.48.0; docs/concept.md, "Follow-up runs"):
  *
  *   POST /api/run/follow-up   body { project, run, approve: [N, ...], note? }
+ *                             (approve may be [] when the note carries the operator's decision, 0.65.0)
  *                             202 { ok: true, pending: true } | { ok: false, error }
  *
  * It starts `darius run follow-up <run> --approve N ... --who "web:<who>"`
@@ -138,16 +139,18 @@ function readBody(parsed: JsonValue): FollowUpBody {
   const { project, run, approve, note } = parsed;
   if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
   if (!isText(run) || !RUN_ID.test(run)) return { error: "run must be a run id" };
-  if (!Array.isArray(approve) || approve.length === 0 || approve.length > APPROVE_MAX || !approve.every((n) => isCount(n))) {
+  if (!Array.isArray(approve) || approve.length > APPROVE_MAX || !approve.every((n) => isCount(n))) {
     return { error: `approve must list question numbers, 1 to ${String(APPROVE_MAX)}` };
   }
   const numbers = [...new Set(approve.filter((n) => isCount(n)))];
-  if (note === undefined || note === null) return { project, run, approve: numbers };
+  const noDecision = { error: "approve question numbers, or give a note with the operator's decision" };
+  if (note === undefined || note === null) return numbers.length === 0 ? noDecision : { project, run, approve: numbers };
   if (!isText(note)) return { error: "note must be text" };
   const line = note.replaceAll(/\s+/gu, " ").trim();
   if (/\p{Cc}/u.test(line)) return { error: "note: plain text only, no control characters" };
   if ([...line].length > NOTE_MAX) return { error: `note: at most ${String(NOTE_MAX)} characters` };
-  return line === "" ? { project, run, approve: numbers } : { project, run, approve: numbers, note: line };
+  if (line === "") return numbers.length === 0 ? noDecision : { project, run, approve: numbers };
+  return { project, run, approve: numbers, note: line };
 }
 
 /** One request under ACTION_API_PREFIX, already past the access check. `viewer` is who the access check let in. */

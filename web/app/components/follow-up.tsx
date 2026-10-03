@@ -4,7 +4,9 @@
  * may add a note, and presses "Start follow-up on <host>". A second press
  * on the confirm box, which lists every line the run will be granted, posts
  * to `/api/run/follow-up`. The page sends question numbers only, never a
- * command line. When this host cannot start one, the card says why and
+ * command line. When no question lists commands, or none is picked, the
+ * note is the operator's decision and the run is granted no line (0.65.0).
+ * When this host cannot start one, the card says why and
  * gives the command for a host that can. When the ritual runs on another
  * host (0.50.0), the card names it and gives the ssh command for it.
  */
@@ -31,7 +33,7 @@ interface Note {
 
 /** The CLI command for the same follow-up, for a host where the button is off. */
 function followUpCommand(run: string, project: string, numbers: readonly number[]): string {
-  const approve = numbers.length === 0 ? "--approve N" : numbers.map((n) => `--approve ${n}`).join(" ");
+  const approve = numbers.length === 0 ? '--note "<decision>"' : numbers.map((n) => `--approve ${n}`).join(" ");
   return `darius run follow-up ${run} ${approve} --project ${project}`;
 }
 
@@ -81,6 +83,7 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
 
   const chosen = offered.filter((question) => picked.has(question.n));
   const lines = [...new Set(chosen.flatMap((question) => question.commands))];
+  const decision = note.trim();
 
   const toggle = (n: number): void => {
     const next = new Set(picked);
@@ -93,9 +96,8 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
   const start = async (): Promise<void> => {
     setBusy(true);
     setNotice(null);
-    const trimmed = note.trim();
     const approve = chosen.map((question) => question.n);
-    const result = await postJson("/api/run/follow-up", trimmed === "" ? { project, run, approve } : { project, run, approve, note: trimmed });
+    const result = await postJson("/api/run/follow-up", decision === "" ? { project, run, approve } : { project, run, approve, note: decision });
     setBusy(false);
     setAsking(false);
     if (!result.ok) {
@@ -108,31 +110,54 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
 
   return (
     <div className="card fu">
-      <fieldset className="fu-picks" disabled={busy}>
-        <legend className="fu-label">Approve the commands of</legend>
-        {offered.map((question) => (
-          <label key={question.n} className="fu-pick">
-            <input type="checkbox" checked={picked.has(question.n)} onChange={() => toggle(question.n)} />
-            Question {question.n} ({question.commands.length === 1 ? "1 line" : `${question.commands.length} lines`})
-          </label>
-        ))}
-      </fieldset>
+      {offered.length === 0 ? null : (
+        <fieldset className="fu-picks" disabled={busy}>
+          <legend className="fu-label">Approve the commands of</legend>
+          {offered.map((question) => (
+            <label key={question.n} className="fu-pick">
+              <input type="checkbox" checked={picked.has(question.n)} onChange={() => toggle(question.n)} />
+              Question {question.n} ({question.commands.length === 1 ? "1 line" : `${question.commands.length} lines`})
+            </label>
+          ))}
+        </fieldset>
+      )}
       <div>
         <label className="fu-label" htmlFor={`fu-note-${run}`}>
-          Note for the follow-up (optional)
+          Operator decision for the follow-up
         </label>
-        <input id={`fu-note-${run}`} className="st-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
+        <input
+          id={`fu-note-${run}`}
+          className="st-input"
+          type="text"
+          maxLength={500}
+          required={chosen.length === 0}
+          value={note}
+          disabled={busy}
+          onChange={(event) => {
+            setNote(event.currentTarget.value);
+            setAsking(false);
+          }}
+        />
       </div>
       {asking ? (
         <div className="fu-ask" role="group" aria-label="Confirm the follow-up">
-          <p className="fu-ask-q">
-            Start a new run on {readiness.host} (profile {readiness.profile}) that may run {lines.length === 1 ? "this line" : `these ${lines.length} lines`} as written?
-          </p>
-          <div className="q-cmds">
-            <pre>
-              <code>{lines.join("\n")}</code>
-            </pre>
-          </div>
+          {lines.length === 0 ? (
+            <p className="fu-ask-q">
+              Start a new run on {readiness.host} (profile {readiness.profile}) that carries out this decision within the ritual's policy?
+            </p>
+          ) : (
+            <p className="fu-ask-q">
+              Start a new run on {readiness.host} (profile {readiness.profile}) that may run {lines.length === 1 ? "this line" : `these ${lines.length} lines`} as written?
+            </p>
+          )}
+          {lines.length === 0 ? null : (
+            <div className="q-cmds">
+              <pre>
+                <code>{lines.join("\n")}</code>
+              </pre>
+            </div>
+          )}
+          {decision === "" ? null : <p>Decision: {decision}</p>}
           <div className="fu-acts">
             <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void start()}>
               {busy ? "Starting…" : "Yes, start it"}
@@ -144,7 +169,7 @@ export function FollowUpCard({ project, run, readiness, questions }: FollowUpCar
         </div>
       ) : (
         <div className="fu-acts">
-          <button type="button" className="st-btn st-btn-main" disabled={busy || chosen.length === 0} onClick={() => setAsking(true)}>
+          <button type="button" className="st-btn st-btn-main" disabled={busy || (chosen.length === 0 && decision === "")} onClick={() => setAsking(true)}>
             Start follow-up on {readiness.host}
           </button>
         </div>

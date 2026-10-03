@@ -921,9 +921,21 @@ test("the follow-up card says why it is off and gives the command; a run without
   assert.match(card, /off A follow-up cannot start from this page: gated profile: profile x has permissions gated/u);
   assert.ok(card.includes(`darius run follow-up ${ASKS} --approve 1 --project demo`));
   assert.equal(card.includes("Start follow-up on"), false);
-  const plain = { ...asksContext(null), followUp: () => assert.fail("no readiness check without commands") };
+  const plain = { ...asksContext(null), followUp: () => Promise.resolve<FollowUpReadiness>({ ready: false, host: "host-a", reason: "x" }) };
   const page = await readPage(`/w/demo/runs/${ASKS}`, plain);
-  assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false);
+  assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false, "without commands, a card that is off is not shown");
+});
+
+test("a complete run with no command question gets a decision card when it is ready (0.65.0)", async () => {
+  const base = asksContext(null);
+  const ctx: WebContext = { ...base, followUp: () => Promise.resolve<FollowUpReadiness>({ ready: true, host: "host-a", profile: "opus-skip", questions: [] }) };
+  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
+  const card = textOf(page);
+  assert.match(card, /Operator decision for the follow-up/u);
+  assert.equal(card.includes("Approve the commands of"), false, "no checkboxes without command questions");
+  assert.equal(page.includes('type="checkbox"'), false);
+  assert.match(card, /Start follow-up on host-a/u);
+  assert.match(page, /<button[^>]*disabled=""[^>]*>Start follow-up on host-a/u, "nothing picked and no decision yet");
 });
 
 test("on a host without the checkout the follow-up card names the right host and gives the ssh command to copy (0.50.0)", async () => {

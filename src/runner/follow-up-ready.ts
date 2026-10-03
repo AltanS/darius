@@ -44,7 +44,7 @@ function approvable(questions: readonly { commands?: string[] }[]): FollowUpQues
   });
 }
 
-/** Whether `darius run follow-up <run>` would start here now, approving every question that lists commands. */
+/** Whether `darius run follow-up <run>` would start here now, approving every question that lists commands (none is fine: the follow-up then carries a note, 0.65.0). */
 export async function followUpReadiness(projectName: string, run: string): Promise<FollowUpReadiness> {
   const host = hostId();
   const off = (reason: string): FollowUpReadiness => ({ ready: false, host, reason });
@@ -60,12 +60,12 @@ export async function followUpReadiness(projectName: string, run: string): Promi
     const doc = project.readItem<Ritual>("ritual", slug);
     const right = doc === null ? null : ritualHost(project, ledger, doc);
     if (right !== null && right.host !== host) {
-      const approve = questions.length === 0 ? ["--grant", "LINE"] : questions.flatMap((question) => ["--approve", String(question.n)]);
+      const approve = questions.length === 0 ? ["--note", "TEXT"] : questions.flatMap((question) => ["--approve", String(question.n)]);
       const command = sshDariusLine(right.host, ["run", "follow-up", run, ...approve, "--project", projectName]);
       return { ready: false, host, reason: `runs on ${right.host}; open this page on ${right.host}, or: ${command}`, rightHost: right.host, command };
     }
-    if (questions.length === 0) return off(`no question of this run lists commands; grant lines by hand: darius run follow-up ${run} --grant LINE`);
-    const plan = planFollowUp(ledger, result, { parent: run, approve: questions.map((question) => question.n), grant: [] });
+    // With no command question the follow-up carries the operator's decision as a note (0.65.0); the check stands in for it.
+    const plan = planFollowUp(ledger, result, { parent: run, approve: questions.map((question) => question.n), grant: [], note: "decision" });
     if ("usage" in plan) return off(plan.usage);
     if ("refused" in plan) return off(plan.refused);
     const { report } = await runDue({

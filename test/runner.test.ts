@@ -42,7 +42,7 @@ import { acknowledgeRun } from "../src/runner/hold.ts";
 import { failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
 import { findingCommand } from "../src/cli/finding.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
-import { planFollowUp } from "../src/runner/follow-up.ts";
+import { followUpSection, planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
 import { buildPrompt, preflightGate } from "../src/runner/launch.ts";
 import { agentName } from "../src/surface/herdr.ts";
@@ -2226,11 +2226,11 @@ const FOLLOW_UP_RESULT = {
 };
 
 /** A linked act ritual with a complete run whose result asks two questions; the first lists a hold-listed command. */
-async function seedParent(project: string, opts: { marker?: string; mode?: Policy["mode"]; link?: boolean } = {}): Promise<string> {
+async function seedParent(project: string, opts: { marker?: string; mode?: Policy["mode"]; link?: boolean; result?: object } = {}): Promise<string> {
   if (opts.link !== false) linkedCheckout(project, opts.marker ?? "");
   seedRitual(project, { policy: { ...HEARTBEAT_POLICY, mode: opts.mode ?? "act" } });
   const run: string = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", project, "--json"])).stdout).run;
-  const findings = `# Check\n\n\`\`\`darius-result\n${JSON.stringify(FOLLOW_UP_RESULT)}\n\`\`\`\n`;
+  const findings = `# Check\n\n\`\`\`darius-result\n${JSON.stringify(opts.result ?? FOLLOW_UP_RESULT)}\n\`\`\`\n`;
   const done = await runCli(runCommand, ["complete", run, "--project", project, "--outcome", "complete", "--findings-stdin"], findings);
   assert.equal(done.code, 0, done.stdout);
   return run;
@@ -2388,8 +2388,63 @@ test("follow-up readiness for the web button: ready with the approvable question
     command,
   });
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-ready", "--json"])).stdout).run;
-  assert.match(await notReady("fu-ready", open), /no question of this run lists commands; grant lines by hand: darius run follow-up \S+ --grant LINE/u);
+  assert.match(await notReady("fu-ready", open), /is running; a follow-up needs a closed run/u);
   assert.match(await withFakeHerdr({}, () => notReady("fu-ready", parent)), new RegExp(`^run ${open.slice(-6).toLowerCase()} of heartbeat is running; a follow-up starts when no run is open$`, "u"));
+});
+
+const DECISION_RESULT = {
+  v: 1,
+  status: "attention",
+  summary: "five posts have stale paragraphs",
+  items: [{ title: "Stale paragraphs", severity: "medium", state: "needs-decision", target: "five posts", key: "stale-paragraphs" }],
+  actions: [],
+  questions: [{ text: "Fix the stale paragraphs of these five posts?", recommendation: "Yes." }],
+};
+
+test("decision follow-up: a note alone starts a run with no grants, readiness needs no command question (0.65.0)", async () => {
+  const project = "fu-decision";
+  const parent = await seedParent(project, { result: DECISION_RESULT });
+  assert.deepEqual(await withFakeHerdr({}, () => followUpReadiness(project, parent)), { ready: true, host: hostId(), profile: "built-in", questions: [] });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await withFakeHerdr({}, () => followUp(parent, project, ["--note", "Fix all five posts", "--headless"]));
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const child: string = JSON.parse(result.stdout).projects[0].rituals[0].run;
+  const started = linesOf(project, "run.started").find((line) => line.run === child);
+  assert.equal(started?.follow_up_of, parent);
+  assert.deepEqual(started?.grants, []);
+  const runDir = join(openProject(project).root, "runs", child);
+  const policy = JSON.parse(readFileSync(join(runDir, "policy.json"), "utf8"));
+  assert.equal("grants" in policy, false, "no grants key");
+  assert.equal(policy.follow_up_of, parent);
+  const prompt = readFileSync(join(runDir, "prompt.md"), "utf8");
+  assert.match(prompt, /\nOperator decision: Fix all five posts\n/u);
+  const section = prompt.slice(prompt.indexOf("## Follow-up"), prompt.indexOf("## Protocol"));
+  assert.doesNotMatch(section, /Granted lines|```|Operator note/u);
+  assert.match(prompt, /No lines are granted\. Carry out the operator's decision within this run's policy/u);
+  assert.equal(linesOf(project, "run.acknowledged")[0]?.note, `follow-up ${child}, decision by note`);
+});
+
+test("planFollowUp: a note alone is a plan with no grants; no line and no note is a usage error (0.65.0)", () => {
+  const parent = "01PARENTRUN000000000000000";
+  const base = [bareLine("run.started", parent), bareLine("run.completed", parent, "ritual/heartbeat", { outcome: "complete" })];
+  assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [], note: " fix the posts " }), { grants: [] });
+  const nothing = { usage: "nothing to do: pass --approve N, --grant LINE or --note TEXT" };
+  assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [] }), nothing);
+  assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [], note: " \n\t " }), nothing);
+  assert.ok("refused" in planFollowUp([bareLine("run.started", parent)], null, { parent, approve: [], grant: [], note: "x" }), "the other checks stand");
+});
+
+test("followUpSection: without grants it prints the decision and the decision rule; with grants the text is as before (0.65.0)", () => {
+  const result: RunResult = { v: 1, status: "attention", summary: "s", metrics: [], items: [], actions: [], questions: [] };
+  const none = followUpSection({ parent: "01P", approved: [], grants: [], note: "Fix all five" }, result).join("\n");
+  assert.match(none, /\nOperator decision: Fix all five\n/u);
+  assert.doesNotMatch(none, /Granted lines|```|Operator note/u);
+  assert.match(none, /No lines are granted\. Carry out the operator's decision within this run's policy: may and hold apply as usual, and the procedure's rules for writes \(checks before a write, before-states, verify after\) still hold\. Verify each change\./u);
+  const some = followUpSection({ parent: "01P", approved: [], grants: ["date"], note: "go" }, result).join("\n");
+  assert.match(some, /\nOperator note: go\n\nGranted lines\. The gate passes each exactly as written/u);
+  assert.match(some, /```bash\ndate\n```/u);
+  assert.match(some, /Run the granted lines as written, then verify each result\./u);
+  assert.doesNotMatch(some, /Operator decision|No lines are granted/u);
 });
 
 /** One bare ledger line, for the pure checks of planFollowUp. */
@@ -2444,7 +2499,8 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
   await usage("fu-refuse", parent, ["--approve", "x"], /--approve must name a question by its number/u);
   await usage("fu-refuse", parent, ["--grant", "cd tools && pnpm cli x"], /--grant "cd tools && pnpm cli x" is not one plain command: more than one command/u);
   await usage("fu-refuse", parent, ["--grant", "echo $(id)"], /not one plain command/u);
-  await usage("fu-refuse", parent, [], /nothing to grant: pass --approve N or --grant LINE\. A follow-up with nothing granted is run now with a note: darius run ack \S+ --note TEXT, then darius run now heartbeat/u);
+  await usage("fu-refuse", parent, [], /nothing to do: pass --approve N, --grant LINE or --note TEXT/u);
+  await usage("fu-refuse", parent, ["--note", "   "], /nothing to do: pass --approve N, --grant LINE or --note TEXT/u);
   await usage("fu-refuse", "01NOPE", ["--grant", "date"], /no run '01NOPE'/u);
 
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-refuse", "--json"])).stdout).run;

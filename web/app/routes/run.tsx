@@ -26,9 +26,13 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const failure = runFailure(run.project, run.row, status.utcOffset);
   const next = failure === null ? null : nextStep(failure, { today: status.today, offset: status.utcOffset });
   const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
-  // Only a run whose questions list commands can have a follow-up from this page; the check runs on the server.
+  // A closed, complete ritual run with a result can have a follow-up from this page (0.65.0: with no command
+  // question it carries a decision note). The check runs on the server. A run with no command question shows
+  // the card only when the check passes, so a run that cannot be followed up gets no "off" card.
   const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
-  const followUp = hasCommands ? await context.followUp(run.project, run.row.run) : null;
+  const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
+  const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
+  const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
   return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
 }
 

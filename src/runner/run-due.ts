@@ -432,7 +432,8 @@ function ackParent(ctx: ProjectContext, followUp: FollowUp, run: string): void {
   const view = viewRun(readLedger(ctx.project), followUp.parent);
   const isWaiting = view.outcome === "complete" && (view.result?.questions ?? 0) > 0 && view.acknowledged === undefined;
   if (!isWaiting) return;
-  const what = followUp.approved.length > 0 ? `approved ${followUp.approved.join(", ")}` : `granted ${String(followUp.grants.length)} line(s)`;
+  const granted = followUp.grants.length > 0 ? `granted ${String(followUp.grants.length)} line(s)` : "decision by note";
+  const what = followUp.approved.length > 0 ? `approved ${followUp.approved.join(", ")}` : granted;
   acknowledgeRun(ctx.project, { run: followUp.parent, who: ctx.options.who, note: `follow-up ${run}, ${what}` });
 }
 

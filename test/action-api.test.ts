@@ -117,7 +117,10 @@ test("a wrong project or run is 400, and so is a body that is not question numbe
     [{ ...VALID, project: "../etc" }, /project must be a project name/u],
     [{ ...VALID, run: "01JNOSUCHRUN0000000000000A" }, /no run 01JNOSUCHRUN0000000000000A in demo/u],
     [{ ...VALID, run: "../../x" }, /run must be a run id/u],
-    [{ ...VALID, approve: [] }, /approve must list question numbers/u],
+    [{ ...VALID, approve: [] }, /approve question numbers, or give a note with the operator's decision/u],
+    [{ ...VALID, approve: [], note: " \n " }, /approve question numbers, or give a note with the operator's decision/u],
+    [{ project: PROJECT, run: RUN }, /approve must list question numbers/u],
+    [{ ...VALID, approve: "1" }, /approve must list question numbers/u],
     [{ ...VALID, approve: [0] }, /approve must list question numbers/u],
     [{ ...VALID, approve: ["1"] }, /approve must list question numbers/u],
     [{ ...VALID, approve: [1.5] }, /approve must list question numbers/u],
@@ -187,6 +190,18 @@ test("ready: it starts run follow-up detached with the approved numbers, the not
   assert.ok(existsSync(runDir), "the parent's run dir exists for the log");
   assert.ok(!(started?.argv ?? []).includes("--grant"), "never a grant line");
   assert.ok(!(started?.argv ?? []).includes("--headless"), "attended: the CLI opens a herdr tab");
+});
+
+test("decision follow-up: approve [] with a note starts the CLI with --note and no --approve (0.65.0)", async () => {
+  const stub = deps({ ready: true, host: "host-a", profile: "opus-skip", questions: [] });
+  const answer = await actionApi(post({ ...VALID, approve: [], note: "  fix the five\nposts " }), { who: "owner" }, stub);
+  assert.equal(answer.status, 202);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--note", "fix the five posts", "--who", "web:owner"]);
+  assert.ok(!(stub.started[0]?.argv ?? []).includes("--approve"), "no --approve");
+  const noNote = await actionApi(post({ ...VALID, approve: [] }), { who: "owner" }, deps(READY));
+  assert.equal(noNote.status, 400, "neither numbers nor a note is refused");
+  const grant = await actionApi(post({ ...VALID, approve: [], note: "x", grant: ["date"] }), { who: "owner" }, stub);
+  assert.equal(grant.status, 400, "the key allowlist stands");
 });
 
 // --- close a finding (0.62.0) --------------------------------------------------------------
