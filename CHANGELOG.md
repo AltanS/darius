@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.64.0] - 2026-10-03
+
+### Changed
+
+- A `hold` pattern or a report-mode write verb that matches only inside quoted text with a blank in it (a jq filter, a commit message, a search text) now denies the call instead of holding the run. The model gets the reason and goes on. A real run was held for a `.wp ` inside a jq filter, which matched `\bwp\s`.
+- A line that names a program that runs its arguments (`bash -c`, `sh -c`, `ssh`, `eval`, `xargs`, `sudo`, `timeout` and the like) is still read as written, so a quoted command there still holds.
+
+### Fixed
+
+- A program name in quotes (`"wp" plugin list`, `w'p' plugin list`) slipped past a hold pattern such as `\bwp\s`. The hold check now also reads the line with those quotes removed, and holds.
+
 ## [0.63.1] - 2026-10-03
 
 ### Fixed

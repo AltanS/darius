@@ -19,7 +19,8 @@
  *
  * A decision is allow, deny or hold. `hold` is for what needs a person: a
  * `hold` pattern, a report-mode write verb, any call after the run is held.
- * The run is then held and the model must stop. `deny` is for a call the
+ * The run is then held and the model must stop. A match only inside quoted
+ * text is a deny instead (holdView, 0.64.0). `deny` is for a call the
  * policy does not allow (outside `may`, a file write, a subagent): the model
  * is told why and goes on within the policy, as it does when a native
  * allowlist refuses a call. Holding on those would end a run on its first
@@ -515,6 +516,91 @@ function firstMatch(command: string, patterns: readonly string[]): string | unde
   return patterns.find((pattern) => new RegExp(pattern, "u").test(command));
 }
 
+/**
+ * Programs that run their arguments as a command, here or on another host.
+ * When a line names one outside quotes, its quoted text is a command after
+ * all, and the hold check reads the line as written (holdView).
+ */
+const RUNS_ARGUMENTS: ReadonlySet<string> = new Set([
+  ...LOADERS,
+  "ssh",
+  "su",
+  "doas",
+  "timeout",
+  "watch",
+  "nice",
+  "ionice",
+  "stdbuf",
+  "parallel",
+  "flock",
+  "chroot",
+  "nsenter",
+  "unshare",
+  "script",
+  "trap",
+]);
+
+/**
+ * The line as the hold check reads it (0.64.0), or undefined when only the
+ * line as written will do. Quoted text with a blank in it is one argument
+ * (a jq filter, a commit message, a search text) and becomes `_`: the
+ * program gets it as data, so `jq '.posts // .wp // null'` does not read as
+ * a `wp` command. Quoted text without a blank loses its quotes, so
+ * `"wp" plugin list` still reads `wp plugin list`. Undefined when scanShell
+ * refuses the line, or when a word outside quotes runs its arguments
+ * (RUNS_ARGUMENTS: `bash -c "..."`, `ssh host "..."`).
+ */
+export function holdView(command: string): string | undefined {
+  if ("refused" in scanShell(command)) return undefined;
+  let out = "";
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] ?? "";
+    if (ch === "\\") {
+      out += ch + (command[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch !== "'" && ch !== '"') {
+      out += ch;
+      continue;
+    }
+    let text = "";
+    for (i += 1; i < command.length && command[i] !== ch; i += 1) {
+      const inner = command[i] ?? "";
+      if (ch === '"' && inner === "\\" && /["\\$`]/u.test(command[i + 1] ?? "")) i += 1;
+      text += command[i] ?? "";
+    }
+    out += /\s/u.test(text) ? "_" : text;
+  }
+  const words = out.split(/[\s;&|]+/u).map((word) => {
+    const bare = word.replaceAll("\\", "");
+    return bare.slice(bare.lastIndexOf("/") + 1);
+  });
+  return words.some((word) => RUNS_ARGUMENTS.has(word)) ? undefined : out;
+}
+
+/**
+ * What a hold list does with a line (0.64.0): undefined when no pattern
+ * matches it. A pattern that matches the line as the hold check reads it
+ * (holdView) holds, so `"wp" plugin list` holds too. A pattern that matches
+ * only the line as written matched inside quoted text: `quotedOnly`, which
+ * is denied, not held. The call does not run either way, and the run goes on.
+ */
+function holdMatch(command: string, patterns: readonly string[]): { pattern: string; quotedOnly: boolean } | undefined {
+  const view = holdView(command);
+  const inView = view === undefined ? undefined : firstMatch(view, patterns);
+  if (inView !== undefined) return { pattern: inView, quotedOnly: false };
+  const pattern = firstMatch(command, patterns);
+  return pattern === undefined ? undefined : { pattern, quotedOnly: view !== undefined };
+}
+
+function quotedOnlyDeny(pattern: string, command: string): GateDecision {
+  return deny(
+    `the pattern /${pattern}/ matches only inside quoted text, so darius refused the call but did not hold the run. ` +
+      `Write the call so the quoted text does not match /${pattern}/ (or put that text in a file under /tmp and pass the file), then go on: ${clip(command)}`,
+  );
+}
+
 function clip(command: string): string {
   return command.slice(0, 300);
 }
@@ -553,14 +639,16 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;
-  const holdPattern = firstMatch(command, policy.hold);
-  if (holdPattern !== undefined) return hold(`the command matches the hold pattern /${holdPattern}/: ${clip(command)}`);
+  const held = holdMatch(command, policy.hold);
+  if (held?.quotedOnly === true) return quotedOnlyDeny(held.pattern, command);
+  if (held !== undefined) return hold(`the command matches the hold pattern /${held.pattern}/: ${clip(command)}`);
   const refusal = scope === "full" ? mayRefusal(command, policy.may) : undefined;
   if (refusal !== undefined) return deny(`the command is not allowed by the policy's may rules (${refusal}): ${clip(command)}`);
   if (policy.mode !== "report") return ALLOW;
-  const verb = firstMatch(command, REPORT_MODE_WRITE_VERBS);
+  const verb = holdMatch(command, REPORT_MODE_WRITE_VERBS);
   if (verb === undefined) return ALLOW;
-  return hold(`report mode denies write verbs (/${verb}/): ${clip(command)}`);
+  if (verb.quotedOnly) return quotedOnlyDeny(verb.pattern, command);
+  return hold(`report mode denies write verbs (/${verb.pattern}/): ${clip(command)}`);
 }
 
 /** The `full` scope's decision for a call that is not a shell command. */

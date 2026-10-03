@@ -170,7 +170,7 @@ export function buildPrompt(input: PromptInput): string {
     "Allowed tool rules:",
     bulletList(ritual.policy.may),
     "",
-    "Hold list (regexes over the Bash command line; a match holds the run):",
+    "Hold list (regexes over the Bash command line; a match holds the run, a match only inside quoted text is just denied):",
     bulletList(ritual.policy.hold),
     ...(ritual.policy.notes === undefined ? [] : ["", "Notes:", ritual.policy.notes]),
     "",

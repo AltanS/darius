@@ -13,6 +13,7 @@ import {
   clearsRunMarker,
   decide as gateDecide,
   grantRefusal,
+  holdView,
   mayAllowsShell,
   mayRefusal,
   normalizeGrant,
@@ -105,6 +106,45 @@ test("full scope enforces may on shell calls, then hold, then report verbs; the 
   assert.match(decide(shell("git commit -m x"), report) ?? "", /report mode denies write verbs/);
   const complete = `darius run complete ${RUN} --project p --outcome complete --findings-stdin <<'FINDINGS'\nwe should deploy\nFINDINGS`;
   assert.equal(decide(shell(complete), act), undefined);
+});
+
+test("a hold pattern that matches only inside quoted text denies the call and leaves the run going (0.64.0)", () => {
+  const wp = policy({ hold: [String.raw`\bwp\s`, String.raw`\bdeploy\b`, String.raw`\bcurl\b.*\s(-X\s*|--request[\s=]+)(POST|PUT|DELETE|PATCH)\b`] });
+  // The command that held a real run: `.wp ` inside a jq filter.
+  const jq = `tail -n +4 /tmp/d.json | jq -c '.bySite | to_entries[] | {site: .key, posts: (.posts // .wpPosts // .wp // null)}' | head -c 4000`;
+  assert.equal(verdict(shell(jq), wp), "deny");
+  assert.match(decide(shell(jq), wp) ?? "", /matches only inside quoted text, so darius refused the call but did not hold the run/u);
+  assert.equal(verdict(shell(`git log --grep "deploy fix"`), wp), "deny", "a search text");
+  assert.equal(verdict(shell(`jq -r '.["wp"]' /tmp/d.json`), wp), "allow", "the rewrite the deny asks for");
+  // Still a hold: the program runs the pattern, quoted or not.
+  for (const line of [
+    "wp plugin list",
+    "cd /srv && wp db export",
+    `"wp" plugin list`,
+    "w'p' plugin list",
+    `curl -X 'POST' https://example.com/api`,
+    `bash -c "wp db drop"`,
+    `/bin/sh -c 'wp db drop'`,
+    `ssh web1 "wp cache flush"`,
+    `timeout 5 bash -c "wp cron run"`,
+    `echo ok; eval "wp db drop"`,
+    `xargs -I{} sh -c "wp post delete {}"`,
+    `pnpm cli fc deploy`,
+    `jq '.x' /tmp/a.json < /tmp/wp b`,
+  ]) {
+    assert.equal(verdict(shell(line), wp), "hold", line);
+  }
+  const report = policy({ mode: "report", hold: [] });
+  assert.equal(verdict(shell(`grep -rn "git push origin" docs`), report), "deny", "a report-mode verb only in quotes");
+  assert.equal(verdict(shell("git push origin main"), report), "hold");
+});
+
+test("holdView blanks quoted text with a blank, unquotes the rest, and gives up on a line that runs its arguments", () => {
+  assert.equal(holdView(`jq -c '.a // .wp // null' /tmp/x`), "jq -c _ /tmp/x");
+  assert.equal(holdView(`git commit -m "ship it" && "wp" cli`), "git commit -m _ && wp cli");
+  assert.equal(holdView(`echo "a \\"b\\" c"`), "echo _");
+  assert.equal(holdView(`sudo -u www "wp cron"`), undefined);
+  assert.equal(holdView(`echo $(wp cli)`), undefined, "scanShell refuses it");
 });
 
 test("hold is for what needs a person; a call outside the policy is only denied", () => {
