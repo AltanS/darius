@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const { sourceHash } = await import("../web/source-hash.ts");
@@ -21,15 +21,14 @@ test("web/build is committed and built from the current source", () => {
   assert.equal(info.sourceHash, sourceHash(ROOT), "web/build is older than its source: run `bun run web:build` and commit web/build");
 });
 
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesUnder(`${dir}${entry.name}/`) : [`${dir}${entry.name}`]));
+}
+
 test("every file of web/build is committed, none is git-ignored", () => {
-  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? files(`${dir}${entry.name}/`) : [`${dir}${entry.name}`]));
-  const paths = files(BUILD).map((path) => path.slice(ROOT.length));
+  const paths = filesUnder(BUILD).map((path) => path.slice(ROOT.length));
   // `git check-ignore` exits 1 when no path is ignored.
-  let ignored = "";
-  try {
-    ignored = execFileSync("git", ["check-ignore", "--stdin"], { cwd: ROOT, input: paths.join("\n"), encoding: "utf8" });
-  } catch (error) {
-    if ((error as { status?: number }).status !== 1) throw error;
-  }
-  assert.equal(ignored.trim(), "", "a .gitignore rule hides these build files from the commit; hosts would miss them");
+  const run = spawnSync("git", ["check-ignore", "--stdin"], { cwd: ROOT, input: paths.join("\n"), encoding: "utf8" });
+  assert.ok(run.status === 0 || run.status === 1, `git check-ignore failed: ${run.stderr}`);
+  assert.equal(run.stdout.trim(), "", "a .gitignore rule hides these build files from the commit; hosts would miss them");
 });
