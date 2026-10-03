@@ -195,13 +195,25 @@ function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
+/**
+ * A rule body as an anchored regex source, `star` standing for `*`. The
+ * legacy `prefix:*` form is the prefix alone, or the prefix and arguments.
+ * So is one program word and ` *` (`prog *`, 0.66.0): it also allows the bare
+ * `prog`, as `prog:*` does. A rule with more words (`pnpm cli *`) does not
+ * change.
+ */
+function ruleSource(pattern: string, star: string): string {
+  const legacy = pattern.endsWith(":*");
+  const bare = !legacy && /^[^\s*]+ \*$/u.test(pattern);
+  const body = legacy || bare ? pattern.slice(0, -2) : pattern;
+  const source = body.split("*").map(escapeRegex).join(star);
+  if (legacy) return `^${source}(?:\\s${star})?$`;
+  return bare ? `^${source}(?: ${star})?$` : `^${source}$`;
+}
+
 /** A Claude permission rule body (`git status`, `pnpm cli *`, `npm run test:*`) as an anchored regex. */
 export function shellRuleRegex(pattern: string): RegExp {
-  // The legacy `prefix:*` form: the prefix alone, or the prefix and arguments.
-  const legacy = pattern.endsWith(":*");
-  const body = legacy ? pattern.slice(0, -2) : pattern;
-  const source = body.split("*").map(escapeRegex).join(STAR);
-  return new RegExp(`^${source}${legacy ? `(?:\\s${STAR})?` : ""}$`, "u");
+  return new RegExp(ruleSource(pattern, STAR), "u");
 }
 
 const SHELL_RULE = /^Bash(?:\((.*)\))?$/su;
@@ -342,10 +354,7 @@ function ruleAllowsCommand(command: string, may: readonly string[]): boolean {
     if (match === null) return false;
     const pattern = match[1];
     if (pattern === undefined) return true;
-    const legacy = pattern.endsWith(":*");
-    const body = legacy ? pattern.slice(0, -2) : pattern;
-    const source = body.split("*").map(escapeRegex).join("[\\s\\S]*");
-    return new RegExp(`^${source}${legacy ? "(?:\\s[\\s\\S]*)?" : ""}$`, "u").test(command);
+    return new RegExp(ruleSource(pattern, "[\\s\\S]*"), "u").test(command);
   });
 }
 

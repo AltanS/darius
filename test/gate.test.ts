@@ -402,6 +402,20 @@ test("shell rules: spelled-out operators, the legacy prefix form, exact rules, b
   assert.equal(mayAllowsShell("axb", ["Bash(a.b)"]), false, "regex characters in a rule are literal");
 });
 
+test("a rule of one program word and * also allows the bare program; a rule with more words does not (0.66.0)", () => {
+  const rule = ["Bash(git *)"];
+  assert.equal(mayAllowsShell("git", rule), true);
+  assert.equal(mayAllowsShell("git status", rule), true);
+  assert.equal(mayAllowsShell("gitx", rule), false);
+  assert.equal(mayAllowsShell("git; rm x", rule), false);
+  assert.equal(mayAllowsShell("cd x && git", ["Bash(cd *)", "Bash(git *)"]), true, "per command of a chain");
+  assert.equal(mayAllowsShell("./tools/x.sh", ["Bash(./tools/x.sh *)"]), true);
+  const longer = ["Bash(pnpm cli *)"];
+  assert.equal(mayAllowsShell("pnpm cli", longer), false);
+  assert.equal(mayAllowsShell("pnpm cli fc", longer), true);
+  assert.equal(mayAllowsShell("pnpm", longer), false);
+});
+
 // --- the Claude Code adapter ----------------------------------------------------------
 
 test("the Claude adapter classifies tool names and reads the command and session", () => {
