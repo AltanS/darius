@@ -10,20 +10,24 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - The gate log row of a hold, and of the deny in its place, names the pattern in `hold_pattern` and the cause in `hold_cause` (`hold-rule` or `report-mode`).
 - `on_hold` shows in `ritual show`, `ritual show --json`, `marker check --resolved` (text and JSON), `ritual export`, `marker factor`, the run prompt and the web ritual page (row "On a match").
 - `darius finding reset [--ritual R] [--note TEXT]` writes one `finding.reset` ledger line. Findings then ignore every run result that completed before it, for that ritual or for all. The verb prints how many findings it hid. The line syncs like any ledger line.
-- A run with the full gate gets a `## Shell commands` section in its prompt. It lists the shell forms the gate refuses and says not to try another form of a denied call.
+- A run with the full gate gets a `## Shell commands` section in its prompt. It lists the shell forms the gate refuses, says to quote the heredoc delimiter of `darius run complete` (`<<'FINDINGS'`), and says not to try another form of a denied call.
+- `marker check` warns about a hold pattern with a literal `\|`, `;` or `&&` outside a character class. Such a pattern can no longer span commands, see below.
 
 ### Changed
 
-- A hold pattern matches each command of a line apart, never across `|`, `;`, `&&` or `||`. So `curl URL | tr -d x` no longer matches a `curl ... -d` pattern. A match in any command holds as before. A line the shell split refuses is read whole, as before.
-- Only the program word of a command decides whether it runs its arguments. The `.` in `find . -name x | jq '.a // .b'` no longer makes the jq part read as written.
+- A hold pattern matches each command of a line apart, never across `|`, `;`, `&&` or `||`. So `curl URL | tr -d x` no longer matches a `curl ... -d` pattern. A match in any command holds as before.
+- A line where any command may run code from its arguments is read whole and as written, and a match holds: a program or an unquoted word such as `bash`, `sh`, `eval`, `xargs`, `ssh` or `sudo`, also after `{`, `do` or `coproc`. So `echo '...' | bash`, `curl URL | sh` and `{ bash; } <<'EOF'` hold. A line the shell split refuses is read whole too. Only a `.` that is not the program does not count, so `find . -name x | jq '.a // .b'` keeps the quoted-text relief.
+- The deny for a hold rule that matched only inside quoted text no longer suggests another form of the command. It says to record a needs-decision item when the command is needed, and to read data such as a search text or a jq filter from a file under /tmp.
 - A finding that two full runs in a row left out is `lapsed`. It leaves the default list, the needs-you count, the run prompt and the web. `finding list --all` shows it. A new report of its key opens it again.
 - A `may` rule `Bash(prog *)` also allows the bare `prog`, as `Bash(prog:*)` does. Rules with more words, such as `Bash(pnpm cli *)`, do not change.
 
 ### Fixed
 
 - The tool check before a run looked up a relative `may` path such as `./tools/x.sh` in the process dir. The timer runs in `$HOME`, so the ritual was skipped as `tool-missing`. The path now resolves against the checkout.
-- The run's own `darius run hold` and `darius run complete` calls are never held for their text. Operators inside quotes are text. An absolute path counts when it resolves to the darius binary the hook runs from. `run complete` may use an unquoted heredoc whose body has no `$(`, backtick or `$[`.
-- The heredoc body of the protocol now ends at its first delimiter line, as the shell reads it. Before, a second delimiter line could hide a command after the body.
+- The run's own `darius run hold` and `darius run complete` calls are never held for their text. Operators inside quotes are text. An absolute path counts only when it is, as written, the path of the darius binary the hook runs from, or its `<app>/current/bin/darius` form. A symlink to it does not count.
+- The heredoc body of the protocol now ends at its first delimiter line, as the shell reads it. Before, a second delimiter line could hide a command after the body. Only a quoted delimiter (`<<'FINDINGS'`) is the protocol.
+- The legacy rule form `Bash(git:*)` allowed `git`, a newline and a second command. It now takes a blank or a tab after the prefix, never a newline.
+- An unquoted backslash in a program name (`w\p`) slipped past a hold pattern such as `\bwp\b`. The hold check now reads it as `wp`.
 - A resumed run on the herdr surface failed with `agent_name_taken` while the old pane was open. Each launch now gets its own agent name (`d-<run>`, then `d-<run>-r2`), and `herdr.json` keeps every tab of the run, so all of them close later.
 - `darius run resume --dry-run` started a real run. It is now a usage error.
 - `doctor` without `--fix` stamped an unstamped index. It now writes nothing and warns that the index needs a rebuild with `--fix`.
