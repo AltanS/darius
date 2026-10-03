@@ -35,17 +35,30 @@ describe("version-auto-stamp", () => {
     writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
     expect(readIndexSchemaVersion(trackerRoot)).toBeNull();
 
-    const report = runDoctor({ trackerRoot });
+    const report = runDoctor({ trackerRoot, fix: true });
 
     expect(report.healthy).toBe(true);
     expect(readIndexSchemaVersion(trackerRoot)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("writes nothing without --fix, and warns that the index needs a rebuild (darius 0.66.0)", () => {
+    writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
+    const before = readFileSync(join(trackerRoot, "00-INDEX.md"), "utf-8");
+
+    const report = runDoctor({ trackerRoot });
+
+    expect(report.healthy).toBe(true);
+    expect(readFileSync(join(trackerRoot, "00-INDEX.md"), "utf-8")).toBe(before);
+    expect(readIndexSchemaVersion(trackerRoot)).toBeNull();
+    const notice = report.warnings.find((w) => w.kind === "version_drift");
+    expect(notice?.detail).toContain("the index needs a rebuild; run doctor --fix");
   });
 
   it("includes schema_version in frontmatter after stamping", () => {
     writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
     expect(readIndexSchemaVersion(trackerRoot)).toBeNull();
 
-    runDoctor({ trackerRoot });
+    runDoctor({ trackerRoot, fix: true });
 
     expect(readIndexSchemaVersion(trackerRoot)).toBe(CURRENT_SCHEMA_VERSION);
   });
@@ -66,7 +79,7 @@ describe("version-auto-stamp", () => {
   it("doctor is healthy after auto-stamp", () => {
     writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
 
-    const firstReport = runDoctor({ trackerRoot });
+    const firstReport = runDoctor({ trackerRoot, fix: true });
     expect(firstReport.healthy).toBe(true);
 
     // Second run should also be healthy

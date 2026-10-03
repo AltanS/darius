@@ -30,9 +30,9 @@ describe("version-stamp-idempotent", () => {
   });
 
   it("running doctor twice on a stamped tracker produces no diff", () => {
-    // First run — stamps the index
+    // First run with --fix stamps the index (darius 0.66.0: never without --fix)
     writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
-    runDoctor({ trackerRoot });
+    runDoctor({ trackerRoot, fix: true });
 
     const afterFirstRun = readFileSync(join(trackerRoot, "00-INDEX.md"), "utf-8");
 
@@ -59,7 +59,7 @@ describe("version-stamp-idempotent", () => {
   it("schema_version remains the same after multiple doctor runs", () => {
     writeFileSync(join(trackerRoot, "00-INDEX.md"), makeUnstampedIndex(), "utf-8");
 
-    runDoctor({ trackerRoot });
+    runDoctor({ trackerRoot, fix: true });
     expect(readIndexSchemaVersion(trackerRoot)).toBe(CURRENT_SCHEMA_VERSION);
 
     runDoctor({ trackerRoot });

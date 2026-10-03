@@ -21,7 +21,11 @@
  *
  * With --fix:
  * - Strips derived fields (status, verified) from spec frontmatter
- * - Regenerates the index
+ * - Regenerates the index, which also stamps schema_version
+ *
+ * Without --fix doctor writes nothing (darius 0.66.0 carve-out). It used to
+ * stamp an unstamped index on its own; now it warns that the index needs a
+ * rebuild with --fix.
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -331,6 +335,9 @@ export function runDoctor(opts: {
   }
 
   // 5. Schema version check (re-read index in case --fix just regenerated it)
+  // darius 0.66.0 carve-out: without --fix doctor writes nothing. An index
+  // that needs the stamp gets a warning that names --fix instead.
+  let stampNotice: DoctorFinding | undefined;
   if (existsSync(indexPath)) {
     const indexRaw = readFileSync(indexPath, "utf-8");
     const onDiskVersion = readIndexSchemaVersion(indexRaw);
@@ -351,7 +358,7 @@ export function runDoctor(opts: {
           detail:
             `schema_version is ${onDiskVersion === null ? "missing" : onDiskVersion} (current: ${CURRENT_SCHEMA_VERSION}) — ask darius to migrate`,
         });
-      } else {
+      } else if (fix) {
         // No other findings: auto-stamp by regenerating the index with the
         // current schema_version embedded (rebuildIndex calls rebuildIndexDoc
         // which always writes CURRENT_SCHEMA_VERSION).
@@ -360,12 +367,19 @@ export function runDoctor(opts: {
         } catch {
           // Non-fatal — might fail on edge-case tracker state
         }
+      } else {
+        stampNotice = {
+          kind: "version_drift",
+          file: indexPath,
+          detail: `schema_version is ${onDiskVersion === null ? "missing" : onDiskVersion} (current: ${CURRENT_SCHEMA_VERSION}): the index needs a rebuild; run doctor --fix`,
+          warnOnly: true,
+        };
       }
     }
   }
 
   // 6. Agent roster check — warn when spec's agent: field is not in live roster
-  const warnings: DoctorFinding[] = [];
+  const warnings: DoctorFinding[] = stampNotice === undefined ? [] : [stampNotice];
   try {
     const roster = discoverAgents();
     const rosterInvocables = new Set(roster.map((a) => a.invocable));
