@@ -170,13 +170,17 @@ function canonicalDir(dir: string): string {
 }
 
 /**
- * The protocol may name darius by an absolute path (0.66.0), but only one
- * that resolves to the binary this hook runs from: a `darius` under /tmp
- * that the run wrote itself is not darius.
+ * The protocol may name darius by an absolute path (0.66.0), but only the
+ * binary this hook runs from, compared as written: no symlink in the
+ * argument is resolved, so a link under /tmp to the real binary does not
+ * pass. An installed app runs from `<app>/versions/<v>/bin/darius`; its
+ * `<app>/current/bin/darius` form passes too.
  */
 export function installedDarius(own: string = dariusBin()): DariusBinCheck {
-  const target = canonicalDir(own);
-  return (path) => existsSync(path) && canonicalDir(path) === target;
+  const forms = new Set([own]);
+  const installed = /^(.*)\/versions\/[^/]+\/bin\/darius$/u.exec(own);
+  if (installed !== null) forms.add(`${installed[1] ?? ""}/current/bin/darius`);
+  return (path) => forms.has(path);
 }
 
 // --- the command ------------------------------------------------------------------

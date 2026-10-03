@@ -140,7 +140,7 @@ function shellFormsSection(scope: GateScope | undefined): string[] {
     "- One command per call where you can.",
     "- No `for` or `while` loops, no shell functions, no subshell parentheses.",
     "- No `$(...)` and no backticks. Run the inner command on its own first.",
-    "- No `<` or `<<`. The one exception is the `darius run complete --findings-stdin` heredoc.",
+    "- No `<` or `<<`. The one exception is the `darius run complete --findings-stdin` heredoc, and its delimiter must be quoted: `<<'FINDINGS'`, never `<<FINDINGS`.",
     "- Send output only to a fixed file path under /tmp, such as `> /tmp/report.json`.",
     "- When a call is denied, do not wrap it in another form. Use an allowed command, or record the gap in the findings.",
     "",

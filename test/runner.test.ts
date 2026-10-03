@@ -705,7 +705,7 @@ function isOwnDarius(path: string): boolean {
   return path === "/opt/app/bin/darius";
 }
 
-test("isProtocolCommand reads quotes, takes the installed darius by its path, and an unquoted heredoc without substitution (0.66.0)", () => {
+test("isProtocolCommand reads quotes, takes the installed darius by its path, and only a quoted heredoc (0.66.0)", () => {
   const run = "01RUN";
   assert.equal(isProtocolCommand(`darius run hold ${run} --question "may I run a | b; c && (d) > e < f?"`, run), true, "operators in double quotes");
   assert.equal(isProtocolCommand(`darius run complete ${run} --outcome complete --note 'costs $5 (net); a|b \`x\`'`, run), true, "anything in single quotes");
@@ -724,8 +724,9 @@ test("isProtocolCommand reads quotes, takes the installed darius by its path, an
   assert.equal(isProtocolCommand(`"/opt/app/bin/darius" run hold ${run} --question x`, run, () => true), false);
   assert.equal(isProtocolCommand(`cd /srv && /opt/app/bin/darius run complete ${run} --outcome complete`, run, isOwnDarius), true);
   // Heredocs: an unquoted delimiter only for run complete, only without substitution.
-  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\nwe should deploy (now) | later; $HOME\nF`, run), true);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<'F'\nwe should deploy (now) | later; $HOME\nF`, run), true);
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin << "F"\nx\nF`, run), true);
+  assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\nplain text\nF`, run), false, "an unquoted delimiter is never the protocol");
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n$(git push)\nF`, run), false);
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n\`git push\`\nF`, run), false);
   assert.equal(isProtocolCommand(`darius run complete ${run} --findings-stdin <<F\n$[x]\nF`, run), false);
@@ -734,20 +735,39 @@ test("isProtocolCommand reads quotes, takes the installed darius by its path, an
   assert.equal(isProtocolCommand(`darius run complete ${run} --note "a << b" --findings-stdin <<'EOF'\nok\nEOF`, run), true);
 });
 
-test("installedDarius accepts a path that resolves to the binary the hook runs from, nothing else", () => {
+test("installedDarius takes the hook's own binary path as written, and its current link form; no symlink, .. or relative path", () => {
   const dir = mkdtempSync(join(tmpdir(), "darius-bin-"));
-  const own = join(dir, "app", "bin", "darius");
-  mkdirSync(join(dir, "app", "bin"), { recursive: true });
+  const own = join(dir, "app", "versions", "v0.66.0", "bin", "darius");
+  mkdirSync(dirname(own), { recursive: true });
   writeFileSync(own, "#!/bin/sh\n");
-  mkdirSync(join(dir, "local", "bin"), { recursive: true });
-  symlinkSync(own, join(dir, "local", "bin", "darius"));
   mkdirSync(join(dir, "tmp"));
-  writeFileSync(join(dir, "tmp", "darius"), "#!/bin/sh\n");
+  symlinkSync(own, join(dir, "tmp", "darius"));
   const check = installedDarius(own);
   assert.equal(check(own), true);
-  assert.equal(check(join(dir, "local", "bin", "darius")), true, "a symlink to it");
-  assert.equal(check(join(dir, "tmp", "darius")), false, "another file named darius");
-  assert.equal(check(join(dir, "missing", "darius")), false);
+  assert.equal(check(join(dir, "app", "current", "bin", "darius")), true, "the current link form");
+  assert.equal(check(join(dir, "tmp", "darius")), false, "a symlink to it is not resolved");
+  assert.equal(check(`${join(dir, "app", "versions", "v0.66.0")}/../v0.66.0/bin/darius`), false, "a .. step");
+  assert.equal(check("app/versions/v0.66.0/bin/darius"), false, "a relative path");
+  const checkout = installedDarius("/srv/darius/bin/darius");
+  assert.equal(checkout("/srv/darius/bin/darius"), true);
+  assert.equal(checkout("/srv/current/bin/darius"), false, "a checkout has no current form");
+  // Through the gate, with the real check.
+  const run = "01RUN";
+  assert.equal(isProtocolCommand(`${own} run hold ${run} --question x`, run, check), true);
+  assert.equal(isProtocolCommand(`${join(dir, "tmp", "darius")} run hold ${run} --question x`, run, check), false);
+  assert.equal(isProtocolCommand(`./darius run hold ${run} --question x`, run, () => true), false);
+});
+
+test("policy.json: on_hold is \"deny\" or absent; \"stop\", \"DENY\" or a non-string fails closed (0.66.0)", async () => {
+  const project = "pc-on-hold-bad";
+  const { policyFile } = seedRunningRun(project, "act");
+  const policy = JSON.parse(readFileSync(policyFile, "utf8"));
+  for (const value of ["stop", "DENY", true, 1, null]) {
+    writeFileSync(policyFile, JSON.stringify({ ...policy, on_hold: value }));
+    assert.throws(() => readRunPolicy(policyFile), /on_hold must be "deny" or absent/u, String(value));
+    const denied = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("date"));
+    assert.equal(denied.code, 2, `${String(value)}: every call is denied`);
+  }
 });
 
 test("policy-check reads real stdin in a child process and prints the deny decision", async () => {

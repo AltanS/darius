@@ -146,11 +146,15 @@ function protocolHead(line: string, run: string, isDariusBin: DariusBinCheck): s
   return match[2];
 }
 
-/** A heredoc at the end of a `run complete` line: the head, the quote around the delimiter (may be empty), the delimiter. */
-const HEREDOC_HEAD = /^(.*)<<-?[ \t]*(['"]?)(\w+)\2\s*$/u;
-
-/** Text an unquoted heredoc body may not hold: a substitution or arithmetic the shell would run. */
-const EXPANDS_TO_COMMAND = /\$\(|`|\$\[/u;
+/**
+ * A quoted heredoc at the end of a `run complete` line: the head, the quote
+ * around the delimiter, the delimiter. Only `<<'X'` and `<<"X"`: the shell
+ * expands nothing in their body. An unquoted delimiter is never the
+ * protocol: bash joins a backslash and a newline in that body, so a body
+ * line `EO\` and a line `F` end it early, and `$\` before a newline and
+ * `(` still runs a command.
+ */
+const HEREDOC_HEAD = /^(.*)<<-?[ \t]*(['"])(\w+)\2\s*$/u;
 
 /**
  * True for `darius run hold|complete <run> ...` of THIS run with plain
@@ -170,11 +174,12 @@ const CD_PREFIX = /^\s*cd\s+(?:'[^'\n]*'|[^\s;&|`$()<>'"\\]+)\s*&&\s*/u;
 
 /**
  * `hold` or `complete` when the command is the protocol of THIS run, else
- * undefined. One line (protocolHead), or `run complete` with a heredoc
- * whose body ends at its first delimiter line, the last line. A quoted
- * delimiter (`<<'EOF'`) keeps the body as text; an unquoted one (`<<EOF`,
- * 0.66.0) passes only when the body holds no `$(`, backtick or `$[`, so the
- * shell expands nothing that runs.
+ * undefined. One line (protocolHead), or `run complete` with a quoted
+ * heredoc (HEREDOC_HEAD) whose body ends at its first delimiter line, which
+ * must be the last line (0.66.0). A delimiter line is matched after a trim:
+ * that finds every line bash ends the body at, and maybe an earlier one, so
+ * the rule that it must be the last line never lets a line after the body
+ * through.
  */
 function protocolVerb(command: string, run: string, isDariusBin: DariusBinCheck): string | undefined {
   const lines = command.replace(/\n+$/u, "").split("\n");
@@ -184,7 +189,6 @@ function protocolVerb(command: string, run: string, isDariusBin: DariusBinCheck)
   if (heredoc === null) return undefined;
   const end = lines.findIndex((line, index) => index > 0 && line.trim() === heredoc[3]);
   if (end !== lines.length - 1) return undefined;
-  if (heredoc[2] === "" && EXPANDS_TO_COMMAND.test(lines.slice(1, -1).join("\n"))) return undefined;
   const verb = protocolHead(heredoc[1] ?? "", run, isDariusBin);
   return verb === "complete" ? verb : undefined;
 }
@@ -214,7 +218,8 @@ function ruleSource(pattern: string, star: string): string {
   const bare = !legacy && /^[^\s*]+ \*$/u.test(pattern);
   const body = legacy || bare ? pattern.slice(0, -2) : pattern;
   const source = body.split("*").map(escapeRegex).join(star);
-  if (legacy) return `^${source}(?:\\s${star})?$`;
+  // [ \t], not \s: a newline is a second command (0.66.0).
+  if (legacy) return `^${source}(?:[ \\t]${star})?$`;
   return bare ? `^${source}(?: ${star})?$` : `^${source}$`;
 }
 
@@ -331,7 +336,9 @@ function scanShell(line: string): Scan {
       i = redirect.end - 1;
       continue;
     }
-    if (ch === "<") return { refused: "an input redirection (< or <<); pass the file as an argument" };
+    if (ch === "<") {
+      return { refused: "an input redirection (< or <<); pass the file as an argument. For darius run complete --findings-stdin, quote the heredoc delimiter: <<'FINDINGS'" };
+    }
     if (ch === "(" || ch === ")") return { refused: "a subshell parenthesis" };
     const operator = ch === "&" && next === "&" ? 2 : ch === "|" && next === "|" ? 2 : ch === "|" || ch === ";" || ch === "\n" ? 1 : 0;
     if (ch === "&" && operator === 0) return { refused: "a background job (a lone &)" };
@@ -637,7 +644,7 @@ const RUNS_ARGUMENTS: ReadonlySet<string> = new Set([
  * group brace, and the keywords of `if`, `while`, `until` and `for` bodies.
  * The hold check looks past them for the program (holdProgram).
  */
-const SHELL_KEYWORDS: ReadonlySet<string> = new Set(["!", "{", "}", "if", "then", "elif", "else", "fi", "do", "done", "while", "until"]);
+const SHELL_KEYWORDS: ReadonlySet<string> = new Set(["!", "{", "}", "if", "then", "elif", "else", "fi", "do", "done", "while", "until", "coproc"]);
 
 /** The program of one split command for the hold check: programWord, after any SHELL_KEYWORDS. */
 function holdProgram(part: string): string {
@@ -648,9 +655,22 @@ function holdProgram(part: string): string {
   return programWord(rest);
 }
 
-/** True when one split command runs its arguments (RUNS_ARGUMENTS), so its quoted text is a command after all. */
+/**
+ * True when one split command may run code from its arguments, so its
+ * quoted text is a command after all: its program is in RUNS_ARGUMENTS
+ * (after SHELL_KEYWORDS), or one of its unquoted words is, as in
+ * `find . -exec sh -c '...'`. Only a `.` that is not the program is left
+ * out: there it names a dir (`find . -name x`), not the loader.
+ */
 function runsArguments(part: string): boolean {
-  return RUNS_ARGUMENTS.has(holdProgram(part));
+  if (RUNS_ARGUMENTS.has(holdProgram(part))) return true;
+  return blankQuotes(part)
+    .split(/\s+/u)
+    .some((word) => {
+      const bare = word.replaceAll("\\", "");
+      const name = bare.slice(bare.lastIndexOf("/") + 1);
+      return name !== "." && RUNS_ARGUMENTS.has(name);
+    });
 }
 
 /**
@@ -661,8 +681,9 @@ function blankQuotes(command: string): string {
   let out = "";
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i] ?? "";
+    // An unquoted backslash only escapes the next character: `w\p` runs `wp` (0.66.0).
     if (ch === "\\") {
-      out += ch + (command[i + 1] ?? "");
+      out += command[i + 1] ?? "";
       i += 1;
       continue;
     }
@@ -718,46 +739,55 @@ function heredocHead(command: string): { head: string; body: string } | undefine
 
 /**
  * What a hold list does with a line: undefined when no pattern matches it.
- * Since 0.66.0 the line is split into its commands (scanShell) and each is
- * read apart, so a pattern never matches across `|`, `;`, `&&` or `||`:
- * `curl URL | tr -d x` is not `curl ... -d`. Per command, as in 0.64.0: a
- * pattern that matches the command as the hold check reads it (blankQuotes)
- * holds, so `"wp" plugin list` holds too; one that matches only the
- * command as written matched inside quoted text: `quotedOnly`, which is
- * denied, not held. A command whose program runs its arguments (`bash -c`,
- * `ssh`, `eval`, `xargs`, `sudo`) is read as written and holds. A line the
- * split refuses is read whole and as written, as before 0.64.0. A quoted
- * heredoc body is text for the command before `<<`: quoted text, unless
- * that command runs its arguments (`bash <<'EOF'`).
+ *
+ * A line the split refuses, or a line where any command may run code from
+ * its arguments (runsArguments: `bash`, `sh`, `ssh`, `eval`, `xargs`,
+ * `sudo`, `coproc bash`, `find -exec sh`, a pipe into a shell, a shell that
+ * reads a heredoc), is read whole and as written, as before 0.64.0: every
+ * pattern against the whole line, body included, and a match holds. So
+ * `echo 'wp x' | bash` and `curl URL | sh` (with `curl.*\|\s*(ba)?sh`) hold.
+ *
+ * Any other line is split into its commands (scanShell) and each is read
+ * apart (0.66.0), so a pattern never matches across `|`, `;`, `&&` or
+ * `||`: `curl URL | tr -d x` is not `curl ... -d`. Per command, as in
+ * 0.64.0: a pattern that matches the command as the hold check reads it
+ * (blankQuotes) holds, so `"wp" plugin list` holds too; one that matches
+ * only the command as written matched inside quoted text: `quotedOnly`,
+ * which is denied, not held. A quoted heredoc body is quoted text.
  */
 function holdMatch(command: string, patterns: readonly string[]): { pattern: string; quotedOnly: boolean } | undefined {
   const heredoc = heredocHead(command);
   const parts = splitShell(heredoc?.head ?? command);
-  if (parts === null) {
+  if (parts === null || parts.some((part) => runsArguments(part))) {
     const whole = firstMatch(command, patterns);
     return whole === undefined ? undefined : { pattern: whole, quotedOnly: false };
   }
   let quoted: string | undefined;
   for (const part of parts) {
-    const strict = runsArguments(part);
-    const held = firstMatch(strict ? part : blankQuotes(part), patterns);
+    const held = firstMatch(blankQuotes(part), patterns);
     if (held !== undefined) return { pattern: held, quotedOnly: false };
-    quoted ??= strict ? undefined : firstMatch(part, patterns);
+    quoted ??= firstMatch(part, patterns);
   }
-  if (heredoc !== undefined) {
-    const reader = parts.at(-1) ?? "";
-    const inBody = firstMatch(heredoc.body, patterns);
-    if (inBody !== undefined && runsArguments(reader)) return { pattern: inBody, quotedOnly: false };
-    quoted ??= inBody;
-  }
+  if (heredoc !== undefined) quoted ??= firstMatch(heredoc.body, patterns);
   return quoted === undefined ? undefined : { pattern: quoted, quotedOnly: true };
 }
 
-function quotedOnlyDeny(pattern: string, command: string): GateDecision {
-  return deny(
-    `the pattern /${pattern}/ matches only inside quoted text, so darius refused the call but did not hold the run. ` +
-      `Write the call so the quoted text does not match /${pattern}/ (or put that text in a file under /tmp and pass the file), then go on: ${clip(command)}`,
+/**
+ * The deny for a hold rule that matched only inside quoted text (0.64.0,
+ * reworded 0.66.0). It must not teach a way around the rule: it names no
+ * other form of the command. The only hint is for data, such as a search
+ * text or a jq filter, which a command can read from a file.
+ */
+export function quotedOnlyReason(pattern: string, command: string): string {
+  return (
+    `quoted text in this command matched the hold rule /${pattern}/, so darius refused the call. Do not run it in another form. ` +
+    "If the command itself is needed, record it as a needs-decision item with the exact command and go on. " +
+    `If the quoted text is only data the command reads, such as a search text or a jq filter, the command may read that data from a file under /tmp instead: ${clip(command)}`
   );
+}
+
+function quotedOnlyDeny(pattern: string, command: string): GateDecision {
+  return deny(quotedOnlyReason(pattern, command));
 }
 
 /** The deny reason of a hold under `on_hold: "deny"` (0.66.0): `hold rule: <pattern>` or `report mode: <verb>`. The model reads it and goes on. */
