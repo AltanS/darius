@@ -635,6 +635,7 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   // that may start subagents: the gate must see each of their calls.
   const needsFull = doc.header.skill !== undefined || allowsSubagents(doc.header.policy.may);
   const scope = needsFull ? "full" : harness.gateScope(profile);
+  prompt.scope = scope;
   const resume = ctx.options.resume === undefined ? undefined : resumePlan(ctx, target, harness);
   const granted = followUp === undefined ? undefined : { grants: followUp.grants, followUpOf: followUp.parent, cwd: target.cwd };
   const files = writeRunFiles(ctx.project.root, prompt, scope, granted);

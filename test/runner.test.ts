@@ -342,6 +342,7 @@ test("run-due starts one run with the policy's model, turns and tools; the run c
   assert.match(prompt, new RegExp(`darius run hold ${run} --project ${project} --question`));
   assert.ok(prompt.indexOf("## Style") > 0 && prompt.indexOf("## Style") < prompt.indexOf("## Result"), "the style section comes before Result");
   assert.match(prompt, /At most 4000 characters\./u);
+  assert.match(prompt, /## Shell commands\n\nThe policy hook checks every shell call\./u, "a full-gate run gets the shell forms section (0.66.0)");
 
   const second = await runDueJson(project);
   assert.equal(second.code, 0);
@@ -1595,6 +1596,21 @@ test("run resume without the session starts fresh with the questions; a hold in 
   process.env.FAKE_CLAUDE_MODE = "complete";
   assert.equal((await runCli(runCommand, ["resume", run, "--project", project])).code, 0);
   assert.match(fakeMessage(run), /2\. may I push\?\n   Answer: still no/u);
+});
+
+test("the shell forms section is in the prompt only when the gate scope is full (0.66.0)", () => {
+  seedRitual("rd-shell-forms");
+  const ritual = openProject("rd-shell-forms").readItem<Ritual>("ritual", "heartbeat")?.header;
+  assert.ok(ritual !== undefined);
+  const input = { project: "rd-shell-forms", run: "01RUN", ritual, body: "Do it." };
+  const full = buildPrompt({ ...input, scope: "full" });
+  assert.match(full, /## Shell commands/u);
+  for (const rule of ["One command per call", "No `for` or `while` loops, no shell functions, no subshell parentheses", "No `$(...)` and no backticks", "No `<` or `<<`. The one exception is the `darius run complete --findings-stdin` heredoc", "only to a fixed file path under /tmp", "do not wrap it in another form"]) {
+    assert.ok(full.includes(rule), rule);
+  }
+  assert.ok(full.indexOf("## Shell commands") < full.indexOf("## Procedure"));
+  assert.equal(buildPrompt({ ...input, scope: "shell" }).includes("## Shell commands"), false);
+  assert.equal(buildPrompt(input).includes("## Shell commands"), false);
 });
 
 test("the report says a run was resumed", () => {

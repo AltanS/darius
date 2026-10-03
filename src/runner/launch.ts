@@ -63,6 +63,8 @@ export interface PromptInput {
   findings?: readonly string[];
   /** The `## Follow-up` section of a follow-up run (src/runner/follow-up.ts). */
   followUp?: readonly string[];
+  /** The run's gate scope (0.66.0). `full` adds the `## Shell commands` section; absent means `shell`. */
+  scope?: GateScope;
 }
 
 /** What a follow-up run's policy.json adds (0.47.0): the granted lines, the parent run, and the dir the run works in (0.47.1). */
@@ -119,6 +121,28 @@ function subagentSection(ritual: Ritual): string[] {
     "You may start subagents with the Agent tool, for example for an independent second check. Every tool call of a subagent passes the same policy and gate as yours.",
     "Start them without `isolation`. A subagent may not start another subagent, and may not complete the run: it returns its findings to you.",
     "Wait for the result of every subagent before you run `darius run complete`.",
+    "",
+  ];
+}
+
+/**
+ * A run whose gate is `full` (0.66.0): the shell forms that gate refuses,
+ * said up front, so the model does not learn them by refusal and does not
+ * try another form of a refused call.
+ */
+function shellFormsSection(scope: GateScope | undefined): string[] {
+  if (scope !== "full") return [];
+  return [
+    "## Shell commands",
+    "",
+    "The policy hook checks every shell call. Write calls it can read:",
+    "",
+    "- One command per call where you can.",
+    "- No `for` or `while` loops, no shell functions, no subshell parentheses.",
+    "- No `$(...)` and no backticks. Run the inner command on its own first.",
+    "- No `<` or `<<`. The one exception is the `darius run complete --findings-stdin` heredoc.",
+    "- Send output only to a fixed file path under /tmp, such as `> /tmp/report.json`.",
+    "- When a call is denied, do not wrap it in another form. Use an allowed command, or record the gap in the findings.",
     "",
   ];
 }
@@ -189,6 +213,7 @@ export function buildPrompt(input: PromptInput): string {
     ...skillSection(ritual),
     ...argsSection(ritual),
     ...subagentSection(ritual),
+    ...shellFormsSection(input.scope),
     ...STYLE_PROMPT,
     ...RESULT_PROMPT,
     "## Procedure",
