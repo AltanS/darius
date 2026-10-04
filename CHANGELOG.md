@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.66.1] - 2026-10-04
+
+### Changed
+
+- A ritual whose mode is `off` is never late. The timer never starts it, so it left the Overdue group, the late tile of the Overview and the Rituals badge. When its date is past, it shows in a quiet group named Off, after the other groups of the Rituals page. An `off` ritual with a date today or later keeps its day group.
+- The vigil tile of the Overview reads "N vigils due" and counts the vigils that are late or due today, the number of the Vigils badge. It was "N vigils armed" and counted every open vigil. The tile is left out at zero. The Vigils page still lists every armed vigil, also those that wait on an event.
+- A question card goes away once a newer run of the same ritual in the same project closed complete. Before, the card stayed until someone answered it with `darius run ack`. A newer run counts by its start time, and a follow-up run is such a run. A newer run that failed, is held, is still running, or belongs to another ritual or project leaves the card. The need-you tile, the verdict, the badges, the state word of the run and the ritual row follow the same rule.
+
 ## [0.66.0] - 2026-10-03
 
 ### Added
