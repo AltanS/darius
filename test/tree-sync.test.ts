@@ -11,7 +11,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -143,6 +143,18 @@ test("darius sync captures the tree before the push and applies it after the pul
   assert.equal(readFileSync(join(second, SPEC), "utf8"), readFileSync(join(first, SPEC), "utf8"));
   assert.equal(readFileSync(join(second, ".tracker", "M1-alpha", "notes.md"), "utf8"), "by hand\n");
   assert.equal(git(second, ["status", "--porcelain"]), "");
+
+  // 00-INDEX.md is derived and never synced: sync rebuilds it, and so does any tracker verb.
+  const index = join(hostB.state, project, "tracker", "00-INDEX.md");
+  assert.equal(existsSync(index), true, "sync rebuilt the index");
+  rmSync(index);
+  const status = await darius(hostB, ["status"], second);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(status.stdout, await ok(hostA, ["status"], first), "the same status as the first host");
+  assert.equal(existsSync(index), true, "the verb rebuilt the index");
+  assert.doesNotMatch(status.stdout, /tracker index: rebuilt/u, "quietly");
+  const quick = await ok(hostB, ["doctor", "--quick"], second);
+  assert.equal(quick, await ok(hostA, ["doctor", "--quick"], first), "doctor --quick sees a tracker on both hosts");
 
   await ok(hostB, ["mark", SPEC, "0", "--in-progress"], second);
   const text = await ok(hostB, ["sync", "--project", project], second);

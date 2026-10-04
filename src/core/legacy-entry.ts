@@ -51,9 +51,10 @@ export async function runLegacy(argv: string[]): Promise<number> {
 /** The vendored writer module: `initTracker` scaffolds `.tracker/00-INDEX.md`. */
 const VENDORED_WRITER = new URL("../legacy/lib/tracker-writer.ts", import.meta.url);
 
-/** What `darius init` needs from the writer module. */
+/** What darius needs from the writer module. */
 interface LegacyWriter {
   initTracker(opts: { projectRoot: string }): void;
+  rebuildIndex(trackerRoot: string): void;
 }
 
 /**
@@ -65,4 +66,16 @@ export async function scaffoldTracker(root: string): Promise<void> {
   const loaded = (await import(VENDORED_WRITER.href)) as Partial<LegacyWriter>;
   if (loaded.initTracker === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no initTracker()`);
   loaded.initTracker({ projectRoot: root });
+}
+
+/**
+ * Rebuilds `<trackerRoot>/00-INDEX.md` through the vendored writer, the one
+ * writer of that file (`tracker index --rebuild` without its stdout lines).
+ * The writer prints nothing on stdout, so a verb's own output stays as it was.
+ */
+export async function rebuildTrackerIndex(trackerRoot: string): Promise<void> {
+  // SAFETY: darius's own vendored module; `rebuildIndex` is checked before it is called.
+  const loaded = (await import(VENDORED_WRITER.href)) as Partial<LegacyWriter>;
+  if (loaded.rebuildIndex === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no rebuildIndex()`);
+  loaded.rebuildIndex(trackerRoot);
 }

@@ -36,7 +36,9 @@ import { GLOBAL_PROJECT, listProjects, openProject, type Project } from "../core
 import { flushAlerts } from "../core/alerts.ts";
 import { syncProject } from "../core/sync.ts";
 import type { SyncReport } from "../core/sync.ts";
-import { applyTree, captureTree, hasTree } from "../core/tree.ts";
+import { rebuildTrackerIndex } from "../core/legacy-entry.ts";
+import { applyTree, captureTree, hasTree, isIndexMissing, treeDir } from "../core/tree.ts";
+import { projectVigils } from "../core/vigil-projection.ts";
 import type { Config } from "../core/config.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError } from "./registry.ts";
@@ -107,6 +109,19 @@ function addRun(report: ProjectSyncReport, more: SyncReport): void {
   if (more.leaseHolder !== undefined) report.leaseHolder = more.leaseHolder;
 }
 
+/**
+ * After the apply: the vigil files of the tree, and a missing `00-INDEX.md` (derived, never synced; the legacy `doctor --quick`
+ * reads a tree without it as no tracker). A failure is one stderr line.
+ */
+async function refreshDerived(project: Project): Promise<void> {
+  try {
+    projectVigils(project, treeDir(project));
+    if (isIndexMissing(project)) await rebuildTrackerIndex(treeDir(project));
+  } catch (cause) {
+    console.error(`darius sync: ${project.name}: cannot refresh the derived tracker files: ${errorMessage(cause)}`);
+  }
+}
+
 /** One project: capture the tree, sync, apply the tree; a merged `.jsonl` file is captured and pushed at once. */
 async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean): Promise<ProjectSyncReport> {
   // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
@@ -121,6 +136,8 @@ async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean)
     recaptured = again.put + again.removed;
     if (recaptured > 0 && !pullOnly && report.skipped === undefined) addRun(report, await syncProject(project, s3, cfg, { pullOnly }));
   }
+  // Pulled vigil items and tree files both feed the derived files.
+  await refreshDerived(project);
   report.tree = {
     captured: captured.put + captured.removed + recaptured,
     applied: applied.written + applied.removed,

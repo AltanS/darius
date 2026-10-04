@@ -148,6 +148,20 @@ export interface TreeApply {
   problems: string[];
 }
 
+/** The derived index the legacy CLI keeps at the tree root. */
+export const TREE_INDEX_FILE = "00-INDEX.md";
+
+/**
+ * True when the working copy holds tracked files but no `00-INDEX.md`. That
+ * file is derived and never synced, so a host that got the tree by sync has
+ * none, and the legacy `doctor --quick` would then read the tree as "no
+ * tracker". The caller rebuilds it (`rebuildTrackerIndex`).
+ */
+export function isIndexMissing(project: Project): boolean {
+  if (existsSync(join(treeDir(project), TREE_INDEX_FILE))) return false;
+  return readIndex(project).files.size > 0;
+}
+
 /** What `pendingTreeChanges` finds: what a capture would record now, without writing. */
 export interface TreePending {
   changed: string[];

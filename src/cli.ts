@@ -19,11 +19,11 @@ import { registerCommands } from "./cli/commands.ts";
 import { getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
 import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
-import { runLegacy } from "./core/legacy-entry.ts";
+import { rebuildTrackerIndex, runLegacy } from "./core/legacy-entry.ts";
 import { findMarker } from "./core/marker.ts";
 import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } from "./core/paths.ts";
 import { openProject, type Project } from "./core/store.ts";
-import { captureTree, ensureTreeLink, syncTree, treeDir } from "./core/tree.ts";
+import { captureTree, ensureTreeLink, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
 import { errorMessage, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
@@ -175,16 +175,27 @@ function treeRoute(verb: string, owned: OwnedKinds, cwd: string): TreeRoute {
 
 function noop(): void {}
 
+/** Rebuilds a missing `00-INDEX.md` of the tree, quietly: a failure is one stderr line, never a stop. */
+async function rebuildMissingIndex(project: Project): Promise<void> {
+  if (!isIndexMissing(project)) return;
+  try {
+    await rebuildTrackerIndex(treeDir(project));
+  } catch (cause) {
+    console.error(`darius: cannot rebuild ${TREE_INDEX_FILE} in ${treeDir(project)}: ${errorMessage(cause)}`);
+  }
+}
+
 function printProblems(problems: readonly string[]): void {
   for (const problem of problems) console.error(`darius: ${problem}`);
 }
 
 /**
  * Prepares the tree for a legacy verb: the link, a capture and an apply, the
- * vigil files. Returns the capture to run after the verb (once), or an error
+ * vigil files, and a missing `00-INDEX.md` (a host that got the tree by sync
+ * has none). Returns the capture to run after the verb (once), or an error
  * message when the verb must not run.
  */
-function openTree(route: { project: Project; checkout: string }): { finish: () => void } | { error: string } {
+async function openTree(route: { project: Project; checkout: string }): Promise<{ finish: () => void } | { error: string }> {
   const { project, checkout } = route;
   try {
     ensureTreeLink(checkout, project);
@@ -194,6 +205,7 @@ function openTree(route: { project: Project; checkout: string }): { finish: () =
   } catch (cause) {
     return { error: errorMessage(cause) };
   }
+  await rebuildMissingIndex(project);
   let done = false;
   const finish = (): void => {
     if (done) return;
@@ -227,7 +239,7 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
   }
   let finish = noop;
   if (route.mode === "tree") {
-    const opened = openTree(route);
+    const opened = await openTree(route);
     if ("error" in opened) {
       console.error(`darius: ${opened.error}`);
       return 1;
