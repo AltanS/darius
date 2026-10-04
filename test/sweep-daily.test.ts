@@ -51,7 +51,7 @@ async function runVigil(argv: string[], stdin?: string): Promise<CliRun> {
 
 /** A vigil due today whose one check passes only in a dir holding `here.txt`. */
 async function addHereVigil(project: string): Promise<void> {
-  const body = "# checks\n\n- [ ] runs in the checkout\n  - Command: `test -f here.txt`\n  - Expected: `exit 0`\n";
+  const body = "# checks\n\n## Verification Checklist\n\n- [ ] runs in the checkout\n  - Command: `test -f here.txt`\n  - Expected: `exit 0`\n";
   const added = await runVigil(["add", "here", "--project", project, "--title", "Runs in the checkout", "--due", localToday(), "--stdin"], body);
   assert.equal(added.code, 0, added.stderr);
 }
