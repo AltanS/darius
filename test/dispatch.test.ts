@@ -12,7 +12,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -154,17 +154,21 @@ test("vigil verbs follow the marker: kinds with vigil reaches the native command
   assert.deepEqual(JSON.parse(legacy.stdout).argv, ["vigil", "list", "--json"]);
 });
 
-test("a broken marker stops a vigil verb with exit 1 and the marker error; sweep and others are not stopped", () => {
+test("a broken marker stops a vigil verb and a tracker verb with exit 1 and the marker error; sweep, hooks and validators are not stopped", () => {
   const repo = markerRepo("kinds-broken", 'kinds = ["vigil"]\n');
-  for (const argv of [["vigil", "list"], ["vigil", "add", "a-vigil"], ["vigil"]]) {
+  for (const argv of [["vigil", "list"], ["vigil", "add", "a-vigil"], ["vigil"], ["status"], ["mark", "x.md", "0"], ["worklog", "list"]]) {
     const result = darius(argv, { cwd: repo });
     assert.equal(result.status, 1, argv.join(" "));
     assert.match(result.stderr, /^darius: .*\.darius\.toml:4: kinds must be one of/u);
     assert.doesNotMatch(result.stdout, /"argv"/u);
   }
-  const legacyVerb = darius(["status"], { cwd: repo });
-  assert.equal(legacyVerb.status, 0, legacyVerb.stderr);
-  assert.deepEqual(JSON.parse(legacyVerb.stdout).argv, ["status"]);
+  // The store may own the tracker of this repo, so nothing may write a .tracker/ here.
+  assert.equal(existsSync(join(repo, ".tracker")), false);
+  for (const verb of ["hook-stop", "hook-drift", "delegation", "agents", "scan", "counsel-gate"]) {
+    const result = darius([verb], { cwd: repo });
+    assert.equal(result.status, 0, `${verb}: ${result.stderr}`);
+    assert.deepEqual(JSON.parse(result.stdout).argv, [verb]);
+  }
   const sweep = darius(["vigil", "sweep", "--project", "no-such-project", "--json"], { cwd: repo });
   assert.doesNotMatch(sweep.stderr, /kinds must be one of/u);
 });

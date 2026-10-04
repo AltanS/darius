@@ -6,6 +6,10 @@
  * The check: in a linked repo with a `.tracker/`, every native write verb
  * runs once, and the hash of `.tracker/` is the same before and after. Each
  * verb must succeed, so a verb that silently did nothing cannot pass.
+ *
+ * In tree mode (the marker's kinds list milestone) the store owns the whole
+ * tracker tree: every write verb, legacy ones included, changes the store
+ * only, and the checkout's `git status` stays clean.
  */
 
 import { after, test } from "node:test";
@@ -15,6 +19,8 @@ import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+
+import { commitAll, initRepo, NO_GIT } from "./helpers/git.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const FIXTURE = join(import.meta.dirname, "fixtures", "tracker-mini");
@@ -38,15 +44,17 @@ function treeHash(dir: string): string {
   return hash.digest("hex");
 }
 
-function darius(repo: string, argv: string[]): string {
+function darius(repo: string, argv: string[], options: { legacy?: boolean } = {}): string {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DARIUS_STATE_DIR: join(SANDBOX, "state"),
     DARIUS_CONFIG_DIR: join(SANDBOX, "config"),
     // A native verb must not reach the legacy tree at all.
     DARIUS_LEGACY_ENTRY: join(SANDBOX, "no-legacy.mjs"),
+    DARIUS_WHO: "dev@example.com",
   };
   delete env.DARIUS_PROJECT;
+  if (options.legacy === true) delete env.DARIUS_LEGACY_ENTRY;
   const result = spawnSync(BIN, argv, { cwd: repo, env, encoding: "utf8", input: "", timeout: 30_000 });
   assert.equal(result.status, 0, `darius ${argv.join(" ")}: ${result.stderr}`);
   return result.stdout;
@@ -80,4 +88,41 @@ test("every native write verb leaves .tracker/ unchanged", () => {
   // The verbs wrote the store: the check is not vacuous.
   assert.ok(readdirSync(join(SANDBOX, "state", PROJECT)).length > 0);
   assert.equal(treeHash(tracker), before);
+});
+
+function gitStatus(repo: string): string {
+  const result = spawnSync("git", ["status", "--porcelain", "--ignored=no"], { cwd: repo, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+test("in tree mode every write verb changes the store only; git status in the checkout stays clean", { skip: NO_GIT }, () => {
+  const repo = join(SANDBOX, "tree-repo");
+  mkdirSync(repo, { recursive: true });
+  initRepo(repo);
+  writeFileSync(join(repo, "README.md"), "# acme-web\n");
+  darius(repo, ["init", "--project", "tree-writer"]);
+  assert.match(readFileSync(join(repo, ".darius.toml"), "utf8"), /^kinds = \["ritual", "vigil", "milestone"\]$/mu);
+  commitAll(repo, "darius init");
+  assert.equal(gitStatus(repo), "");
+  const tree = join(SANDBOX, "state", "tree-writer", "tracker");
+  const before = treeHash(tree);
+
+  const legacy = { legacy: true };
+  darius(repo, ["add", "milestone", "--name", "Alpha", "--slug", "alpha", "--owner", "dev@example.com"], legacy);
+  darius(repo, ["add", "spec", "--milestone", "alpha", "--name", "Spec one", "--template", "generic"], legacy);
+  darius(repo, ["mark", ".tracker/M1-alpha/01-spec-one.md", "0", "--in-progress"], legacy);
+  darius(repo, ["worklog", "open", "alpha", "--spec", ".tracker/M1-alpha/01-spec-one.md", "--message", "start"], legacy);
+  darius(repo, ["index", "--rebuild"], legacy);
+  darius(repo, ["vigil", "sweep", "--project", "tree-writer", "--json"]);
+  darius(repo, ["due", "--json"]);
+
+  assert.notEqual(treeHash(tree), before);
+  assert.ok(readdirSync(join(tree, "M1-alpha")).includes("01-spec-one.md"));
+  const ledger = readdirSync(join(SANDBOX, "state", "tree-writer", "ledger"), { recursive: true, encoding: "utf8" })
+    .filter((file) => file.endsWith(".jsonl"))
+    .flatMap((file) => readFileSync(join(SANDBOX, "state", "tree-writer", "ledger", file), "utf8").trim().split("\n"));
+  assert.ok(ledger.some((line) => line.includes('"type":"tree.put"') && line.includes("M1-alpha/01-spec-one.md")));
+  assert.ok(ledger.some((line) => line.includes('"type":"tree.put"') && line.includes("worklog/")));
+  assert.equal(gitStatus(repo), "", "the checkout holds only the ignored link");
 });

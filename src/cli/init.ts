@@ -6,17 +6,24 @@
  * `.darius.toml`, else of the nearest `.tracker/`, else the git root, else
  * the current dir. Then:
  *
- *   no .darius.toml, no .tracker/    fresh repo: write `.darius.toml` (v2,
- *                                    `project` defaults to the dir name), link
- *                                    this checkout, scaffold `.tracker/`
- *                                    through the vendored writer.
+ *   no .darius.toml, no .tracker/    fresh repo: write `.darius.toml` (v3,
+ *                                    `project` defaults to the dir name, kinds
+ *                                    ritual, vigil and milestone), link this
+ *                                    checkout, scaffold the tracker tree in the
+ *                                    store through the vendored writer, make
+ *                                    `.tracker` a link to it and add
+ *                                    `/.tracker` to `.gitignore`.
  *   no .darius.toml, a .tracker/     legacy repo: import its rituals, runs and
  *                                    verification log into the store (read-only
  *                                    on `.tracker/`), write the marker, link.
+ *                                    `darius onboard` moves the tracker later.
  *   a .darius.toml                   link it when this host has no link yet,
  *                                    scaffold `.tracker/` when it is missing,
  *                                    never import. Safe to re-run: a linked
- *                                    repo prints `already linked`.
+ *                                    repo prints `already linked`. When its
+ *                                    kinds list milestone: make the `.tracker`
+ *                                    link and bring the tree up to date, never
+ *                                    scaffold.
  *
  * Refusals, each with its fix on the line: the store already holds rituals
  * for the project and there is no marker yet (the import would run twice;
@@ -26,7 +33,8 @@
  *
  * Every write goes through its one writer: the marker here, the link through
  * `linkCheckout`, `.tracker/` through the vendored `initTracker`, the store
- * through `importTracker`. Nothing is written before every check passed.
+ * through `importTracker`, the tree through src/core/tree.ts. Nothing is
+ * written before every check passed.
  *
  * Exit codes: 0 done or nothing to do, 1 refused or failed, 2 usage.
  */
@@ -44,6 +52,7 @@ import { findMarker, MARKER_FILE, MARKER_VERSION, readMarker } from "../core/mar
 import { findTrackerDir, projectDir } from "../core/paths.ts";
 import { isProjectName, openProject } from "../core/store.ts";
 import { tomlString } from "../core/toml.ts";
+import { captureTree, ensureTreeLink, ignoreTrackerLink, syncTree, TRACKER_IGNORE } from "../core/tree.ts";
 import { conflictingLink, linkCheckout } from "./link.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -143,15 +152,26 @@ function hasImportable(root: string): boolean {
   return isDir(join(root, TRACKER, "rituals")) || existsSync(join(root, TRACKER, ".verification-log.jsonl"));
 }
 
-function markerText(project: string): string {
+function markerText(project: string, isTree: boolean): string {
   return [
     "# darius: this repo's project. Commit this file; each host links its checkout with darius init.",
     `v = ${String(MARKER_VERSION)}`,
     `project = ${tomlString(project)}`,
     // A v3 marker needs a root zone: the host's, which the operator may change.
     `tz = ${tomlString(Intl.DateTimeFormat().resolvedOptions().timeZone)}`,
+    // A fresh repo keeps its whole tracker in the darius store.
+    ...(isTree ? ['kinds = ["ritual", "vigil", "milestone"]'] : []),
     "",
   ].join("\n");
+}
+
+/** True when the repo's marker lists `milestone`: the store owns the tracker tree. A broken marker is false. */
+function isTreeMarker(root: string): boolean {
+  try {
+    return readMarker(root)?.kinds.includes("milestone") === true;
+  } catch {
+    return false;
+  }
 }
 
 /** The owner for the milestone example: git's user.email, else the login name. */
@@ -208,10 +228,11 @@ function isV3(root: string): boolean {
 }
 
 /** The lines after the ✓ lines: what to run next. */
-function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracker: boolean }): NextSteps {
+function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracker: boolean; ignore: boolean }): NextSteps {
   const lines: string[] = [];
   const commands: string[] = [];
-  const paths = [wrote.marker ? MARKER_FILE : null, wrote.tracker ? TRACKER : null].filter((path) => path !== null);
+  const isTree = isTreeMarker(repo.root);
+  const paths = [wrote.marker ? MARKER_FILE : null, wrote.tracker && !isTree ? TRACKER : null, wrote.ignore ? ".gitignore" : null].filter((path) => path !== null);
   if (paths.length > 0) {
     const commit = `git add ${paths.join(" ")} && git commit -m "darius init"`;
     if (repo.inGit) {
@@ -235,6 +256,7 @@ function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracke
     lines.push("See the next open task in .tracker/: darius next");
     commands.push("darius next");
   }
+  if (repo.hasTracker && !isTree && isV3(repo.root)) lines.push("Next: darius onboard moves the tracker into the darius store.");
   if (isV3(repo.root)) {
     lines.push(
       "Rituals live in .darius.toml (v = 3): add [rituals.<slug>] with title, cadence, skill and mode, commit it, then run darius ritual reconcile.",
@@ -272,7 +294,7 @@ async function run(args: ParsedArgs): Promise<number> {
     if (repo.hasTracker && !noImport && hasImportable(repo.root)) {
       report = importTracker({ source: join(repo.root, TRACKER), project, dryRun: false });
     }
-    writeFileSync(join(repo.root, MARKER_FILE), markerText(project));
+    writeFileSync(join(repo.root, MARKER_FILE), markerText(project, !repo.hasTracker));
     markerState = "written";
     out.push(`✓ wrote ${MARKER_FILE}: project = "${project}"`);
   } else {
@@ -293,7 +315,25 @@ async function run(args: ParsedArgs): Promise<number> {
   else out.push(`✓ linked ${project} to ${repo.root} on this host`);
 
   let trackerState: InitResult["tracker"] = "present";
-  if (!repo.hasTracker) {
+  let ignored = false;
+  if (isTreeMarker(repo.root)) {
+    const store = openProject(project, { create: true });
+    if (markerState === "written") {
+      // The vendored writer scaffolds a real `.tracker/` with only the derived
+      // 00-INDEX.md; ensureTreeLink moves it into the store and links it.
+      await scaffoldTracker(repo.root);
+      ensureTreeLink(repo.root, store);
+      captureTree(store);
+      trackerState = "created";
+      out.push(`✓ created the tracker in the darius store: ${TRACKER} links to it`);
+    } else {
+      ensureTreeLink(repo.root, store);
+      const synced = syncTree(store);
+      out.push(`✓ ${TRACKER} links to the tracker in the darius store`, ...[...synced.capture.problems, ...synced.apply.problems].map((problem) => `! ${problem}`));
+    }
+    ignored = ignoreTrackerLink(repo.root) === "added";
+    if (ignored) out.push(`✓ added ${TRACKER_IGNORE} to .gitignore`);
+  } else if (!repo.hasTracker) {
     await scaffoldTracker(repo.root);
     trackerState = "created";
     out.push(`✓ created ${TRACKER}/00-INDEX.md`);
@@ -310,7 +350,7 @@ async function run(args: ParsedArgs): Promise<number> {
     );
   }
 
-  const next = nextSteps(repo, project, { marker: markerState === "written", tracker: trackerState === "created" });
+  const next = nextSteps(repo, project, { marker: markerState === "written", tracker: trackerState === "created", ignore: ignored });
   if (args.json) {
     const result: InitResult = { project, dir: repo.root, marker: markerState, link: linked.outcome, tracker: trackerState, import: report, next: next.commands };
     console.log(JSON.stringify(result));
@@ -322,7 +362,7 @@ async function run(args: ParsedArgs): Promise<number> {
 
 export const initCommand: Command = {
   name: "init",
-  summary: "set up this repo: write .darius.toml, link this checkout, create .tracker/ or import its rituals. --project, --no-import",
+  summary: "set up this repo: write .darius.toml, link this checkout, create the tracker or import its rituals. --project, --no-import",
   audience: "session",
   usage: "init [--project <name>] [--no-import]",
   run,

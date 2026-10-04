@@ -38,7 +38,7 @@ function etagOf(body: Buffer): string {
   return createHash("md5").update(body).digest("hex");
 }
 
-function send(response: ServerResponse, status: number, body = "", headers: Record<string, string> = {}): void {
+function send(response: ServerResponse, status: number, body: string | Buffer = "", headers: Record<string, string> = {}): void {
   response.writeHead(status, { "content-length": String(Buffer.byteLength(body)), ...headers });
   response.end(body);
 }
@@ -109,7 +109,8 @@ export async function startFakeS3(bucket = "backups"): Promise<FakeS3> {
       response.end();
       return;
     }
-    send(response, 200, found.toString("latin1"), { etag: `"${etagOf(found)}"` });
+    // The bytes as stored: a string would re-encode anything outside ASCII.
+    send(response, 200, found, { etag: `"${etagOf(found)}"` });
   };
 
   const server: Server = createServer((request, response) => {

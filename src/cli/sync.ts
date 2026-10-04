@@ -15,6 +15,13 @@
  * project (store-wide profiles), which it creates when missing, so every
  * host that syncs gets the profiles.
  *
+ * A project whose store holds a tracker tree (src/core/tree.ts) gets its
+ * working copy captured before the sync and applied after it, so a tree
+ * change on this host goes out with the push, and one pulled from another
+ * host lands in the working copy. The report gets `tree: {captured,
+ * applied, problems}`. Tree problems are printed, and never change the
+ * exit code.
+ *
  * `--json` prints one object: {ok, projects: SyncReport[], errors: [{project, error}]}.
  */
 
@@ -27,6 +34,7 @@ import { GLOBAL_PROJECT, listProjects, openProject } from "../core/store.ts";
 import { flushAlerts } from "../core/alerts.ts";
 import { syncProject } from "../core/sync.ts";
 import type { SyncReport } from "../core/sync.ts";
+import { applyTree, captureTree, hasTree } from "../core/tree.ts";
 import type { Config } from "../core/config.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError } from "./registry.ts";
@@ -41,8 +49,22 @@ interface ProjectError {
   error: string;
 }
 
+/** What sync did to a project's tracker tree. */
+interface TreeSyncReport {
+  /** Lines the capture before the sync wrote. */
+  captured: number;
+  /** Files the apply after the sync wrote or removed. */
+  applied: number;
+  problems: string[];
+}
+
+/** One project's sync report, with its tree when it has one. */
+interface ProjectSyncReport extends SyncReport {
+  tree?: TreeSyncReport;
+}
+
 interface SyncRun {
-  reports: SyncReport[];
+  reports: ProjectSyncReport[];
   errors: ProjectError[];
 }
 
@@ -76,13 +98,32 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   for (const name of names) {
     try {
       const project = openProject(name, { create: isCreate(name) });
-      run.reports.push(await syncProject(project, s3, cfg, { pullOnly: args.flags["pull-only"] === true }));
+      const isTree = hasTree(project);
+      // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
+      const captured = isTree ? captureTree(project) : null;
+      const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly: args.flags["pull-only"] === true });
+      // After the pull: lines from other hosts reach the working copy.
+      if (captured !== null) {
+        const applied = applyTree(project);
+        report.tree = {
+          captured: captured.put + captured.removed,
+          applied: applied.written + applied.removed,
+          problems: [...captured.problems, ...applied.problems],
+        };
+      }
+      run.reports.push(report);
     } catch (cause) {
       if (cause instanceof UsageError) throw cause;
       run.errors.push({ project: name, error: errorMessage(cause) });
     }
   }
   return run;
+}
+
+function describeTree(report: ProjectSyncReport): string[] {
+  const tree = report.tree;
+  if (tree === undefined) return [];
+  return [`  tree: ${String(tree.captured)} captured, ${String(tree.applied)} applied`, ...tree.problems.map((problem) => `  ! ${problem}`)];
 }
 
 function describe(report: SyncReport): string {
@@ -136,7 +177,7 @@ export const syncCommand: Command = {
       for (const failure of run.errors) console.error(`darius sync: ${failure.project}: ${failure.error}`);
       return code;
     }
-    for (const report of run.reports) console.log(describe(report));
+    for (const report of run.reports) console.log([describe(report), ...describeTree(report)].join("\n"));
     for (const failure of run.errors) console.error(`! ${failure.project}: ${failure.error}`);
     if (run.reports.length === 0 && run.errors.length === 0) console.log("· no projects in the local store");
     return code;
