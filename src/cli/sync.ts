@@ -19,8 +19,10 @@
  * working copy captured before the sync and applied after it, so a tree
  * change on this host goes out with the push, and one pulled from another
  * host lands in the working copy. The report gets `tree: {captured,
- * applied, problems}`. Tree problems are printed, and never change the
- * exit code.
+ * applied, merged, problems}`. Tree problems are printed, and never change
+ * the exit code. When the apply merged a concurrent `.jsonl` edit, the merged
+ * file is captured at once and a second sync pushes it, so both hosts hold
+ * the same file after each has synced twice.
  *
  * `--json` prints one object: {ok, projects: SyncReport[], errors: [{project, error}]}.
  */
@@ -30,7 +32,7 @@ import { loadCredentials } from "../core/credentials.ts";
 import { resolveProject } from "../core/paths.ts";
 import { createS3 } from "../core/s3.ts";
 import type { S3 } from "../core/s3.ts";
-import { GLOBAL_PROJECT, listProjects, openProject } from "../core/store.ts";
+import { GLOBAL_PROJECT, listProjects, openProject, type Project } from "../core/store.ts";
 import { flushAlerts } from "../core/alerts.ts";
 import { syncProject } from "../core/sync.ts";
 import type { SyncReport } from "../core/sync.ts";
@@ -55,6 +57,8 @@ interface TreeSyncReport {
   captured: number;
   /** Files the apply after the sync wrote or removed. */
   applied: number;
+  /** `.jsonl` files merged from two concurrent versions, captured and pushed in this run. */
+  merged: number;
   problems: string[];
 }
 
@@ -90,6 +94,42 @@ function remoteClient(cfg: Config): S3 {
   return createS3(cfg.remote, loadCredentials(cfg.remote.credentials));
 }
 
+/** Adds the counts of a second sync run to the first report. */
+function addRun(report: ProjectSyncReport, more: SyncReport): void {
+  report.pulledChunks += more.pulledChunks;
+  report.pushedChunks += more.pushedChunks;
+  report.itemsPulled += more.itemsPulled;
+  report.itemsPushed += more.itemsPushed;
+  report.blobsPulled += more.blobsPulled;
+  report.blobsPushed += more.blobsPushed;
+  report.conflicts.push(...more.conflicts);
+  if (more.skipped !== undefined) report.skipped = more.skipped;
+  if (more.leaseHolder !== undefined) report.leaseHolder = more.leaseHolder;
+}
+
+/** One project: capture the tree, sync, apply the tree; a merged `.jsonl` file is captured and pushed at once. */
+async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean): Promise<ProjectSyncReport> {
+  // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
+  const captured = hasTree(project) ? captureTree(project) : null;
+  const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly });
+  if (captured === null) return report;
+  // After the pull: lines from other hosts reach the working copy.
+  const applied = applyTree(project);
+  let recaptured = 0;
+  if (applied.merged > 0) {
+    const again = captureTree(project);
+    recaptured = again.put + again.removed;
+    if (recaptured > 0 && !pullOnly && report.skipped === undefined) addRun(report, await syncProject(project, s3, cfg, { pullOnly }));
+  }
+  report.tree = {
+    captured: captured.put + captured.removed + recaptured,
+    applied: applied.written + applied.removed,
+    merged: applied.merged,
+    problems: [...captured.problems, ...applied.problems],
+  };
+  return report;
+}
+
 async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   const { names, isCreate } = projectNames(args);
   const cfg = loadConfig();
@@ -98,20 +138,7 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   for (const name of names) {
     try {
       const project = openProject(name, { create: isCreate(name) });
-      const isTree = hasTree(project);
-      // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
-      const captured = isTree ? captureTree(project) : null;
-      const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly: args.flags["pull-only"] === true });
-      // After the pull: lines from other hosts reach the working copy.
-      if (captured !== null) {
-        const applied = applyTree(project);
-        report.tree = {
-          captured: captured.put + captured.removed,
-          applied: applied.written + applied.removed,
-          problems: [...captured.problems, ...applied.problems],
-        };
-      }
-      run.reports.push(report);
+      run.reports.push(await syncOne(project, s3, cfg, args.flags["pull-only"] === true));
     } catch (cause) {
       if (cause instanceof UsageError) throw cause;
       run.errors.push({ project: name, error: errorMessage(cause) });

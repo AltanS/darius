@@ -32,7 +32,7 @@ import { dirname, join } from "node:path";
 
 import { closeOpenChunk, readLedger } from "../src/core/ledger.ts";
 import { getBlob, openProject, sha256Hex, type Project } from "../src/core/store.ts";
-import { applyTree, captureTree, ensureTreeLink, hasTree, isLocalTreePath, syncTree, treeDir } from "../src/core/tree.ts";
+import { applyTree, captureTree, ensureTreeLink, hasTree, isLocalTreePath, isMergeablePath, mergeLines, syncTree, treeDir } from "../src/core/tree.ts";
 import { sleepSync } from "../src/runtime.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-tree-"));
@@ -92,7 +92,8 @@ function ship(from: Host, to: Host, name: string, options: { blobs?: boolean } =
   const sender = projectOn(from, name);
   closeOpenChunk(sender);
   const receiver = projectOn(to, name);
-  cpSync(join(sender.root, "ledger", from.name), join(receiver.root, "ledger", from.name), { recursive: true });
+  const chunks = join(sender.root, "ledger", from.name);
+  if (existsSync(chunks)) cpSync(chunks, join(receiver.root, "ledger", from.name), { recursive: true });
   if (options.blobs !== false) cpSync(join(sender.root, "blobs"), join(receiver.root, "blobs"), { recursive: true });
 }
 
@@ -376,4 +377,75 @@ test("ensureTreeLink: missing, a link to the tree, a link elsewhere, a folder of
     ensureTreeLink(checkout, project);
   }, new RegExp(`the darius store owns the tracker of ${name}, but a \\.tracker/ folder is in this checkout\\. Remove it from git \\(git rm -r \\.tracker\\) or merge the commit that did\\.`, "u"));
   assert.equal(readFileSync(join(link, "M1-alpha", "01-spec.md"), "utf8"), "real data\n", "a refusal moves nothing");
+});
+
+/** What one simulated sync applied. */
+interface Round {
+  merged: number;
+  problems: string[];
+}
+
+/** One `darius sync` of `host`, as the CLI orders it: capture, pull, push, apply, and a merged file captured and pushed at once. */
+function syncRound(host: Host, other: Host, name: string): Round {
+  captureTree(projectOn(host, name));
+  ship(other, host, name);
+  ship(host, other, name);
+  const applied = applyTree(projectOn(host, name));
+  if (applied.merged > 0) {
+    captureTree(projectOn(host, name));
+    ship(host, other, name);
+  }
+  return { merged: applied.merged, problems: applied.problems };
+}
+
+test("a concurrent edit of a .jsonl file is merged line by line; both hosts converge after two syncs each, with no ping-pong", () => {
+  const name = newProject();
+  const log = ".verification-log.jsonl";
+  put(hostA, name, log, '{"n":1}\n{"n":2}\n');
+  put(hostA, name, "spec.md", "v0\n");
+  syncRound(hostA, hostB, name);
+  syncRound(hostB, hostA, name);
+  assert.equal(read(hostB, name, log).toString(), '{"n":1}\n{"n":2}\n');
+
+  // Both hosts append, and both edit an .md file: only the .jsonl file merges.
+  put(hostA, name, log, '{"n":1}\n{"n":2}\n{"a":1}\n');
+  put(hostA, name, "spec.md", "from A\n");
+  sleepSync(5);
+  put(hostB, name, log, '{"n":1}\n{"n":2}\n{"b":1}\n{"b":2}\n');
+  put(hostB, name, "spec.md", "from B\n");
+
+  assert.equal(syncRound(hostA, hostB, name).merged, 0, "A's first sync sees nothing from B yet");
+  assert.equal(syncRound(hostB, hostA, name).merged, 0, "B's own line wins on B: nothing to merge there");
+  const second = syncRound(hostA, hostB, name);
+  assert.equal(second.merged, 1);
+  assert.deepEqual(second.problems.toSorted(), [
+    `concurrent edit of ${log}: merged the lines of both versions (host-b and host-a) into one file`,
+    `concurrent edit of spec.md: kept the version of host-b, the other version is blob ${sha256Hex("from A\n")}`,
+  ]);
+  assert.deepEqual(syncRound(hostB, hostA, name).problems, []);
+
+  const merged = '{"n":1}\n{"n":2}\n{"b":1}\n{"b":2}\n{"a":1}\n';
+  assert.equal(read(hostA, name, log).toString(), merged, "the winner's lines, then the lines only the other had");
+  assert.equal(read(hostB, name, log).toString(), merged);
+  assert.equal(read(hostA, name, "spec.md").toString(), "from B\n", "every other path keeps last-writer-wins");
+  assert.equal(read(hostB, name, "spec.md").toString(), "from B\n");
+
+  const lines = treeLines(hostA, name).length;
+  for (let round = 0; round < 2; round += 1) {
+    assert.equal(syncRound(hostA, hostB, name).merged, 0);
+    assert.equal(syncRound(hostB, hostA, name).merged, 0);
+  }
+  assert.equal(treeLines(hostA, name).length, lines, "no new lines once both hosts agree");
+  assert.deepEqual(treeLines(hostA, name), treeLines(hostB, name));
+});
+
+const bytes = (text: string): Uint8Array => Buffer.from(text, "latin1");
+const text = (value: Uint8Array): string => Buffer.from(value).toString("latin1");
+
+test("mergeLines keeps the winner's order, adds the other's missing lines in order, and is byte exact", () => {
+  assert.equal(text(mergeLines(bytes("a\nb\n"), bytes("a\nc\nb\nd"))), "a\nb\nc\nd\n");
+  assert.equal(text(mergeLines(bytes(""), bytes(""))), "");
+  assert.equal(text(mergeLines(bytes("x\xff\n"), bytes("\x80y\n"))), "x\xff\n\x80y\n");
+  assert.equal(isMergeablePath("archive/x.jsonl"), true);
+  assert.equal(isMergeablePath("spec.md"), false);
 });

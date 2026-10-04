@@ -151,3 +151,40 @@ test("darius sync captures the tree before the push and applies it after the pul
   assert.equal(readFileSync(join(first, SPEC), "utf8"), readFileSync(join(second, SPEC), "utf8"));
   assert.match(readFileSync(join(first, SPEC), "utf8"), /in-progress|\[~\]|\[-\]/u);
 });
+
+test("darius sync merges a .jsonl file both hosts appended to; each host syncs twice and both hold the same file", { skip: NO_GIT }, async () => {
+  const endpoint = bucket?.endpoint ?? "";
+  const hostA = makeHost("host-c", endpoint);
+  const hostB = makeHost("host-d", endpoint);
+  const project = "acme-merge";
+  const first = join(SANDBOX, "merge-a");
+  mkdirSync(first);
+  git(first, ["init", "--quiet", "--initial-branch=main"]);
+  await ok(hostA, ["init", "--project", project], first);
+  git(first, ["add", "--all"]);
+  git(first, ["commit", "--quiet", "--message", "darius init"]);
+  const log = join(".tracker", "evidence.jsonl");
+  writeFileSync(join(first, log), '{"n":1}\n');
+  await ok(hostA, ["sync", "--project", project], first);
+  const second = join(SANDBOX, "merge-b");
+  git(SANDBOX, ["clone", "--quiet", first, second]);
+  await ok(hostB, ["init"], second);
+  await ok(hostB, ["sync", "--project", project], second);
+  assert.equal(readFileSync(join(second, log), "utf8"), '{"n":1}\n');
+
+  writeFileSync(join(first, log), '{"n":1}\n{"host":"a"}\n');
+  writeFileSync(join(second, log), '{"n":1}\n{"host":"b"}\n');
+  await ok(hostA, ["sync", "--project", project], first);
+  await ok(hostB, ["sync", "--project", project], second);
+  const merging = JSON.parse(await ok(hostA, ["sync", "--project", project, "--json"], first));
+  assert.equal(merging.projects[0].tree.merged, 1);
+  assert.match(merging.projects[0].tree.problems.join("\n"), /concurrent edit of evidence\.jsonl: merged the lines of both versions \(host-d and host-c\)/u);
+  await ok(hostB, ["sync", "--project", project], second);
+  const merged = '{"n":1}\n{"host":"b"}\n{"host":"a"}\n';
+  assert.equal(readFileSync(join(first, log), "utf8"), merged);
+  assert.equal(readFileSync(join(second, log), "utf8"), merged);
+  for (const [at, dir] of [[hostA, first], [hostB, second]] as const) {
+    const quiet = JSON.parse(await ok(at, ["sync", "--project", project, "--json"], dir));
+    assert.deepEqual([quiet.projects[0].tree.captured, quiet.projects[0].tree.merged], [0, 0], "no ping-pong");
+  }
+});

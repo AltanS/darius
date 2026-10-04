@@ -31,6 +31,15 @@
  * Apply never deletes or overwrites a local file the index does not vouch
  * for: such a path is skipped with a problem until capture records it.
  *
+ * A concurrent edit (the winning line was not written on top of the line
+ * before it, and that line came from another host) is last-writer-wins,
+ * with one exception: a `.jsonl` file is append-only, so apply writes the
+ * union of both versions (`mergeLines`) when both blobs are here. The index
+ * keeps the winner's sha for it, so the next capture records the merged file
+ * as a normal `tree.put`; `syncTree` runs that capture at once. The merge is
+ * deterministic, so every host that merges the same two versions writes the
+ * same bytes, and the line after the merge is no concurrent edit.
+ *
  * The index (`tracker-index.json`, `{v: 1, files: {path: {sha, size,
  * mtimeMs, exec}}}`) lets capture skip hashing a file whose size, mtime and
  * exec bit match. A file whose mtime was within RACY_MS of the moment it was
@@ -127,8 +136,10 @@ export interface TreeCapture {
 
 /** What `applyTree` did. */
 export interface TreeApply {
-  /** Files written from a blob. */
+  /** Files written from a blob, merged files included. */
   written: number;
+  /** `.jsonl` files written as the union of two concurrent versions; a capture must record them. */
+  merged: number;
   /** Files deleted. */
   removed: number;
   /** The paths written or deleted, sorted. */
@@ -471,14 +482,51 @@ function isVouched(full: string, entry: IndexEntry | undefined): boolean {
   return entry.exec === isExec(stats) && sha256Hex(readFileSync(full)) === entry.sha;
 }
 
-/** The problem line for a concurrent edit, or null: the winner was not written on top of the line before it, from another host. */
-function concurrentEdit(lines: readonly TreeLine[]): string | null {
+/** The line the winner competed with, or null: a concurrent edit is a winner not written on top of the line before it, from another host. */
+function concurrentWith(lines: readonly TreeLine[]): TreeLine | null {
   const winner = lines.at(-1);
   const before = lines.at(-2);
   if (winner === undefined || before === undefined) return null;
   if (before.host === winner.host || winner.prev === before.after) return null;
+  return before;
+}
+
+function concurrentProblem(winner: TreeLine, before: TreeLine): string {
   const other = before.after === null ? `the other host (${before.host}) removed it` : `the other version is blob ${before.after}`;
   return `concurrent edit of ${winner.path}: kept the version of ${winner.host}, ${other}`;
+}
+
+/** True for a file whose concurrent versions are merged line by line: append-only `.jsonl`. */
+export function isMergeablePath(path: string): boolean {
+  return path.endsWith(".jsonl");
+}
+
+function linesOf(bytes: Uint8Array): string[] {
+  // latin1 maps each byte to one char and back, so the merge is byte exact.
+  const text = Buffer.from(bytes).toString("latin1");
+  const body = text.endsWith("\n") ? text.slice(0, -1) : text;
+  return body === "" ? [] : body.split("\n");
+}
+
+/**
+ * The union of two versions of a line file: every line of `winner` in order,
+ * then every line of `other` that `winner` lacks (exact match), in its order.
+ * Ends with one newline (empty when both are empty).
+ */
+export function mergeLines(winner: Uint8Array, other: Uint8Array): Uint8Array {
+  const kept = linesOf(winner);
+  const seen = new Set(kept);
+  const all = [...kept, ...linesOf(other).filter((line) => !seen.has(line))];
+  return Buffer.from(all.length === 0 ? "" : `${all.join("\n")}\n`, "latin1");
+}
+
+/** The merged bytes for a concurrent `.jsonl` edit, or null when the path is not mergeable, a blob is missing, or the other version adds nothing. */
+function mergedContent(ctx: ApplyContext, winner: TreeLine, before: TreeLine | null, blob: Uint8Array): Uint8Array | null {
+  if (before === null || before.after === null || !isMergeablePath(winner.path)) return null;
+  const other = getBlob(ctx.project, before.after);
+  if (other === null) return null;
+  const merged = mergeLines(blob, other);
+  return sha256Hex(merged) === sha256Hex(blob) ? null : merged;
 }
 
 /** Removes empty dirs from `dir` up to, never including, `root`. */
@@ -528,7 +576,8 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
     ctx.result.problems.push(`local change not captured yet: ${path}; left as it is (run the verb again or darius sync)`);
     return;
   }
-  const concurrent = concurrentEdit(lines);
+  const before = concurrentWith(lines);
+  let problem = before === null ? null : concurrentProblem(winner, before);
   if (winner.after === null) {
     if (existsSync(full)) {
       unlinkSync(full);
@@ -543,13 +592,22 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
       return;
     }
     mkdirSync(dirname(full), { recursive: true });
-    writeFileAtomic(full, blob, modeFor(full, winner.exec));
-    ctx.index.files.set(path, entryFor(winner.after, lstatSync(full)));
+    const merged = mergedContent(ctx, winner, before, blob);
+    writeFileAtomic(full, merged ?? blob, modeFor(full, winner.exec));
+    if (merged === null) {
+      ctx.index.files.set(path, entryFor(winner.after, lstatSync(full)));
+    } else {
+      // The index names the winner, and size -1 never matches: the next
+      // capture hashes the file and records the merged version.
+      ctx.index.files.set(path, { sha: winner.after, size: -1, mtimeMs: RACY_MTIME, exec: winner.exec });
+      ctx.result.merged += 1;
+      problem = `concurrent edit of ${path}: merged the lines of both versions (${winner.host} and ${before?.host ?? "?"}) into one file`;
+    }
     ctx.result.written += 1;
   }
   ctx.dirty = true;
   ctx.result.changed.push(path);
-  if (concurrent !== null) ctx.result.problems.push(concurrent);
+  if (problem !== null) ctx.result.problems.push(problem);
 }
 
 /**
@@ -560,7 +618,7 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
  */
 export function applyTree(project: Project): TreeApply {
   return project.withLock(() => {
-    const result: TreeApply = { written: 0, removed: 0, changed: [], problems: [] };
+    const result: TreeApply = { written: 0, merged: 0, removed: 0, changed: [], problems: [] };
     const byPath = foldTree(project, result.problems);
     if (byPath.size === 0) return result;
     const root = treeDir(project);
@@ -580,11 +638,21 @@ export function applyTree(project: Project): TreeApply {
   });
 }
 
-/** Capture, then apply: a local edit becomes a line before another host's version is considered. */
+/**
+ * Capture, then apply: a local edit becomes a line before another host's
+ * version is considered. When apply merged a `.jsonl` file, a second capture
+ * records the merged file at once; its counts join the first capture's.
+ */
 export function syncTree(project: Project, options: { who?: string } = {}): { capture: TreeCapture; apply: TreeApply } {
   return project.withLock(() => {
     const capture = captureTree(project, options);
     const apply = applyTree(project);
+    if (apply.merged > 0) {
+      const merged = captureTree(project, options);
+      capture.put += merged.put;
+      capture.removed += merged.removed;
+      capture.changed = [...new Set([...capture.changed, ...merged.changed])].toSorted();
+    }
     return { capture, apply };
   });
 }
