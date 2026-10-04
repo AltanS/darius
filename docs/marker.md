@@ -81,7 +81,7 @@ Root keys:
 
 `kinds` says which kinds the store owns in this project. `ritual` is always owned. `vigil` means the store owns this project's vigils, so `darius vigil` verbs act on the store and not on `.tracker/vigils/`. `milestone` means the store owns the whole tracker tree: milestones, specs, worklogs and the archive. Each list adds one kind to the one before, so no other list is valid, and a wrong list is a marker error.
 
-An older darius refuses the unknown key `kinds`. Update every host before you commit the first marker with `kinds`.
+An older darius refuses the unknown key `kinds`. Update every host before you commit the first marker with `kinds`. With `milestone`, `.tracker` in a checkout is a link to the store's working copy and `/.tracker` is in `.gitignore`. `darius onboard` adds the `kinds` line to a legacy repo; `darius init` writes it in a fresh one.
 
 `[rituals.<slug>]` takes a slug of lowercase letters, digits, `-` and `_` (at most 64, no dots):
 
