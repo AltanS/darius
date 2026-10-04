@@ -23,6 +23,7 @@ import { projectDir } from "../core/paths.ts";
 import { parseResult, readSummary } from "../core/result.ts";
 import { GLOBAL_PROJECT, getBlobText, listProjects, openProject, type Project } from "../core/store.ts";
 import { localToday, vigilStatus } from "../core/sweep.ts";
+import { treeDir } from "../core/tree.ts";
 import { followUpOf, followUpsOf } from "../runner/follow-up.ts";
 import { failedToday, viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
@@ -223,12 +224,11 @@ function legacyVigilRows(trackerDir: string | null, known: readonly VigilRow[]):
  * The tracker tree the readers use: the store working copy
  * `<state dir>/<project>/tracker` when it exists (a project whose marker lists
  * `milestone`; a host with no checkout still has it), else `<checkout>/.tracker`
- * as before, else null. The store path is the same one `treeDir(project)` in
- * src/core/tree.ts names; it is spelled out here so the web layer does not
- * depend on that module.
+ * as before, else null. The store path comes from `treeDir` in
+ * src/core/tree.ts, its one definition.
  */
 export function trackerDirOf(project: string, checkout: string | null): string | null {
-  const stored = join(projectDir(project), "tracker");
+  const stored = treeDir({ root: projectDir(project) });
   if (existsSync(stored)) return stored;
   return checkout === null ? null : join(checkout, ".tracker");
 }

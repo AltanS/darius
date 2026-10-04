@@ -16,11 +16,6 @@ import { join } from "node:path";
 import type { Project } from "./store.ts";
 import { readVigilViews, type VigilView } from "./vigil-view.ts";
 
-/** The tree directory of a project in the store: `<project root>/tracker`. */
-export function treeDirOf(project: Project): string {
-  return join(project.root, "tracker");
-}
-
 /** Where the projection of vigil `slug` lives. */
 export function projectedVigilPath(treeDir: string, slug: string): string {
   return join(treeDir, "vigils", `${slug}.md`);

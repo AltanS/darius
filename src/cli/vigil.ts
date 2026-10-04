@@ -73,7 +73,8 @@ import {
   type VigilStatus,
 } from "../core/sweep.ts";
 import { checkVigilBody, commandCount } from "../core/vigil-body.ts";
-import { projectedVigilPath, projectVigils, treeDirOf } from "../core/vigil-projection.ts";
+import { treeDir as treeDirOf } from "../core/tree.ts";
+import { projectedVigilPath, projectVigils } from "../core/vigil-projection.ts";
 import { isCalendarDate, localNoonIso, readVigilViews, type VigilView } from "../core/vigil-view.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";

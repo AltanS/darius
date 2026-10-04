@@ -19,7 +19,8 @@ import { linesFor, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue, Vigil } from "../src/core/model.ts";
 import { itemRef, openProject, readItemText } from "../src/core/store.ts";
 import { importLegacyVigils } from "../src/core/vigil-import.ts";
-import { projectedVigilPath, projectVigils, treeDirOf } from "../src/core/vigil-projection.ts";
+import { treeDir as treeDirOf } from "../src/core/tree.ts";
+import { projectedVigilPath, projectVigils } from "../src/core/vigil-projection.ts";
 import { localToday } from "../src/core/sweep.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");

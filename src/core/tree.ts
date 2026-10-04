@@ -183,8 +183,12 @@ const RACY_MTIME = -1;
 
 // --- paths -------------------------------------------------------------------
 
-/** `<stateDir>/<project>/tracker`: the working copy of the tree on this host. */
-export function treeDir(project: Project): string {
+/**
+ * `<stateDir>/<project>/tracker`: the working copy of the tree on this host.
+ * The one definition of that path; it needs only the store root, so a reader
+ * that has a project name and no open store passes `{ root: projectDir(name) }`.
+ */
+export function treeDir(project: Pick<Project, "root">): string {
   return join(project.root, TREE_DIR);
 }
 
