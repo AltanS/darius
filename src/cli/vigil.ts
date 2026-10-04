@@ -5,6 +5,7 @@
  *             [--from REF] [--agent A] [--opened YYYY-MM-DD]
  *             [--stdin | --content TEXT] [--gate-command CMD] [--heavy] [--who W]
  *   vigil set-body <slug> (--stdin | --content TEXT)
+ *   vigil set <slug> [--heavy | --no-heavy] [--due YYYY-MM-DD] [--until TEXT] [--gate-command CMD]
  *   vigil list [--all] [--json]
  *   vigil show <slug>
  *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD]
@@ -19,7 +20,12 @@
  * legacy `assertVigilBodyIsWorkable` (src/core/vigil-body.ts).
  *
  * After a write the vigils are projected as read-only legacy files under the
- * project's tree directory (src/core/vigil-projection.ts).
+ * project's tree directory (src/core/vigil-projection.ts), but only when that
+ * directory already exists: its existence means the store owns the tracker
+ * tree, and a vigil verb never creates it.
+ *
+ * An imported open vigil is `heavy`, so the daily sweep skips it.
+ * `vigil set <slug> --no-heavy` lets the sweep run it.
  *
  * The sweep rules live in src/core/sweep.ts. Commands run in the project's working
  * dir on this host (src/core/workdir.ts). A project whose checkout is not on
@@ -44,7 +50,7 @@ import { loadConfigIfPresent } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
 import { defaultWho, hostId, linesFor, readLedger } from "../core/ledger.ts";
 import type { LeaseBlock } from "../core/lease.ts";
-import type { Vigil } from "../core/model.ts";
+import type { Document, Vigil } from "../core/model.ts";
 import { projectDir, resolveProject } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { itemRef, listProjects, openProject, type Project } from "../core/store.ts";
@@ -72,7 +78,7 @@ import { isCalendarDate, localNoonIso, readVigilViews, type VigilView } from "..
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "add | set-body | list | show | close | sweep";
+const VERBS = "add | set-body | set | list | show | close | sweep";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -135,8 +141,13 @@ function suppliedBody(args: ParsedArgs, verb: string): string | undefined {
   return content === undefined ? undefined : contentOf(content);
 }
 
-/** Brings the read-only legacy files in line with the store. A failure warns; the write already happened. */
+/**
+ * Brings the read-only legacy files in line with the store. Does nothing when
+ * the tree directory does not exist: this never creates it. A failure warns;
+ * the write already happened.
+ */
 function refreshProjection(project: Project): void {
+  if (!existsSync(treeDirOf(project))) return;
   try {
     projectVigils(project, treeDirOf(project));
   } catch (cause) {
@@ -218,6 +229,58 @@ async function runSetBody(args: ParsedArgs): Promise<number> {
   refreshProjection(project);
   if (args.json) printJson({ project: project.name, slug, executableCommands: checked.executableCommands });
   else console.log(`wrote vigil ${slug} in ${project.name} (${commandCount(checked.executableCommands)})`);
+  return 0;
+}
+
+// --- set ------------------------------------------------------------------------
+
+function runSet(args: ParsedArgs): number {
+  const slug = requireSlug(args, "set");
+  const wantsHeavy = isFlagSet(args, "heavy");
+  const wantsLight = isFlagSet(args, "no-heavy");
+  if (wantsHeavy && wantsLight) throw new UsageError("vigil set: --heavy and --no-heavy exclude each other");
+  const due = dateFlag(args, "due");
+  const until = textFlag(args, "until");
+  const gateCommand = textFlag(args, "gate-command");
+  if (!wantsHeavy && !wantsLight && due === undefined && until === undefined && gateCommand === undefined) {
+    throw new UsageError("vigil set needs one of --heavy, --no-heavy, --due, --until, --gate-command");
+  }
+  const project = currentProject(args);
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const changes: string[] = [];
+  const doc = project.withLock(() => {
+    const current = project.readItem<Vigil>("vigil", slug);
+    if (current === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
+    const status = vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug)));
+    if (status.state === "closed") {
+      throw new Error(`vigil '${slug}' is closed (verdict ${status.verdict ?? "?"}): a closed vigil is a historical claim and is not edited`);
+    }
+    const header: Vigil = { ...current.header, updated: new Date().toISOString() };
+    if (wantsHeavy || wantsLight) {
+      header.heavy = wantsHeavy;
+      changes.push(`heavy=${String(header.heavy)}`);
+    }
+    if (due !== undefined) {
+      header.due = due;
+      changes.push(`due=${due}`);
+    }
+    if (until !== undefined) {
+      header.until = until;
+      changes.push(`until=${until}`);
+    }
+    if (gateCommand !== undefined) {
+      const selfInvoking = commandsOf("", gateCommand).find(invokesSweep);
+      if (selfInvoking !== undefined) throw new Error(`refusing vigil '${slug}': its Command starts a sweep (${selfInvoking})`);
+      header.gate_command = gateCommand;
+      changes.push(`gate_command=${gateCommand}`);
+    }
+    const next: Document<Vigil> = { header, body: current.body };
+    project.writeItem(next, { who });
+    return next;
+  });
+  refreshProjection(project);
+  if (args.json) printJson({ project: project.name, updated: doc.header });
+  else console.log(`updated vigil ${slug} in ${project.name}: ${changes.join(", ")}`);
   return 0;
 }
 
@@ -534,7 +597,8 @@ async function runSweep(args: ParsedArgs): Promise<number> {
 
 export const vigilCommand: Command = {
   name: "vigil",
-  summary: "add, set-body, list, show, close and sweep vigils",
+  summary: "add, set-body, set, list, show, close and sweep vigils",
+  usage: "vigil add|set-body|set|list|show|close|sweep <slug> ...",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {
@@ -542,6 +606,8 @@ export const vigilCommand: Command = {
         return runAdd(args);
       case "set-body":
         return runSetBody(args);
+      case "set":
+        return runSet(args);
       case "list":
         return runList(args);
       case "show":

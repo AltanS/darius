@@ -13,6 +13,9 @@
  *   by it: identical text is `unchanged`; a changed source rewrites the item
  *   and keeps its id, tags, `heavy` and `gate_command`, which the source does
  *   not have. A same-slug item of another origin is a problem.
+ * - An imported OPEN vigil gets `heavy: true`, so the daily sweep does not run
+ *   its Commands (many read production) until `vigil set <slug> --no-heavy`.
+ *   A closed one gets `heavy: false`. A re-import keeps the stored value.
  * - A legacy `verdict` becomes one `vigil.closed{verdict, by: "import",
  *   imported_from}` line at LOCAL noon of `resolved`. A vigil that already has
  *   a `vigil.closed` line gets no second one.
@@ -69,6 +72,8 @@ function createdOf(opened: string | undefined, mtime: Date): string {
 /** The doc a source file stands for. A previous import keeps its id, tags and native-only fields. */
 function docOf(source: { slug: string; fields: Map<string, string>; body: string; ref: string; mtime: Date }, previous: Document<Vigil> | null): Document<Vigil> {
   const { slug, fields, body, ref, mtime } = source;
+  // An open vigil comes in heavy: the daily sweep skips it until the operator runs `vigil set <slug> --no-heavy`.
+  const isOpen = fieldOf(fields, "verdict") === undefined;
   const created = previous?.header.created ?? createdOf(fieldOf(fields, "opened"), mtime);
   const header: Vigil = {
     id: previous?.header.id ?? ulid(),
@@ -78,7 +83,7 @@ function docOf(source: { slug: string; fields: Map<string, string>; body: string
     created,
     updated: previous?.header.updated ?? created,
     tags: previous?.header.tags ?? [],
-    heavy: previous?.header.heavy ?? false,
+    heavy: previous?.header.heavy ?? isOpen,
     imported_from: ref,
   };
   for (const key of ["from", "due", "until", "agent"] as const) {

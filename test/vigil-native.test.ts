@@ -52,6 +52,13 @@ function darius(argv: string[], cwd: string, input = ""): Run {
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+/** Makes the tree directory of a store project, as a project that owns the tracker tree has. */
+function withTree(name: string): string {
+  const tree = join(process.env.DARIUS_STATE_DIR ?? "", name, "tracker");
+  mkdirSync(tree, { recursive: true });
+  return tree;
+}
+
 /** A repo whose marker owns `vigil`. The project is named like the directory. */
 function ownedRepo(name: string): string {
   const repo = join(SANDBOX, "repos", name);
@@ -163,6 +170,7 @@ test("list: text lines, the open filter, and --all in file-name order", () => {
 
 test("list --json is a bare pretty array with the legacy fields in order, then the native ones", () => {
   const repo = ownedRepo("nv-json");
+  withTree("nv-json");
   darius(["vigil", "add", "guard-soak", "--name", "Guard soak", "--until", "first batch", "--from", "M1/S02", "--agent", "host-a", "--opened", "2026-09-28", "--stdin"], repo, BODY);
   darius(["vigil", "add", "bare", "--due", "2026-10-05", "--stdin"], repo, BODY);
   const run = darius(["vigil", "list", "--json"], repo);
@@ -232,6 +240,43 @@ test("close: idempotent for the same verdict, exit 1 for another, --date sets lo
   assert.equal(darius(["vigil", "close", "soak", "--verdict", "held", "--date", "yesterday"], repo).status, 2);
 });
 
+test("set turns heavy on and off, edits the gates, and writes through the store", () => {
+  const repo = ownedRepo("nv-set");
+  assert.equal(darius(["vigil", "add", "soak", "--until", "x", "--stdin"], repo, BODY).status, 0);
+  const heavy = darius(["vigil", "set", "soak", "--heavy"], repo);
+  assert.equal(heavy.status, 0, heavy.stderr);
+  assert.equal(heavy.stdout, "updated vigil soak in nv-set: heavy=true\n");
+  assert.equal(openProject("nv-set").readItem<Vigil>("vigil", "soak")?.header.heavy, true);
+
+  const light = darius(["vigil", "set", "soak", "--no-heavy", "--due", "2026-10-05", "--until", "later", "--gate-command", "test -f /tmp/ready"], repo);
+  assert.equal(light.status, 0, light.stderr);
+  assert.equal(light.stdout, "updated vigil soak in nv-set: heavy=false, due=2026-10-05, until=later, gate_command=test -f /tmp/ready\n");
+  const stored = openProject("nv-set").readItem<Vigil>("vigil", "soak");
+  assert.deepEqual([stored?.header.heavy, stored?.header.due, stored?.header.until, stored?.header.gate_command], [false, "2026-10-05", "later", "test -f /tmp/ready"]);
+  assert.equal(stored?.body, BODY, "the body is untouched");
+  assert.equal(lines("nv-set", "soak", "item.changed").length, 3, "add and each set wrote through writeItemText");
+
+  const json = darius(["vigil", "set", "soak", "--heavy", "--json"], repo);
+  assert.equal(JSON.parse(json.stdout).updated.heavy, true);
+  assert.equal(JSON.parse(json.stdout).project, "nv-set");
+});
+
+test("set refuses a closed vigil (exit 1), no flag or a bad flag (exit 2), and a self-sweeping gate", () => {
+  const repo = ownedRepo("nv-set-refuse");
+  darius(["vigil", "add", "soak", "--until", "x", "--stdin"], repo, BODY);
+  assert.equal(darius(["vigil", "set", "soak"], repo).status, 2, "no flag is a usage error");
+  assert.equal(darius(["vigil", "set", "soak", "--heavy", "--no-heavy"], repo).status, 2);
+  assert.equal(darius(["vigil", "set", "soak", "--due", "tomorrow"], repo).status, 2);
+  assert.equal(darius(["vigil", "set", "soak", "--gate-command", "darius vigil sweep"], repo).status, 1);
+  assert.equal(darius(["vigil", "set", "ghost", "--heavy"], repo).status, 1);
+  darius(["vigil", "close", "soak", "--verdict", "held"], repo);
+  const before = readItemText(openProject("nv-set-refuse"), "vigil", "soak");
+  const closed = darius(["vigil", "set", "soak", "--heavy"], repo);
+  assert.equal(closed.status, 1);
+  assert.match(closed.stderr, /is closed/u);
+  assert.equal(readItemText(openProject("nv-set-refuse"), "vigil", "soak"), before);
+});
+
 function localDay(iso: string): string {
   return localToday(new Date(iso));
 }
@@ -265,13 +310,14 @@ test("import: open and closed vigils, local noon dates, the close line, and the 
   assert.ok(open);
   assert.deepEqual(
     [open.header.title, open.header.due, open.header.until, open.header.from, open.header.agent, open.header.heavy, open.header.imported_from],
-    ["Guard soak", "2026-10-05", "first real batch", "M1/S02", "host-a", false, ".tracker/vigils/guard-soak.md"],
+    ["Guard soak", "2026-10-05", "first real batch", "M1/S02", "host-a", true, ".tracker/vigils/guard-soak.md"],
   );
   assert.equal(new Date(open.header.created).getHours(), 12);
   assert.equal(localDay(open.header.created), "2026-09-28");
   const source = readFileSync(join(tracker, "vigils", "guard-soak.md"), "utf8");
   assert.equal(open.body, source.slice(source.indexOf("\n---\n", 4) + "\n---\n".length), "the body is kept byte for byte");
   assert.equal(lines("nv-import", "guard-soak", "vigil.closed").length, 0);
+  assert.equal(project.readItem<Vigil>("vigil", "cache-check")?.header.heavy, false, "a closed vigil stays heavy: false");
 
   const closedLines = lines("nv-import", "cache-check", "vigil.closed");
   assert.equal(closedLines.length, 1);
@@ -291,6 +337,18 @@ test("import is idempotent: a second run is unchanged and writes no line", () =>
   assert.deepEqual(again, { imported: [], unchanged: ["cache-check", "guard-soak"], closed: 0, problems: [] });
   assert.equal(readLedger(project).length, ledgerBefore);
   assert.equal(readItemText(project, "vigil", "guard-soak"), textBefore);
+});
+
+test("a re-import keeps the stored heavy value, so --no-heavy survives it", () => {
+  const repo = ownedRepo("nv-keep-heavy");
+  const project = openProject("nv-keep-heavy", { create: true });
+  const tracker = legacyTracker("nv-keep-heavy", { "guard-soak.md": OPEN_FILE });
+  importLegacyVigils(project, tracker, { dryRun: false });
+  assert.equal(project.readItem<Vigil>("vigil", "guard-soak")?.header.heavy, true, "an imported open vigil is heavy");
+  assert.equal(darius(["vigil", "set", "guard-soak", "--no-heavy"], repo).status, 0);
+  const again = importLegacyVigils(project, tracker, { dryRun: false });
+  assert.equal(project.readItem<Vigil>("vigil", "guard-soak")?.header.heavy, false);
+  assert.deepEqual(again.problems, []);
 });
 
 test("import does not close twice when the store already holds a vigil.closed line", () => {
@@ -425,8 +483,9 @@ test("projection: files in the legacy format, a stale file removed, an unchanged
   assert.equal(existsSync(join(tree, "vigils", "stale.md")), false);
   assert.equal(statSync(projectedVigilPath(tree, "guard-soak")).mtimeMs, old.getTime(), "an unchanged file is not rewritten");
 
-  // A changed store vigil rewrites its file only.
+  // A changed store vigil rewrites its file only (the tree dir exists, so the verb projects).
   const repo = ownedRepo("nv-proj");
+  withTree("nv-proj");
   assert.equal(darius(["vigil", "close", "guard-soak", "--verdict", "failed", "--date", "2026-10-01"], repo).status, 0);
   projectVigils(project, tree);
   assert.match(readFileSync(projectedVigilPath(tree, "guard-soak"), "utf8"), /resolved: 2026-10-01\nverdict: failed\n/u);
@@ -510,6 +569,21 @@ test("due lists no vigils for a project that does not own vigil, and keeps the r
   const json = darius(["due", "--json"], repo);
   assert.deepEqual(JSON.parse(json.stdout).vigils, { due: [], armed: [] });
   assert.equal(darius(["due"], repo).stdout, "no rituals due\n");
+});
+
+test("a vigil verb never creates the tree dir; with a tree dir it refreshes the projection", () => {
+  const repo = ownedRepo("nv-guard");
+  assert.equal(darius(["vigil", "add", "soak", "--until", "x", "--stdin"], repo, BODY).status, 0);
+  assert.equal(darius(["vigil", "set-body", "soak", "--stdin"], repo, BODY_TWO).status, 0);
+  assert.equal(darius(["vigil", "set", "soak", "--no-heavy"], repo).status, 0);
+  assert.equal(darius(["vigil", "close", "soak", "--verdict", "held"], repo).status, 0);
+  const storeDir = join(process.env.DARIUS_STATE_DIR ?? "", "nv-guard");
+  assert.equal(existsSync(join(storeDir, "tracker")), false, "no tracker/ folder in the store dir");
+
+  const tree = withTree("nv-guard");
+  assert.equal(existsSync(join(tree, "vigils")), false);
+  assert.equal(darius(["vigil", "add", "second", "--until", "x", "--stdin"], repo, BODY).status, 0);
+  assert.deepEqual(readdirSync(join(tree, "vigils")), ["second.md", "soak.md"], "with the tree dir present the verb projects into it");
 });
 
 test("the store was the only thing the native verbs wrote: no .tracker/ appears in the repo", () => {
