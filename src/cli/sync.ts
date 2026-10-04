@@ -127,7 +127,8 @@ async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean)
   // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
   const captured = hasTree(project) ? captureTree(project) : null;
   const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly });
-  if (captured === null) return report;
+  // Checked again: on a new host the first pull brings the first tree lines.
+  if (captured === null && !hasTree(project)) return report;
   // After the pull: lines from other hosts reach the working copy.
   const applied = applyTree(project);
   let recaptured = 0;
@@ -139,10 +140,10 @@ async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean)
   // Pulled vigil items and tree files both feed the derived files.
   await refreshDerived(project);
   report.tree = {
-    captured: captured.put + captured.removed + recaptured,
+    captured: (captured?.put ?? 0) + (captured?.removed ?? 0) + recaptured,
     applied: applied.written + applied.removed,
     merged: applied.merged,
-    problems: [...captured.problems, ...applied.problems],
+    problems: [...(captured?.problems ?? []), ...applied.problems],
   };
   return report;
 }

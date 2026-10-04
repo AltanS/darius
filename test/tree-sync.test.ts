@@ -134,6 +134,13 @@ test("darius sync captures the tree before the push and applies it after the pul
   assert.equal(pushed.projects[0].tree.captured, 1, "the hand-written file");
   assert.deepEqual(pushed.projects[0].tree.problems, []);
 
+  // A new host whose first act is a sync: the pull brings the first tree lines, and the same sync applies them.
+  const hostE = makeHost("host-e", endpoint);
+  const fresh = JSON.parse(await ok(hostE, ["sync", "--project", project, "--json"], SANDBOX));
+  assert.ok(fresh.projects[0].tree.applied > 0, JSON.stringify(fresh.projects[0]));
+  assert.equal(readFileSync(join(hostE.state, project, "tracker", "M1-alpha", "notes.md"), "utf8"), "by hand\n");
+  assert.equal(existsSync(join(hostE.state, project, "tracker", "00-INDEX.md")), true, "the first sync rebuilt the index");
+
   const second = join(SANDBOX, "checkout-b");
   git(SANDBOX, ["clone", "--quiet", first, second]);
   const linked = await ok(hostB, ["init"], second);
