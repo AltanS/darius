@@ -53,9 +53,9 @@ Consolidate completed milestones into archive documents, clean up the active das
    - Full original spec content under `## Specs`
    - **Counsel Transcripts** appendix, inline every `_counsel/*.md`
 
-7. **Commit archive** via `/darius-commit` before cleanup.
+7. **Commit archive** via `/darius-commit` before cleanup. In a project whose `.tracker` is a link to the darius store there is nothing to stage: the archive file is in the store tree, not in git. Skip this step.
 
-8. **Clean up**: `rm -rf .tracker/{milestone-slug}/` (skipped by `--keep`). The worklog is **distilled, never deleted**, its stub stays in `.tracker/worklog/` as a findable anchor long after the milestone folder is gone:
+8. **Clean up**: `rm -rf .tracker/{milestone-slug}/` (skipped by `--keep`). This works through the link too. In a store-owned project darius records the archive file and the removal at the next darius verb or sync, so the skill must end with one: the `darius index --rebuild` of step 9. The worklog is **distilled, never deleted**, its stub stays in `.tracker/worklog/` as a findable anchor long after the milestone folder is gone:
    - Author an anchor stub from the worklog content already in context. Template, selectivity rule, size budget and the secrets rule: `skills/dream/SKILL.md` §3-4.
    - Land it (no Write tool, quoted heredoc):
      ```bash

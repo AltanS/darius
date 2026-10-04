@@ -18,7 +18,8 @@ session, and you answer held questions in a terminal UI.
 **Status: experimental.** Rituals, vigils, runs, sync, snapshot backups, import of a legacy
 `.tracker/`, the unattended runner, the terminal UI (the Due and Run screens), and a read-only web
 status page work. Milestones and specs still run through a vendored copy of the older `tracker`
-CLI, which darius calls for you. They are not native to darius yet. The design is in
+CLI, which darius calls for you. They are not native to darius yet. Since 0.67.0 a project can keep
+its whole tracker tree in the darius store, and `darius onboard` moves a repo there. The design is in
 [`docs/concept.md`](docs/concept.md).
 
 ## The words darius uses
@@ -41,21 +42,20 @@ CLI, which darius calls for you. They are not native to darius yet. The design i
 The example below is one project, `acme-web`, on one host, `host-a`. It shows what you commit and
 what stays on the machine.
 
-### In the repo (committed to git)
+### In the repo
 
 ```text
 ~/projects/acme-web/
-├── .darius.toml                 # project name, time zone, rituals, policies
-├── .claude/skills/              # one folder per ritual procedure
+├── .darius.toml                 # committed: project name, time zone, kinds, rituals, policies
+├── .gitignore                   # committed: lists /.tracker
+├── .claude/skills/              # committed: one folder per ritual procedure
 │   ├── daily-report/SKILL.md    #   the steps of one ritual
 │   └── weekly-audit/SKILL.md
-├── .tracker/                    # milestones, specs, worklogs, vigils
+├── .tracker -> ~/.local/share/darius/acme-web/tracker   # a link, NOT in git
 │   ├── 00-INDEX.md
 │   ├── M12-checkout-redesign/
 │   │   ├── 00-README.md         #   the milestone
 │   │   └── 01-cart-page.md      #   one spec
-│   ├── vigils/
-│   │   └── guard-soak.md        #   a check that waits for an event
 │   └── worklog/
 └── src/ ...                     # your own code
 ```
@@ -63,9 +63,13 @@ what stays on the machine.
 Git holds the definition of the work. A ritual is a table in `.darius.toml`. Its procedure is the
 skill file. Review both like code, in a pull request.
 
-The old `tracker` plugin is gone, but the `.tracker/` folder stays. It is the format darius still
-reads and writes for milestones, specs, worklogs and vigils, and it stays in git. The `/darius-*`
-skills and the `darius` command now do the work that the plugin did.
+Where the tracker lives depends on `kinds` in `.darius.toml`. The block above is a project with
+`kinds = ["ritual", "vigil", "milestone"]`: the milestones, specs, worklogs and archive are in the
+darius store, and `.tracker` is a link to them. Nothing under it is in git, so never `git add` it.
+Every path such as `.tracker/M12-checkout-redesign/01-cart-page.md` works as before. A repo without
+that `kinds` line keeps a real `.tracker/` folder in git, which the vendored code reads and writes.
+`darius onboard` moves such a repo (see [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)).
+The `/darius-*` skills and the `darius` command do the work that the old `tracker` plugin did.
 
 ### On the host (never in git)
 
@@ -83,6 +87,7 @@ skills and the `darius` command now do the work that the plugin did.
     ├── items/
     │   ├── rituals/                # each ritual, mirrored from .darius.toml
     │   └── vigils/
+    ├── tracker/                    # the tracker tree, when kinds lists milestone
     ├── runs/<id>/                  # per run: prompt, policy, findings
     ├── ledger/host-a/              # the log of what happened, in chunks
     ├── blobs/                      # older versions and large outputs
@@ -128,7 +133,7 @@ everything below works without one.
 
 ```bash
 cd ~/projects/acme-web
-darius init                 # writes .darius.toml, links this checkout, creates .tracker/
+darius init                 # writes .darius.toml, links this checkout, makes the tracker link
 mkdir -p .claude/skills/daily-report   # then write the steps in SKILL.md inside it
 ```
 
@@ -160,7 +165,7 @@ store between hosts (steps 2 and 3 of [Install](#install)).
 - [What it looks like in use](#what-it-looks-like-in-use)
 - [Quick start](#quick-start-one-host-no-bucket)
 - [Install](#install), [Update](#update), [NixOS and Nix](#nixos-and-nix)
-- [Link a repo](#link-a-repo)
+- [Link a repo](#link-a-repo), [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)
 - [Commands](#commands)
 - [Develop](#develop)
 - More: [Backups](docs/backups.md), [Marker reference](docs/marker.md), [Design](docs/concept.md)
@@ -293,12 +298,15 @@ app in place.
 
 Run `darius init` once in each repo, on each host. It prints what it did and what to run next.
 
-- In a new repo it writes `.darius.toml`, links the checkout on this host, and creates
-  `.tracker/`. Commit both.
-- In a repo with a `.tracker/` from the old tracker plugin it imports the rituals, runs and
+- In a new repo it writes `.darius.toml` with `kinds = ["ritual", "vigil", "milestone"]`, links the
+  checkout on this host, creates the tracker tree in the darius store, links `.tracker` to it and
+  adds `/.tracker` to `.gitignore`. Commit `.darius.toml` and `.gitignore`. No tracker folder lands
+  in git.
+- In a repo that still has a `.tracker/` folder it works as before: it imports the rituals, runs and
   verification log into the darius store, writes `.darius.toml` and links the checkout.
-  `.tracker/` stays as it is. It refuses the import when the store already holds rituals for the
-  project; `darius init --no-import` then links without it.
+  `.tracker/` stays as it is, in git, and init prints a hint to run `darius onboard`. It refuses the
+  import when the store already holds rituals for the project; `darius init --no-import` then links
+  without it.
 - In a repo with a committed `.darius.toml` (a clone on another host) it links the checkout.
   A second run says `already linked`.
 
@@ -312,6 +320,7 @@ v = 3                               # format version; darius init writes 3
 project = "acme-web"                 # the project this repo belongs to
 tz = "Europe/Berlin"                # required in v3; init writes this host's zone
 max_mode = "report"                 # optional: the highest ritual mode the timer may run here
+kinds = ["ritual", "vigil", "milestone"]   # optional: what the store owns; see the marker reference
 ```
 
 ### Marker v3: rituals in git
@@ -360,6 +369,33 @@ rejects modes above it, and run-due skips those rituals as `policy-capped` and r
 
 `scripts/acceptance.sh` validates the complete install on the bucket host, end to end. It runs one real
 `claude -p` session.
+
+### Move a repo's tracker into the store
+
+A repo with a real `.tracker/` folder in git moves to the store with `darius onboard`. Every host
+must run 0.67.0 or later first, because an older darius refuses the `kinds` key.
+
+```bash
+darius onboard scan             # read-only: what would move, and what blocks it
+darius onboard --dry-run        # show the plan
+darius onboard                  # do it
+darius onboard --only vigil     # move the vigils only, leave the rest in git
+```
+
+`darius onboard` refuses a `.tracker/` with uncommitted changes. It imports `.tracker/vigils` into
+the store, copies the rest of `.tracker/` into the store and checks every file by sha256, writes a
+`project.cutover` ledger line, adds the `kinds` line to `.darius.toml`, runs `git rm -r .tracker`,
+links `.tracker` to the store and adds `/.tracker` to `.gitignore`. It never commits. Review the
+change and commit `.darius.toml` and `.gitignore` yourself.
+
+On every other host: update darius, `git pull`, then run `darius sync`. darius captures tracker
+changes after each tracker verb and at each sync, and applies other hosts' changes before each
+tracker verb and after a pull. The last writer wins per file. When two hosts edit one file, darius
+reports the blob id of the version that lost. Host-local files (`00-INDEX.md`, `.pending-sync` and
+similar) do not sync.
+
+To go back, revert the cut-over commit (git still has every file) and copy newer files back from
+the store's working copy, `~/.local/share/darius/<project>/tracker/`.
 
 ## NixOS and Nix
 
@@ -433,11 +469,12 @@ the full reference.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
-- `darius vigil add|list|show|close|sweep`: one-shot checks that wait for a date or an event.
+- `darius vigil add|set-body|list|show|close|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
-- `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and `.tracker/` or an import of its rituals.
+- `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and the tracker link, or an import of its rituals when a `.tracker/` folder exists.
+- `darius onboard [scan] [--dry-run] [--only vigil]`: move a repo's `.tracker/` into the store. Never commits.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does. A missing skill file is an error; other findings are warnings. `--resolved` prints the effective policy of one ritual.
 - `darius marker factor [dir] [--write]`: move the `may` and `hold` rules that inline rituals share into new `[policies.*]` tables. Prints a diff; `--write` writes the file and never runs git.

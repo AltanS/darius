@@ -55,4 +55,4 @@ A stub over 4 KB warns but still writes. If the raw copy already exists and diff
 - `... worklog distill <file> --check [--min-age-days N]`: prints the reason on stdout, exits 0 when eligible, 1 otherwise. The scriptable single-file gate.
 - `... worklog distill --list [--json] [--min-age-days N]`: every worklog file with `eligible` and its `reason`. Surveys the whole directory, so it cannot be combined with `--check` or a `<file>` argument.
 
-**Security:** Worklog files are committed to the repository. Never write API keys, tokens, passwords, connection strings with credentials, `.env` contents, session cookies, or any sensitive value. Scrub command output before pasting.
+**Security:** Worklog files are shared: committed to the repository, or synced through the darius store when the project owns the tracker tree. Never write API keys, tokens, passwords, connection strings with credentials, `.env` contents, session cookies, or any sensitive value. Scrub command output before pasting.

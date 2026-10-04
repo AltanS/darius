@@ -107,9 +107,10 @@ Present findings as a structured proposal grouped by spec file:
 ## Phase 4: Apply
 
 1. **Ask user** via AskUserQuestion: apply all / select subset / skip.
-2. **Apply selected changes**: edit spec files, add/remove/update checklist items, update frontmatter counts and `depends_on`. **Repo-relative paths only**: every path you write into a spec, `Command:`/`Expected:` lines (as in the `src/middleware/auth.ts` example above) and prose, must be repo-relative, never `/home/you/repo/...`. Verification runs from the repo root and `.tracker/` is committed, so absolute paths leak the author's home-dir layout into git history and won't run on other machines.
+2. **Apply selected changes**: edit spec files, add/remove/update checklist items, update frontmatter counts and `depends_on`. **Repo-relative paths only**: every path you write into a spec, `Command:`/`Expected:` lines (as in the `src/middleware/auth.ts` example above) and prose, must be repo-relative, never `/home/you/repo/...`. Verification runs from the repo root and `.tracker/` is shared (committed, or synced through the darius store), so absolute paths leak the author's home-dir layout and won't run on other machines.
 3. **Rebuild index**:
    `!darius index --rebuild`
+   In a project whose `.darius.toml` `kinds` lists `milestone`, darius records the spec edits above at the next darius verb or sync. This command is that verb, so the phase ends with it.
 4. **New specs**: if approved, invoke `darius add`.
 5. **Commit**: invoke `/darius-commit` with context "tracker enrich: update specs based on implementation learnings".
 
@@ -128,7 +129,7 @@ Present findings as a structured proposal grouped by spec file:
    _No lessons of note, mechanical milestone._
    ```
 6. Otherwise write 3–7 bullets prefixed by `<!-- enriched: <ISO> -->`, replacing any prior enrich-authored content.
-7. Commit via `/darius-commit` with context "tracker enrich: milestone lessons".
+7. Commit via `/darius-commit` with context "tracker enrich: milestone lessons". In a store-owned project the Lessons edit is not in git and is recorded at the next darius verb; `darius index --rebuild` (run by `/darius-commit`) is that verb.
 
 ## Rules
 

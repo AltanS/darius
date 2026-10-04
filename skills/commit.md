@@ -17,6 +17,8 @@ command -v darius >/dev/null || { echo "darius is not installed. Install it: bas
 
 Atomically commit code changes alongside tracker documentation updates.
 
+**Store-owned tracker.** When `.tracker` is a link (the project's `.darius.toml` `kinds` lists `milestone`), the tracker tree lives in the darius store and nothing under it is in git. There are no tracker files to stage, and `darius uncommitted-verified` reports none. The commit holds code only. Never `git add .tracker`. Skip the steps below that stage or prune tracker files (steps 5 and 6 reduce to the code files); steps 3, 4, 7, 8 and 9 still apply.
+
 **Scope** (read `$ARGUMENTS` first): if one or more milestone slugs / spec paths are passed (e.g. `M191` or `.tracker/M191-foo/04-thing.md`), this is a **scoped** commit, stage ONLY those specs plus the code artifacts recorded in their worklog threads. Do not sweep unrelated dirty files (other milestones, unrelated specs) into the commit. With no scope argument, stage the changes belonging to the current work (default), or everything with `--all`. The commit-first gate in `/darius-work-plan` always passes a scope, honor it.
 
 1. **Analyze changes**: `git status` and `git diff --name-only`. Exit if nothing to commit. When scoped, narrow to the scope's spec files + their worklog-recorded code artifacts.
@@ -25,8 +27,8 @@ Atomically commit code changes alongside tracker documentation updates.
 4. **Validate index (CRITICAL)**:
    `!darius index --rebuild`
    Wait for success before staging.
-5. **Stage**: the in-scope code files + updated tracker files (including `00-INDEX.md`). When scoped, stage only the scoped specs + their code artifacts + `00-INDEX.md`, explicitly `git add <paths>`, never `git add -A`. With `--all`: stage all modified files.
-6. **Prune drift ledger**: remove `.pending-sync` entries for files now staged. Stage the updated ledger.
+5. **Stage**: the in-scope code files + updated tracker files (including `00-INDEX.md`). In a store-owned project stage the code files only. When scoped, stage only the scoped specs + their code artifacts + `00-INDEX.md`, explicitly `git add <paths>`, never `git add -A`. With `--all`: stage all modified files.
+6. **Prune drift ledger**: remove `.pending-sync` entries for files now staged. Stage the updated ledger. (In a store-owned project `.pending-sync` is host-local and never staged.)
 7. **Compose commit message** (LLM): conventional commit reflecting the code change with tracker progress trailer, e.g. `Tracker: M2-api-layer/01-AUTH 3/5 -> 4/5 verified`.
 8. **Create commit** via Bash using the composed message.
 9. **Stamp loop stage**: after the commit lands, for each worklog thread whose spec is in this commit's scope:

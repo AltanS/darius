@@ -34,6 +34,7 @@ const { openProject, putBlob } = await import("../src/core/store.ts");
 const { acknowledgeRun } = await import("../src/runner/hold.ts");
 const { collectStatus, runRows } = await import("../src/web/status.ts");
 const { writeLink } = await import("../src/core/links.ts");
+const { projectDir } = await import("../src/core/paths.ts");
 const { ulid } = await import("../src/core/ulid.ts");
 const { Seeder } = await import("./helpers/finding-seed.ts");
 
@@ -508,6 +509,48 @@ test("status: a linked checkout's legacy milestones reach the project, an unlink
   assert.deepEqual(tracked?.milestones[0]?.specs.map((row) => [row.source, row.slug, row.label, row.done, row.total]), [["legacy", "m7-01-cart", "M7/01", 1, 2]]);
   const untracked = projects.find((entry) => entry.name === "web-untracked");
   assert.deepEqual([untracked?.milestones, untracked?.milestonesArchived], [[], 0]);
+});
+
+/** A tracker tree with one milestone `M<n>-<slug>` titled `title`, one spec and, optionally, one armed vigil. */
+function writeTree(trackerDir: string, number: number, title: string, vigil?: string): void {
+  const dir = join(trackerDir, `M${String(number)}-tree`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "00-README.md"), `---\nname: ${title}\nstarted: 2026-09-01\n---\n`);
+  writeFileSync(join(dir, "01-spec.md"), "---\nupdated: 2026-09-02\n---\n\n# Spec\n\n- [x] a\n- [ ] b\n");
+  if (vigil === undefined) return;
+  mkdirSync(join(trackerDir, "vigils"), { recursive: true });
+  writeFileSync(join(trackerDir, "vigils", `${vigil}.md`), `---\nname: Vigil ${vigil}\nslug: ${vigil}\nuntil: the next batch\n---\n`);
+}
+
+test("status: the store tree shows without a checkout link, and wins over the checkout's .tracker", () => {
+  // Only the store working copy: a host with no checkout still shows an onboarded project.
+  openProject("web-tree-only", { create: true });
+  writeTree(join(projectDir("web-tree-only"), "tracker"), 21, "From the store", "store-soak");
+  // Both: the store working copy wins, and the legacy vigil view reads it too.
+  openProject("web-tree-both", { create: true });
+  writeTree(join(projectDir("web-tree-both"), "tracker"), 22, "From the store", "store-soak");
+  const checkout = mkdtempSync(join(tmpdir(), "darius-web-tree-"));
+  writeTree(join(checkout, ".tracker"), 23, "From the checkout", "checkout-soak");
+  writeLink("web-tree-both", checkout);
+  // Neither: a project with no tree and no checkout has nothing.
+  openProject("web-tree-neither", { create: true });
+
+  const projects = collectStatus().projects;
+  const only = projects.find((entry) => entry.name === "web-tree-only");
+  assert.equal(only?.checkout, null);
+  assert.deepEqual(only?.milestones.map((row) => [row.id, row.title, row.done, row.total]), [["M21", "From the store", 1, 2]]);
+  assert.deepEqual(only?.vigils.map((row) => [row.slug, row.state]), [["store-soak", "armed"]]);
+  const both = projects.find((entry) => entry.name === "web-tree-both");
+  assert.deepEqual(both?.milestones.map((row) => [row.id, row.title]), [["M22", "From the store"]]);
+  assert.deepEqual(both?.vigils.map((row) => row.slug), ["store-soak"]);
+  const neither = projects.find((entry) => entry.name === "web-tree-neither");
+  assert.deepEqual([neither?.milestones, neither?.vigils, neither?.milestonesArchived], [[], [], 0]);
+
+  const context = webContext("tester");
+  assert.equal(context.milestone("web-tree-only", "M21")?.row.title, "From the store", "detail without a checkout");
+  assert.equal(context.milestone("web-tree-both", "M22")?.row.title, "From the store");
+  assert.equal(context.milestone("web-tree-both", "M23"), null, "the checkout's tree is not read when the store has one");
+  assert.equal(context.milestone("web-tree-neither", "M21"), null);
 });
 
 test("milestone detail through the WebContext: README, spec texts and worklogs as blocks, unknown ones null", () => {

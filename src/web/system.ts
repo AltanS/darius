@@ -10,14 +10,14 @@ import { basename, dirname, join } from "node:path";
 
 import { loadConfigIfPresent } from "../core/config.ts";
 import { hostId, listChunks, readLedger } from "../core/ledger.ts";
-import { readLegacyMilestones } from "../core/legacy-milestones.ts";
+import { readLegacyMilestonesAt } from "../core/legacy-milestones.ts";
 import { linkedDir } from "../core/links.ts";
 import { projectDir, stateDir } from "../core/paths.ts";
 import { listProjects, openProject } from "../core/store.ts";
 import { ulidTime } from "../core/ulid.ts";
 import { VERSION } from "../version.ts";
 import type { SystemDisk, SystemHost, SystemProject, SystemStatus } from "./api.ts";
-import { lastSync } from "./status.ts";
+import { lastSync, trackerDirOf } from "./status.ts";
 
 const WALK_TTL_MS = 60_000;
 
@@ -118,9 +118,9 @@ function systemProject(name: string, walk: Walk): SystemProject & { milestones: 
     // A broken project still shows up, with what could be read.
   }
   try {
-    const checkout = linkedDir(name);
-    if (checkout !== undefined) {
-      const { milestones } = readLegacyMilestones(checkout);
+    const trackerDir = trackerDirOf(name, linkedDir(name) ?? null);
+    if (trackerDir !== null) {
+      const { milestones } = readLegacyMilestonesAt(trackerDir);
       row.milestones = milestones.length;
       row.specs = milestones.reduce((sum, milestone) => sum + milestone.specs.length, 0);
     }

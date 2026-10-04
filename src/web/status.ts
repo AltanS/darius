@@ -12,9 +12,9 @@ import { ritualState } from "../core/due.ts";
 import { collectFindings, findingCounts } from "../core/finding-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
-import { readLegacyMilestoneDetail, type LegacyFile } from "../core/legacy-milestone-detail.ts";
-import { readLegacyMilestones, type LegacyMilestone } from "../core/legacy-milestones.ts";
-import { readLegacyVigils } from "../core/legacy-vigils.ts";
+import { readLegacyMilestoneDetailAt, type LegacyFile } from "../core/legacy-milestone-detail.ts";
+import { readLegacyMilestonesAt, type LegacyMilestone } from "../core/legacy-milestones.ts";
+import { readLegacyVigilsAt } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
 import { readMarker, type Marker } from "../core/marker.ts";
 import { ritualWarnings } from "../core/reconcile.ts";
@@ -199,10 +199,10 @@ function vigilRows(project: Project, ledger: LedgerLine[]): VigilRow[] {
  * Vigils that only the legacy tracker holds (phase 3 has not moved them):
  * read from the linked checkout, read-only, and never over a vigil the store has.
  */
-function legacyVigilRows(checkout: string | null, known: readonly VigilRow[]): VigilRow[] {
-  if (checkout === null) return [];
+function legacyVigilRows(trackerDir: string | null, known: readonly VigilRow[]): VigilRow[] {
+  if (trackerDir === null) return [];
   const have = new Set(known.map((vigil) => vigil.slug));
-  return readLegacyVigils(checkout)
+  return readLegacyVigilsAt(trackerDir)
     .filter((vigil) => !have.has(vigil.slug))
     .map((vigil) => {
       const closed = vigil.resolved !== null || vigil.verdict !== null;
@@ -217,6 +217,20 @@ function legacyVigilRows(checkout: string | null, known: readonly VigilRow[]): V
         until: vigil.until,
       };
     });
+}
+
+/**
+ * The tracker tree the readers use: the store working copy
+ * `<state dir>/<project>/tracker` when it exists (a project whose marker lists
+ * `milestone`; a host with no checkout still has it), else `<checkout>/.tracker`
+ * as before, else null. The store path is the same one `treeDir(project)` in
+ * src/core/tree.ts names; it is spelled out here so the web layer does not
+ * depend on that module.
+ */
+export function trackerDirOf(project: string, checkout: string | null): string | null {
+  const stored = join(projectDir(project), "tracker");
+  if (existsSync(stored)) return stored;
+  return checkout === null ? null : join(checkout, ".tracker");
 }
 
 function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
@@ -235,10 +249,10 @@ function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
   };
 }
 
-/** Milestones that only the legacy tracker holds: read from the linked checkout, read-only. */
-function legacyMilestones(checkout: string | null): Pick<ProjectStatus, "milestones" | "milestonesArchived"> {
-  if (checkout === null) return { milestones: [], milestonesArchived: 0 };
-  const { milestones, archived } = readLegacyMilestones(checkout);
+/** Milestones of the tracker tree: read from the store working copy or the linked checkout, read-only. */
+function legacyMilestones(trackerDir: string | null): Pick<ProjectStatus, "milestones" | "milestonesArchived"> {
+  if (trackerDir === null) return { milestones: [], milestonesArchived: 0 };
+  const { milestones, archived } = readLegacyMilestonesAt(trackerDir);
   return { milestones: milestones.map(milestoneRow), milestonesArchived: archived };
 }
 
@@ -249,12 +263,12 @@ function milestoneFile(file: LegacyFile): MilestoneFile {
   return { path: file.path, size: file.size, modifiedAt: file.modifiedAt, lines: content === null ? 0 : content.split("\n").length, body, omitted: file.omitted };
 }
 
-/** One milestone of a project's linked checkout, in full; null when the project, its checkout or the milestone is unknown. */
+/** One milestone of a project's tracker tree, in full; null when the project, its tree or the milestone is unknown. */
 export function milestoneDetail(projectName: string, ref: string): MilestoneDetail | null {
   if (!listProjects().includes(projectName)) return null;
-  const checkout = linkedDir(projectName);
-  if (checkout === undefined) return null;
-  const detail = readLegacyMilestoneDetail(checkout, ref);
+  const trackerDir = trackerDirOf(projectName, linkedDir(projectName) ?? null);
+  if (trackerDir === null) return null;
+  const detail = readLegacyMilestoneDetailAt(trackerDir, ref);
   if (detail === null) return null;
   const row = milestoneRow(detail.milestone);
   return {
@@ -290,8 +304,9 @@ function projectStatus(name: string, now: Date): ProjectStatus {
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
     status.findings = findingCounts(collectFindings(project, ledger));
     const stored = vigilRows(project, ledger);
-    status.vigils = [...stored, ...legacyVigilRows(checkout, stored)];
-    const tracked = legacyMilestones(checkout);
+    const trackerDir = trackerDirOf(name, checkout);
+    status.vigils = [...stored, ...legacyVigilRows(trackerDir, stored)];
+    const tracked = legacyMilestones(trackerDir);
     status.milestones = tracked.milestones;
     status.milestonesArchived = tracked.milestonesArchived;
     if (checkout !== null) status.maxMode = readMarker(checkout)?.maxMode ?? null;

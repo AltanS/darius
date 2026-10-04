@@ -43,6 +43,6 @@ This one command rebuilds both indexes: `.tracker/00-INDEX.md` and the worklog i
 1. **Report** (use current status as source of truth):
    `!darius status --json`
    Summarize index count changes and worklog threads closed. If `--dry-run`, show what WOULD change but write nothing.
-2. **Commit**: if files changed and NOT `--dry-run`, invoke `/darius-commit` with message context "tracker wrap-up: reconcile index and close worklogs".
+2. **Commit**: if files changed and NOT `--dry-run`, invoke `/darius-commit` with message context "tracker wrap-up: reconcile index and close worklogs". When `.tracker` is a link to the darius store (`kinds` lists `milestone`), the tracker files are not in git: commit only code changes, never `git add .tracker`, and skip the commit when only tracker files changed. The index rebuild in Phase 1 still runs; it is the darius verb that records the tracker changes.
 
 Read-heavy, write-careful: read everything, only write what's actually wrong. Never modify verification checklist items (`[x]`, `[ ]`, etc.). Idempotent: running twice produces no changes the second time.

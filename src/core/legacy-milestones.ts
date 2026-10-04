@@ -238,7 +238,11 @@ function countArchived(root: string): number {
 
 /** The open milestones of a checkout, and how many are archived. */
 export function readLegacyMilestones(checkout: string): LegacyMilestones {
-  const root = join(checkout, ".tracker");
+  return readLegacyMilestonesAt(join(checkout, ".tracker"));
+}
+
+/** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */
+export function readLegacyMilestonesAt(root: string): LegacyMilestones {
   if (!existsSync(root)) return { milestones: [], archived: 0 };
   let names: string[] = [];
   try {
