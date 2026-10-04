@@ -622,7 +622,8 @@ async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<numb
     console.log(JSON.stringify({ mode: "dry-run", ...surveyJson(result), vigil_import: vigils, copy: copy.map((file) => file.path), target: project === null ? null : treeDir(project) }));
   } else {
     for (const line of surveyLines(result)) console.log(line);
-    console.log("error" in vigils ? `✗ vigils: ${vigils.error}` : `· vigils: ${vigils.summary}`);
+    // A failed import is already a blocker line above.
+    if (!("error" in vigils)) console.log(`· vigils: ${vigils.summary}`);
     if (scope === "all") {
       console.log(`· would copy ${String(copy.length)} files${project === null ? "" : ` into ${treeDir(project)}`}:`);
       for (const file of copy) console.log(`  ${file.path}`);
