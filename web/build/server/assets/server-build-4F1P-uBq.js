@@ -9924,17 +9924,23 @@ function activity(projects, opts) {
 		manual: itemManual(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item)))
 	}))).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
+/** A newer run of the same ritual in the same project that closed complete: it replaces this run's questions. */
+function supersededBy(run, other) {
+	return other.item === run.item && other.project === run.project && other.run !== run.run && other.phase === "closed" && other.outcome === "complete" && other.startedAt.localeCompare(run.startedAt) > 0;
+}
 /**
 * A complete run whose result asks the operator something (0.22.0), and
 * nobody answered yet: it waits for `darius run ack --note`, like a held run
-* waits for an answer.
+* waits for an answer. It stops asking once a newer run of the same ritual
+* (a follow-up counts) closed complete, since that run answers it. `runs` are
+* the runs to look through: the same project's, or any list that holds them.
 */
-function asksYou(run) {
-	return run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
+function asksYou(run, runs) {
+	return run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null && !runs.some((other) => supersededBy(run, other));
 }
-/** How a run ended, in words and a tone (the table in `state-words.ts`). */
-function runState(run) {
-	return runWord(run, asksYou(run));
+/** How a run ended, in words and a tone (the table in `state-words.ts`). `runs` are as for `asksYou`. */
+function runState(run, runs) {
+	return runWord(run, asksYou(run, runs));
 }
 /** A run still open after this long has outlived the timeout by far: it may be stuck. */
 var STUCK_AFTER_MS = 72e5;
@@ -10139,13 +10145,19 @@ function addDays(date, days) {
 function weekdayDate(date) {
 	return dayName(`${date}T00:00:00Z`, 0);
 }
-function groupOf$1(today, date, overdue) {
+function groupOf$1(today, row) {
+	const { date } = row;
+	if (row.off) return {
+		key: "off",
+		kind: "off",
+		label: "Off"
+	};
 	if (date === null) return {
 		key: "none",
 		kind: "none",
 		label: "No schedule"
 	};
-	if (overdue) return {
+	if (row.overdueDays > 0) return {
 		key: "overdue",
 		kind: "overdue",
 		label: "Overdue"
@@ -10186,8 +10198,9 @@ function isNoise$1(run) {
 }
 /** Whether the newest counted run of a ritual is a complete run that asks the operator something. */
 function asksNow(project, ritual) {
-	const last = project.runs.filter((run) => run.item === `ritual/${ritual.slug}` && !isNoise$1(run)).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
-	return last !== void 0 && asksYou(last);
+	const own = project.runs.filter((run) => run.item === `ritual/${ritual.slug}` && !isNoise$1(run)).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+	const last = own[0];
+	return last !== void 0 && asksYou(last, own);
 }
 function placement(input, project, ritual) {
 	const { today } = input;
@@ -10216,6 +10229,12 @@ function placement(input, project, ritual) {
 		state: asks
 	};
 	const late = Math.max(ritual.overdueDays, dayGap(ritual.nextDue, today));
+	if (late > 0 && ritual.mode === "off") return {
+		date: ritual.nextDue,
+		overdueDays: 0,
+		state: null,
+		off: true
+	};
 	if (late > 0) return {
 		date: ritual.nextDue,
 		overdueDays: late,
@@ -10247,7 +10266,8 @@ function ritualRow(input, project, ritual) {
 		facts: factsText(ritual),
 		until: null,
 		note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
-		overdueDays: at.overdueDays
+		overdueDays: at.overdueDays,
+		off: at.off === true
 	};
 }
 function isArmed(vigil) {
@@ -10276,7 +10296,8 @@ function vigilRow(input, project, vigil, due) {
 		facts: "",
 		until: vigil.until,
 		note,
-		overdueDays: late
+		overdueDays: late,
+		off: false
 	};
 }
 function waitingRow(project, vigil) {
@@ -10311,7 +10332,8 @@ var GROUP_ORDER = {
 	tomorrow: 2,
 	day: 3,
 	later: 4,
-	none: 5
+	none: 5,
+	off: 6
 };
 function buildAgenda(input) {
 	const rows = [];
@@ -10327,7 +10349,7 @@ function buildAgenda(input) {
 	}
 	const groups = /* @__PURE__ */ new Map();
 	for (const row of rows.toSorted(byRow)) {
-		const spec = groupOf$1(input.today, row.date, row.overdueDays > 0);
+		const spec = groupOf$1(input.today, row);
 		const found = groups.get(spec.key);
 		if (found === void 0) groups.set(spec.key, {
 			...spec,
@@ -10343,7 +10365,7 @@ function buildAgenda(input) {
 		label,
 		rows: members
 	}));
-	const dated = ordered.filter((group) => group.kind !== "overdue" && group.kind !== "none").flatMap((group) => group.rows);
+	const dated = ordered.filter((group) => group.kind !== "overdue" && group.kind !== "none" && group.kind !== "off").flatMap((group) => group.rows);
 	const today = ordered.find((group) => group.kind === "today");
 	return {
 		groups: ordered,
@@ -10354,6 +10376,15 @@ function buildAgenda(input) {
 		dueToday: today?.rows.filter((row) => row.state === null || row.state !== RUNNING && row.state !== WAITING_FOR_YOU).length ?? 0,
 		armed
 	};
+}
+/** Vigils that need action: overdue or due today. The Vigils badge and the vigils tile of the Overview both show this number. */
+function vigilsDue(projects, today) {
+	const agenda = buildAgenda({
+		projects,
+		today,
+		only: "vigil"
+	});
+	return agenda.overdue + agenda.dueToday;
 }
 /** The first dated row that is not overdue (the strip already counts the overdue ones); null when there is none. */
 function nextLine(agenda, today) {
@@ -10490,6 +10521,7 @@ function djinnState(clock, project, ritual, runs) {
 		project,
 		ritual,
 		last,
+		own,
 		missed: ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday
 	};
 }
@@ -10624,8 +10656,8 @@ function isOpenFailure(run) {
 	return run.phase === "closed" && outcomeTone(run.outcome) === "bad" && run.acknowledged === null;
 }
 /** A run for the Last night cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
-function isDone(run) {
-	if (asksYou(run)) return false;
+function isDone(run, runs) {
+	if (asksYou(run, runs)) return false;
 	return run.phase === "closed" && (run.outcome === "complete" || outcomeTone(run.outcome) === "bad" && run.acknowledged !== null);
 }
 /** Who acknowledged a run: the decision on a result's questions, or who saw a failure. */
@@ -10636,7 +10668,7 @@ function seenText$1(run, clock) {
 }
 function finishedCard(clock, readRun, state, run) {
 	const failed = isOpenFailure(run);
-	const badge = runState(run);
+	const badge = runState(run, state.own);
 	const report = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : reportOf(readRun, run, DONE_CHARS, DONE_FADE);
 	return {
 		...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done", "ritual", isManual(state.ritual)),
@@ -10836,7 +10868,7 @@ function projectNeeds(clock, generatedAt, project) {
 		runs,
 		states,
 		held: runs.filter((run) => run.phase === "held"),
-		asks: runs.filter((run) => asksYou(run)),
+		asks: runs.filter((run) => asksYou(run, runs)),
 		failed: states.filter((state) => state.last !== null && isOpenFailure(state.last)),
 		stuck,
 		flagged,
@@ -10879,7 +10911,7 @@ function lastRunPiece(clock, states) {
 		text: " No ritual has run yet.",
 		ink: "mute"
 	}];
-	const state = runState(last);
+	const state = runState(last, states.flatMap((entry) => entry.own));
 	return [{
 		text: ` Last ritual run ${when(clock, last.startedAt)}, ${state.label.toLowerCase()}.`,
 		ink: state.tone === "bad" ? "bad" : "plain"
@@ -10903,9 +10935,10 @@ function cardSegment(needs, kind, label, tone) {
 * The status strip. A segment shows only above zero, and the strip not at all
 * when every segment is zero. The order: need you (held runs and runs that
 * ask), findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
-* (rituals and dated vigils past due), due today, and armed vigils.
+* (rituals and dated vigils past due), due today, and vigils due (late or due
+* today, the number of the Vigils badge).
 */
-function statusStrip(needs, running, agenda, workspace, findings) {
+function statusStrip(needs, running, agenda, workspace, findings, vigilsDueCount) {
 	const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
 	const findingsHref = href({
 		to: "section",
@@ -10957,17 +10990,17 @@ function statusStrip(needs, running, agenda, workspace, findings) {
 		live: false,
 		kind: null
 	}];
-	const armedHref = `${href({
+	const vigilsHref = `${href({
 		to: "section",
 		ws: workspace,
 		section: "vigils"
-	})}#${agenda.waiting.length === 0 ? "coming-up" : "waiting"}`;
-	const armedSegment = agenda.armed === 0 ? [] : [{
-		key: "armed",
-		label: "vigils armed",
-		count: agenda.armed,
+	})}#coming-up`;
+	const vigilsSegment = vigilsDueCount === 0 ? [] : [{
+		key: "vigils",
+		label: "vigils due",
+		count: vigilsDueCount,
 		tone: "gold",
-		href: armedHref,
+		href: vigilsHref,
 		live: false,
 		kind: "vigil"
 	}];
@@ -10981,7 +11014,7 @@ function statusStrip(needs, running, agenda, workspace, findings) {
 		...cardSegment(needs, "unreadable", "unreadable", "bad"),
 		...lateSegment,
 		...todaySegment,
-		...armedSegment
+		...vigilsSegment
 	];
 }
 /** Where a day group of the agenda lives: the Rituals section when it holds a ritual, else the Vigils section. */
@@ -11038,7 +11071,7 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
 		...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project))
 	];
-	const lastNight = states.filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY).toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? "")).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]);
+	const lastNight = states.filter((state) => state.last !== null && isDone(state.last, state.own) && clock.now - Date.parse(state.last.startedAt) < DAY).toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? "")).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]);
 	const agenda = buildAgenda({
 		projects: all.map((entry) => entry.project),
 		today: clock.today
@@ -11049,7 +11082,7 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		tone: verdictTone(needs),
 		sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
 		next: nextLine(agenda, clock.today),
-		strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0)),
+		strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0), vigilsDue(scoped, clock.today)),
 		now,
 		needs,
 		lastNight,
@@ -11115,7 +11148,7 @@ function selftestLines(status) {
 		const ran = (() => {
 			if (last === void 0 || slug === null) return "no run yet.";
 			if (last.phase === "closed" && last.outcome === "complete") return `${slug} ran ${whenPhrase(clock, last.startedAt)}.`;
-			return `${slug} ${runState(last).label.toLowerCase()}, started ${whenPhrase(clock, last.startedAt)}.`;
+			return `${slug} ${runState(last, project.runs).label.toLowerCase()}, started ${whenPhrase(clock, last.startedAt)}.`;
 		})();
 		const flagged = project.vigils.filter((vigil) => vigil.flagged).length;
 		return {
@@ -11224,18 +11257,13 @@ function readScopeCookie(cookieHeader) {
 * the shell calls it with the path.
 */
 function tabCounts(projects, today) {
-	const vigils = buildAgenda({
-		projects,
-		today,
-		only: "vigil"
-	});
 	const rituals = buildAgenda({
 		projects,
 		today,
 		only: "ritual"
 	});
 	return {
-		vigils: vigils.overdue + vigils.dueToday,
+		vigils: vigilsDue(projects, today),
 		rituals: rituals.overdue,
 		findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0)
 	};
@@ -12820,7 +12848,7 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
 		bare: true,
 		children: runs.map((run, index) => {
-			const state = runState(run);
+			const state = runState(run, runs);
 			const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
 			const isImport = run.who === "import";
 			const meta = [
@@ -12910,7 +12938,7 @@ function ReportRow({ project, ritual, last, report, showProject, className }) {
 	const state = last === null ? {
 		tone: "idle",
 		label: "No run yet"
-	} : runState(last);
+	} : runState(last, [last]);
 	const seen = last?.acknowledged ?? null;
 	const next = ritual.nextDue === null || ritual.overdueDays > 0 || ritual.heldRun !== null || ritual.openRun !== null ? null : `next ${datePhrase(today, ritual.nextDue)}`;
 	const time = last === null && next === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -14924,7 +14952,7 @@ function loader$11({ context, params }) {
 		held,
 		finished,
 		next,
-		asks: finished !== null && asksYou(finished) ? detail?.result?.questions ?? [] : [],
+		asks: finished !== null && asksYou(finished, ritual.runs) ? detail?.result?.questions ?? [] : [],
 		report: reportExcerpt(detail)
 	};
 }
@@ -15111,7 +15139,7 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 						children: "Read it all"
 					}),
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: `card card-accent edge-${runState(finished).tone}`,
+						className: `card card-accent edge-${runState(finished, ritual.runs).tone}`,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Report, {
 							report,
 							lines: 4,
@@ -15510,15 +15538,16 @@ async function loader$10({ context, params }) {
 		manual: itemManual(run.row.item, ritual),
 		label: itemLabel(project, run.row.item),
 		stuck: stuckFor(run.row, status.generatedAt),
+		state: runState(run.row, project?.runs ?? []),
 		next,
 		followUp
 	};
 }
 var meta$8 = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, kind, manual, label, stuck, next, followUp } = loaderData;
+	const { run, kind, manual, label, stuck, state, next, followUp } = loaderData;
 	const { row, project } = run;
-	const state = stuck === null ? runState(row) : {
+	const badge = stuck === null ? state : {
 		tone: "late",
 		label: "May be stuck"
 	};
@@ -15556,7 +15585,7 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 							icon: true
 						})
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: badge }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["started ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.startedAt })] }),
 					took === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["took ", took] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: row.who === "timer" ? "by timer" : `by ${row.who}` }),
@@ -17965,7 +17994,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root--skW9RO7.js",
+			"module": "/assets/root-B-vrTUDd.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -17973,8 +18002,8 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/agenda-Crx53LFL.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/agenda-DgpBtP1m.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
 			"css": ["/assets/root-oG52IYg_.css"],
@@ -18017,7 +18046,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CiqefwNh.js",
+			"module": "/assets/overview-CPJawpXs.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18025,13 +18054,13 @@ var server_manifest_default = {
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js"
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18052,7 +18081,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CiqefwNh.js",
+			"module": "/assets/overview-CPJawpXs.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18060,13 +18089,13 @@ var server_manifest_default = {
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js"
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18087,20 +18116,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-DowcA4Bd.js",
+			"module": "/assets/vigils-p95LzxA5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
+				"/assets/view-CIvKJVtw.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-DIn0yaIB.js",
+				"/assets/section-whavXC1O.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
-				"/assets/agenda-Crx53LFL.js"
+				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18121,20 +18150,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-DowcA4Bd.js",
+			"module": "/assets/vigils-p95LzxA5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
+				"/assets/view-CIvKJVtw.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-DIn0yaIB.js",
+				"/assets/section-whavXC1O.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
-				"/assets/agenda-Crx53LFL.js"
+				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18155,23 +18184,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CbgTWJW_.js",
+			"module": "/assets/rituals-DF5rbJw8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-DIn0yaIB.js",
+				"/assets/section-whavXC1O.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/agenda-Crx53LFL.js"
+				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18192,23 +18221,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CbgTWJW_.js",
+			"module": "/assets/rituals-DF5rbJw8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-DIn0yaIB.js",
+				"/assets/section-whavXC1O.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/agenda-Crx53LFL.js"
+				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18229,21 +18258,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Dyy-VNQ8.js",
+			"module": "/assets/findings-B2R-PwQX.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-CAF3hkTD.js"
+				"/assets/view-CIvKJVtw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18264,21 +18293,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Dyy-VNQ8.js",
+			"module": "/assets/findings-B2R-PwQX.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-CAF3hkTD.js"
+				"/assets/view-CIvKJVtw.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18361,21 +18390,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-38UA3fbg.js",
+			"module": "/assets/runs-BHhCdl86.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -18398,19 +18427,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-BhdU7YXn.js",
+			"module": "/assets/ritual-BDBFvMWP.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js"
@@ -18434,19 +18463,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-7MFFvomm.js",
+			"module": "/assets/run-CzX9fQxa.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18671,21 +18700,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-38UA3fbg.js",
+			"module": "/assets/runs-BHhCdl86.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-Yu-OyGf2.js",
+				"/assets/runs-CeJIce9e.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CAF3hkTD.js",
-				"/assets/result-BabOQuLq.js",
+				"/assets/view-CIvKJVtw.js",
+				"/assets/result-yH6PoTGI.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -18834,8 +18863,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-3e2a3823.js",
-	"version": "3e2a3823",
+	"url": "/assets/manifest-fa39f3d4.js",
+	"version": "fa39f3d4",
 	"sri": void 0
 };
 //#endregion
