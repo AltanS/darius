@@ -32,4 +32,4 @@ Detect items implemented manually (without `/darius-work`) and update the tracke
 8. **Rebuild index**: `!darius index --rebuild`
 9. **Clear drift ledger**: truncate or prune `.pending-sync` entries that are now verified.
 10. **Create worklog entry** via `darius worklog append` documenting the sync with evidence used.
-11. **Commit** via `/darius-commit`.
+11. **Commit** via `/darius-commit`. When `.tracker` is a link to the darius store, tracker files are not in git and the commit holds code only; step 8 (`darius index --rebuild`) is the darius verb that records the tracker changes.

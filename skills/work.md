@@ -107,4 +107,4 @@ The gate is **off by default**, without that config line, work-plan never mentio
 
 ## Hygiene
 
-Worklogs are committed, never write secrets into them; instruct implementing agents to scrub command output. Reference worklog findings in your reports. Tracker state reads go through the CLI (`darius status|show|next --json`), not the Read tool.
+Worklogs are shared with other hosts and agents (committed, or synced through the darius store), never write secrets into them; instruct implementing agents to scrub command output. Reference worklog findings in your reports. Tracker state reads go through the CLI (`darius status|show|next --json`), not the Read tool.

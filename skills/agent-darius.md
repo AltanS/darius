@@ -23,9 +23,9 @@ description: |
   user: "initialize the tracker for this project"
   assistant: "Initializing the tracker."
   [assistant runs `darius init` via Bash, reads output, surfaces the milestone/spec scaffold or any setup decisions needed]
-  assistant: "Tracker initialized at .tracker/. Created index + 1 placeholder milestone (M1). Next: add your first real milestone with `darius add milestone <name>` or skip to spec-level adds."
+  assistant: "Tracker initialized. .darius.toml lists kinds ritual, vigil and milestone; .tracker/ is a link to the darius store and no tracker file is in git. Next: add your first milestone with `darius add milestone <name>`."
   <commentary>
-  Init request runs the skill AND reports what landed. The user needs to know what was created, not just that you intend to do it.
+  Init request runs the skill AND reports what landed. The user needs to know what was created, not just that you intend to do it. In a repo that still has a real `.tracker/` folder, `darius init` works as before and prints a hint to run `darius onboard`; pass that hint on.
   </commentary>
   </example>
 
@@ -78,7 +78,7 @@ description: |
   user: "add a new milestone for the auth refactor"
   assistant: "Adding the milestone."
   [assistant runs `darius add` via Bash with appropriate args, reads output]
-  assistant: "Created M78-auth-refactor at .tracker/M78-auth-refactor/. Skeleton: 00-README + 01-skeleton-spec. What's the first concrete spec, extract the existing auth middleware to a service, or start with the new schema?"
+  assistant: "Created M78-auth-refactor at .tracker/M78-auth-refactor/ (through the link, when the project owns the tracker tree). Skeleton: 00-README + 01-skeleton-spec. What's the first concrete spec, extract the existing auth middleware to a service, or start with the new schema?"
   <commentary>
   Add request creates the milestone AND surfaces the next decision (what spec to write first). Don't stop at "I added it."
   </commentary>
@@ -149,6 +149,7 @@ When a sync or wrap-up surfaces a gap in spec intent, even one that literal veri
 | Implemented something manually | `/darius-sync` |
 | Add new milestone or spec | `darius add` via Bash |
 | Initialize tracking | `darius init` via Bash |
+| Move or migrate the tracker into darius | `darius onboard scan` via Bash, report the blockers, then `darius onboard` only on the user's word |
 | Archive completed milestones | `/darius-archive` |
 | Dream / distill worklogs, clean up worklogs, worklog cleanup | `/darius-dream` |
 | Check tracker health, migrate | `darius doctor`, `darius migrate` via Bash |
@@ -157,7 +158,9 @@ When a sync or wrap-up surfaces a gap in spec intent, even one that literal veri
 | Wrap up session, reconcile tracker | `/darius-wrap-up` |
 | Check what's due (rituals + vigils) | `darius due` via Bash |
 | Add / run / complete a ritual | `darius ritual add\|list` and `darius run start\|complete <slug>` via Bash |
-| Arm / list / close a vigil (shipped work awaiting a check) | `darius vigil <add\|list\|close>` via Bash |
+| Arm / list / close a vigil (shipped work awaiting a check) | `darius vigil <add\|set-body\|list\|show\|close>` via Bash |
+
+**Where the tracker lives.** The marker `.darius.toml` has a `kinds` list that says what the darius store owns: `["ritual"]` (the default), `["ritual", "vigil"]` or `["ritual", "vigil", "milestone"]`. With `milestone`, the whole tracker tree is in the store and `.tracker/` in the checkout is a link to it. Paths such as `.tracker/M12-cart/01-api.md` stay valid, nothing under `.tracker/` is in git, and it is never staged. A repo with a real `.tracker/` folder in git still works the old way. When the user asks to move or migrate the tracker into darius, run `darius onboard scan`, report the blockers, and run `darius onboard` only on the user's word. It never commits; the user commits `.darius.toml` and `.gitignore`.
 
 **Immediate route**, invoke the skill immediately with the user's request as args. Do NOT pre-read `.tracker/` files or pre-fetch context. The skills call the CLI; the CLI handles discovery.
 
@@ -184,7 +187,9 @@ Vigils are the **one-shot** sibling of rituals, work that already shipped but is
 - `darius vigil add <slug> --name … [--due YYYY-MM-DD] [--until "event"] [--from M77/S02] [--agent …] --stdin`: arm one, checklist and all. At least one gate is required; `from` records which spec/milestone it guards. `--stdin` reads the vigil BODY (see the recipe below).
 - `darius vigil set-body <slug> --stdin`: replace an existing vigil's checklist, frontmatter untouched. Use it when the check turns out to be wrong, or when arming raced ahead of knowing what to run. Refuses a CLOSED vigil: a verdict is a historical claim, not a draft.
 - `darius vigil list [--all]`: open vigils; `--all` includes closed ones with verdicts.
-- `darius vigil close <slug> --verdict held|failed`: terminal. The file keeps its findings for provenance.
+- `darius vigil close <slug> --verdict held|failed`: terminal, and safe to repeat. The vigil keeps its findings for provenance.
+
+Where vigils live depends on the marker. When `kinds` lists `vigil`, they are store items, never files in git, and the verbs and their forms are the same. The daily `darius vigil sweep` sees them: it runs the Commands of a vigil whose date is due, closes it `held` when all pass, and leaves it armed and flagged when one fails. Otherwise they are files in `.tracker/vigils/`, as before. In a store-owned tracker tree, `.tracker/vigils/` is a read-only view of the store vigils: change them with the verbs only.
 
 When conversation surfaces "shipped, but check X once Y happens", during wrap-up, status, or in passing, that's a vigil. Arm it immediately; don't let it evaporate. **A failed vigil emits no follow-up work automatically**, route remediation to `darius add` as a normal milestone, same rule as rituals.
 
@@ -217,7 +222,7 @@ A worklog is **distilled, never deleted**. When a file goes quiet, milestone arc
 
 ## Security: Worklog Hygiene
 
-Worklog files are committed to the repo. **Secrets must never be written**, no API keys, tokens, passwords, private keys, credentialed connection strings, `.env` contents, session cookies, or signed URLs. Instruct implementing agents to scrub command output before recording anything. If you spot a secret already in a worklog, stop, surface it to the user, and treat it as compromised, it must be rotated, not just edited out.
+Worklog files are shared: committed to the repo, or synced through the darius store when the project owns the tracker tree. **Secrets must never be written**, no API keys, tokens, passwords, private keys, credentialed connection strings, `.env` contents, session cookies, or signed URLs. Instruct implementing agents to scrub command output before recording anything. If you spot a secret already in a worklog, stop, surface it to the user, and treat it as compromised, it must be rotated, not just edited out.
 
 ## Conversation Style
 

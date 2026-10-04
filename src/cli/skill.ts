@@ -77,31 +77,31 @@ description: darius, the one project tracker CLI. Use for milestones, specs, tas
 
 # darius
 
-darius owns every tracker verb. Rituals and runs live in the darius store; milestones, specs, worklogs and vigils live in .tracker/ and darius writes them.
+darius owns every tracker verb. Rituals and runs live in the darius store. Milestones, specs, worklogs and vigils live in the store or in git, as \`kinds\` in .darius.toml says; darius writes them.
 
 ## Rules
 
-- Never edit darius store files (~/.local/share/darius). Change rituals and runs with darius verbs only.
+- Never edit darius store files (~/.local/share/darius). Use darius verbs.
+- \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items. With \`milestone\`, the tracker tree is in the store and .tracker/ in the checkout is a link to it; nothing under it is in git, so never \`git add\` it.
+- A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first, and \`onboard\` only when the operator asks.
 - In .tracker/, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first; darius says so.
-- Pass --json where a verb takes it, and read the JSON on stdout.
-- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. A ritual may add to its policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy, and \`marker check\` fails when a skill file is missing. Pass input to the skill with \`args\` (one line); procedure belongs in the skill, not in \`notes\`. To move a v2 project, run \`ritual export [--write]\`; it never commits.
-- Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
+- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
+- Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
 - A tracker verb with no arguments prints its usage.
 
 ## Prose
 
-Applies to worklog entries, findings, handoff and vigil bodies.
+For worklog entries, findings, handoff and vigil bodies.
 
 - Short sentences. Facts, not narrative. One line per item.
-- Name the thing, its state, the next step. No preamble, no recap.
-- An entry says what changed, what is left, one blocker. At most 8 lines.
+- Name the thing, its state, the next step. No recap. At most 8 lines per entry.
 - Findings: at most 4000 characters. The result block holds the items.
 
 ## Exit codes
 
 - 0: done.
-- 1: refused or failed. Tracker verbs also exit 1 on a usage error. Read stderr and act on it. Never fall back to editing files.
+- 1: refused or failed. Tracker verbs also exit 1 on a usage error. Read stderr. Never fall back to editing files.
 - 2: usage error. Fix the command line.
 - 3: the environment is inconclusive. Stop and report to the operator.
 
@@ -121,29 +121,26 @@ On the wrong host \`run now\`, \`run resume\` and \`run follow-up\` refuse and p
 
 ## Backups
 
-A snapshot is a dated tar.gz of this host's darius store, in a local folder and optionally in an S3 bucket. Each host backs up its own store.
+A snapshot is a dated tar.gz of this host's darius store, in a local folder and optionally in an S3 bucket.
 
-- Read: \`snapshot status\` (settings, timer, last run), \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
+- Read: \`snapshot status\`, \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
 - Act: \`snapshot create\` makes one now. \`snapshot check\` tests the bucket.
 - Settings: \`snapshot config set <key> <value>\`, \`snapshot config unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
 - Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
-- Exit 1: refused, for example a key the environment sets. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
+- Exit 1: refused. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
 - Restore is by hand with \`tar -xzf\`, and only when the operator asks.
 
 ## Examples
 
-The next open task, and the rituals due:
+The next task, and rituals due:
 
     darius next
     darius due --json
 
-Start a run of a ritual by hand; the JSON holds the run id:
+Start a run by hand, then complete it with its findings:
 
     darius run start weekly-report --json
-
-Complete that run with its findings:
-
     darius run complete <run> --outcome complete --json --findings-stdin <<'EOF'
     ...findings...
     EOF
