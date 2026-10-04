@@ -36,7 +36,7 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
   return (
     <RowList bare>
       {runs.map((run, index) => {
-        const state = runState(run);
+        const state = runState(run, runs);
         const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
         const isImport = run.who === "import";
         const meta = [named ? run.project : null, took === null ? null : `took ${took}`, isImport ? null : run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null);
@@ -146,7 +146,7 @@ function seenText(run: RunRow | null, seen: Acknowledgement, clock: HostClock): 
  */
 export function ReportRow({ project, ritual, last, report, showProject, className }: ReportRowProps): React.ReactNode {
   const { today, offset } = useClock();
-  const state: Badge = last === null ? { tone: "idle", label: "No run yet" } : runState(last);
+  const state: Badge = last === null ? { tone: "idle", label: "No run yet" } : runState(last, [last]);
   const seen = last?.acknowledged ?? null;
   const next = ritual.nextDue === null || ritual.overdueDays > 0 || ritual.heldRun !== null || ritual.openRun !== null ? null : `next ${datePhrase(today, ritual.nextDue)}`;
   const time = last === null && next === null ? undefined : (

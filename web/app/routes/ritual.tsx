@@ -31,7 +31,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   const next = failure === null ? null : nextStep(failure, { today: status.today, offset: status.utcOffset });
   const detail = finished === null ? null : context.run(ritual.project, finished.run);
   // The latest report asks the operator something nobody answered yet: its questions lead the page.
-  const asks = finished !== null && asksYou(finished) ? (detail?.result?.questions ?? []) : [];
+  const asks = finished !== null && asksYou(finished, ritual.runs) ? (detail?.result?.questions ?? []) : [];
   return { ritual, held, finished, next, asks, report: reportExcerpt(detail) };
 }
 
@@ -155,7 +155,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
 
           {finished === null || report === null ? null : (
             <Section title="Latest report" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Read it all</Link>}>
-              <div className={`card card-accent edge-${runState(finished).tone}`}>
+              <div className={`card card-accent edge-${runState(finished, ritual.runs).tone}`}>
                 <Report report={report} lines={4} fades={false} />
                 {finished.result === null || summaryTags(finished.result, finished.acknowledged !== null).length === 0 ? null : (
                   <div className="rw-chips mt-3">

@@ -32,7 +32,7 @@
  */
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { buildAgenda, nextLine, type Agenda, type NextLine } from "./agenda.ts";
+import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./agenda.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
@@ -229,6 +229,8 @@ interface DjinnState {
   project: string;
   ritual: RitualRow;
   last: ActivityRun | null;
+  /** The ritual's runs, newest first; `last` is the first. */
+  own: ActivityRun[];
   /** Due since a day or more, not started today, nothing open: the timer did not start it. */
   missed: boolean;
 }
@@ -239,7 +241,7 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
   const waiting = ritual.heldRun !== null || ritual.openRun !== null;
   const ranToday = own.some((run) => hostDate(run.startedAt, clock.offset) === clock.today);
   const missed = ritual.isDue && ritual.overdueDays >= 1 && !waiting && !ranToday;
-  return { project, ritual, last, missed };
+  return { project, ritual, last, own, missed };
 }
 
 // --- cards ---------------------------------------------------------------------------------
@@ -308,8 +310,8 @@ function isOpenFailure(run: RunRow): boolean {
 }
 
 /** A run for the Last night cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
-function isDone(run: RunRow): boolean {
-  if (asksYou(run)) return false;
+function isDone(run: RunRow, runs: readonly RunRow[]): boolean {
+  if (asksYou(run, runs)) return false;
   return run.phase === "closed" && (run.outcome === "complete" || (outcomeTone(run.outcome) === "bad" && run.acknowledged !== null));
 }
 
@@ -322,7 +324,7 @@ function seenText(run: RunRow, clock: Clock): string | null {
 
 function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: ActivityRun): Card {
   const failed = isOpenFailure(run);
-  const badge = runState(run);
+  const badge = runState(run, state.own);
   const report = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : reportOf(readRun, run, DONE_CHARS, DONE_FADE);
   // An acknowledged failure is a plain card: runState() makes its word grey, and the acknowledgement says who saw it.
   return {
@@ -456,7 +458,7 @@ function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus)
     runs,
     states,
     held: runs.filter((run) => run.phase === "held"),
-    asks: runs.filter((run) => asksYou(run)),
+    asks: runs.filter((run) => asksYou(run, runs)),
     failed: states.filter((state) => state.last !== null && isOpenFailure(state.last)),
     stuck,
     flagged,
@@ -510,7 +512,7 @@ function lastRunPiece(clock: Clock, states: readonly DjinnState[]): Piece[] {
     .filter((run) => run !== null)
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
   if (last === undefined) return [{ text: " No ritual has run yet.", ink: "mute" }];
-  const state = runState(last);
+  const state = runState(last, states.flatMap((entry) => entry.own));
   return [{ text: ` Last ritual run ${when(clock, last.startedAt)}, ${state.label.toLowerCase()}.`, ink: state.tone === "bad" ? "bad" : "plain" }];
 }
 
@@ -525,9 +527,10 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
  * The status strip. A segment shows only above zero, and the strip not at all
  * when every segment is zero. The order: need you (held runs and runs that
  * ask), findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
- * (rituals and dated vigils past due), due today, and armed vigils.
+ * (rituals and dated vigils past due), due today, and vigils due (late or due
+ * today, the number of the Vigils badge).
  */
-function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null, findings: number): Segment[] {
+function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null, findings: number, vigilsDueCount: number): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
   const findingsHref = href({ to: "section", ws: workspace, section: "findings" });
   const findingsSegment: Segment[] = findings === 0 ? [] : [{ key: "findings", label: "findings", count: findings, tone: "wait", href: findingsHref, live: false, kind: null }];
@@ -535,8 +538,8 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, wo
   const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
   const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), live: false, kind: null }];
   const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: groupHref(agenda, "today", workspace), live: false, kind: null }];
-  const armedHref = `${href({ to: "section", ws: workspace, section: "vigils" })}#${agenda.waiting.length === 0 ? "coming-up" : "waiting"}`;
-  const armedSegment: Segment[] = agenda.armed === 0 ? [] : [{ key: "armed", label: "vigils armed", count: agenda.armed, tone: "gold", href: armedHref, live: false, kind: "vigil" }];
+  const vigilsHref = `${href({ to: "section", ws: workspace, section: "vigils" })}#coming-up`;
+  const vigilsSegment: Segment[] = vigilsDueCount === 0 ? [] : [{ key: "vigils", label: "vigils due", count: vigilsDueCount, tone: "gold", href: vigilsHref, live: false, kind: "vigil" }];
   return [
     ...needSegment,
     ...findingsSegment,
@@ -547,7 +550,7 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, wo
     ...cardSegment(needs, "unreadable", "unreadable", "bad"),
     ...lateSegment,
     ...todaySegment,
-    ...armedSegment,
+    ...vigilsSegment,
   ];
 }
 
@@ -596,7 +599,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     ...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project)),
   ];
   const lastNight = states
-    .filter((state) => state.last !== null && isDone(state.last) && clock.now - Date.parse(state.last.startedAt) < DAY)
+    .filter((state) => state.last !== null && isDone(state.last, state.own) && clock.now - Date.parse(state.last.startedAt) < DAY)
     .toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? ""))
     .flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]));
   const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today });
@@ -607,7 +610,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     tone: verdictTone(needs),
     sub: `${dayName(status.generatedAt, clock.offset)}, ${clockTime(status.generatedAt, clock.offset)}`,
     next: nextLine(agenda, clock.today),
-    strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0)),
+    strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0), vigilsDue(scoped, clock.today)),
     now,
     needs,
     lastNight,
@@ -674,7 +677,7 @@ export function selftestLines(status: HostStatus): SelftestLine[] {
       const ran = (() => {
         if (last === undefined || slug === null) return "no run yet.";
         if (last.phase === "closed" && last.outcome === "complete") return `${slug} ran ${whenPhrase(clock, last.startedAt)}.`;
-        return `${slug} ${runState(last).label.toLowerCase()}, started ${whenPhrase(clock, last.startedAt)}.`;
+        return `${slug} ${runState(last, project.runs).label.toLowerCase()}, started ${whenPhrase(clock, last.startedAt)}.`;
       })();
       const flagged = project.vigils.filter((vigil) => vigil.flagged).length;
       return { text: `Self-test: ${ran} ${flagged === 0 ? "Nothing flagged." : `${plural(flagged, "vigil")} flagged.`}`, href: link };

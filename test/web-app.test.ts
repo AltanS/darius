@@ -469,7 +469,7 @@ test("the run filter keeps only matching runs", async () => {
   assert.equal(page.body.includes(`/w/demo/runs/${DONE}`), false);
 });
 
-test("the home page shows a manual ritual as a late row of Coming up, and never imported runs", async () => {
+test("a late manual ritual sits in the quiet Off group of Coming up, not in Overdue or the late count, and imported runs never show", async () => {
   const project = STATUS.projects[0]!;
   const manual = { ...project.rituals[0]!, slug: "by-hand", title: "Done by hand", mode: "off", skill: null, heldRun: null, overdueDays: 4, nextDue: "2026-09-24" };
   const imported = { ...RUNS[2]!, run: "01KDDDDDDDDDDDDDDDDDDDDDDD", item: "ritual/by-hand", who: "import" };
@@ -480,9 +480,10 @@ test("the home page shows a manual ritual as a late row of Coming up, and never 
   assert.equal(body.includes(imported.run), false, "no imported run");
   const rituals = (await (await handler(new Request("http://darius.test/rituals"), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
   const coming = comingOf(rituals).replaceAll(/<[^>]+>/gu, "");
-  assert.ok(coming.includes("Done by hand") && coming.includes("4 days late") && coming.includes("manual"), "the late manual ritual is a row of Coming up, marked manual");
-  assert.ok(coming.indexOf("Overdue") < coming.indexOf("Done by hand"), "under the Overdue label");
-  assert.match(body, /<a [^>]*href="\/rituals#coming-up"[^>]*>.*?<span class="pill-n">1<\/span><span class="pill-l">late<\/span>/su, "and the late segment of the strip counts it, and opens the Rituals section");
+  assert.ok(coming.includes("Done by hand") && coming.includes("manual"), "the late manual ritual is still a row of Coming up, marked manual");
+  assert.equal(coming.includes("4 days late") || coming.includes("Overdue"), false, "it is not late: it cannot run");
+  assert.ok(coming.indexOf("Off") !== -1 && coming.indexOf("Off") < coming.indexOf("Done by hand"), "under the Off label");
+  assert.equal(segment(body, "late"), null, "and the late segment of the strip does not count it");
   const workspacePage = await (await handler(new Request("http://darius.test/w/demo/rituals"), { ...context, status: () => busy })).text();
   assert.ok(workspacePage.replaceAll("<!-- -->", "").includes("Done by hand"), "the workspace section lists it in the same Coming up");
   const runs = await (await handler(new Request("http://darius.test/runs?imported=1"), { ...context, status: () => busy })).text();
@@ -1068,7 +1069,7 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
     assert.ok(waiting.includes("Event soak") && waiting.includes("the first deploy &lt;script&gt;"), `${path}: the event vigil waits, as text`);
     assert.equal(waiting.includes(EVIL), false, `${path}: store text stays text`);
   }
-  assert.match(await read("/all"), /<a [^>]*href="\/vigils#waiting"[^>]*>.*?<span class="pill-n">2<\/span><span class="pill-l">vigils armed<\/span>/su, "the strip counts armed vigils and links the waiting list");
+  assert.match(await read("/all"), /<a [^>]*href="\/vigils#coming-up"[^>]*>.*?<span class="pill-n">1<\/span><span class="pill-l">vigils due<\/span>/su, "the strip counts the vigils that are late or due today, not the one that waits on an event");
 });
 
 // --- the information architecture (0.39.0, reworked 0.63.0): scopes, Places, tabs, settings -------------

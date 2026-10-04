@@ -8,8 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { HostStatus, ProjectStatus, RitualRow, VigilRow } from "../src/web/api.ts";
-import { workspaceRows } from "../web/app/lib/home.ts";
+import type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow } from "../src/web/api.ts";
+import { homeView, needCounts, workspaceRows } from "../web/app/lib/home.ts";
 
 const TODAY = "2026-09-30";
 
@@ -102,4 +102,65 @@ test("the self-test workspace is left out unless the scope shows it", () => {
 
 test("no workspace, no rows", () => {
   assert.deepEqual(workspaceRows(status([])), []);
+});
+
+// --- the Overview counts: vigils due, rituals that cannot run, superseded questions -----------
+
+const stripOf = (projects: ProjectStatus[]) => homeView(status(projects), () => null).strip;
+const countOf = (projects: ProjectStatus[], key: string) => stripOf(projects).find((segment) => segment.key === key)?.count ?? null;
+
+test("the vigils tile counts the vigils that are late or due today, the number of the Vigils badge", () => {
+  const vigils = [vigil("late", { due: "2026-09-29" }), vigil("today", { due: TODAY }), vigil("far", { due: "2027-01-01" }), vigil("event", { until: "a batch" })];
+  const segment = stripOf([project("shop", [], vigils)]).find((entry) => entry.key === "vigils");
+  assert.equal(segment?.count, 2);
+  assert.equal(segment?.label, "vigils due");
+  assert.equal(segment?.href, "/vigils#coming-up");
+  assert.equal(countOf([project("shop", [], [vigil("event", { until: "a batch" }), vigil("far", { due: "2027-01-01" })])], "vigils"), null, "armed vigils that need nothing leave no tile");
+});
+
+test("a late ritual with mode off adds nothing to the late tile", () => {
+  const hand = ritual("hand", { nextDue: "2026-09-20", overdueDays: 10 });
+  const djinn = ritual("djinn", { mode: "report", skill: "djinn", nextDue: "2026-09-25", overdueDays: 5 });
+  assert.equal(countOf([project("shop", [hand])], "late"), null);
+  assert.equal(countOf([project("shop", [hand, djinn])], "late"), 1);
+});
+
+const RESULT = { status: "attention" as const, questions: 2, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
+
+function run(id: string, item: string, startedAt: string, extra: Partial<RunRow> = {}): RunRow {
+  return { run: id, item, phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: RESULT, acknowledged: null, ...extra };
+}
+
+const REPORT = ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-05" });
+const OTHER = ritual("other", { mode: "report", skill: "other", nextDue: "2026-10-05" });
+const OLD = run("01OLD", "ritual/report", "2026-09-28T05:00:00.000Z");
+const NEWER = (extra: Partial<RunRow> = {}): RunRow => run("01NEW", "ritual/report", "2026-09-29T05:00:00.000Z", { result: null, ...extra });
+
+/** The asks cards, the need-you tile and the needs count of a workspace, for the runs given. */
+function asksOf(runs: RunRow[], projectName = "shop") {
+  const shop = project(projectName, [REPORT, OTHER], [], { runs });
+  const view = homeView(status([shop]), () => null);
+  return { cards: view.needs.filter((card) => card.kind === "asks").length, tile: view.strip.find((segment) => segment.key === "need")?.count ?? null, needs: needCounts(status([shop])).total };
+}
+
+test("a question card shows for a complete run with open questions", () => {
+  assert.deepEqual(asksOf([OLD]), { cards: 1, tile: 1, needs: 1 });
+});
+
+test("a newer complete run of the same ritual takes the card away, in the cards, the tile and the count", () => {
+  assert.deepEqual(asksOf([NEWER(), OLD]), { cards: 0, tile: null, needs: 0 });
+});
+
+test("a newer run that failed, is held or is of another ritual leaves the question card", () => {
+  assert.equal(asksOf([NEWER({ outcome: "failed" }), OLD]).cards, 1, "failed");
+  assert.equal(asksOf([NEWER({ phase: "held", outcome: null }), OLD]).cards, 1, "held (and the held card shows too)");
+  assert.equal(asksOf([NEWER({ item: "ritual/other" }), OLD]).cards, 1, "another ritual");
+  assert.equal(asksOf([NEWER({ item: "ritual/other" }), OLD]).needs, 1);
+});
+
+test("a newer complete run of another project does not hide the question", () => {
+  const shop = project("shop", [REPORT], [], { runs: [OLD] });
+  const docs = project("docs", [REPORT], [], { runs: [NEWER()] });
+  const view = homeView(status([shop, docs]), () => null);
+  assert.equal(view.needs.filter((card) => card.kind === "asks").length, 1);
 });

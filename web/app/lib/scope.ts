@@ -11,12 +11,12 @@
 import { data } from "react-router";
 
 import type { HostStatus, ProjectStatus } from "../../../src/web/api.ts";
-import { buildAgenda } from "./agenda.ts";
+import { buildAgenda, vigilsDue } from "./agenda.ts";
 import { needCounts, scopeProjects, selftestLines, type HomeScope, type SelftestLine } from "./home.ts";
 import type { Place } from "./paths.ts";
 import { readScopeCookie, readSettings, type Settings } from "./settings.ts";
 
-/** The badges on the tabs: vigils due today or late, rituals late, findings that need the operator. */
+/** The badges on the tabs: vigils due today or late, rituals darius runs that are late, findings that need the operator. */
 export interface TabCounts {
   vigils: number;
   rituals: number;
@@ -24,9 +24,8 @@ export interface TabCounts {
 }
 
 export function tabCounts(projects: readonly ProjectStatus[], today: string): TabCounts {
-  const vigils = buildAgenda({ projects, today, only: "vigil" });
   const rituals = buildAgenda({ projects, today, only: "ritual" });
-  return { vigils: vigils.overdue + vigils.dueToday, rituals: rituals.overdue, findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0) };
+  return { vigils: vigilsDue(projects, today), rituals: rituals.overdue, findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0) };
 }
 
 /** The default workspace from the settings, when this host has it; otherwise null (all workspaces). */

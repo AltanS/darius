@@ -33,15 +33,15 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
   const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
   const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
-  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), next, followUp };
+  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, next, followUp } = loaderData;
+  const { run, kind, manual, label, stuck, state, next, followUp } = loaderData;
   const { row, project } = run;
-  const state = stuck === null ? runState(row) : { tone: "late" as const, label: "May be stuck" };
+  const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
   // Any other run (failed, abandoned, running, held) is titled by its ritual.
   const complete = row.phase === "closed" && row.outcome === "complete";
@@ -66,7 +66,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           <span className="rw-chips">
             <KindWord kind={kind} manual={manual} icon />
           </span>
-          <StateWord state={state} />
+          <StateWord state={badge} />
           <span>
             started <Time iso={row.startedAt} />
           </span>

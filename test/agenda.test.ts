@@ -8,8 +8,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../src/web/api.ts";
-import { buildAgenda, nextLine, phoneHidden, type Agenda } from "../web/app/lib/agenda.ts";
-import { cadenceText } from "../web/app/lib/view.ts";
+import { buildAgenda, nextLine, phoneHidden, vigilsDue, type Agenda } from "../web/app/lib/agenda.ts";
+import { tabCounts } from "../web/app/lib/scope.ts";
+import { asksYou, cadenceText, runState } from "../web/app/lib/view.ts";
 
 const TODAY = "2026-09-30";
 
@@ -50,7 +51,7 @@ function vigil(slug: string, extra: Partial<VigilRow> = {}): VigilRow {
 }
 
 function project(name: string, rituals: RitualRow[], vigils: VigilRow[] = [], runs: RunRow[] = []): ProjectStatus {
-  return { name, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, milestones: [], milestonesArchived: 0, error: null };
+  return { name, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null };
 }
 
 function build(projects: ProjectStatus[]): Agenda {
@@ -68,8 +69,8 @@ function titles(agenda: Agenda, label: string): string[] {
 const SAMPLE = project(
   "shop",
   [
-    ritual("late-most", { nextDue: "2026-09-17", overdueDays: 13 }),
-    ritual("late-less", { nextDue: "2026-09-25", overdueDays: 5 }),
+    ritual("late-most", { mode: "report", nextDue: "2026-09-17", overdueDays: 13 }),
+    ritual("late-less", { mode: "report", nextDue: "2026-09-25", overdueDays: 5 }),
     ritual("due-hand", { nextDue: TODAY, isDue: true }),
     ritual("due-djinn", { mode: "report", skill: "due-djinn", nextDue: TODAY, isDue: true }),
     ritual("next-day", { nextDue: "2026-10-01" }),
@@ -198,10 +199,85 @@ test("the horizon: day 14 has its own group, day 15 is Later", () => {
 
 test("a phone shows Overdue, Today and Tomorrow in full, then six more rows", () => {
   const many = Array.from({ length: 10 }, (_, index) => ritual(`later-${String(index).padStart(2, "0")}`, { nextDue: `2026-10-${String(3 + index).padStart(2, "0")}` }));
-  const agenda = build([project("shop", [ritual("late", { nextDue: "2026-09-20", overdueDays: 10 }), ritual("soon", { nextDue: "2026-10-01" }), ...many])]);
+  const agenda = build([project("shop", [ritual("late", { mode: "report", nextDue: "2026-09-20", overdueDays: 10 }), ritual("soon", { nextDue: "2026-10-01" }), ...many])]);
   const hidden = phoneHidden(agenda);
   assert.equal(hidden.size, 4);
   assert.equal(hidden.has("shop/ritual/later-09"), true);
   assert.equal(hidden.has("shop/ritual/late"), false);
   assert.equal(hidden.has("shop/ritual/soon"), false);
+});
+
+test("a late ritual with mode off is not overdue: it sits in the quiet Off group, after the others, and no count shows it", () => {
+  const shop = project("shop", [
+    ritual("hand-late", { nextDue: "2026-09-20", overdueDays: 10 }),
+    ritual("djinn-late", { mode: "report", skill: "djinn-late", nextDue: "2026-09-25", overdueDays: 5 }),
+    ritual("loose", { cadence: null }),
+  ]);
+  const agenda = build([shop]);
+  assert.deepEqual(agenda.groups.map((group) => group.kind), ["overdue", "none", "off"]);
+  assert.deepEqual(titles(agenda, "Overdue"), ["djinn-late"]);
+  assert.deepEqual(titles(agenda, "Off"), ["hand-late"], "still listed");
+  const off = agenda.groups.find((group) => group.kind === "off")?.rows[0];
+  assert.equal(off?.state, null, "no late word");
+  assert.equal(off?.rail, null);
+  assert.equal(off?.overdueDays, 0);
+  assert.equal(agenda.overdue, 1, "the late tile counts the ritual darius runs only");
+  assert.equal(build([project("shop", [ritual("hand-late", { nextDue: "2026-09-20", overdueDays: 10 })])]).overdue, 0);
+  assert.equal(tabCounts([shop], TODAY).rituals, 1, "the Rituals badge too");
+  assert.equal(tabCounts([project("shop", [ritual("hand-late", { nextDue: "2026-09-20", overdueDays: 10 })])], TODAY).rituals, 0);
+  assert.equal(nextLine(build([project("shop", [ritual("hand-late", { nextDue: "2026-09-20", overdueDays: 10 })])]), TODAY), null, "the Next line skips it");
+  const phone = build([project("shop", [ritual("hand-late", { nextDue: "2026-09-20", overdueDays: 10 })])]);
+  assert.equal(phoneHidden(phone).size, 0);
+});
+
+test("a ritual with mode off that is due today or later keeps its day group", () => {
+  const agenda = build([project("shop", [ritual("today-hand", { nextDue: TODAY, isDue: true }), ritual("soon-hand", { nextDue: "2026-10-01" })])]);
+  assert.deepEqual(labels(agenda), ["Today", "Tomorrow"]);
+});
+
+test("the vigils due count is the late plus the due-today vigils, and leaves out event vigils and far ones", () => {
+  const vigils = [vigil("late", { due: "2026-09-29" }), vigil("today", { due: TODAY }), vigil("far", { due: "2027-01-01" }), vigil("event", { until: "a batch" }), vigil("done", { state: "closed", due: TODAY })];
+  const shop = project("shop", [], vigils);
+  assert.equal(vigilsDue([shop], TODAY), 2);
+  assert.equal(vigilsDue([shop], TODAY), tabCounts([shop], TODAY).vigils, "the same number as the Vigils badge");
+  assert.equal(build([shop]).armed, 4, "the Vigils page still counts every armed vigil");
+  assert.equal(vigilsDue([project("shop", [], [vigil("event", { until: "a batch" })])], TODAY), 0);
+});
+
+// --- a question card goes away when a newer complete run replaces it ------------------------
+
+const RESULT = { status: "attention" as const, questions: 1, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
+
+function run(id: string, startedAt: string, extra: Partial<RunRow> = {}): RunRow {
+  return { run: id, item: "ritual/report", phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: "x", result: RESULT, acknowledged: null, ...extra };
+}
+
+const OLD_ASKS = run("01OLD", "2026-09-29T05:00:00.000Z");
+const NEWER = (extra: Partial<RunRow> = {}): RunRow => run("01NEW", "2026-09-30T05:00:00.000Z", { result: null, ...extra });
+
+test("asksYou: a complete run with open questions asks, until a newer complete run of the same ritual replaces it", () => {
+  assert.equal(asksYou(OLD_ASKS, [OLD_ASKS]), true);
+  assert.equal(asksYou(OLD_ASKS, [NEWER(), OLD_ASKS]), false, "a newer complete run hides it");
+  assert.equal(asksYou(OLD_ASKS, [NEWER({ who: "darius" }), OLD_ASKS]), false, "a follow-up run is a run of the same ritual, so it counts, whoever started it");
+  assert.equal(runState(OLD_ASKS, [NEWER(), OLD_ASKS]).label, "Complete", "the state word is plain too");
+  assert.equal(runState(OLD_ASKS, [OLD_ASKS]).label, "Asks you");
+});
+
+test("asksYou: a newer run that failed, is held, is still running, or belongs to another ritual or project does not hide it", () => {
+  for (const other of [NEWER({ outcome: "failed" }), NEWER({ phase: "held", outcome: null }), NEWER({ phase: "running", outcome: null }), NEWER({ item: "ritual/other" })]) {
+    assert.equal(asksYou(OLD_ASKS, [other, OLD_ASKS]), true, JSON.stringify([other.phase, other.outcome, other.item]));
+  }
+  const here = { ...OLD_ASKS, project: "shop" };
+  assert.equal(asksYou(here, [{ ...NEWER(), project: "docs" }, here]), true, "another project");
+  assert.equal(asksYou(here, [{ ...NEWER(), project: "shop" }, here]), false, "the same project");
+  assert.equal(asksYou(OLD_ASKS, [run("01OLDER", "2026-09-28T05:00:00.000Z", { result: null }), OLD_ASKS]), true, "an older complete run does not");
+  assert.equal(asksYou({ ...OLD_ASKS, acknowledged: { at: "2026-09-29T06:00:00.000Z", who: "tester", note: null } }, [OLD_ASKS]), false, "an answered run asks nothing");
+});
+
+test("the agenda row of a ritual drops Asks you once a newer complete run replaced the question", () => {
+  const report = ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-01" });
+  const asks = build([project("shop", [report], [], [OLD_ASKS])]);
+  assert.equal(asks.groups[0]?.rows[0]?.state?.label, "Asks you");
+  const gone = build([project("shop", [report], [], [NEWER(), OLD_ASKS])]);
+  assert.equal(gone.groups[0]?.rows[0]?.state, null);
 });

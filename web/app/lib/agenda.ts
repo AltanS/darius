@@ -6,14 +6,16 @@
  * Coming up holds every active ritual once, at its next date, and every armed
  * vigil that has a due date, once, at that date. The rows are grouped by day:
  * Overdue, Today, Tomorrow, one group per weekday for two weeks, Later, and
- * No schedule (active rituals without a cadence or a next date).
+ * No schedule (active rituals without a cadence or a next date). A last, quiet
+ * group, Off, holds the rituals whose mode is off and whose date is past: the
+ * timer never starts them, so they are not late.
  *
  * Waiting on an event holds the armed vigils without a due date, flagged first.
  *
  * Where a ritual lands: a running or held run puts it in Today. A ritual whose
  * latest run failed today goes to tomorrow, because the timer does not retry it
- * before then. Otherwise its `nextDue` decides: past is Overdue, today is
- * Today.
+ * before then. Otherwise its `nextDue` decides: past is Overdue (Off for a ritual
+ * whose mode is off), today is Today.
  */
 
 import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
@@ -29,7 +31,7 @@ const DAY = 24 * 60 * 60_000;
 /** Days ahead that get a group of their own; a later date joins "Later". */
 export const HORIZON_DAYS = 14;
 
-export type GroupKind = "overdue" | "today" | "tomorrow" | "day" | "later" | "none";
+export type GroupKind = "overdue" | "today" | "tomorrow" | "day" | "later" | "none" | "off";
 
 /** A state word that is not plain: "13 days late", "Running", "Waiting for you", "Failed", "Asks you", "Flagged". */
 export type AgendaState = Badge;
@@ -56,6 +58,8 @@ export interface AgendaRow {
   note: string | null;
   /** Days past due; 0 when not overdue. */
   overdueDays: number;
+  /** A ritual with mode off whose date is past: it goes to the Off group, not to Overdue. */
+  off: boolean;
 }
 
 export interface AgendaGroup {
@@ -84,7 +88,7 @@ export interface Agenda {
   showProject: boolean;
   /** The first row that is not overdue and has a date. */
   next: AgendaRow | null;
-  /** Rituals and dated vigils past due. */
+  /** Rituals darius runs and dated vigils past due; a ritual with mode off is not counted. */
   overdue: number;
   /** Rows due today that are not running or held now. */
   dueToday: number;
@@ -118,9 +122,11 @@ interface GroupSpec {
   label: string;
 }
 
-function groupOf(today: string, date: string | null, overdue: boolean): GroupSpec {
+function groupOf(today: string, row: AgendaRow): GroupSpec {
+  const { date } = row;
+  if (row.off) return { key: "off", kind: "off", label: "Off" };
   if (date === null) return { key: "none", kind: "none", label: "No schedule" };
-  if (overdue) return { key: "overdue", kind: "overdue", label: "Overdue" };
+  if (row.overdueDays > 0) return { key: "overdue", kind: "overdue", label: "Overdue" };
   const gap = dayGap(today, date);
   if (gap <= 0) return { key: "today", kind: "today", label: "Today" };
   if (gap === 1) return { key: "tomorrow", kind: "tomorrow", label: "Tomorrow" };
@@ -150,13 +156,14 @@ function isNoise(run: RunRow): boolean {
 function asksNow(project: ProjectStatus, ritual: RitualRow): boolean {
   const own = project.runs.filter((run) => run.item === `ritual/${ritual.slug}` && !isNoise(run)).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
   const last = own[0];
-  return last !== undefined && asksYou(last);
+  return last !== undefined && asksYou(last, own);
 }
 
 interface Placement {
   date: string | null;
   overdueDays: number;
   state: AgendaState | null;
+  off?: boolean;
 }
 
 function placement(input: AgendaInput, project: ProjectStatus, ritual: RitualRow): Placement {
@@ -170,6 +177,8 @@ function placement(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
   const asks: AgendaState | null = asksNow(project, ritual) ? ASKS_YOU : null;
   if (ritual.nextDue === null) return { date: null, overdueDays: 0, state: asks };
   const late = Math.max(ritual.overdueDays, dayGap(ritual.nextDue, today));
+  // The timer never starts a ritual with mode off (`policy-off` in run-due), so it cannot be late.
+  if (late > 0 && ritual.mode === "off") return { date: ritual.nextDue, overdueDays: 0, state: null, off: true };
   if (late > 0) return { date: ritual.nextDue, overdueDays: late, state: lateWord(late) };
   return { date: ritual.nextDue <= today ? today : ritual.nextDue, overdueDays: 0, state: asks };
 }
@@ -191,6 +200,7 @@ function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
     until: null,
     note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
     overdueDays: at.overdueDays,
+    off: at.off === true,
   };
 }
 
@@ -221,6 +231,7 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
     until: vigil.until,
     note,
     overdueDays: late,
+    off: false,
   };
 }
 
@@ -244,7 +255,7 @@ function byWaiting(left: WaitingRow, right: WaitingRow): number {
   return Number(right.flagged) - Number(left.flagged) || left.title.localeCompare(right.title);
 }
 
-const GROUP_ORDER = { overdue: 0, today: 1, tomorrow: 2, day: 3, later: 4, none: 5 } as const satisfies Record<GroupKind, number>;
+const GROUP_ORDER = { overdue: 0, today: 1, tomorrow: 2, day: 3, later: 4, none: 5, off: 6 } as const satisfies Record<GroupKind, number>;
 
 export function buildAgenda(input: AgendaInput): Agenda {
   const rows: AgendaRow[] = [];
@@ -262,7 +273,7 @@ export function buildAgenda(input: AgendaInput): Agenda {
   }
   const groups = new Map<string, AgendaGroup & { order: number; date: string }>();
   for (const row of rows.toSorted(byRow)) {
-    const spec = groupOf(input.today, row.date, row.overdueDays > 0);
+    const spec = groupOf(input.today, row);
     const found = groups.get(spec.key);
     if (found === undefined) groups.set(spec.key, { ...spec, rows: [row], order: GROUP_ORDER[spec.kind], date: row.date ?? "" });
     else found.rows.push(row);
@@ -270,7 +281,7 @@ export function buildAgenda(input: AgendaInput): Agenda {
   const ordered = [...groups.values()]
     .toSorted((left, right) => left.order - right.order || left.date.localeCompare(right.date))
     .map(({ key, kind, label, rows: members }): AgendaGroup => ({ key, kind, label, rows: members }));
-  const dated = ordered.filter((group) => group.kind !== "overdue" && group.kind !== "none").flatMap((group) => group.rows);
+  const dated = ordered.filter((group) => group.kind !== "overdue" && group.kind !== "none" && group.kind !== "off").flatMap((group) => group.rows);
   const today = ordered.find((group) => group.kind === "today");
   return {
     groups: ordered,
@@ -281,6 +292,12 @@ export function buildAgenda(input: AgendaInput): Agenda {
     dueToday: today?.rows.filter((row) => row.state === null || (row.state !== RUNNING && row.state !== WAITING_FOR_YOU)).length ?? 0,
     armed,
   };
+}
+
+/** Vigils that need action: overdue or due today. The Vigils badge and the vigils tile of the Overview both show this number. */
+export function vigilsDue(projects: readonly ProjectStatus[], today: string): number {
+  const agenda = buildAgenda({ projects, today, only: "vigil" });
+  return agenda.overdue + agenda.dueToday;
 }
 
 /** The Next line under the home verdict: the first item that is not late, with when it comes up. */

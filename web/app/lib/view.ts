@@ -64,18 +64,29 @@ export function activity(projects: readonly ProjectStatus[], opts: { withImporte
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
+/** A run row that may name its project (an activity run does). Runs of two projects never replace each other. */
+type SiblingRun = RunRow & { project?: string | undefined };
+
+/** A newer run of the same ritual in the same project that closed complete: it replaces this run's questions. */
+function supersededBy(run: SiblingRun, other: SiblingRun): boolean {
+  return other.item === run.item && other.project === run.project && other.run !== run.run && other.phase === "closed" && other.outcome === "complete" && other.startedAt.localeCompare(run.startedAt) > 0;
+}
+
 /**
  * A complete run whose result asks the operator something (0.22.0), and
  * nobody answered yet: it waits for `darius run ack --note`, like a held run
- * waits for an answer.
+ * waits for an answer. It stops asking once a newer run of the same ritual
+ * (a follow-up counts) closed complete, since that run answers it. `runs` are
+ * the runs to look through: the same project's, or any list that holds them.
  */
-export function asksYou(run: RunRow): boolean {
-  return run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
+export function asksYou(run: SiblingRun, runs: readonly SiblingRun[]): boolean {
+  const open = run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
+  return open && !runs.some((other) => supersededBy(run, other));
 }
 
-/** How a run ended, in words and a tone (the table in `state-words.ts`). */
-export function runState(run: RunRow): Badge {
-  return runWord(run, asksYou(run));
+/** How a run ended, in words and a tone (the table in `state-words.ts`). `runs` are as for `asksYou`. */
+export function runState(run: SiblingRun, runs: readonly SiblingRun[]): Badge {
+  return runWord(run, asksYou(run, runs));
 }
 
 // --- stuck runs ------------------------------------------------------------------------
@@ -113,7 +124,7 @@ export function vigilWaits(vigil: VigilRow, today: string): string[] {
 /** The questions that wait for the operator: a held run's (one without a question counts as one), and a result's nobody answered. */
 export function questionCount(runs: readonly RunRow[]): number {
   const held = runs.filter((run) => run.phase === "held").reduce((sum, run) => sum + Math.max(run.questions.length, 1), 0);
-  return runs.filter((run) => asksYou(run)).reduce((sum, run) => sum + (run.result?.questions ?? 0), held);
+  return runs.filter((run) => asksYou(run, runs)).reduce((sum, run) => sum + (run.result?.questions ?? 0), held);
 }
 
 /** "2 questions wait for you". */
