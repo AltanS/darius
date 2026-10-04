@@ -1,8 +1,9 @@
 /**
  * Read-only view of the legacy tracker's vigils (`<checkout>/.tracker/vigils/*.md`).
- * Until migration phase 3 they stay canonical there (docs/concept.md), so the
- * darius store holds none, and the web page would show a project with no
- * vigils. This reads only the header of each file and never writes to `.tracker/`.
+ * In a project whose marker lacks `vigil` in kinds they stay canonical there
+ * (docs/concept.md), so the darius store holds none, and the web page would
+ * show a project with no vigils. This reads only the header of each file and
+ * never writes to `.tracker/`.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -28,7 +29,12 @@ function valueOf(header: Map<string, string>, key: string): string | null {
 
 /** Legacy vigils of a checkout, the newest resolved first and the armed ones before them. */
 export function readLegacyVigils(checkout: string): LegacyVigil[] {
-  const dir = join(checkout, ".tracker", "vigils");
+  return readLegacyVigilsAt(join(checkout, ".tracker"));
+}
+
+/** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */
+export function readLegacyVigilsAt(trackerDir: string): LegacyVigil[] {
+  const dir = join(trackerDir, "vigils");
   if (!existsSync(dir)) return [];
   const vigils = readdirSync(dir)
     .filter((name) => name.endsWith(".md"))

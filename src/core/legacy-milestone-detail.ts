@@ -25,7 +25,7 @@ import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Stat
 import { join, sep } from "node:path";
 
 import { parseHeader } from "./legacy-header.ts";
-import { readLegacyMilestones, type LegacyMilestone, type LegacySpec } from "./legacy-milestones.ts";
+import { readLegacyMilestonesAt, type LegacyMilestone, type LegacySpec } from "./legacy-milestones.ts";
 
 /** A file larger than this is listed, not read. */
 export const MAX_TEXT_BYTES = 256 * 1024;
@@ -223,14 +223,18 @@ export function pickMilestone(milestones: readonly LegacyMilestone[], ref: strin
 
 /** One open milestone of a checkout with everything its directory holds and its worklogs; null when the checkout has no such milestone. */
 export function readLegacyMilestoneDetail(checkout: string, ref: string): LegacyMilestoneDetail | null {
-  const trackerDir = join(checkout, ".tracker");
+  return readLegacyMilestoneDetailAt(join(checkout, ".tracker"), ref);
+}
+
+/** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */
+export function readLegacyMilestoneDetailAt(trackerDir: string, ref: string): LegacyMilestoneDetail | null {
   let root: string;
   try {
     root = realpathSync(trackerDir);
   } catch {
     return null;
   }
-  const milestone = pickMilestone(readLegacyMilestones(checkout).milestones, ref);
+  const milestone = pickMilestone(readLegacyMilestonesAt(trackerDir).milestones, ref);
   if (milestone === null) return null;
   const dir = `${milestone.id}-${milestone.slug}`;
   const milestoneDir = join(root, dir);
