@@ -24,9 +24,12 @@
  *                    identical copy in the tree dir or in git HEAD, `git rm
  *                    -r --cached .tracker`, remove the folder, link
  *                    `.tracker` to the tree dir, add `/.tracker` to
- *                    `.gitignore`
+ *                    `.gitignore`, then write the store's vigils as files
+ *                    under `.tracker/vigils/` (src/core/vigil-projection.ts)
  *               Nothing is committed: the operator commits the marker, the
- *               `.gitignore` and the staged removal.
+ *               `.gitignore` and the staged removal. Imported open vigils
+ *               are heavy, so the daily sweep skips them; the summary says
+ *               so, and `darius vigil set <slug> --no-heavy` allows one.
  *   --only vigil  step 1, kinds = ["ritual", "vigil"], `git rm -r -q
  *               .tracker/vigils`. No copy and no link.
  *
@@ -46,6 +49,7 @@ import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, r
 import { dirname, join } from "node:path";
 
 import type { OwnedKind } from "../core/kinds.ts";
+import type { Vigil } from "../core/model.ts";
 import { appendLine, defaultWho, readLedger } from "../core/ledger.ts";
 import { readLegacyVigils } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
@@ -67,6 +71,7 @@ import {
   type TreeCapture,
 } from "../core/tree.ts";
 import { importLegacyVigils, type VigilImportResult } from "../core/vigil-import.ts";
+import { projectVigils } from "../core/vigil-projection.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -153,6 +158,8 @@ interface CopyCount {
 interface VigilStep {
   summary: string;
   result: VigilImportResult | null;
+  /** The imported vigils that are heavy now: the open ones. The daily sweep skips them. */
+  heavy: string[];
 }
 
 interface StepReport {
@@ -427,15 +434,26 @@ function surveyLines(result: Survey): string[] {
 
 /** Step 1: the vigil import, a dry run first. Skipped when there are no vigil files or the marker already lists vigil. */
 function importVigils(project: Project, root: string, kinds: readonly OwnedKind[], dryRun: boolean): VigilStep {
-  if (kinds.includes("vigil")) return { summary: "skipped: the marker already lists vigil", result: null };
-  if (vigilFiles(root).length === 0) return { summary: "none in .tracker/vigils", result: null };
+  if (kinds.includes("vigil")) return { summary: "skipped: the marker already lists vigil", result: null, heavy: [] };
+  if (vigilFiles(root).length === 0) return { summary: "none in .tracker/vigils", result: null, heavy: [] };
   const source = join(root, TRACKER_LINK);
   const trial = importLegacyVigils(project, source, { dryRun: true, who: defaultWho() });
   if (trial.problems.length > 0) throw new StepFailure(1, `the vigil import dry run found problems:\n  ${trial.problems.join("\n  ")}`);
-  if (dryRun) return { summary: `would import ${String(trial.imported.length)}, ${String(trial.unchanged.length)} unchanged, ${String(trial.closed)} closed`, result: trial };
+  if (dryRun) {
+    const summary = `would import ${String(trial.imported.length)}, ${String(trial.unchanged.length)} unchanged, ${String(trial.closed)} closed; open ones come in heavy`;
+    return { summary, result: trial, heavy: [] };
+  }
   const done = importLegacyVigils(project, source, { dryRun: false, who: defaultWho() });
   if (done.problems.length > 0) throw new StepFailure(1, `the vigil import found problems:\n  ${done.problems.join("\n  ")}`);
-  return { summary: `imported ${String(done.imported.length)}, ${String(done.unchanged.length)} unchanged, ${String(done.closed)} closed`, result: done };
+  const heavy = done.imported.filter((slug) => project.readItem<Vigil>("vigil", slug)?.header.heavy === true);
+  return { summary: `imported ${String(done.imported.length)}, ${String(done.unchanged.length)} unchanged, ${String(done.closed)} closed`, result: done, heavy };
+}
+
+/** The one line about imported open vigils, or null when there are none. */
+function heavyLine(heavy: readonly string[]): string | null {
+  if (heavy.length === 0) return null;
+  const count = heavy.length === 1 ? "1 open vigil was" : `${String(heavy.length)} open vigils were`;
+  return `${count} imported as heavy: the daily sweep skips them. Allow one with: darius vigil set <slug> --no-heavy`;
 }
 
 /** The files and dirs step 2 copies: everything under `.tracker/` except `vigils/`. */
@@ -608,7 +626,7 @@ async function runScan(marker: Marker, scope: Scope, json: boolean): Promise<num
 async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<number> {
   const result = survey(marker, scope);
   const project = result.store.exists ? openProject(marker.project) : null;
-  let vigils: VigilStep | { error: string } = { summary: "not run: no store for the project on this host", result: null };
+  let vigils: VigilStep | { error: string } = { summary: "not run: no store for the project on this host", result: null, heavy: [] };
   if (project !== null && result.tracker === "folder") {
     try {
       vigils = importVigils(project, marker.dir, marker.kinds, true);
@@ -649,8 +667,12 @@ async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<num
   const root = marker.dir;
   const project = openProject(marker.project);
   const steps: StepReport[] = [];
+  const warnings: string[] = [];
+  let heavy: string[] = [];
   try {
-    steps.push({ step: 1, name: "vigils", summary: importVigils(project, root, marker.kinds, false).summary });
+    const vigils = importVigils(project, root, marker.kinds, false);
+    heavy = vigils.heavy;
+    steps.push({ step: 1, name: "vigils", summary: vigils.summary });
     if (scope === "vigil") {
       writeKinds(marker, VIGIL_KINDS, 2);
       steps.push({ step: 2, name: MARKER_FILE, summary: `kinds = ${kindsText(VIGIL_KINDS)}` });
@@ -678,6 +700,12 @@ async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<num
         throw cause instanceof StepFailure ? cause : new StepFailure(5, errorMessage(cause));
       }
       steps.push({ step: 5, name: "link", summary: `.tracker removed from git (staged) and linked to ${treeDir(project)}, ${TRACKER_IGNORE} in .gitignore` });
+      try {
+        // .tracker/vigils/ shows the store's vigils at once, not after the next verb.
+        projectVigils(project, treeDir(project));
+      } catch (cause) {
+        warnings.push(`the vigil files under .tracker/vigils/ are not written yet (${errorMessage(cause)}); the next tracker verb writes them`);
+      }
     }
   } catch (cause) {
     const step = cause instanceof StepFailure ? cause.step : steps.length + 1;
@@ -693,11 +721,14 @@ async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<num
   }
   const next = nextCommands(scope);
   const after = "Then, on every other host: update darius first, pull, and run darius sync.";
+  const heavyText = heavyLine(heavy);
   if (json) {
-    console.log(JSON.stringify({ mode: "move", ok: true, project: marker.project, steps, next, after }));
+    console.log(JSON.stringify({ mode: "move", ok: true, project: marker.project, steps, heavy_vigils: heavy, heavy_note: heavyText, warnings, next, after }));
     return EXIT_OK;
   }
   printSteps(steps);
+  if (heavyText !== null) console.log(heavyText);
+  for (const warning of warnings) console.log(`! ${warning}`);
   console.log("Next, commit the change:");
   for (const command of next) console.log(`  ${command}`);
   console.log(after);

@@ -103,8 +103,43 @@ const MARKER = [
 
 const SPEC = ".tracker/M1-alpha/01-spec-one.md";
 
+/** One legacy vigil file, as the legacy CLI writes it. `commands` empty: an armed vigil nobody can run. */
+function vigilFile(options: { slug: string; from: string; commands: string[]; resolved?: string; verdict?: string }): string {
+  const steps =
+    options.commands.length === 0
+      ? "- [ ] look at the dashboard\n"
+      : options.commands.map((command, index) => `- [ ] step ${String(index + 1)}\n  - Command: \`${command}\`\n  - Expected: \`exit 0\`\n`).join("");
+  return [
+    "---",
+    "type: vigil",
+    `name: ${options.slug}`,
+    `slug: ${options.slug}`,
+    "due:",
+    "until: first real batch",
+    `from: ${options.from}`,
+    "agent:",
+    "opened: 2026-09-02",
+    `resolved: ${options.resolved ?? ""}`,
+    `verdict: ${options.verdict ?? ""}`,
+    "---",
+    "",
+    `# ${options.slug}`,
+    "",
+    "## Verification Checklist",
+    "",
+    steps,
+  ].join("\n");
+}
+
+/** Two open vigils (one guards M1 and has no Command) and one closed one. */
+const VIGILS = {
+  "guard-soak": vigilFile({ slug: "guard-soak", from: "M1/01", commands: [] }),
+  "cache-check": vigilFile({ slug: "cache-check", from: "M2/01", commands: ["test -f README.md"] }),
+  "old-soak": vigilFile({ slug: "old-soak", from: "M2/01", commands: ["test -f README.md"], resolved: "2026-09-20", verdict: "held" }),
+};
+
 /** A committed legacy repo, linked on `at`: a tracker made by the legacy CLI, a v3 marker without kinds. */
-function legacyRepo(at: Host, name: string): string {
+function legacyRepo(at: Host, name: string, options: { vigils?: boolean } = {}): string {
   const dir = join(SANDBOX, name);
   mkdirSync(join(dir, ".tracker"), { recursive: true });
   git(at, dir, ["init", "--quiet", "--initial-branch=main"]);
@@ -124,6 +159,10 @@ function legacyRepo(at: Host, name: string): string {
   writeFileSync(join(dir, ".tracker", "M1-alpha", "diagram.bin"), new Uint8Array([0, 159, 146, 150, 255, 0, 10]));
   writeFileSync(join(dir, ".tracker", "M1-alpha", "check.sh"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(dir, ".tracker", "M1-alpha", "check.sh"), 0o755);
+  if (options.vigils === true) {
+    mkdirSync(join(dir, ".tracker", "vigils"));
+    for (const [slug, text] of Object.entries(VIGILS)) writeFileSync(join(dir, ".tracker", "vigils", `${slug}.md`), text);
+  }
   writeFileSync(join(dir, ".darius.toml"), MARKER.replace("PROJECT", name));
   writeFileSync(join(dir, "README.md"), "# acme\n");
   git(at, dir, ["add", "--all"]);
@@ -296,4 +335,83 @@ test("withKinds sets or inserts the root kinds line and keeps every other byte",
   const crlf = 'v = 3\r\nproject = "a"\r\ntz = "UTC"\r\n';
   assert.equal(withKinds(crlf, file, ["ritual", "vigil", "milestone"]), 'v = 3\r\nproject = "a"\r\ntz = "UTC"\r\nkinds = ["ritual", "vigil", "milestone"]\r\n');
   assert.equal(existsSync(file), false);
+});
+
+/** A vigil record without `path` and without the fields the native list adds. */
+function legacyFields(records: Record<string, string | boolean | null>[], keys: readonly string[]): Record<string, string | boolean | null>[] {
+  return records
+    .map((record) => Object.fromEntries(keys.filter((key) => key !== "path").map((key) => [key, record[key] ?? null])))
+    .toSorted((a, b) => String(a.slug).localeCompare(String(b.slug)));
+}
+
+function storeVigil(at: Host, project: string, slug: string): string {
+  return readFileSync(join(at.state, project, "items", "vigils", `${slug}.md`), "utf8");
+}
+
+test("onboard imports real vigils: open ones heavy, projected through the link, the same legacy list fields, and archive-check still refuses", { skip: NO_GIT }, () => {
+  const at = host();
+  const name = "acme-vigils";
+  const dir = legacyRepo(at, name, { vigils: true });
+  const legacyList = darius(at, ["vigil", "list", "--all", "--json"], dir);
+  assert.equal(legacyList.code, 0, legacyList.stderr);
+  const before: Record<string, string | boolean | null>[] = JSON.parse(legacyList.stdout);
+  assert.equal(before.length, 3);
+  const keys = Object.keys(before[0] ?? {});
+  const refusedBefore = darius(at, ["archive-check", "M1-alpha"], dir);
+  assert.equal(refusedBefore.code, 1);
+  assert.match(refusedBefore.stderr, /REFUSED.*guard-soak|guard-soak[\s\S]*REFUSED|REFUSED[\s\S]*guard-soak/u);
+
+  const dry = darius(at, ["onboard", "--dry-run", "--json"], dir);
+  assert.equal(dry.code, 0, dry.stdout + dry.stderr);
+  assert.match(JSON.parse(dry.stdout).vigil_import.summary, /^would import 3, 0 unchanged, 1 closed; open ones come in heavy$/u);
+  assert.equal(readdirSync(join(at.state, name, "items", "vigils")).length, 0, "the dry run imports nothing");
+
+  const moved = darius(at, ["onboard"], dir);
+  assert.equal(moved.code, 0, moved.stdout + moved.stderr);
+  assert.match(moved.stdout, /^✓ 1 vigils: imported 3, 0 unchanged, 1 closed$/mu);
+  assert.match(moved.stdout, /^2 open vigils were imported as heavy: the daily sweep skips them\. Allow one with: darius vigil set <slug> --no-heavy$/mu);
+
+  assert.match(storeVigil(at, name, "guard-soak"), /^heavy: true$/mu);
+  assert.match(storeVigil(at, name, "cache-check"), /^heavy: true$/mu);
+  assert.match(storeVigil(at, name, "old-soak"), /^heavy: false$/mu);
+  const staged = git(at, dir, ["diff", "--cached", "--name-status"]);
+  for (const slug of Object.keys(VIGILS)) {
+    assert.match(staged, new RegExp(`^D\\t\\.tracker/vigils/${slug}\\.md$`, "mu"));
+    assert.ok(existsSync(join(dir, ".tracker", "vigils", `${slug}.md`)), `${slug} is projected through the link`);
+  }
+  assert.equal(git(at, dir, ["ls-files", ".tracker"]), "", "nothing under .tracker is in the git index");
+
+  const nativeList = darius(at, ["vigil", "list", "--all", "--json"], dir);
+  assert.equal(nativeList.code, 0, nativeList.stderr);
+  assert.deepEqual(legacyFields(JSON.parse(nativeList.stdout), keys), legacyFields(before, keys));
+
+  const refused = darius(at, ["archive-check", "M1-alpha"], dir);
+  assert.equal(refused.code, 1, refused.stdout);
+  assert.match(refused.stderr, /guard-soak/u);
+  assert.match(refused.stderr, /no Command: line at all/u);
+  assert.equal(darius(at, ["archive-check", "M2-beta"], dir).code, 0, "a vigil with a Command does not block");
+});
+
+test("onboard --only vigil moves the vigils into the store and leaves the rest of .tracker/ in git", { skip: NO_GIT }, () => {
+  const at = host();
+  const name = "acme-only-vigil";
+  const dir = legacyRepo(at, name, { vigils: true });
+  const moved = darius(at, ["onboard", "--only", "vigil"], dir);
+  assert.equal(moved.code, 0, moved.stdout + moved.stderr);
+  assert.match(moved.stdout, /^✓ 2 \.darius\.toml: kinds = \["ritual", "vigil"\]$/mu);
+  assert.match(moved.stdout, /^2 open vigils were imported as heavy/mu);
+  assert.match(moved.stdout, /^ {2}git add \.darius\.toml$/mu);
+  assert.match(readFileSync(join(dir, ".darius.toml"), "utf8"), /^kinds = \["ritual", "vigil"\]$/mu);
+  assert.equal(lstatSync(join(dir, ".tracker")).isDirectory(), true, ".tracker/ stays a folder in git");
+  assert.equal(existsSync(join(dir, ".tracker", "vigils")), false);
+  const staged = git(at, dir, ["diff", "--cached", "--name-status"]).trim().split("\n");
+  assert.deepEqual(staged.toSorted(), Object.keys(VIGILS).map((slug) => `D\t.tracker/vigils/${slug}.md`).toSorted());
+  assert.match(storeVigil(at, name, "guard-soak"), /^heavy: true$/mu);
+  const list = darius(at, ["vigil", "list", "--all", "--json"], dir);
+  assert.equal(list.code, 0, list.stderr);
+  assert.deepEqual(JSON.parse(list.stdout).map((record: { slug: string }) => record.slug).toSorted(), ["cache-check", "guard-soak", "old-soak"]);
+  const again = darius(at, ["onboard", "--only", "vigil"], dir);
+  assert.equal(again.code, 1);
+  assert.match(again.stderr, /nothing to do/u);
+  assert.equal(darius(at, ["onboard", "scan", "--only", "vigil"], dir).code, 3, "nothing left to move");
 });
