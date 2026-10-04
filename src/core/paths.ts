@@ -12,8 +12,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { findMarker } from "./marker.ts";
+import { DEFAULT_KINDS, type OwnedKind } from "./kinds.ts";
+import { linkedDir } from "./links.ts";
+import { findMarker, readMarker, type Marker } from "./marker.ts";
 import { UsageError } from "./model.ts";
+import { errorMessage } from "../runtime.ts";
 
 /** `~/.config/darius`, or `DARIUS_CONFIG_DIR` when set. */
 /** An env override, where an empty string counts as unset (systemd `Environment=X=` sets ""). */
@@ -95,4 +98,43 @@ export function isUnlinkedTrackerRepo(flag: string | undefined, cwd: string): bo
   if (fromEnv !== undefined && fromEnv.length > 0) return false;
   if (findMarker(cwd) !== null) return false;
   return findTrackerDir(cwd) !== null;
+}
+
+/** What `ownedKinds` answers: the owned set and the marker it came from, or the marker's parse error. */
+export type OwnedKinds =
+  | { ok: true; kinds: ReadonlySet<OwnedKind>; marker: Marker | null }
+  | { ok: false; error: string };
+
+/** The `--project P` or `--project=P` value in `argv`, the last one. Undefined when there is none. */
+function projectFlag(argv: readonly string[]): string | undefined {
+  let found: string | undefined;
+  argv.forEach((token, index) => {
+    if (token === "--project") found = argv[index + 1];
+    else if (token.startsWith("--project=")) found = token.slice("--project=".length);
+  });
+  return found === undefined || found === "" ? undefined : found;
+}
+
+/**
+ * The kinds the darius store owns for the command in `argv` run in `cwd`.
+ * The project is `--project`, else `DARIUS_PROJECT`; its marker is the one in
+ * its linked checkout on this host. With no name, the nearest marker at or
+ * above `cwd`. No link, no marker or no `kinds` key: `DEFAULT_KINDS`. A
+ * marker that does not parse gives `{ ok: false, error }`. Never throws.
+ */
+export function ownedKinds(argv: readonly string[], cwd: string): OwnedKinds {
+  try {
+    const name = projectFlag(argv) ?? envDir("DARIUS_PROJECT");
+    let marker: Marker | null;
+    if (name === undefined) {
+      marker = findMarker(cwd);
+    } else {
+      const dir = linkedDir(name);
+      marker = dir === undefined ? null : readMarker(dir);
+    }
+    if (marker === null) return { ok: true, kinds: DEFAULT_KINDS, marker: null };
+    return { ok: true, kinds: new Set(marker.kinds), marker };
+  } catch (cause) {
+    return { ok: false, error: errorMessage(cause) };
+  }
 }

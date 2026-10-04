@@ -77,6 +77,11 @@ Root keys:
 | `project` | The project name. |
 | `max_mode` | `off`, `report` or `act`. The ceiling for every ritual. A ritual with `mode = "act"` needs `max_mode = "act"`. |
 | `tz` | Required when `v = 3`. An IANA zone name, such as `Europe/Berlin`. |
+| `kinds` | Optional, needs `v = 3`. The kinds the darius store owns in this project. Exactly one of `["ritual"]` (the default), `["ritual", "vigil"]` or `["ritual", "vigil", "milestone"]`. |
+
+`kinds` says which kinds the store owns in this project. `ritual` is always owned. `vigil` means the store owns this project's vigils, so `darius vigil` verbs act on the store and not on `.tracker/vigils/`. `milestone` means the store owns the whole tracker tree: milestones, specs, worklogs and the archive. Each list adds one kind to the one before, so no other list is valid, and a wrong list is a marker error.
+
+An older darius refuses the unknown key `kinds`. Update every host before you commit the first marker with `kinds`.
 
 `[rituals.<slug>]` takes a slug of lowercase letters, digits, `-` and `_` (at most 64, no dots):
 

@@ -4,7 +4,8 @@
  *
  * Without `<dir>` it takes the nearest marker at or above the working
  * directory. With one it reads the marker in that directory. Exit 0 and
- * `ok: v3, 2 rituals, 1 policies` when the file parses, 1 with the first
+ * `ok: v3, 2 rituals, 1 policies` and a `kinds: ritual` line (the kinds the
+ * store owns, `kinds` in the JSON) when the file parses, 1 with the first
  * error as `file:line: message` when it does not, 2 when there is no file.
  * A ritual whose skill file is missing in this checkout is an error too
  * (exit 1): run-due would skip it as `skill-missing`. Warnings never change
@@ -50,6 +51,7 @@ interface CheckReport {
   ok: boolean;
   file?: string;
   version?: number;
+  kinds?: readonly string[];
   rituals?: number;
   policies?: number;
   errors: string[];
@@ -163,6 +165,7 @@ function check(dir: string | undefined): CheckReport {
   if (marker === null) throw new UsageError(`no ${MARKER_FILE} in ${found.where}`);
   report.file = marker.file;
   report.version = marker.version;
+  report.kinds = marker.kinds;
   report.rituals = marker.rituals.length;
   report.policies = Object.keys(marker.policies).length;
   report.errors = skillErrorsFor(marker);
@@ -177,6 +180,7 @@ function printReport(report: CheckReport): void {
   if (!report.ok) return;
   const counts = report.version === 3 ? `, ${String(report.rituals)} rituals, ${String(report.policies)} policies` : "";
   console.log(`ok: v${String(report.version)}${counts}`);
+  if (report.kinds !== undefined) console.log(`kinds: ${report.kinds.join(", ")}`);
 }
 
 /** What `--resolved <slug> --json` prints. */

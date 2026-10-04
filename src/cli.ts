@@ -7,8 +7,9 @@
  * command. Every other verb is a `Command` registered by a module under
  * src/cli/ (src/cli/commands.ts holds the fixed import list; a command
  * module calls `register()` once, at import time), or a verb of the vendored
- * legacy CLI: `routeVerb` in src/core/kinds.ts decides, and a legacy verb
- * gets the whole argv, its output and its exit code unchanged. Exit codes follow the
+ * legacy CLI: `routeVerb` in src/core/kinds.ts decides, from the verb and
+ * the kinds the repo's marker says the store owns (`ownedKinds`), and a
+ * legacy verb gets the whole argv, its output and its exit code unchanged. Exit codes follow the
  * operator's probe contract: 0 ok, 1 refused or failed, 2 usage, 3
  * inconclusive environment.
  */
@@ -17,9 +18,9 @@ import { parseArgs, readStdin } from "./cli/args.ts";
 import { registerCommands } from "./cli/commands.ts";
 import { getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
-import { DARIUS_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
+import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { runLegacy } from "./core/legacy-entry.ts";
-import { findTrackerDir, isUnlinkedTrackerRepo } from "./core/paths.ts";
+import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds } from "./core/paths.ts";
 import { errorMessage, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
 
@@ -83,7 +84,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const name = resolveCommandName(first);
-  const route = routeVerb(name, argv[1], (verb) => getCommand(verb) !== undefined);
+  const owned = ownedKinds(argv, process.cwd());
+  // A broken marker must never send a vigil write to the legacy writer.
+  if (!owned.ok && name === "vigil" && argv[1] !== "sweep") {
+    console.error(`darius: ${owned.error}`);
+    return 1;
+  }
+  const kinds = owned.ok ? owned.kinds : DEFAULT_KINDS;
+  const route = routeVerb(name, argv[1], (verb) => getCommand(verb) !== undefined, kinds);
   if (route === "legacy") return runLegacyVerb(argv);
   const command = getCommand(name);
   if (route === "unknown" || command === undefined) {
@@ -102,7 +110,7 @@ async function main(argv: string[]): Promise<number> {
   const kind = kindOfVerb(name);
   const project = args.flags.project;
   const named = project !== undefined && project !== false && project !== true ? project : undefined;
-  if (kind !== null && DARIUS_KINDS.has(kind) && isUnlinkedTrackerRepo(named, process.cwd())) {
+  if (kind !== null && kinds.has(kind) && isUnlinkedTrackerRepo(named, process.cwd())) {
     console.error("darius: this repo is not linked: run darius init");
     return 1;
   }

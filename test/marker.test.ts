@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
 import { linksFile, readLinks, writeLink } from "../src/core/links.ts";
 import { definitionHash, findMarker, isAboveCap, readMarker, resolvedLines, resolvedPolicy, shellOperatorIn, type Marker, type RepoRitual } from "../src/core/marker.ts";
-import { resolveProject } from "../src/core/paths.ts";
+import { DEFAULT_KINDS } from "../src/core/kinds.ts";
+import { ownedKinds, resolveProject } from "../src/core/paths.ts";
 import type { Document, LedgerLine, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { parseToml, tomlKey, tomlString } from "../src/core/toml.ts";
@@ -682,4 +683,104 @@ test("notes in the multi-line form read back as the same value and give the same
 test("a multi-line notes value keeps the line of the keys after it", () => {
   const text = v3(`${RITUAL}notes = """\none\ntwo\n"""\nat = "07:00"\nmode = "plain"\n`);
   assert.throws(() => readMarker(checkout(text)), /:14: mode must be "off", "report" or "act"/u);
+});
+
+// --- kinds ------------------------------------------------------------------------
+
+const V3 = 'v = 3\nproject = "ws"\ntz = "Europe/Berlin"\n';
+
+test("kinds: the three valid lists read back, and an absent key is [ritual]", () => {
+  assert.deepEqual(readMarker(checkout(V3))?.kinds, ["ritual"]);
+  for (const list of [["ritual"], ["ritual", "vigil"], ["ritual", "vigil", "milestone"]]) {
+    const text = `${V3}kinds = [${list.map((kind) => `"${kind}"`).join(", ")}]\n`;
+    assert.deepEqual(readMarker(checkout(text))?.kinds, list);
+  }
+  assert.deepEqual(readMarker(checkout('project = "ws"\n'))?.kinds, ["ritual"]);
+});
+
+test("kinds: every other form is a marker error that lists the three valid forms", () => {
+  const forms = /kinds must be one of \["ritual"\], \["ritual", "vigil"\], \["ritual", "vigil", "milestone"\], in this order/u;
+  for (const bad of [
+    '["tracker"]',
+    '["ritual", "ritual"]',
+    '["vigil", "ritual"]',
+    '["ritual", "milestone"]',
+    '["vigil"]',
+    '["milestone"]',
+    '["ritual", "vigil", "milestone", "ritual"]',
+    "[]",
+    '"ritual"',
+  ]) {
+    assert.throws(() => readMarker(checkout(`${V3}kinds = ${bad}\n`)), forms, bad);
+  }
+  assert.throws(() => readMarker(checkout(`${V3}kinds = [1]\n`)), /\.darius\.toml:4: /u);
+  assert.throws(() => readMarker(checkout(`${V3}kinds = ["tracker"]\n`)), /\.darius\.toml:4: kinds must be one of/u);
+});
+
+test("kinds needs v = 3, as tz does", () => {
+  assert.throws(() => readMarker(checkout('v = 2\nproject = "ws"\nkinds = ["ritual", "vigil"]\n')), /\.darius\.toml:3: kinds needs v = 3 at the top of \.darius\.toml/u);
+  assert.throws(() => readMarker(checkout('project = "ws"\nkinds = ["ritual"]\n')), /\.darius\.toml:2: kinds needs v = 3/u);
+});
+
+// --- ownedKinds -------------------------------------------------------------------
+
+test("ownedKinds: the marker above cwd, else the default", () => {
+  const dir = checkout(`${V3}kinds = ["ritual", "vigil"]\n`);
+  const deep = join(dir, "a", "b");
+  mkdirSync(deep, { recursive: true });
+  const found = ownedKinds(["vigil", "list"], deep);
+  assert.ok(found.ok);
+  assert.deepEqual([...found.kinds], ["ritual", "vigil"]);
+  assert.equal(found.marker?.project, "ws");
+
+  const bare = join(SANDBOX, "no-marker");
+  mkdirSync(bare, { recursive: true });
+  const none = ownedKinds(["vigil", "list"], bare);
+  assert.deepEqual(none, { ok: true, kinds: DEFAULT_KINDS, marker: null });
+});
+
+test("ownedKinds: --project P and --project=P read the linked checkout, not cwd", () => {
+  const linked = checkout(`${V3}kinds = ["ritual", "vigil", "milestone"]\n`);
+  writeLink("owned-linked", linked);
+  const elsewhere = checkout('project = "other"\n');
+  for (const argv of [["vigil", "list", "--project", "owned-linked"], ["vigil", "list", "--project=owned-linked"]]) {
+    const found = ownedKinds(argv, elsewhere);
+    assert.ok(found.ok, argv.join(" "));
+    assert.deepEqual([...found.kinds], ["ritual", "vigil", "milestone"]);
+  }
+  // A name with no link, and a link to a directory with no marker, give the default.
+  assert.deepEqual(ownedKinds(["vigil", "list", "--project", "never-linked"], linked), { ok: true, kinds: DEFAULT_KINDS, marker: null });
+  const empty = join(SANDBOX, "linked-empty");
+  mkdirSync(empty, { recursive: true });
+  writeLink("owned-empty", empty);
+  assert.deepEqual(ownedKinds(["vigil", "list", "--project=owned-empty"], linked), { ok: true, kinds: DEFAULT_KINDS, marker: null });
+});
+
+test("ownedKinds: DARIUS_PROJECT names the project when there is no flag; the flag wins", () => {
+  const vigils = checkout(`${V3}kinds = ["ritual", "vigil"]\n`);
+  const plain = checkout(V3);
+  writeLink("owned-env", vigils);
+  writeLink("owned-plain", plain);
+  process.env.DARIUS_PROJECT = "owned-env";
+  try {
+    const fromEnv = ownedKinds(["vigil", "list"], plain);
+    assert.ok(fromEnv.ok);
+    assert.deepEqual([...fromEnv.kinds], ["ritual", "vigil"]);
+    const flagged = ownedKinds(["vigil", "list", "--project", "owned-plain"], vigils);
+    assert.ok(flagged.ok);
+    assert.deepEqual([...flagged.kinds], ["ritual"]);
+  } finally {
+    delete process.env.DARIUS_PROJECT;
+  }
+});
+
+test("ownedKinds: a marker that does not parse gives the parser's message and never throws", () => {
+  const broken = checkout(`${V3}kinds = ["vigil"]\n`);
+  const here = ownedKinds(["vigil", "list"], broken);
+  assert.ok(!here.ok);
+  assert.match(here.error, /\.darius\.toml:4: kinds must be one of/u);
+  writeLink("owned-broken", broken);
+  const named = ownedKinds(["vigil", "list", "--project", "owned-broken"], SANDBOX);
+  assert.ok(!named.ok);
+  assert.match(named.error, /kinds must be one of/u);
 });

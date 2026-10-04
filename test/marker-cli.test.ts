@@ -81,7 +81,7 @@ test("marker check: a missing skill file is an error and exits 1; with the files
   addSkill(dir, "weekly-audit");
   const clean = await runCli(markerCommand, ["check", dir]);
   assert.equal(clean.code, 0, clean.stderr);
-  assert.equal(clean.stdout, "ok: v3, 2 rituals, 1 policies");
+  assert.equal(clean.stdout, "ok: v3, 2 rituals, 1 policies\nkinds: ritual");
 });
 
 test("marker check: a bad file prints file:line and exits 1; --json carries the same error", async () => {
@@ -104,8 +104,8 @@ test("marker check: warns about an unused policy and an empty v3 marker", async 
 });
 
 test("marker check: a v2 or v1 file is ok with no ritual counts", async () => {
-  assert.equal((await runCli(markerCommand, ["check", checkout('v = 2\nproject = "acme-web"\n')])).stdout, "ok: v2");
-  assert.equal((await runCli(markerCommand, ["check", checkout('project = "acme-web"\n')])).stdout, "ok: v1");
+  assert.equal((await runCli(markerCommand, ["check", checkout('v = 2\nproject = "acme-web"\n')])).stdout, "ok: v2\nkinds: ritual");
+  assert.equal((await runCli(markerCommand, ["check", checkout('project = "acme-web"\n')])).stdout, "ok: v1\nkinds: ritual");
 });
 
 test("marker check: --json reports version, counts, errors and warnings", async () => {
@@ -335,7 +335,7 @@ test("marker check counts own notes and policy notes apart, never the joined tex
 test("marker check: short notes and unrelated hold lists give no warning", async () => {
   const dir = withSkills(`${ROOT}${inlineRitual("a", HOLDS, 'notes = "Never push."\n')}${inlineRitual("b", HOLDS.map((item) => `${item}2`))}`, ["a", "b"]);
   const run = await runCli(markerCommand, ["check", dir]);
-  assert.equal(run.stdout, "ok: v3, 2 rituals, 0 policies");
+  assert.equal(run.stdout, "ok: v3, 2 rituals, 0 policies\nkinds: ritual");
 });
 
 test("marker check warns about a hold pattern with a literal shell operator, once, and never for a class (0.66.0)", async () => {
@@ -352,4 +352,14 @@ test("marker check warns about a hold pattern with a literal shell operator, onc
     "warning: [rituals.a] hold pattern 'make && make install' holds the shell operator &&: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)",
     "warning: [rituals.b] hold pattern 'a;b' holds the shell operator ;: since 0.66.0 a pattern is matched per command and cannot span commands unless the line has a loader (bash, sh, xargs, ssh and the like)",
   ]);
+});
+
+test("marker check shows the kinds, in text and in --json", async () => {
+  const dir = checkout('v = 3\nproject = "acme-web"\ntz = "UTC"\nkinds = ["ritual", "vigil"]\n');
+  const text = await runCli(markerCommand, ["check", dir]);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /^kinds: ritual, vigil$/mu);
+  assert.deepEqual(JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout).kinds, ["ritual", "vigil"]);
+  const plain = JSON.parse((await runCli(markerCommand, ["check", checkout('project = "acme-web"\n'), "--json"])).stdout);
+  assert.deepEqual(plain.kinds, ["ritual"]);
 });

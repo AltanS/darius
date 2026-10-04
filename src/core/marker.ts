@@ -20,6 +20,7 @@
  * zone), `[policies.<name>]` and `[rituals.<slug>]`:
  *
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
+ *   kinds = ["ritual", "vigil"]        optional: the kinds the store owns (below)
  *   [policies.read-only]               mode, may, hold, notes, on_hold
  *   [rituals.daily-report]             title, skill, and optionally cadence,
  *   at = "07:00"                       anchor, at, tz, from, args, timeout,
@@ -29,6 +30,13 @@
  *   notes = "Reports only."            optional next to `policy`, see below
  *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
  *   hold_extra = ['\bpush\b']          adds to the policy's hold (or the own hold)
+ *
+ * `kinds` (v = 3 only) says which kinds the darius store owns in this
+ * project. The only valid values are `["ritual"]` (the default),
+ * `["ritual", "vigil"]` and `["ritual", "vigil", "milestone"]`. `vigil`: the
+ * store owns this project's vigils. `milestone`: the store owns the whole
+ * tracker tree (milestones, specs, worklogs, archive). A host on an older
+ * darius refuses the unknown key, so update every host first.
  *
  * `args` is input for the skill, one line of at most 256 characters. The
  * run prompt passes it on under `## Arguments`. It is part of the definition
@@ -74,6 +82,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import type { OwnedKind } from "./kinds.ts";
 import type { Policy, ProfileFields } from "./model.ts";
 import { parseToml, type TomlDocument, type TomlValue } from "./toml.ts";
 import { isZone } from "./zone.ts";
@@ -146,6 +155,13 @@ export interface Marker {
   maxMode?: Mode;
   /** Root `tz`: required in a v3 file, absent below it. */
   tz?: string;
+  /**
+   * Root `kinds` (v3 only): the kinds the darius store owns in this project.
+   * `["ritual"]` when the key is absent. `vigil` means the store owns this
+   * project's vigils. `milestone` means the store owns the whole tracker tree
+   * (milestones, specs, worklogs, archive).
+   */
+  kinds: readonly OwnedKind[];
   /** `[rituals.<slug>]` tables in file order. Empty below v3. */
   rituals: RepoRitual[];
   /** `[policies.<name>]` tables, by name. Empty below v3. */
@@ -158,7 +174,10 @@ export interface Marker {
   defaultFollowUp?: string;
 }
 
-const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz"]);
+const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz", "kinds"]);
+/** The only valid `kinds` lists, in this order: each one adds a kind to the one before. */
+const VALID_KINDS: readonly (readonly OwnedKind[])[] = [["ritual"], ["ritual", "vigil"], ["ritual", "vigil", "milestone"]];
+const ABSENT_KINDS: readonly OwnedKind[] = ["ritual"];
 const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args"]);
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
@@ -601,7 +620,7 @@ export function decodeMarker(text: string, file: string): Marker {
   if (!isText(project) || project === "") {
     throw new Error(`${where(file, lines.project)}: project = "<name>" is required`);
   }
-  const marker: Marker = { dir: dirname(file), file, version, project, profiles: {}, rituals: [], policies: {} };
+  const marker: Marker = { dir: dirname(file), file, version, project, kinds: ABSENT_KINDS, profiles: {}, rituals: [], policies: {} };
   const maxMode = root.max_mode;
   if (maxMode !== undefined) {
     if (!isMode(maxMode)) {
@@ -610,6 +629,7 @@ export function decodeMarker(text: string, file: string): Marker {
     marker.maxMode = maxMode;
   }
   decodeRootZone(root.tz, version, { file, lines }, marker);
+  decodeKinds(root.kinds, { file, lines }, marker);
   decodeSections(document, file, marker);
   return marker;
 }
@@ -627,6 +647,22 @@ function decodeRootZone(tz: TomlValue | undefined, version: 1 | 2 | 3, at: { fil
     throw new Error(`${where(at.file, at.lines.tz)}: tz must be an IANA time zone name, such as "Europe/Berlin"`);
   }
   marker.tz = tz;
+}
+
+/** Root `kinds`: one of the three valid lists, and only at v = 3. Absent means `["ritual"]`. */
+function decodeKinds(kinds: TomlValue | undefined, at: { file: string; lines: Lines }, marker: Marker): void {
+  if (kinds === undefined) return;
+  const line = at.lines.kinds;
+  if (marker.version !== REPO_VERSION) {
+    throw new Error(`${where(at.file, line)}: kinds needs v = ${String(REPO_VERSION)} at the top of ${MARKER_FILE}`);
+  }
+  const given = Array.isArray(kinds) ? kinds : [];
+  const valid = VALID_KINDS.find((list) => list.length === given.length && list.every((kind, index) => kind === given[index]));
+  if (valid === undefined) {
+    const forms = VALID_KINDS.map((list) => `[${list.map((kind) => `"${kind}"`).join(", ")}]`).join(", ");
+    throw new Error(`${where(at.file, line)}: kinds must be one of ${forms}, in this order`);
+  }
+  marker.kinds = valid;
 }
 
 /** The marker in `dir` itself, or null. A malformed file throws. */

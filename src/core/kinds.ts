@@ -1,21 +1,32 @@
 /**
  * Which code writes each kind, and so which code answers each verb.
  *
- * darius is the one tracker CLI. A kind in `DARIUS_KINDS` lives in the darius
- * store and is written by darius's own code only. Every other kind lives in a
- * project's `.tracker/` and is written by the vendored legacy CLI
- * (`src/legacy/`) only. Moving a kind into the store is one edit here plus an
- * import, never a change to a caller (docs/concept.md, "Migration plan").
+ * darius is the one tracker CLI. A kind the project owns lives in the darius
+ * store and is written by darius's own code only. Every other kind lives in
+ * the project's `.tracker/` and is written by the vendored legacy CLI
+ * (`src/legacy/`) only (docs/concept.md, "Migration plan").
  *
- * The rule is context free: it reads the command line only, never the cwd,
- * the store or `.tracker/`. `routeVerb` is the whole decision.
+ * Ownership is per project. The repo marker's root key `kinds` names the
+ * kinds the store owns (src/core/marker.ts); `DEFAULT_KINDS` holds when the
+ * marker has no `kinds`, or there is no marker. So the route reads the
+ * marker of the repo, not only the command line: src/cli.ts resolves the
+ * owned set (`ownedKinds` in src/core/paths.ts) and passes it to `routeVerb`.
+ * `routeVerb` itself is pure: the verb, the subverb and the owned set are
+ * the whole decision.
  */
 
 /** The kinds that have a darius verb. */
 export type Kind = "ritual" | "vigil";
 
-/** The kinds darius's store owns. `vigil` joins at migration phase 3. */
-export const DARIUS_KINDS: ReadonlySet<Kind> = new Set<Kind>(["ritual"]);
+/**
+ * A kind the store can own, as the marker's `kinds` names it. `vigil` means
+ * the store owns this project's vigils. `milestone` means the store owns the
+ * whole tracker tree: milestones, specs, worklogs and the archive.
+ */
+export type OwnedKind = "ritual" | "vigil" | "milestone";
+
+/** The kinds the store owns in a project whose marker has no `kinds`. */
+export const DEFAULT_KINDS: ReadonlySet<OwnedKind> = new Set<OwnedKind>(["ritual"]);
 
 /** The top-level verbs that act on one kind. A run belongs to a ritual. */
 const KIND_OF_VERB = new Map<string, Kind>([
@@ -76,17 +87,20 @@ export function kindOfVerb(verb: string): Kind | null {
  * - `legacy`: the vendored legacy CLI, with the whole argv.
  * - `unknown`: neither; a usage error.
  *
- * A verb of a kind outside `DARIUS_KINDS` goes to the legacy writer even when
- * darius registers the verb too, so each kind keeps exactly one writer.
- * Otherwise the darius registry wins, then `LEGACY_VERBS`.
+ * A verb of a kind the project does not own (`vigil` without `vigil` in
+ * `owned`) goes to the legacy writer even when darius registers the verb
+ * too, so each kind keeps exactly one writer. Otherwise the darius registry
+ * wins, then `LEGACY_VERBS`. A verb in `LEGACY_VERBS` with no kind (status,
+ * list, show, ...) goes to legacy for every `owned`.
  */
 export function routeVerb(
   verb: string,
   subverb: string | undefined,
   isRegistered: (name: string) => boolean,
+  owned: ReadonlySet<OwnedKind>,
 ): "darius" | "legacy" | "unknown" {
   const kind = kindOfVerb(verb);
-  if (kind !== null && !DARIUS_KINDS.has(kind) && LEGACY_VERBS.has(verb)) {
+  if (kind !== null && !owned.has(kind) && LEGACY_VERBS.has(verb)) {
     const nativeSubverbs: readonly string[] = NATIVE_SUBVERBS[kind];
     const native = subverb !== undefined && nativeSubverbs.includes(subverb);
     if (!native) return "legacy";

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
-import { DARIUS_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "../src/core/kinds.ts";
+import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb, type OwnedKind } from "../src/core/kinds.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-dispatch-"));
@@ -63,8 +63,11 @@ function darius(argv: string[], options: { cwd?: string; entry?: string; input?:
   return { status: result.status, stdout: result.stdout, stderr: stripVTControlCharacters(result.stderr) };
 }
 
-test("only rituals are a darius kind until phase 3", () => {
-  assert.deepEqual([...DARIUS_KINDS], ["ritual"]);
+const RITUAL_ONLY: ReadonlySet<OwnedKind> = DEFAULT_KINDS;
+const WITH_VIGIL: ReadonlySet<OwnedKind> = new Set<OwnedKind>(["ritual", "vigil"]);
+
+test("only rituals are a darius kind unless the marker says more", () => {
+  assert.deepEqual([...DEFAULT_KINDS], ["ritual"]);
   assert.equal(kindOfVerb("ritual"), "ritual");
   assert.equal(kindOfVerb("run"), "ritual");
   assert.equal(kindOfVerb("vigil"), "vigil");
@@ -72,22 +75,29 @@ test("only rituals are a darius kind until phase 3", () => {
 });
 
 test("routeVerb: darius verbs, legacy verbs, the vigil clash, and unknown verbs", () => {
-  assert.equal(routeVerb("ritual", "list", isRegistered), "darius");
-  assert.equal(routeVerb("run", "start", isRegistered), "darius");
-  assert.equal(routeVerb("due", undefined, isRegistered), "darius");
-  assert.equal(routeVerb("sync", undefined, isRegistered), "darius");
+  assert.equal(routeVerb("ritual", "list", isRegistered, RITUAL_ONLY), "darius");
+  assert.equal(routeVerb("run", "start", isRegistered, RITUAL_ONLY), "darius");
+  assert.equal(routeVerb("due", undefined, isRegistered, RITUAL_ONLY), "darius");
+  assert.equal(routeVerb("sync", undefined, isRegistered, RITUAL_ONLY), "darius");
   for (const verb of LEGACY_VERBS) {
     if (verb === "vigil") continue;
-    assert.equal(routeVerb(verb, undefined, isRegistered), "legacy", verb);
+    assert.equal(routeVerb(verb, undefined, isRegistered, RITUAL_ONLY), "legacy", verb);
   }
   // vigil is not a darius kind yet: its verbs go to the legacy writer even
   // though darius registers `vigil`. The daily timer's sweep stays native.
   for (const sub of ["add", "list", "close", "set-body", "show", undefined]) {
-    assert.equal(routeVerb("vigil", sub, isRegistered), "legacy", String(sub));
+    assert.equal(routeVerb("vigil", sub, isRegistered, RITUAL_ONLY), "legacy", String(sub));
   }
-  assert.equal(routeVerb("vigil", "sweep", isRegistered), "darius");
-  assert.equal(routeVerb("init", undefined, isRegistered), "unknown");
-  assert.equal(routeVerb("no-such-verb", undefined, isRegistered), "unknown");
+  assert.equal(routeVerb("vigil", "sweep", isRegistered, RITUAL_ONLY), "darius");
+  // With vigil owned, vigil verbs go to darius; verbs of no kind still go to legacy.
+  for (const sub of ["add", "list", "close", "set-body", "show", "sweep", undefined]) {
+    assert.equal(routeVerb("vigil", sub, isRegistered, WITH_VIGIL), "darius", String(sub));
+  }
+  assert.equal(routeVerb("status", undefined, isRegistered, WITH_VIGIL), "legacy");
+  assert.equal(routeVerb("worklog", "list", isRegistered, WITH_VIGIL), "legacy");
+  assert.equal(routeVerb("ritual", "list", isRegistered, WITH_VIGIL), "darius");
+  assert.equal(routeVerb("init", undefined, isRegistered, RITUAL_ONLY), "unknown");
+  assert.equal(routeVerb("no-such-verb", undefined, isRegistered, RITUAL_ONLY), "unknown");
 });
 
 test("no legacy verb is also a registered darius verb, except vigil", () => {
@@ -122,6 +132,41 @@ test("vigil add|list|close go to the legacy CLI; vigil sweep does not", () => {
   const sweep = darius(["vigil", "sweep", "--project", "no-such-project", "--json"]);
   assert.doesNotMatch(sweep.stdout, /"argv"/u);
   assert.doesNotMatch(sweep.stderr, /fake legacy/u);
+});
+
+/** A repo with a v3 marker whose `kinds` line is `kindsLine` (none when empty). */
+function markerRepo(name: string, kindsLine: string): string {
+  const repo = join(SANDBOX, name);
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(join(repo, ".darius.toml"), `v = 3\nproject = "${name}"\ntz = "Europe/Berlin"\n${kindsLine}`);
+  return repo;
+}
+
+test("vigil verbs follow the marker: kinds with vigil reaches the native command, none reaches legacy", () => {
+  const owned = markerRepo("kinds-vigil", 'kinds = ["ritual", "vigil"]\n');
+  const native = darius(["vigil", "list", "--json"], { cwd: owned });
+  assert.doesNotMatch(native.stdout, /"argv"/u, "the fake legacy entry did not answer");
+  assert.doesNotMatch(native.stderr, /fake legacy/u);
+
+  const plain = markerRepo("kinds-none", "");
+  const legacy = darius(["vigil", "list", "--json"], { cwd: plain });
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.deepEqual(JSON.parse(legacy.stdout).argv, ["vigil", "list", "--json"]);
+});
+
+test("a broken marker stops a vigil verb with exit 1 and the marker error; sweep and others are not stopped", () => {
+  const repo = markerRepo("kinds-broken", 'kinds = ["vigil"]\n');
+  for (const argv of [["vigil", "list"], ["vigil", "add", "a-vigil"], ["vigil"]]) {
+    const result = darius(argv, { cwd: repo });
+    assert.equal(result.status, 1, argv.join(" "));
+    assert.match(result.stderr, /^darius: .*\.darius\.toml:4: kinds must be one of/u);
+    assert.doesNotMatch(result.stdout, /"argv"/u);
+  }
+  const legacyVerb = darius(["status"], { cwd: repo });
+  assert.equal(legacyVerb.status, 0, legacyVerb.stderr);
+  assert.deepEqual(JSON.parse(legacyVerb.stdout).argv, ["status"]);
+  const sweep = darius(["vigil", "sweep", "--project", "no-such-project", "--json"], { cwd: repo });
+  assert.doesNotMatch(sweep.stderr, /kinds must be one of/u);
 });
 
 test("--stdin on a legacy verb reaches the legacy CLI unread", () => {
