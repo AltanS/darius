@@ -1,15 +1,27 @@
 /**
- * `darius vigil <verb>`: add, list, show, close and sweep vigils.
+ * `darius vigil <verb>`: add, set-body, list, show, close and sweep vigils.
  *
- *   vigil add <slug> --title T [--due YYYY-MM-DD] [--until TEXT]
- *             [--gate-command CMD] [--heavy] [--from REF] [--stdin]
- *   vigil list
+ *   vigil add <slug> [--name N | --title N] (--due YYYY-MM-DD | --until TEXT)
+ *             [--from REF] [--agent A] [--opened YYYY-MM-DD]
+ *             [--stdin | --content TEXT] [--gate-command CMD] [--heavy] [--who W]
+ *   vigil set-body <slug> (--stdin | --content TEXT)
+ *   vigil list [--all] [--json]
  *   vigil show <slug>
- *   vigil close <slug> --verdict held|failed
+ *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD]
  *   vigil sweep [--all-projects] [--only SLUG] [--include-heavy] [--daily]
  *               [--classify-only] [--dry-run] [--timeout SECONDS] [--who W]
  *
- * The rules live in src/core/sweep.ts. Commands run in the project's working
+ * `add`, `set-body`, `list` and `close` take the command-line forms of the
+ * legacy tracker's verbs, so skills, the darius agent and existing vigil
+ * Commands keep working: the same flags, the same `--json` array, the same
+ * text lines. `--content` is a file path as the legacy verb read it; a value
+ * that is no file is taken as the body text. A body is checked with the
+ * legacy `assertVigilBodyIsWorkable` (src/core/vigil-body.ts).
+ *
+ * After a write the vigils are projected as read-only legacy files under the
+ * project's tree directory (src/core/vigil-projection.ts).
+ *
+ * The sweep rules live in src/core/sweep.ts. Commands run in the project's working
  * dir on this host (src/core/workdir.ts). A project whose checkout is not on
  * this host is skipped (`no-workdir`) with --all-projects or --daily, and
  * refused when named alone.
@@ -26,12 +38,14 @@
  * reached for the daily lease.
  */
 
+import { existsSync, readFileSync, statSync } from "node:fs";
+
 import { loadConfigIfPresent } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
 import { defaultWho, hostId, linesFor, readLedger } from "../core/ledger.ts";
 import type { LeaseBlock } from "../core/lease.ts";
 import type { Vigil } from "../core/model.ts";
-import { resolveProject } from "../core/paths.ts";
+import { projectDir, resolveProject } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { itemRef, listProjects, openProject, type Project } from "../core/store.ts";
 import { pruneSweepLeases, takeSweepLease } from "../core/sweep-lease.ts";
@@ -40,6 +54,8 @@ import {
   addVigil,
   assertNotNested,
   closeVigil,
+  commandsOf,
+  invokesSweep,
   isBashAvailable,
   latestEvidence,
   localToday,
@@ -50,10 +66,13 @@ import {
   type SweptVigil,
   type VigilStatus,
 } from "../core/sweep.ts";
+import { checkVigilBody, commandCount } from "../core/vigil-body.ts";
+import { projectedVigilPath, projectVigils, treeDirOf } from "../core/vigil-projection.ts";
+import { isCalendarDate, localNoonIso, readVigilViews, type VigilView } from "../core/vigil-view.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "add | list | show | close | sweep";
+const VERBS = "add | set-body | list | show | close | sweep";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -80,80 +99,204 @@ function printJson<T>(value: T): void {
   console.log(JSON.stringify(value));
 }
 
+// --- shared: flags, bodies, the projected files --------------------------------
+
+/** The legacy text lines use an em dash. It is kept only so the output stays compatible. */
+const LEGACY_DASH = "\u2014";
+
+function dateFlag(args: ParsedArgs, name: string): string | undefined {
+  const value = stringFlag(args, name)?.trim();
+  if (value === undefined || value === "") return undefined;
+  if (!isCalendarDate(value)) throw new UsageError(`--${name} must be a date as YYYY-MM-DD, got '${value}'`);
+  return value;
+}
+
+function textFlag(args: ParsedArgs, name: string): string | undefined {
+  const value = stringFlag(args, name)?.trim();
+  return value === undefined || value === "" ? undefined : value;
+}
+
+/** `--content`: a file path (the legacy form); a value that is no file is the body text itself. */
+function contentOf(value: string): string {
+  try {
+    if (!value.includes("\n") && statSync(value).isFile()) return readFileSync(value, "utf8");
+  } catch {
+    // Not a readable file: the value is the text.
+  }
+  return value;
+}
+
+/** The body from `--stdin` or `--content`; undefined when neither was given. */
+function suppliedBody(args: ParsedArgs, verb: string): string | undefined {
+  const content = stringFlag(args, "content");
+  const isStdin = isFlagSet(args, "stdin");
+  if (content !== undefined && isStdin) throw new UsageError(`vigil ${verb}: --content and --stdin are mutually exclusive`);
+  if (isStdin) return args.stdin ?? "";
+  return content === undefined ? undefined : contentOf(content);
+}
+
+/** Brings the read-only legacy files in line with the store. A failure warns; the write already happened. */
+function refreshProjection(project: Project): void {
+  try {
+    projectVigils(project, treeDirOf(project));
+  } catch (cause) {
+    console.error(`darius: warning: the legacy vigil files were not refreshed: ${errorMessage(cause)}`);
+  }
+}
+
 // --- add ------------------------------------------------------------------------
 
-function runAdd(args: ParsedArgs): number {
+async function runAdd(args: ParsedArgs): Promise<number> {
   const slug = requireSlug(args, "add");
-  const title = stringFlag(args, "title");
-  if (title === undefined) throw new UsageError("vigil add needs --title");
+  const name = textFlag(args, "name") ?? textFlag(args, "title") ?? slug;
+  const due = dateFlag(args, "due");
+  const until = textFlag(args, "until");
+  if (due === undefined && until === undefined) {
+    throw new UsageError('a vigil needs a gate: provide --due <YYYY-MM-DD> and/or --until "<event>"');
+  }
+  const opened = dateFlag(args, "opened");
+  const body = suppliedBody(args, "add");
   const project = currentProject(args, { create: true });
+  if (project.readItem("vigil", slug) !== null) {
+    if (args.json) printJson({ project: project.name, exists: true, slug });
+    else console.log(`already exists: vigil ${slug}`);
+    return 0;
+  }
+  const checked =
+    body === undefined
+      ? { body: `# ${name}\n`, executableCommands: 0 }
+      : await checkVigilBody({ body, title: name, slug, context: `refusing to write vigil ${slug} in ${project.name}` });
+  const who = stringFlag(args, "who") ?? defaultWho();
   const doc = addVigil(project, {
     slug,
-    title,
-    body: args.stdin ?? `# ${title}\n`,
-    due: stringFlag(args, "due"),
-    until: stringFlag(args, "until"),
+    title: name,
+    body: checked.body,
+    due,
+    until,
     gate_command: stringFlag(args, "gate-command"),
     heavy: isFlagSet(args, "heavy"),
-    from: stringFlag(args, "from"),
-    who: stringFlag(args, "who") ?? defaultWho(),
+    from: textFlag(args, "from"),
+    agent: textFlag(args, "agent"),
+    created: opened === undefined ? undefined : localNoonIso(opened),
+    who,
   });
-  if (args.json) printJson({ project: project.name, added: doc.header });
-  else console.log(`✓ vigil ${slug} added to ${project.name}`);
+  refreshProjection(project);
+  if (args.json) printJson({ project: project.name, added: doc.header, executableCommands: checked.executableCommands });
+  else console.log(`created vigil ${slug} in ${project.name} (${commandCount(checked.executableCommands)})`);
+  return 0;
+}
+
+// --- set-body -------------------------------------------------------------------
+
+async function runSetBody(args: ParsedArgs): Promise<number> {
+  const slug = requireSlug(args, "set-body");
+  const body = suppliedBody(args, "set-body");
+  if (body === undefined) throw new UsageError("vigil set-body needs --stdin or --content");
+  const project = currentProject(args);
+  const doc = project.readItem<Vigil>("vigil", slug);
+  if (doc === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
+  const checked = await checkVigilBody({
+    body,
+    title: doc.header.title,
+    slug,
+    context: `refusing to rewrite vigil ${slug} in ${project.name}`,
+  });
+  const selfInvoking = commandsOf(checked.body, doc.header.gate_command).find(invokesSweep);
+  if (selfInvoking !== undefined) throw new Error(`refusing vigil '${slug}': its Command starts a sweep (${selfInvoking})`);
+  const who = stringFlag(args, "who") ?? defaultWho();
+  project.withLock(() => {
+    const current = project.readItem<Vigil>("vigil", slug);
+    if (current === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
+    const status = vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug)));
+    if (status.state === "closed") {
+      throw new Error(
+        `vigil '${slug}' is closed (verdict ${status.verdict ?? "?"}): a closed vigil is a historical claim, not a draft, and its body is not rewritten`,
+      );
+    }
+    project.writeItem({ header: { ...current.header, updated: new Date().toISOString() }, body: checked.body }, { who });
+  });
+  refreshProjection(project);
+  if (args.json) printJson({ project: project.name, slug, executableCommands: checked.executableCommands });
+  else console.log(`wrote vigil ${slug} in ${project.name} (${commandCount(checked.executableCommands)})`);
   return 0;
 }
 
 // --- list and show --------------------------------------------------------------
 
-interface ListedVigil {
-  slug: string;
-  title: string;
-  due?: string;
-  until?: string;
-  heavy: boolean;
-  status: VigilStatus;
+function gateSummary(view: VigilView): string {
+  const parts: string[] = [];
+  if (view.due !== null) parts.push(`due ${view.due}`);
+  if (view.until !== null) parts.push(`until: ${view.until}`);
+  return parts.length > 0 ? `(${parts.join("; ")})` : "(no gate)";
 }
 
-function listVigils(project: Project): ListedVigil[] {
-  const ledger = readLedger(project);
-  return project.listItems("vigil").flatMap((slug) => {
-    const doc = project.readItem<Vigil>("vigil", slug);
-    if (doc === null) return [];
-    const { header } = doc;
-    const status = vigilStatus(slug, linesFor(ledger, itemRef("vigil", slug)));
-    const listed: ListedVigil = { slug, title: header.title, heavy: header.heavy, status };
-    if (header.due !== undefined) listed.due = header.due;
-    if (header.until !== undefined) listed.until = header.until;
-    return [listed];
-  });
+/** The legacy `vigil list` text line: open vigils show their gate, closed ones their verdict. */
+function listLine(view: VigilView): string {
+  const from = view.from === null ? "" : `  [from ${view.from}]`;
+  if (view.state === "open") {
+    return `${view.slug}  ${gateSummary(view)}  ${LEGACY_DASH} ${view.name}  (opened ${view.opened ?? LEGACY_DASH})${from}`;
+  }
+  return `${view.slug}  [${view.verdict ?? "closed"}, resolved ${view.resolved ?? LEGACY_DASH}]  ${LEGACY_DASH} ${view.name}${from}`;
+}
+
+/** One record of `vigil list --json`: the legacy fields in legacy order, then the native ones. */
+function listRecord(view: VigilView, treeDir: string | null): JsonRecord {
+  const projected = treeDir === null ? "" : projectedVigilPath(treeDir, view.slug);
+  return {
+    slug: view.slug,
+    name: view.name,
+    due: view.due,
+    until: view.until,
+    from: view.from,
+    agent: view.agent,
+    opened: view.opened,
+    resolved: view.resolved,
+    verdict: view.verdict,
+    path: projected !== "" && existsSync(projected) ? projected : "",
+    state: view.state,
+    flagged: view.flagged,
+    heavy: view.heavy,
+    lastOutcome: view.lastOutcome,
+  };
+}
+
+interface JsonRecord {
+  slug: string;
+  name: string;
+  due: string | null;
+  until: string | null;
+  from: string | null;
+  agent: string | null;
+  opened: string | null;
+  resolved: string | null;
+  verdict: string | null;
+  path: string;
+  state: "open" | "closed";
+  flagged: boolean;
+  heavy: boolean;
+  lastOutcome: string | null;
+}
+
+function runList(args: ParsedArgs): number {
+  const name = resolveProject(stringFlag(args, "project"));
+  // A project with no store yet has no vigils: the legacy list printed "No open vigils" for an empty tree.
+  const project = existsSync(projectDir(name)) ? openProject(name) : null;
+  const isAll = isFlagSet(args, "all");
+  const views = (project === null ? [] : readVigilViews(project)).filter((view) => isAll || view.state === "open");
+  if (args.json) {
+    const treeDir = project === null ? null : treeDirOf(project);
+    console.log(JSON.stringify(views.map((view) => listRecord(view, treeDir)), null, 2));
+    return 0;
+  }
+  if (views.length === 0) console.log(isAll ? "No vigils" : "No open vigils");
+  for (const view of views) console.log(listLine(view));
+  return 0;
 }
 
 function stateLabel(status: VigilStatus): string {
   if (status.state === "closed") return `closed ${status.verdict ?? ""}`.trimEnd();
   if (status.flagged) return "open, FLAGGED";
   return "open";
-}
-
-function runList(args: ParsedArgs): number {
-  const project = currentProject(args);
-  const vigils = listVigils(project);
-  if (args.json) {
-    printJson({
-      project: project.name,
-      vigils: vigils.map((vigil) => ({
-        ...vigil,
-        status: { ...vigil.status, lastSwept: vigil.status.lastSwept?.at },
-      })),
-    });
-    return 0;
-  }
-  if (vigils.length === 0) console.log(`no vigils in ${project.name}`);
-  for (const vigil of vigils) {
-    const gate = vigil.due === undefined ? (vigil.until ?? "") : `due ${vigil.due}`;
-    const last = vigil.status.lastOutcome === undefined ? "" : `  last: ${vigil.status.lastOutcome}`;
-    console.log(`${vigil.slug.padEnd(28)} ${stateLabel(vigil.status).padEnd(16)} ${gate}${last}`);
-  }
-  return 0;
 }
 
 function runShow(args: ParsedArgs): number {
@@ -189,11 +332,24 @@ function runClose(args: ParsedArgs): number {
   const slug = requireSlug(args, "close");
   const verdict = stringFlag(args, "verdict");
   if (verdict !== "held" && verdict !== "failed") throw new UsageError("vigil close needs --verdict held|failed");
+  const date = dateFlag(args, "date");
   const project = currentProject(args);
   const who = stringFlag(args, "who") ?? defaultWho();
-  const line = closeVigil(project, { slug, verdict, by: who, who });
-  if (args.json) printJson({ project: project.name, closed: line });
-  else console.log(`✓ vigil ${slug} closed ${verdict}`);
+  if (project.readItem("vigil", slug) === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
+  const status = vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug)));
+  if (status.state === "closed" && status.verdict === verdict) {
+    if (args.json) printJson({ project: project.name, slug, alreadyClosed: true, verdict });
+    else console.log(`already closed: ${slug} (${verdict}), not overwritten`);
+    return 0;
+  }
+  const line = closeVigil(project, { slug, verdict, by: who, who, at: date === undefined ? undefined : localNoonIso(date) });
+  refreshProjection(project);
+  if (args.json) {
+    printJson({ project: project.name, closed: line });
+    return 0;
+  }
+  console.log(`closed vigil ${slug} in ${project.name} (verdict ${verdict}, resolved ${date ?? localToday()})`);
+  if (verdict === "failed") console.log("  Remediation goes to a new spec via darius add. Never bolt it onto the vigil.");
   return 0;
 }
 
@@ -378,12 +534,14 @@ async function runSweep(args: ParsedArgs): Promise<number> {
 
 export const vigilCommand: Command = {
   name: "vigil",
-  summary: "add, list, show, close and sweep vigils",
+  summary: "add, set-body, list, show, close and sweep vigils",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {
       case "add":
         return runAdd(args);
+      case "set-body":
+        return runSetBody(args);
       case "list":
         return runList(args);
       case "show":

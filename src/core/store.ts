@@ -107,6 +107,11 @@ export function isProjectName(name: string): boolean {
   return PROJECT_NAME.test(name);
 }
 const SLUG = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
+
+/** True when `slug` may name an item: lowercase letters, digits, '-', '_' or '.', a letter or digit first. */
+export function isSlug(slug: string): boolean {
+  return SLUG.test(slug);
+}
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 
 const DEFAULT_LOCK_TIMING: LockTiming = { timeoutMs: 45_000, staleMs: 30_000 };

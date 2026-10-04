@@ -82,7 +82,7 @@ function yesterday(): string {
 }
 
 function checklist(...items: string[]): string {
-  return `# checks\n\n${items.join("\n")}\n`;
+  return `# checks\n\n## Verification Checklist\n\n${items.join("\n")}\n`;
 }
 
 function execItem(label: string, command: string, expected = "exit 0"): string {
@@ -108,7 +108,7 @@ async function seed(): Promise<void> {
       ],
       checklist(execItem("passes", "test 1 = 1")),
     ],
-    [["heavy-one", "--title", "heavy one", "--heavy"], checklist(execItem("sleeps", "sleep 1"))],
+    [["heavy-one", "--title", "heavy one", "--due", due, "--heavy"], checklist(execItem("sleeps", "sleep 1"))],
     [
       ["mixed-manual", "--title", "mixed manual", "--due", due],
       checklist(
@@ -169,13 +169,15 @@ test("the six selftest vigils land in the planned buckets and outcomes", async (
   const mixed = entry(first, "mixed-manual");
   assert.deepEqual([mixed.bucket, mixed.outcome, mixed.closed, mixed.flagged], ["mixed", "awaiting-manual", false, false]);
 
-  // `vigil list` flags the failed one only.
+  // `vigil list` flags the failed one only, and hides the closed one without --all.
   const list = await runVigil(["list", "--json"]);
-  const listed: { vigils: { slug: string; status: { flagged: boolean; state: string } }[] } = JSON.parse(list.stdout);
+  const listed: { slug: string; flagged: boolean; state: string; lastOutcome: string | null }[] = JSON.parse(list.stdout);
   assert.deepEqual(
-    listed.vigils.filter((vigil) => vigil.status.flagged).map((vigil) => vigil.slug),
+    listed.filter((vigil) => vigil.flagged).map((vigil) => vigil.slug),
     ["date-failed"],
   );
+  assert.ok(!listed.some((vigil) => vigil.slug === "date-held"), "a closed vigil is not listed without --all");
+  assert.equal(listed.find((vigil) => vigil.slug === "date-failed")?.lastOutcome, "failed");
 
   // The event fires: the gate command now exits 0 and the vigil closes held.
   writeFileSync(MARKER, "");
@@ -207,14 +209,14 @@ test("a sweep inside a sweep refuses with exit 1 and runs nothing", async () => 
 
 test("every Command runs with DARIUS_SWEEP_ACTIVE=1", async () => {
   const body = checklist(execItem("sees the guard", 'test "$DARIUS_SWEEP_ACTIVE" = 1'));
-  assert.equal((await runVigil(["add", "guard-env", "--title", "guard env", "--stdin"], body)).code, 0);
+  assert.equal((await runVigil(["add", "guard-env", "--title", "guard env", "--due", yesterday(), "--stdin"], body)).code, 0);
   const result = await sweep(["--only", "guard-env"]);
   assert.equal(entry(result, "guard-env").outcome, "held");
 });
 
 test("vigil add refuses a Command that starts a sweep", async () => {
   const body = checklist(execItem("recurses", "darius vigil sweep --json"));
-  await assert.rejects(runVigil(["add", "recursive", "--title", "recursive", "--stdin"], body), /starts a sweep/u);
+  await assert.rejects(runVigil(["add", "recursive", "--title", "recursive", "--until", "x", "--stdin"], body), /starts a sweep/u);
   const gate = ["add", "recursive-gate", "--title", "r", "--until", "x", "--gate-command", "djinn fc vigil-sweep"];
   await assert.rejects(runVigil(gate), /starts a sweep/u);
 });
@@ -222,7 +224,7 @@ test("vigil add refuses a Command that starts a sweep", async () => {
 test("a trailing-pipe exit check is masked: never run, never closes", async () => {
   const touched = join(SANDBOX, "ran");
   const body = checklist(execItem("masked", `touch ${touched}; false | head -1`));
-  assert.equal((await runVigil(["add", "masked-pipe", "--title", "masked", "--stdin"], body)).code, 0);
+  assert.equal((await runVigil(["add", "masked-pipe", "--title", "masked", "--due", yesterday(), "--stdin"], body)).code, 0);
   const result = await sweep(["--only", "masked-pipe"]);
   const masked = entry(result, "masked-pipe");
   assert.equal(masked.bucket, "no-command");

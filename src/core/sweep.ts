@@ -403,6 +403,9 @@ export interface VigilInput {
   gate_command?: string;
   heavy: boolean;
   from?: string;
+  agent?: string;
+  /** The `created` instant, ISO. Default now. `vigil add --opened D` sets it to local noon of D. */
+  created?: string;
   who: string;
 }
 
@@ -412,7 +415,7 @@ function assertIsoDate(value: string | undefined, flag: string): void {
 }
 
 /** Every Command a vigil would run: its checks and its gate. */
-function commandsOf(body: string, gateCommand: string | undefined): string[] {
+export function commandsOf(body: string, gateCommand: string | undefined): string[] {
   const commands = parseChecklist(body).flatMap((check) => (check.command === undefined ? [] : [check.command]));
   if (gateCommand !== undefined) commands.push(gateCommand);
   return commands;
@@ -438,12 +441,13 @@ export function addVigil(project: Project, input: VigilInput): Document<Vigil> {
     kind: "vigil",
     slug: input.slug,
     title: input.title,
-    created: now,
+    created: input.created ?? now,
     updated: now,
     tags: [],
     heavy: input.heavy,
   };
   if (input.from !== undefined) header.from = input.from;
+  if (input.agent !== undefined) header.agent = input.agent;
   if (input.due !== undefined) header.due = input.due;
   if (input.until !== undefined) header.until = input.until;
   if (input.gate_command !== undefined) header.gate_command = input.gate_command;
@@ -457,6 +461,8 @@ export interface CloseInput {
   verdict: "held" | "failed";
   by: string;
   who: string;
+  /** The instant of the `vigil.closed` line, ISO. Default now. */
+  at?: string;
 }
 
 /** Appends `vigil.closed`. Refuses (throws) a missing or already closed vigil. */
@@ -475,6 +481,7 @@ export function closeVigil(project: Project, input: CloseInput): LedgerLine {
       item: itemRef("vigil", input.slug),
       verdict: input.verdict,
       by: input.by,
+      at: input.at,
     });
   });
 }
