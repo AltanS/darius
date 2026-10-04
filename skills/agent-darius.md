@@ -158,7 +158,7 @@ When a sync or wrap-up surfaces a gap in spec intent, even one that literal veri
 | Wrap up session, reconcile tracker | `/darius-wrap-up` |
 | Check what's due (rituals + vigils) | `darius due` via Bash |
 | Add / run / complete a ritual | `darius ritual add\|list` and `darius run start\|complete <slug>` via Bash |
-| Arm / list / close a vigil (shipped work awaiting a check) | `darius vigil <add\|set-body\|list\|show\|close>` via Bash |
+| Arm / list / close a vigil (shipped work awaiting a check) | `darius vigil <add\|set-body\|set\|list\|show\|close>` via Bash |
 
 **Where the tracker lives.** The marker `.darius.toml` has a `kinds` list that says what the darius store owns: `["ritual"]` (the default), `["ritual", "vigil"]` or `["ritual", "vigil", "milestone"]`. With `milestone`, the whole tracker tree is in the store and `.tracker/` in the checkout is a link to it. Paths such as `.tracker/M12-cart/01-api.md` stay valid, nothing under `.tracker/` is in git, and it is never staged. A repo with a real `.tracker/` folder in git still works the old way. When the user asks to move or migrate the tracker into darius, run `darius onboard scan`, report the blockers, and run `darius onboard` only on the user's word. It never commits; the user commits `.darius.toml` and `.gitignore`.
 
@@ -186,10 +186,11 @@ Vigils are the **one-shot** sibling of rituals, work that already shipped but is
 - `darius due [--json]`: unified queue: date-due vigils appear alongside due rituals; event-gated ones are listed as `armed, waiting on: <event>` and stay visible until closed. The CLI cannot know an awaited event fired, surfacing armed vigils so the operator judges "has that happened yet?" is your job.
 - `darius vigil add <slug> --name … [--due YYYY-MM-DD] [--until "event"] [--from M77/S02] [--agent …] --stdin`: arm one, checklist and all. At least one gate is required; `from` records which spec/milestone it guards. `--stdin` reads the vigil BODY (see the recipe below).
 - `darius vigil set-body <slug> --stdin`: replace an existing vigil's checklist, frontmatter untouched. Use it when the check turns out to be wrong, or when arming raced ahead of knowing what to run. Refuses a CLOSED vigil: a verdict is a historical claim, not a draft.
+- `darius vigil set <slug> [--heavy|--no-heavy] [--due …] [--until …] [--gate-command …]`: change the gates or the heavy flag of a store vigil. The daily sweep skips a heavy vigil.
 - `darius vigil list [--all]`: open vigils; `--all` includes closed ones with verdicts.
 - `darius vigil close <slug> --verdict held|failed`: terminal, and safe to repeat. The vigil keeps its findings for provenance.
 
-Where vigils live depends on the marker. When `kinds` lists `vigil`, they are store items, never files in git, and the verbs and their forms are the same. The daily `darius vigil sweep` sees them: it runs the Commands of a vigil whose date is due, closes it `held` when all pass, and leaves it armed and flagged when one fails. Otherwise they are files in `.tracker/vigils/`, as before. In a store-owned tracker tree, `.tracker/vigils/` is a read-only view of the store vigils: change them with the verbs only.
+Where vigils live depends on the marker. When `kinds` lists `vigil`, they are store items, never files in git, and the verbs and their forms are the same. `darius due` lists them. The daily `darius vigil sweep` sees them: it runs the Commands of a vigil whose date is due, closes it `held` when all pass, and leaves it armed and flagged when one fails. It skips a heavy vigil. Vigils that `darius onboard` imported open are heavy; run `darius vigil set <slug> --no-heavy` only when the user says the sweep may run that vigil's Commands. Otherwise they are files in `.tracker/vigils/`, as before. In a store-owned tracker tree, `.tracker/vigils/` is a read-only view of the store vigils: change them with the verbs only.
 
 When conversation surfaces "shipped, but check X once Y happens", during wrap-up, status, or in passing, that's a vigil. Arm it immediately; don't let it evaporate. **A failed vigil emits no follow-up work automatically**, route remediation to `darius add` as a normal milestone, same rule as rituals.
 
@@ -208,7 +209,7 @@ darius vigil add s02-guard-soak --name "S02 guard soak" \
 EOF
 ```
 
-Arming without a body is a half-armed vigil: `darius doctor` FAILS on an armed vigil with no executable `Command:`, so it becomes a defect the moment it exists. The refusals are the point, no `## Verification Checklist` heading, an empty body, an unflagged shell no-op (`echo todo`), or no executable `Command:` at all each REFUSE the write and name the file that was NOT written. An operator decision is written as `- Expected: manual (owner: <who>, expires: <YYYY-MM-DD>)`; at least one item must still be executable. To fix a checklist later, `darius vigil set-body <slug> --stdin` with the same heredoc.
+Arming without a body is a half-armed vigil. `darius doctor` FAILS on an armed vigil with no executable `Command:` when it can read the vigil as a file: in a `.tracker/vigils/` folder in git, and in a store-owned tree, where `.tracker/vigils/` shows the store vigils. With `kinds = ["ritual", "vigil"]` doctor does not see the vigils, and the daily sweep reports such a vigil as `no-command`. The refusals are the point, no `## Verification Checklist` heading, an empty body, an unflagged shell no-op (`echo todo`), or no executable `Command:` at all each REFUSE the write and say which vigil was NOT written. An operator decision is written as `- Expected: manual (owner: <who>, expires: <YYYY-MM-DD>)`; at least one item must still be executable. To fix a checklist later, `darius vigil set-body <slug> --stdin` with the same heredoc.
 
 ## Worklog End of Life (dreaming)
 

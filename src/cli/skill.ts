@@ -65,7 +65,7 @@ export const TRACKER_VERB_GROUPS: readonly (readonly [string, string])[] = [
   ["Verify", "`verify <spec>`, `verify-item <spec> <idx>`, `archive-check`, `uncommitted-verified`"],
   ["Worklogs", "`worklog open|append|close|list|set-stage|dispatch|park|distill|index`"],
   ["Sessions", "`claim`, `release`, `loop-check`, `counsel-gate`, `agents`"],
-  ["Vigils", "`vigil add|list|set-body|close`"],
+  ["Vigils", "`vigil add|list|set-body|set|close`"],
   ["Hooks", "`hook-stop`, `hook-drift`, `delegation validate|return-validate <json>`"],
   ["Health", "`doctor [--fix]`, `migrate`, `scan artifacts|stubs <path>`"],
 ];
@@ -77,12 +77,12 @@ description: darius, the one project tracker CLI. Use for milestones, specs, tas
 
 # darius
 
-darius owns every tracker verb. Rituals and runs live in the darius store. Milestones, specs, worklogs and vigils live in the store or in git, as \`kinds\` in .darius.toml says; darius writes them.
+darius owns every tracker verb. Rituals and runs live in the darius store; the rest is in the store or git, as \`kinds\` in .darius.toml says.
 
 ## Rules
 
 - Never edit darius store files (~/.local/share/darius). Use darius verbs.
-- \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items. With \`milestone\`, the tracker tree is in the store and .tracker/ in the checkout is a link to it; nothing under it is in git, so never \`git add\` it.
+- \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and .tracker/ in the checkout is a link to it; nothing under it is in git, so never \`git add\` it.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first, and \`onboard\` only when the operator asks.
 - In .tracker/, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first; darius says so.

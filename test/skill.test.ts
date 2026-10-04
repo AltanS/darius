@@ -98,7 +98,8 @@ test("the verb table lists the session verbs only, in registry order", () => {
 test("the skill states the one decision rule and lists only real tracker verbs, one group per line", () => {
   const { env } = sandbox();
   const text = darius(env, ["skill"]).stdout;
-  assert.match(text, /darius owns every tracker verb\. Rituals and runs live in the darius store\. Milestones, specs, worklogs and vigils live in the store or in git, as `kinds` in \.darius\.toml says; darius writes them\./u);
+  assert.match(text, /darius owns every tracker verb\. Rituals and runs live in the darius store; the rest is in the store or git, as `kinds` in \.darius\.toml says\./u);
+  assert.match(text, /imported open ones are heavy \(the sweep skips them\) until `vigil set <slug> --no-heavy`/u);
   assert.match(text, /With `milestone`, the tracker tree is in the store and \.tracker\/ in the checkout is a link to it;/u);
   assert.match(text, /so never `git add` it\./u);
   assert.match(text, /moved by `darius onboard`/u);

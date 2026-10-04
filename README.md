@@ -307,8 +307,9 @@ Run `darius init` once in each repo, on each host. It prints what it did and wha
   `.tracker/` stays as it is, in git, and init prints a hint to run `darius onboard`. It refuses the
   import when the store already holds rituals for the project; `darius init --no-import` then links
   without it.
-- In a repo with a committed `.darius.toml` (a clone on another host) it links the checkout.
-  A second run says `already linked`.
+- In a repo with a committed `.darius.toml` (a clone on another host) it links the checkout. When
+  `kinds` lists `milestone`, it also links `.tracker` and brings the tree from the store. A second
+  run says `already linked`.
 
 `--project <name>` names the project; the default is the directory name.
 
@@ -385,14 +386,20 @@ darius onboard --only vigil     # move the vigils only, leave the rest in git
 `darius onboard` refuses a `.tracker/` with uncommitted changes. It imports `.tracker/vigils` into
 the store, copies the rest of `.tracker/` into the store and checks every file by sha256, writes a
 `project.cutover` ledger line, adds the `kinds` line to `.darius.toml`, runs `git rm -r .tracker`,
-links `.tracker` to the store and adds `/.tracker` to `.gitignore`. It never commits. Review the
-change and commit `.darius.toml` and `.gitignore` yourself.
+links `.tracker` to the store, adds `/.tracker` to `.gitignore`, and writes the store vigils under
+`.tracker/vigils/`. It never commits. Review the change and commit `.darius.toml` and `.gitignore`
+yourself.
+
+An imported open vigil is heavy: the daily sweep skips it. `darius onboard` says how many there
+are. To let the sweep run one, use `darius vigil set <slug> --no-heavy`.
 
 On every other host: update darius, `git pull`, then run `darius sync`. darius captures tracker
 changes after each tracker verb and at each sync, and applies other hosts' changes before each
 tracker verb and after a pull. The last writer wins per file. When two hosts edit one file, darius
-reports the blob id of the version that lost. Host-local files (`00-INDEX.md`, `.pending-sync` and
-similar) do not sync.
+reports the blob id of the version that lost. A `.jsonl` file is append-only, so there darius
+merges: it writes the lines of both versions and records the result, and no line is lost.
+Host-local files (`00-INDEX.md`, `.pending-sync` and similar) do not sync. darius rebuilds a missing
+`00-INDEX.md` before a tracker verb and after a sync.
 
 To go back, revert the cut-over commit (git still has every file) and copy newer files back from
 the store's working copy, `~/.local/share/darius/<project>/tracker/`.
@@ -467,9 +474,9 @@ the full reference.
 - `darius update [vX.Y.Z] [--check] [--major] [--hosts h1,h2]`: move this host, or other hosts, to a release.
 - `darius ritual add|list|show|set|pause|resume|retire|reconcile|export`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store. `export [--write]` builds a v3 marker from a v2 project's rituals.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
-- `darius due [--all-projects] [--brief]`: what is due now. `--brief` prints one line or nothing, for a session start hook.
+- `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
-- `darius vigil add|set-body|list|show|close|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due.
+- `darius vigil add|set-body|set|list|show|close|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
