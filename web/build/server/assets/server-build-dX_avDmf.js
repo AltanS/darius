@@ -1,5 +1,5 @@
-import { C as __toESM, S as __require, _ as withComponentProps, a as Meta, b as __commonJSMin, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteLoaderData, h as useRouteError, i as Links, l as ScrollRestoration, m as useRevalidator, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withErrorBoundaryProps, x as __exportAll, y as require_react } from "./chunk-H4DAEOV7-Br-5CKvD.js";
-//#region node_modules/react-dom/cjs/react-dom.production.js
+import { C as __toESM, S as __require, _ as withComponentProps, a as Meta, b as __commonJSMin, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteLoaderData, h as useRouteError, i as Links, l as ScrollRestoration, m as useRevalidator, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withErrorBoundaryProps, x as __exportAll, y as require_react } from "./chunk-H4DAEOV7-CeX8RpdJ.js";
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -152,7 +152,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/index.js
+//#region ../../../../web/node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -166,7 +166,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
 /**
 * @license React
 * react-dom-server-legacy.node.production.js
@@ -4260,7 +4260,7 @@ var require_react_dom_server_legacy_node_production = /* @__PURE__ */ __commonJS
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-server.node.production.js
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server.node.production.js
 /**
 * @license React
 * react-dom-server.node.production.js
@@ -8871,7 +8871,7 @@ var import_server_node = (/* @__PURE__ */ __commonJSMin(((exports) => {
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var NonceContext = (0, import_react.createContext)(void 0);
 //#endregion
-//#region node_modules/react/cjs/react-jsx-runtime.production.js
+//#region ../../../../web/node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -8906,7 +8906,7 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region node_modules/react/jsx-runtime.js
+//#region ../../../../web/node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
@@ -10011,7 +10011,9 @@ function nextStep(failure, clock) {
 		tone: failed ? "bad" : "idle",
 		text,
 		runNow: runNowCommand(failure.slug, failure.project),
-		ack: ackCommand(failure.run, failure.project)
+		ack: ackCommand(failure.run, failure.project),
+		project: failure.project,
+		run: failure.run
 	};
 }
 /** The failure a run page shows a next step for: a closed ritual run that failed or was abandoned; null for any other run. */
@@ -10543,6 +10545,7 @@ function blank(id, kind, item, manual = false) {
 		meta2: null,
 		questions: [],
 		ask: null,
+		ack: null,
 		report: null,
 		fades: false,
 		error: null,
@@ -10624,6 +10627,10 @@ function asksCard(clock, readRun, run) {
 			questions: result === null ? [] : result.questions,
 			command: decideCommand(run.run, run.project)
 		},
+		ack: {
+			project: run.project,
+			run: run.run
+		},
 		actions: [{
 			text: "Open the run",
 			href: href({
@@ -10693,6 +10700,10 @@ function finishedCard(clock, readRun, state, run) {
 			tookText(run)
 		].filter((part) => part !== null),
 		meta2: seenText$1(run, clock),
+		ack: failed && (run.outcome === "failed" || run.outcome === "abandoned") ? {
+			project: run.project,
+			run: run.run
+		} : null,
 		...report,
 		actions: [{
 			text: run.findingsSha === null ? "Open the run" : "Read the report",
@@ -11736,6 +11747,246 @@ var routes_default = withComponentProps(function Index() {
 	return null;
 });
 //#endregion
+//#region app/lib/post.ts
+function failed(status, error) {
+	return {
+		ok: false,
+		status,
+		error
+	};
+}
+/** Read an answer: the endpoints send one JSON object, anything else is a failure. */
+function parse(status, text) {
+	let reply;
+	try {
+		reply = new Map(Object.entries(Object(JSON.parse(text))));
+	} catch {
+		return failed(status, `The host answered ${status} with text that is not JSON.`);
+	}
+	const error = reply.get("error");
+	if (reply.get("ok") !== true) return failed(status, error === void 0 || error === null || error === "" ? `The host answered ${status}.` : String(error));
+	const count = reply.get("count");
+	return {
+		ok: true,
+		status,
+		started: reply.get("started") === true,
+		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count)
+	};
+}
+/** POST `body` as JSON to `path` on this origin. */
+async function postJson(path, body) {
+	let response;
+	try {
+		response = await fetch(path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json"
+			},
+			body: JSON.stringify(body)
+		});
+	} catch {
+		return failed(0, "The host did not answer. Check the connection and try again.");
+	}
+	let text;
+	try {
+		text = await response.text();
+	} catch {
+		return failed(response.status, `The host answered ${response.status}, but the answer could not be read.`);
+	}
+	return parse(response.status, text);
+}
+//#endregion
+//#region app/components/ui.tsx
+/** Small shared pieces: sections, status words, times, folds, code chips. */
+/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
+function TitleText({ text }) {
+	return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => /^\d{4}-\d{2}-\d{2}$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "whitespace-nowrap",
+		children: part
+	}, `${index}`) : part);
+}
+/** A state in words, in the state colour: sans, 13 px, weight 600, sentence case (no square; the square stays in the status strip). */
+function Status({ tone, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: `status tone-${tone}`,
+		children: label
+	});
+}
+/** A relative time with the absolute ISO time on hover. */
+function Time({ iso }) {
+	const { now } = useClock();
+	if (iso === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "text-muted",
+		children: "never"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
+		dateTime: iso,
+		title: iso,
+		children: relativeTime(iso, now)
+	});
+}
+/** A section label between two rules that end in the small square tick of a D2 panel. */
+function SectHead({ title, aside }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+		className: "sect",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sect-rule sect-rule-start",
+				"aria-hidden": "true"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+				className: "label",
+				children: title
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sect-rule",
+				"aria-hidden": "true"
+			}),
+			aside === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sect-aside",
+				children: aside
+			})
+		]
+	});
+}
+/** A titled part of a page: the section label, then its content. */
+function Section({ title, id, aside, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		id,
+		className: "section",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, {
+			title,
+			aside
+		}), children]
+	});
+}
+/** Detail that most visits do not need, closed until asked for. */
+function Fold({ summary, id, open = false, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		id,
+		className: "fold scroll-mt-20",
+		open,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fold-body",
+			children
+		})]
+	});
+}
+function Empty({ children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "empty",
+		children
+	});
+}
+function Chips({ items, none }) {
+	if (items.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "text-muted",
+		children: none
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "flex flex-wrap gap-1.5",
+		children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			className: "chip",
+			children: item
+		}, item))
+	});
+}
+function Facts({ facts }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+		className: "facts",
+		children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "contents",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: fact.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: fact.value })]
+		}, fact.label))
+	});
+}
+//#endregion
+//#region app/components/ack.tsx
+/**
+* The Acknowledge button (0.68.0; `darius run ack`). One click marks the run
+* as seen: a failed run, or a complete run whose questions the operator will
+* not act on. There is no confirm step. An empty note is a plain
+* acknowledgement, a dismissal of the questions; a note behind the small
+* "Add a note" fold is the operator's decision, as with the terminal command.
+* The button posts to `/api/run/ack` and then reloads the page data, so the
+* card moves to Last night as an acknowledged card. A refusal of the server
+* (the run is held, already acknowledged, and so on) shows as its own
+* sentence and the card stays. The button does not draw for a viewer who
+* cannot write: the server would refuse it, and the terminal command stays.
+*/
+function AckButton({ project, run, canWrite, subject, hint }) {
+	const { revalidate } = useRevalidator();
+	const id = (0, import_react.useId)();
+	const [note, setNote] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [isDone, setDone] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)(null);
+	if (!canWrite) return null;
+	const submit = async (event) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		const trimmed = note.trim();
+		const result = await postJson("/api/run/ack", trimmed === "" ? {
+			project,
+			run
+		} : {
+			project,
+			run,
+			note: trimmed
+		});
+		setBusy(false);
+		if (!result.ok) {
+			setError(result.error);
+			return;
+		}
+		setDone(true);
+		await revalidate();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "ack",
+		onSubmit: (event) => void submit(event),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fu-acts",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-small",
+					"aria-label": `Acknowledge: ${subject}`,
+					disabled: busy || isDone,
+					children: busy ? "Acknowledging…" : isDone ? "Acknowledged" : "Acknowledge"
+				})
+			}),
+			hint === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fu-off",
+				children: hint
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+				summary: "Add a note",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "fu-label",
+					htmlFor: id,
+					children: "Note (optional)"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id,
+					className: "st-input",
+					type: "text",
+					maxLength: 500,
+					value: note,
+					disabled: busy || isDone,
+					onChange: (event) => setNote(event.currentTarget.value)
+				})]
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
+	});
+}
+//#endregion
 //#region app/components/chip.tsx
 /**
 * The one chip: a small square-cornered box with a tinted border and ground,
@@ -12091,111 +12342,6 @@ function summaryTags(summary, isAnswered) {
 	return tags;
 }
 //#endregion
-//#region app/components/ui.tsx
-/** Small shared pieces: sections, status words, times, folds, code chips. */
-/** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
-function TitleText({ text }) {
-	return text.split(/(\d{4}-\d{2}-\d{2})/u).map((part, index) => /^\d{4}-\d{2}-\d{2}$/u.test(part) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "whitespace-nowrap",
-		children: part
-	}, `${index}`) : part);
-}
-/** A state in words, in the state colour: sans, 13 px, weight 600, sentence case (no square; the square stays in the status strip). */
-function Status({ tone, label }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: `status tone-${tone}`,
-		children: label
-	});
-}
-/** A relative time with the absolute ISO time on hover. */
-function Time({ iso }) {
-	const { now } = useClock();
-	if (iso === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "text-muted",
-		children: "never"
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("time", {
-		dateTime: iso,
-		title: iso,
-		children: relativeTime(iso, now)
-	});
-}
-/** A section label between two rules that end in the small square tick of a D2 panel. */
-function SectHead({ title, aside }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-		className: "sect",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sect-rule sect-rule-start",
-				"aria-hidden": "true"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-				className: "label",
-				children: title
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sect-rule",
-				"aria-hidden": "true"
-			}),
-			aside === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "sect-aside",
-				children: aside
-			})
-		]
-	});
-}
-/** A titled part of a page: the section label, then its content. */
-function Section({ title, id, aside, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		id,
-		className: "section",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, {
-			title,
-			aside
-		}), children]
-	});
-}
-/** Detail that most visits do not need, closed until asked for. */
-function Fold({ summary, id, open = false, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		id,
-		className: "fold scroll-mt-20",
-		open,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fold-body",
-			children
-		})]
-	});
-}
-function Empty({ children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "empty",
-		children
-	});
-}
-function Chips({ items, none }) {
-	if (items.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "text-muted",
-		children: none
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "flex flex-wrap gap-1.5",
-		children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-			className: "chip",
-			children: item
-		}, item))
-	});
-}
-function Facts({ facts }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
-		className: "facts",
-		children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "contents",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: fact.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: fact.value })]
-		}, fact.label))
-	});
-}
-//#endregion
 //#region app/components/result.tsx
 /** A small word in a chip, in its tone. The word carries the meaning; the colour only repeats it. */
 function Tag({ tag }) {
@@ -12237,10 +12383,11 @@ function QuestionList({ questions }) {
 }
 /**
 * The "Questions for you" card. A complete run waits for the operator's
-* decision: the card gives the command that records it. Once someone
+* decision: the card gives the command that records it, and the Acknowledge
+* button that dismisses the questions without acting (0.68.0). Once someone
 * acknowledged the run, the card says who, when, and what they decided.
 */
-function ResultQuestions({ project, row, questions }) {
+function ResultQuestions({ project, row, questions, canWrite }) {
 	const clock = useClock();
 	const seen = row.acknowledged;
 	const isWaiting = seen === null && row.phase === "closed" && row.outcome === "complete";
@@ -12251,7 +12398,17 @@ function ResultQuestions({ project, row, questions }) {
 			seen === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: decisionText(seen, clock) }),
 			isWaiting ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "next-cmd",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Record your decision:" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: decideCommand(row.run, project) })]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Record your decision:" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: decideCommand(row.run, project) }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AckButton, {
+						project,
+						run: row.run,
+						canWrite,
+						subject: "the questions of this run",
+						hint: "Or dismiss the questions without acting. The next run is told you chose not to act on them."
+					})
+				]
 			}) : null
 		]
 	});
@@ -12369,7 +12526,7 @@ function Actions({ actions }) {
 	});
 }
 /** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
-function ResultPanel({ project, row, result, afterQuestions = null }) {
+function ResultPanel({ project, row, result, canWrite, afterQuestions = null }) {
 	const tone = resultTone(result.status);
 	const hasQuestions = result.questions.length > 0;
 	const tiles = result.metrics.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tiles, { metrics: result.metrics });
@@ -12400,7 +12557,8 @@ function ResultPanel({ project, row, result, afterQuestions = null }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultQuestions, {
 					project,
 					row,
-					questions: result.questions
+					questions: result.questions,
+					canWrite
 				})
 			}),
 			afterQuestions,
@@ -12747,11 +12905,13 @@ function Commands({ card }) {
 * A Needs you card, or a plain Last night card when it has no edge. The head
 * (the status word, the age, the title and the meta line) is one tap target
 * to the run; the questions stay plain text and the commands wait in a
-* closed disclosure.
+* closed disclosure. A question card and a failed card carry the Acknowledge
+* button (0.68.0), which dismisses the card without acting on it.
 */
-function CardView({ card }) {
+function CardView({ card, canWrite }) {
 	const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held";
+	const hasAck = card.ack !== null && canWrite;
+	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || hasAck;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
 		id: card.id,
 		className: `card hcard ${edge}`,
@@ -12824,6 +12984,12 @@ function CardView({ card }) {
 					card.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 						className: "code-block",
 						children: card.error
+					}),
+					card.ack === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AckButton, {
+						project: card.ack.project,
+						run: card.ack.run,
+						canWrite,
+						subject: card.title
 					})
 				]
 			}) : null,
@@ -12901,10 +13067,11 @@ function Questions({ project, run }) {
 }
 /**
 * What happens after a failed or abandoned run: darius does not retry it
-* today, so the card gives the two commands a person has. Once someone
-* acknowledged the run, it says who, and when.
+* today, so the card gives the two commands a person has, and the
+* Acknowledge button for the second (0.68.0). Once someone acknowledged the
+* run, it says who, and when.
 */
-function NextStepCard({ step }) {
+function NextStepCard({ step, canWrite }) {
 	if (step.kind === "seen") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "card next",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: step.text })
@@ -12919,7 +13086,16 @@ function NextStepCard({ step }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "next-cmd",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Seen it:" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: step.ack })]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Seen it:" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AckButton, {
+						project: step.project,
+						run: step.run,
+						canWrite,
+						subject: "this failed run"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: step.ack })
+				]
 			})
 		]
 	});
@@ -13165,7 +13341,8 @@ function loader$17({ context, request, params }) {
 		workspace: scope.workspace,
 		home: homeView(status, read, scope),
 		workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
-		extras: only === void 0 ? null : workspaceExtras(only, read)
+		extras: only === void 0 ? null : workspaceExtras(only, read),
+		canWrite: context.canWrite
 	};
 }
 var meta$15 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Overview | darius" : `Overview · ${data.workspace} | darius` }];
@@ -13273,7 +13450,7 @@ function RecentRuns({ extras }) {
 * night and the health line. Each run shows once.
 */
 var overview_default = withComponentProps(function Overview({ loaderData }) {
-	const { home, extras, workspaces } = loaderData;
+	const { home, extras, workspaces, canWrite } = loaderData;
 	const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "proj ov",
@@ -13303,7 +13480,10 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 							id: "needs",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Needs you" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "cards",
-								children: needs.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, { card }, card.id))
+								children: needs.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardView, {
+									card,
+									canWrite
+								}, card.id))
 							})]
 						}),
 						workspaces === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspaceList, { rows: workspaces }),
@@ -13742,56 +13922,6 @@ function ChipRow({ label, current, children }) {
 		className: "fchips",
 		children
 	});
-}
-//#endregion
-//#region app/lib/post.ts
-function failed(status, error) {
-	return {
-		ok: false,
-		status,
-		error
-	};
-}
-/** Read an answer: the endpoints send one JSON object, anything else is a failure. */
-function parse(status, text) {
-	let reply;
-	try {
-		reply = new Map(Object.entries(Object(JSON.parse(text))));
-	} catch {
-		return failed(status, `The host answered ${status} with text that is not JSON.`);
-	}
-	const error = reply.get("error");
-	if (reply.get("ok") !== true) return failed(status, error === void 0 || error === null || error === "" ? `The host answered ${status}.` : String(error));
-	const count = reply.get("count");
-	return {
-		ok: true,
-		status,
-		started: reply.get("started") === true,
-		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count)
-	};
-}
-/** POST `body` as JSON to `path` on this origin. */
-async function postJson(path, body) {
-	let response;
-	try {
-		response = await fetch(path, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				accept: "application/json"
-			},
-			body: JSON.stringify(body)
-		});
-	} catch {
-		return failed(0, "The host did not answer. Check the connection and try again.");
-	}
-	let text;
-	try {
-		text = await response.text();
-	} catch {
-		return failed(response.status, `The host answered ${response.status}, but the answer could not be read.`);
-	}
-	return parse(response.status, text);
 }
 //#endregion
 //#region app/components/findings.tsx
@@ -14953,28 +15083,36 @@ function loader$11({ context, params }) {
 		finished,
 		next,
 		asks: finished !== null && asksYou(finished, ritual.runs) ? detail?.result?.questions ?? [] : [],
-		report: reportExcerpt(detail)
+		report: reportExcerpt(detail),
+		canWrite: context.canWrite
 	};
 }
 var meta$9 = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
 /** What darius puts at the top of the next run's prompt: the run's note and the operator's note on that run. */
 function HandoffCard({ handoff }) {
-	const { operator } = handoff;
+	const { operator, dismissed } = handoff;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card",
-		children: [handoff.note === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "text-muted",
-			children: "The latest run left no note."
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: handoff.note }), operator === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "rail-note",
-			children: [
-				handoff.questions.length > 0 ? "Your answer" : "Your note",
-				", ",
-				operator.who,
-				": ",
-				operator.note
-			]
-		})]
+		children: [
+			handoff.note === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "text-muted",
+				children: "The latest run left no note."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: handoff.note }),
+			operator === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rail-note",
+				children: [
+					handoff.questions.length > 0 ? "Your answer" : "Your note",
+					", ",
+					operator.who,
+					": ",
+					operator.note
+				]
+			}),
+			dismissed === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rail-note",
+				children: [dismissed.who, " saw the questions and chose not to act on them. The next run is told not to act on them or ask them again."]
+			})
+		]
 	});
 }
 function modeText(mode) {
@@ -14983,7 +15121,7 @@ function modeText(mode) {
 	return mode;
 }
 var ritual_default = withComponentProps(function Ritual({ loaderData }) {
-	const { ritual, held, finished, next, asks, report } = loaderData;
+	const { ritual, held, finished, next, asks, report, canWrite } = loaderData;
 	const { row, policy, project } = ritual;
 	const manual = isManual(row);
 	const runs = ritual.runs.map((run) => ({
@@ -15121,12 +15259,16 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultQuestions, {
 						project,
 						row: finished,
-						questions: asks
+						questions: asks,
+						canWrite
 					})
 				}),
 				next === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "What happens next",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NextStepCard, { step: next })
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NextStepCard, {
+						step: next,
+						canWrite
+					})
 				}),
 				finished === null || report === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "Latest report",
@@ -15540,12 +15682,13 @@ async function loader$10({ context, params }) {
 		stuck: stuckFor(run.row, status.generatedAt),
 		state: runState(run.row, project?.runs ?? []),
 		next,
-		followUp
+		followUp,
+		canWrite: context.canWrite
 	};
 }
 var meta$8 = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, kind, manual, label, stuck, state, next, followUp } = loaderData;
+	const { run, kind, manual, label, stuck, state, next, followUp, canWrite } = loaderData;
 	const { row, project } = run;
 	const badge = stuck === null ? state : {
 		tone: "late",
@@ -15621,12 +15764,16 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 				}) : null,
 				next === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "What happens next",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NextStepCard, { step: next })
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NextStepCard, {
+						step: next,
+						canWrite
+					})
 				}),
 				run.result === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultPanel, {
 					project,
 					row,
 					result: run.result,
+					canWrite,
 					afterQuestions: followUp === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 						title: "Follow-up",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FollowUpCard, {
@@ -17994,7 +18141,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-B-vrTUDd.js",
+			"module": "/assets/root-Dwt1-Z2Y.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18006,7 +18153,7 @@ var server_manifest_default = {
 				"/assets/agenda-DgpBtP1m.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-oG52IYg_.css"],
+			"css": ["/assets/root-BytfipkT.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -18046,21 +18193,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CPJawpXs.js",
+			"module": "/assets/overview-C0FtfSb3.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js"
+				"/assets/result-BNqVYGeP.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18081,21 +18229,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CPJawpXs.js",
+			"module": "/assets/overview-C0FtfSb3.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js"
+				"/assets/result-BNqVYGeP.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18184,22 +18333,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DF5rbJw8.js",
+			"module": "/assets/rituals-CvEI-rfj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/pulse-C1C41WFP.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
-				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/row-CgOYoUJa.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
@@ -18221,22 +18371,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DF5rbJw8.js",
+			"module": "/assets/rituals-CvEI-rfj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/pulse-C1C41WFP.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
-				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/row-CgOYoUJa.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
@@ -18258,19 +18409,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-B2R-PwQX.js",
+			"module": "/assets/findings-CluEcfB5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/view-CIvKJVtw.js"
 			],
@@ -18293,19 +18444,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-B2R-PwQX.js",
+			"module": "/assets/findings-CluEcfB5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/post-BAUIktA6.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/view-CIvKJVtw.js"
 			],
@@ -18390,13 +18541,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BHhCdl86.js",
+			"module": "/assets/runs-DUnkJ0mG.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18404,9 +18555,10 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/row-CgOYoUJa.js"
+				"/assets/row-CgOYoUJa.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18427,7 +18579,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-BDBFvMWP.js",
+			"module": "/assets/ritual-DXnQMr_s.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18435,14 +18587,15 @@ var server_manifest_default = {
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/result-BNqVYGeP.js",
+				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
-				"/assets/kind-CbYiwFqF.js"
+				"/assets/kind-CbYiwFqF.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18463,7 +18616,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-CzX9fQxa.js",
+			"module": "/assets/run-BM2GcUFx.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18471,13 +18624,13 @@ var server_manifest_default = {
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
-				"/assets/pulse-C1C41WFP.js",
-				"/assets/ui-BgN6qkA5.js",
-				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CeJIce9e.js",
-				"/assets/route-error-ClXTN74F.js",
 				"/assets/post-BAUIktA6.js",
+				"/assets/ui-BgN6qkA5.js",
+				"/assets/result-BNqVYGeP.js",
+				"/assets/pulse-C1C41WFP.js",
+				"/assets/row-CgOYoUJa.js",
+				"/assets/runs-CVlfp1CA.js",
+				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js"
 			],
@@ -18500,18 +18653,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestone-BtuGV6K6.js",
+			"module": "/assets/milestone-BpjBamuH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/pulse-C1C41WFP.js",
 				"/assets/ui-BgN6qkA5.js",
+				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/milestones-Db1DhTQt.js",
 				"/assets/crumbs-D1W8LZ6x.js",
-				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/kind-CbYiwFqF.js",
 				"/assets/paths-BupYQEYF.js"
 			],
 			"css": [],
@@ -18614,15 +18767,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-BJnWkg2h.js",
+			"module": "/assets/settings-backups-HQKSQ_nP.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/nav-icons-CyBWLN6t.js",
 				"/assets/clock-D-5lOmZM.js",
+				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/post-BAUIktA6.js",
 				"/assets/settings-ui-ChNT_lIl.js",
 				"/assets/paths-BupYQEYF.js"
 			],
@@ -18700,13 +18853,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BHhCdl86.js",
+			"module": "/assets/runs-DUnkJ0mG.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CeJIce9e.js",
+				"/assets/runs-CVlfp1CA.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18714,9 +18867,10 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-yH6PoTGI.js",
+				"/assets/result-BNqVYGeP.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/row-CgOYoUJa.js"
+				"/assets/row-CgOYoUJa.js",
+				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18863,8 +19017,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-fa39f3d4.js",
-	"version": "fa39f3d4",
+	"url": "/assets/manifest-97ce958b.js",
+	"version": "97ce958b",
 	"sri": void 0
 };
 //#endregion

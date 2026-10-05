@@ -1,9 +1,10 @@
-import { n as createRequestHandler } from "./assets/chunk-H4DAEOV7-Br-5CKvD.js";
+import { n as createRequestHandler } from "./assets/chunk-H4DAEOV7-CeX8RpdJ.js";
 //#region server/load-context.ts
 function loadContext(context) {
 	return {
 		viewer: context.viewer,
 		nonce: context.nonce,
+		canWrite: context.canWrite,
 		status: () => context.status(),
 		ritual: (project, slug) => context.ritual(project, slug),
 		run: (project, run) => context.run(project, run),
@@ -22,7 +23,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-4F1P-uBq.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-dX_avDmf.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };
