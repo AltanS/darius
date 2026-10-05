@@ -10,6 +10,7 @@ import { summaryTags } from "../lib/result.ts";
 import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, decisionText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
+import { AckButton } from "./ack.tsx";
 import { Command } from "./command.tsx";
 import { Chip, KindWord } from "./chip.tsx";
 import { Report } from "./board.tsx";
@@ -94,14 +95,17 @@ export function Questions({ project, run }: QuestionsProps): React.ReactNode {
 
 interface NextStepCardProps {
   step: NextStep;
+  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  canWrite: boolean;
 }
 
 /**
  * What happens after a failed or abandoned run: darius does not retry it
- * today, so the card gives the two commands a person has. Once someone
- * acknowledged the run, it says who, and when.
+ * today, so the card gives the two commands a person has, and the
+ * Acknowledge button for the second (0.68.0). Once someone acknowledged the
+ * run, it says who, and when.
  */
-export function NextStepCard({ step }: NextStepCardProps): React.ReactNode {
+export function NextStepCard({ step, canWrite }: NextStepCardProps): React.ReactNode {
   if (step.kind === "seen") {
     return (
       <div className="card next">
@@ -118,6 +122,7 @@ export function NextStepCard({ step }: NextStepCardProps): React.ReactNode {
       </div>
       <div className="next-cmd">
         <p>Seen it:</p>
+        <AckButton project={step.project} run={step.run} canWrite={canWrite} subject="this failed run" />
         <Command command={step.ack} />
       </div>
     </div>

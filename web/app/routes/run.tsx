@@ -33,13 +33,13 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
   const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
   const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
-  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp };
+  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, canWrite: context.canWrite };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, state, next, followUp } = loaderData;
+  const { run, kind, manual, label, stuck, state, next, followUp, canWrite } = loaderData;
   const { row, project } = run;
   const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -93,7 +93,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
 
           {next === null ? null : (
             <Section title="What happens next">
-              <NextStepCard step={next} />
+              <NextStepCard step={next} canWrite={canWrite} />
             </Section>
           )}
 
@@ -102,6 +102,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
               project={project}
               row={row}
               result={run.result}
+              canWrite={canWrite}
               afterQuestions={
                 followUp === null ? null : (
                   <Section title="Follow-up">

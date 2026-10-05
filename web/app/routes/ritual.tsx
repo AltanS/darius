@@ -32,7 +32,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   const detail = finished === null ? null : context.run(ritual.project, finished.run);
   // The latest report asks the operator something nobody answered yet: its questions lead the page.
   const asks = finished !== null && asksYou(finished, ritual.runs) ? (detail?.result?.questions ?? []) : [];
-  return { ritual, held, finished, next, asks, report: reportExcerpt(detail) };
+  return { ritual, held, finished, next, asks, report: reportExcerpt(detail), canWrite: context.canWrite };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
@@ -43,7 +43,7 @@ interface HandoffCardProps {
 
 /** What darius puts at the top of the next run's prompt: the run's note and the operator's note on that run. */
 function HandoffCard({ handoff }: HandoffCardProps): React.ReactNode {
-  const { operator } = handoff;
+  const { operator, dismissed } = handoff;
   return (
     <div className="card">
       {handoff.note === null ? <p className="text-muted">The latest run left no note.</p> : <p>{handoff.note}</p>}
@@ -52,6 +52,7 @@ function HandoffCard({ handoff }: HandoffCardProps): React.ReactNode {
           {handoff.questions.length > 0 ? "Your answer" : "Your note"}, {operator.who}: {operator.note}
         </p>
       )}
+      {dismissed === null ? null : <p className="rail-note">{dismissed.who} saw the questions and chose not to act on them. The next run is told not to act on them or ask them again.</p>}
     </div>
   );
 }
@@ -63,7 +64,7 @@ function modeText(mode: string): string {
 }
 
 export default function Ritual({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { ritual, held, finished, next, asks, report } = loaderData;
+  const { ritual, held, finished, next, asks, report, canWrite } = loaderData;
   const { row, policy, project } = ritual;
   const manual = isManual(row);
   const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
@@ -143,13 +144,13 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
 
           {finished === null || asks.length === 0 ? null : (
             <Section title="Needs you" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Open the run</Link>}>
-              <ResultQuestions project={project} row={finished} questions={asks} />
+              <ResultQuestions project={project} row={finished} questions={asks} canWrite={canWrite} />
             </Section>
           )}
 
           {next === null ? null : (
             <Section title="What happens next">
-              <NextStepCard step={next} />
+              <NextStepCard step={next} canWrite={canWrite} />
             </Section>
           )}
 

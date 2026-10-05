@@ -7,6 +7,7 @@ import type { NextLine } from "../lib/agenda.ts";
 import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
 import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
+import { AckButton } from "./ack.tsx";
 import { KindWord } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
@@ -178,17 +179,21 @@ function Commands({ card }: CommandsProps): React.ReactNode {
 
 interface CardViewProps {
   card: Card;
+  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  canWrite: boolean;
 }
 
 /**
  * A Needs you card, or a plain Last night card when it has no edge. The head
  * (the status word, the age, the title and the meta line) is one tap target
  * to the run; the questions stay plain text and the commands wait in a
- * closed disclosure.
+ * closed disclosure. A question card and a failed card carry the Acknowledge
+ * button (0.68.0), which dismisses the card without acting on it.
  */
-export function CardView({ card }: CardViewProps): React.ReactNode {
+export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
   const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held";
+  const hasAck = card.ack !== null && canWrite;
+  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || hasAck;
   return (
     <article id={card.id} className={`card hcard ${edge}`}>
       <div className="hc-head">
@@ -228,6 +233,7 @@ export function CardView({ card }: CardViewProps): React.ReactNode {
           <Commands card={card} />
           {card.report === null ? null : <Report report={card.report} lines={card.edge === null ? 3 : 4} fades={card.fades} />}
           {card.error === null ? null : <pre className="code-block">{card.error}</pre>}
+          {card.ack === null ? null : <AckButton project={card.ack.project} run={card.ack.run} canWrite={canWrite} subject={card.title} />}
         </div>
       ) : null}
       <div className="hc-acts">

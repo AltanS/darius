@@ -196,7 +196,7 @@ export interface Failure {
 }
 
 /** The "What happens next" card: the two commands, or who saw the failure. */
-export type NextStep = { kind: "open"; tone: Tone; text: string; runNow: string; ack: string } | { kind: "seen"; text: string };
+export type NextStep = { kind: "open"; tone: Tone; text: string; runNow: string; ack: string; project: string; run: string } | { kind: "seen"; text: string };
 
 export function nextStep(failure: Failure, clock: HostClock): NextStep {
   if (failure.acknowledged !== null) return { kind: "seen", text: ackText(failure.acknowledged, clock) };
@@ -206,7 +206,7 @@ export function nextStep(failure: Failure, clock: HostClock): NextStep {
     failure.endedOn === clock.today
       ? `This run ${verb}. darius does not retry it today. The timer starts the ritual again when it is next due, tomorrow for a daily ritual.`
       : `This run ${verb} on ${shortDate(failure.endedOn)}. The timer starts the ritual again when it is next due.`;
-  return { kind: "open", tone: failed ? "bad" : "idle", text, runNow: runNowCommand(failure.slug, failure.project), ack: ackCommand(failure.run, failure.project) };
+  return { kind: "open", tone: failed ? "bad" : "idle", text, runNow: runNowCommand(failure.slug, failure.project), ack: ackCommand(failure.run, failure.project), project: failure.project, run: failure.run };
 }
 
 /** The failure a run page shows a next step for: a closed ritual run that failed or was abandoned; null for any other run. */

@@ -304,6 +304,7 @@ const context: WebContext = {
   backups: () => BACKUPS,
   findings: () => Promise.resolve(FINDINGS),
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
+  canWrite: true,
 };
 
 async function get(path: string): Promise<{ status: number; body: string; headers: Headers }> {
@@ -766,6 +767,7 @@ test("the ritual page shows the note for the next run, with the operator's answe
     note: "Check post 7 again.",
     questions: [{ text: "Delete the card?" }],
     operator: { who: "owner", at: "2026-09-30T11:00:00.000Z", note: "yes, delete it" },
+    dismissed: null,
   };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
   const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
@@ -1017,6 +1019,128 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   const project = await readPage("/w/demo", ctx);
   assert.match(project, /id="reports".*?<li class="rw rw-rail tone-wait">.*?Asks you/su, "the latest-report row waits, with a rail");
   for (const page of [home, runs, ritual, project]) assert.equal(page.includes(EVIL), false);
+});
+
+// --- the Acknowledge button (0.68.0) ------------------------------------------------------
+
+/** The demo project with one failed run (`outcome`), acknowledged or not; the run shows on home, the run page and the ritual page. */
+function failedContext(outcome: string, acknowledged: Acknowledgement | null): WebContext {
+  const project = STATUS.projects[0]!;
+  const row: RunRow = { ...runRow(FAILED, "closed", outcome), startedAt: "2026-09-28T08:10:00.000Z", acknowledged };
+  const ritualRow = { ...project.rituals[0]!, heldRun: null, isDue: true, failedToday: { run: FAILED, acknowledged } };
+  const runs = [row, RUNS[2]!];
+  const status: HostStatus = { ...STATUS, projects: [{ ...project, rituals: [ritualRow], runs, vigils: [{ ...project.vigils[0]!, flagged: false }] }] };
+  return {
+    ...context,
+    status: () => status,
+    ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: ritualRow, runs } : null),
+    run: (name, run) => {
+      const found = runs.find((candidate) => candidate.run === run);
+      return name === "demo" && found !== undefined ? runDetail(found) : null;
+    },
+  };
+}
+
+/** The Needs you card with `id`, from its opening tag to its end. */
+function cardOf(home: string, id: string): string {
+  const at = home.indexOf(`<article id="${id}"`);
+  assert.notEqual(at, -1, `a card ${id}`);
+  return between(home, at, home.indexOf("</article>", at));
+}
+
+const ACK_BUTTON = /<button type="submit" class="st-btn st-btn-small" aria-label="Acknowledge: [^"]*">Acknowledge<\/button>/u;
+
+test("a question card and a failed card carry an Acknowledge button, with a note behind a fold; the commands stay", async () => {
+  const asks = await readPage("/all", asksContext(null));
+  const asksCard = cardOf(asks, `asks-${ASKS}`);
+  assert.match(asksCard, ACK_BUTTON, "the question card");
+  assert.ok(asksCard.includes("aria-label=\"Acknowledge: Daily &lt;script&gt;alert(1)&lt;/script&gt; report\""), "named after the card, as text");
+  assert.match(textOf(asksCard), /Add a noteNote \(optional\)/u, "the note waits behind a fold");
+  assert.match(asksCard, /<details class="fold scroll-mt-20"><summary>Add a note<\/summary>/u, "closed by default");
+  assert.match(asksCard, /<input id="[^"]+" class="st-input" type="text" maxLength="500" value=""|<input id="[^"]+" class="st-input" type="text" maxlength="500" value=""/u, "the note is empty by default");
+  assert.ok(asksCard.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`), "the terminal command stays");
+  assert.ok(asksCard.indexOf("Answer from a terminal") < asksCard.search(ACK_BUTTON), "the button comes after the command fold");
+
+  const failed = await readPage("/all", failedContext("failed", null));
+  assert.match(cardOf(failed, "failed-demo-daily-report"), ACK_BUTTON, "the failed card");
+
+  const held = await readPage("/all", context);
+  assert.ok(held.includes(`id="held-${HELD}"`), "the held card is there");
+  assert.equal(cardOf(held, `held-${HELD}`).includes("Acknowledge"), false, "a held run is answered and resumed, never acknowledged");
+});
+
+test("a failed card whose outcome the CLI would refuse (a refused start) has no Acknowledge button", async () => {
+  const home = await readPage("/all", failedContext("refused", null));
+  assert.ok(home.includes('id="failed-demo-daily-report"'), "it still needs the operator");
+  assert.equal(cardOf(home, "failed-demo-daily-report").includes("Acknowledge"), false);
+});
+
+test("the run page and the ritual page carry the button where the command is: the decision card and the failure card", async () => {
+  const ask = await readPage(`/w/demo/runs/${ASKS}`, asksContext(null));
+  const questions = between(ask, ask.indexOf('<h2 class="label">Questions for you</h2>'), ask.indexOf('<h2 class="label">What it found</h2>'));
+  assert.ok(questions.includes("Record your decision:"), "the command stays");
+  assert.match(questions, ACK_BUTTON);
+  assert.ok(questions.includes("Or dismiss the questions without acting. The next run is told you chose not to act on them."), "the line that says what it does");
+  assert.ok(questions.indexOf("Record your decision:") < questions.search(ACK_BUTTON), "the decision command first, then the dismissal");
+  const ritual = await readPage("/w/demo/rituals/daily-report", asksContext(null));
+  assert.match(between(ritual, ritual.indexOf('<h2 class="label">Needs you</h2>'), ritual.length), ACK_BUTTON, "the ritual page's question card");
+
+  for (const path of [`/w/demo/runs/${FAILED}`, "/w/demo/rituals/daily-report"]) {
+    const page = await readPage(path, failedContext("failed", null));
+    const next = between(page, page.indexOf("What happens next"), page.length);
+    assert.match(next, ACK_BUTTON, path);
+    assert.ok(next.indexOf("Seen it:") < next.search(ACK_BUTTON), `${path}: under "Seen it:"`);
+    assert.ok(next.includes(`darius run ack ${FAILED} --project demo`), `${path}: the command stays`);
+  }
+  assertScriptsCarryNonce(await readPage(`/w/demo/runs/${FAILED}`, failedContext("failed", null)), "run page with an Acknowledge button");
+});
+
+test("the loopback viewer sees no Acknowledge button, only the terminal commands (canWrite false)", async () => {
+  const asks: WebContext = { ...asksContext(null), canWrite: false };
+  const failed: WebContext = { ...failedContext("failed", null), canWrite: false };
+  const pages: [string, WebContext, string][] = [
+    ["/all", asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
+    [`/w/demo/runs/${ASKS}`, asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
+    ["/w/demo/rituals/daily-report", asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
+    [`/w/demo/runs/${FAILED}`, failed, `darius run ack ${FAILED} --project demo`],
+    ["/w/demo/rituals/daily-report", failed, `darius run ack ${FAILED} --project demo`],
+  ];
+  for (const [path, ctx, command] of pages) {
+    const page = await readPage(path, ctx);
+    assert.equal(page.includes("Acknowledge"), false, `${path}: no button`);
+    assert.equal(page.includes("Add a note"), false, `${path}: no note fold`);
+    assert.ok(page.includes(command), `${path}: the command stays`);
+  }
+  const failedHome = await readPage("/all", failed);
+  assert.ok(failedHome.includes('id="failed-demo-daily-report"'), "the failed card is still there");
+  assert.equal(failedHome.includes("Acknowledge"), false);
+});
+
+test("an acknowledged run has no button: the card is plain and the run page says who", async () => {
+  const seen = { at: "2026-09-28T08:30:00.000Z", who: "owner", note: null };
+  const answered = asksContext({ ...seen, note: "no, keep them" });
+  const failed = failedContext("failed", seen);
+  const cases = [
+    ["/all", answered, "Answered by owner at 10:30: no, keep them."],
+    [`/w/demo/runs/${ASKS}`, answered, "Answered by owner at 10:30: no, keep them."],
+    ["/all", failed, "Acknowledged by owner at 10:30."],
+    [`/w/demo/runs/${FAILED}`, failed, "Acknowledged by owner at 10:30."],
+    ["/w/demo/rituals/daily-report", failed, "Acknowledged by owner at 10:30."],
+  ] as const;
+  for (const [path, ctx, said] of cases) {
+    const page = await readPage(path, ctx);
+    assert.ok(page.includes(said), `${path}: the page rendered and says who`);
+    assert.equal(page.includes("Acknowledge</button>"), false, `${path}: nothing left to acknowledge`);
+  }
+});
+
+test("the ritual page says when the operator chose not to act on the questions (0.68.0)", async () => {
+  const from = "01KJJJJJJJJJJJJJJJJJJJJJJJ";
+  const handoff = { run: from, at: "2026-09-30T10:12:00.000Z", note: null, questions: [{ text: "Delete the card?" }], operator: null, dismissed: { who: "web:owner", at: "2026-09-30T11:00:00.000Z" } };
+  const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
+  const page = textOf(await readPage("/w/demo/rituals/daily-report", ctx));
+  assert.ok(page.includes("web:owner saw the questions and chose not to act on them. The next run is told not to act on them or ask them again."));
+  assert.equal(page.includes("Your answer"), false);
 });
 
 test("an answered result: the decision replaces the command, home is quiet, the tag says answered", async () => {

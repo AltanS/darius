@@ -12,6 +12,7 @@ export function loadContext(context: WebContext): AppLoadContext {
   return {
     viewer: context.viewer,
     nonce: context.nonce,
+    canWrite: context.canWrite,
     status: () => context.status(),
     ritual: (project, slug) => context.ritual(project, slug),
     run: (project, run) => context.run(project, run),

@@ -467,6 +467,8 @@ function demoBackups(clock: number): BackupsStatus {
 export function demoContext(base: WebContext): WebContext {
   return {
     ...base,
+    // The dev server answers the demo's POSTs with a stub, so the demo shows the write buttons to every viewer.
+    canWrite: true,
     status: () => demoStatus(),
     ritual: () => null,
     run: () => null,

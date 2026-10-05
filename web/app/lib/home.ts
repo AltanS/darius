@@ -88,6 +88,12 @@ export interface Ask {
   command: string;
 }
 
+/** The run an Acknowledge button names. */
+export interface AckTarget {
+  project: string;
+  run: string;
+}
+
 export type CardKind = "held" | "asks" | "failed" | "stuck" | "flagged" | "unreadable" | "done";
 
 /** One card in the main column: a thing that needs the operator, or a djinn that completed last night. */
@@ -111,6 +117,8 @@ export interface Card {
   questions: Question[];
   /** Set on an "Asks you" card. */
   ask: Ask | null;
+  /** The run the Acknowledge button acknowledges (0.68.0): an "Asks you" card and a failed card; null on any other card. */
+  ack: AckTarget | null;
   report: Excerpt | null;
   /** True when the report excerpt runs past its lines, so its end fades out. */
   fades: boolean;
@@ -247,7 +255,7 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
 // --- cards ---------------------------------------------------------------------------------
 
 function blank(id: string, kind: CardKind, item: Kind | null, manual = false): Card {
-  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], ask: null, report: null, fades: false, error: null, actions: [] };
+  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], ask: null, ack: null, report: null, fades: false, error: null, actions: [] };
 }
 
 function historyHref(run: ActivityRun): string {
@@ -282,6 +290,7 @@ function asksCard(clock: Clock, readRun: ReadRun, run: ActivityRun): Card {
     meta: [run.project, byText(run.who), plural(count, "question")],
     meta2: result === null ? null : result.summary,
     ask: { questions: result === null ? [] : result.questions, command: decideCommand(run.run, run.project) },
+    ack: { project: run.project, run: run.run },
     actions: [
       { text: "Open the run", href: href({ to: "run", ws: run.project, run: run.run }) },
       { text: "History", href: historyHref(run) },
@@ -336,6 +345,8 @@ function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: Ac
     href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [state.project, byText(run.who), tookText(run)].filter((part) => part !== null),
     meta2: seenText(run, clock),
+    // `darius run ack` takes a failed or abandoned run; the other bad outcomes (a refused start) it does not, so they get no button.
+    ack: failed && (run.outcome === "failed" || run.outcome === "abandoned") ? { project: run.project, run: run.run } : null,
     ...report,
     actions: [
       { text: run.findingsSha === null ? "Open the run" : "Read the report", href: href({ to: "run", ws: run.project, run: run.run }) },

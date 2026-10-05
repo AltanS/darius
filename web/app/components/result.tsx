@@ -10,6 +10,7 @@ import { useClock } from "../lib/clock.tsx";
 import { decideCommand } from "../lib/format.ts";
 import { actionTag, groupItems, itemStateTag, itemsText, metricTag, resultTone, resultWord, severityTone, summaryTags, type TagSpec } from "../lib/result.ts";
 import { decisionText } from "../lib/view.ts";
+import { AckButton } from "./ack.tsx";
 import { Chip } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { Fold, Section, Status } from "./ui.tsx";
@@ -68,14 +69,17 @@ interface ResultQuestionsProps {
   project: string;
   row: RunRow;
   questions: readonly ResultQuestion[];
+  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  canWrite: boolean;
 }
 
 /**
  * The "Questions for you" card. A complete run waits for the operator's
- * decision: the card gives the command that records it. Once someone
+ * decision: the card gives the command that records it, and the Acknowledge
+ * button that dismisses the questions without acting (0.68.0). Once someone
  * acknowledged the run, the card says who, when, and what they decided.
  */
-export function ResultQuestions({ project, row, questions }: ResultQuestionsProps): React.ReactNode {
+export function ResultQuestions({ project, row, questions, canWrite }: ResultQuestionsProps): React.ReactNode {
   const clock = useClock();
   const seen = row.acknowledged;
   const isWaiting = seen === null && row.phase === "closed" && row.outcome === "complete";
@@ -87,6 +91,7 @@ export function ResultQuestions({ project, row, questions }: ResultQuestionsProp
         <div className="next-cmd">
           <p>Record your decision:</p>
           <Command command={decideCommand(row.run, project)} />
+          <AckButton project={project} run={row.run} canWrite={canWrite} subject="the questions of this run" hint="Or dismiss the questions without acting. The next run is told you chose not to act on them." />
         </div>
       ) : null}
     </div>
@@ -198,12 +203,14 @@ interface ResultPanelProps {
   project: string;
   row: RunRow;
   result: RunResult;
+  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  canWrite: boolean;
   /** Drawn right after the questions: the follow-up card of the run page (0.48.0). */
   afterQuestions?: React.ReactNode;
 }
 
 /** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
-export function ResultPanel({ project, row, result, afterQuestions = null }: ResultPanelProps): React.ReactNode {
+export function ResultPanel({ project, row, result, canWrite, afterQuestions = null }: ResultPanelProps): React.ReactNode {
   const tone = resultTone(result.status);
   const hasQuestions = result.questions.length > 0;
   const tiles = result.metrics.length === 0 ? null : <Tiles metrics={result.metrics} />;
@@ -221,7 +228,7 @@ export function ResultPanel({ project, row, result, afterQuestions = null }: Res
       {hasQuestions ? (
         <>
           <Section title="Questions for you">
-            <ResultQuestions project={project} row={row} questions={result.questions} />
+            <ResultQuestions project={project} row={row} questions={result.questions} canWrite={canWrite} />
           </Section>
           {afterQuestions}
           {tiles === null ? null : <Section title="Numbers">{tiles}</Section>}

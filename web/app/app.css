@@ -4994,6 +4994,17 @@
     }
   }
 
+  /* The Acknowledge button of a card: the button, what it does, and the note behind a fold. */
+
+  .ack {
+    display: grid;
+    gap: 8px;
+  }
+
+  .ack .fold {
+    max-width: 480px;
+  }
+
   .fu-ask {
     display: grid;
     gap: 12px;

@@ -35,6 +35,7 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
     home: homeView(status, read, scope),
     workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
     extras: only === undefined ? null : workspaceExtras(only, read),
+    canWrite: context.canWrite,
   };
 }
 
@@ -140,7 +141,7 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
  * night and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { home, extras, workspaces } = loaderData;
+  const { home, extras, workspaces, canWrite } = loaderData;
   const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
   return (
     <div className="proj ov">
@@ -157,7 +158,7 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
               <SectHead title="Needs you" />
               <div className="cards">
                 {needs.map((card) => (
-                  <CardView key={card.id} card={card} />
+                  <CardView key={card.id} card={card} canWrite={canWrite} />
                 ))}
               </div>
             </section>
