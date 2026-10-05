@@ -12,6 +12,12 @@
  * that note answers. Before 0.26.0 that answer was display only, and the
  * next run never saw it.
  *
+ * A bare acknowledgement of a run that asked questions (0.68.0, the web
+ * Acknowledge button) is a dismissal: the operator saw the questions and
+ * chose not to act. The handoff says so, so the next run neither acts on the
+ * questions nor asks them again. A bare acknowledgement of a run with no
+ * questions changes nothing.
+ *
  * The source is the latest run of the ritual that handed in a result. A run
  * that crashed or ran out of turns hands in none, so the note of the last
  * good run stays. A run whose result has no `handoff` leaves no note: that
@@ -32,6 +38,12 @@ export interface OperatorNote {
   note: string;
 }
 
+/** Who acknowledged the source run with no note, and when. */
+export interface Dismissal {
+  who: string;
+  at: string;
+}
+
 export interface Handoff {
   /** The run that left the note. */
   run: string;
@@ -43,6 +55,8 @@ export interface Handoff {
   questions: ResultQuestion[];
   /** Null until someone acknowledges that run with a note. */
   operator: OperatorNote | null;
+  /** Set when that run asked questions and someone acknowledged it with no note: the operator chose not to act. Null otherwise, and always null when `operator` is set. */
+  dismissed: Dismissal | null;
 }
 
 function isText(value: JsonValue | undefined): value is string {
@@ -54,6 +68,13 @@ function operatorNote(ledger: readonly LedgerLine[], run: string): OperatorNote 
   const ack = ledger.find((line) => line.type === "run.acknowledged" && line.run === run && isText(line.note) && line.note.trim() !== "");
   if (ack === undefined || !isText(ack.note)) return null;
   return { who: ack.who, at: ack.at, note: ack.note.trim() };
+}
+
+/** The first acknowledgement of `run` when it carries no note and the run asked questions: the operator saw them and left them. */
+function dismissal(ledger: readonly LedgerLine[], run: string, questions: readonly ResultQuestion[]): Dismissal | null {
+  if (questions.length === 0) return null;
+  const ack = ledger.find((line) => line.type === "run.acknowledged" && line.run === run);
+  return ack === undefined ? null : { who: ack.who, at: ack.at };
 }
 
 /** The questions in the run's result blob; read only when the ledger line counts some. */
@@ -78,8 +99,10 @@ export function latestHandoff(project: Project, ledger: readonly LedgerLine[], s
   const note = isText(completed.handoff) && completed.handoff !== "" ? completed.handoff : null;
   const questions = resultQuestions(project, completed);
   const operator = operatorNote(ledger, run);
-  if (note === null && questions.length === 0 && operator === null) return null;
-  return { run, at: completed.at, note, questions, operator };
+  const dismissed = operator === null ? dismissal(ledger, run, questions) : null;
+  // A dismissal needs questions, and questions alone keep the handoff, so it never needs a note.
+  if (note === null && questions.length === 0 && operator === null && dismissed === null) return null;
+  return { run, at: completed.at, note, questions, operator, dismissed };
 }
 
 /** `2026-09-30T10:12:44.123Z` as `2026-09-30 10:12 UTC`. */
@@ -106,6 +129,8 @@ export function handoffLines(handoff: Handoff): string[] {
   if (operator !== null) {
     const what = handoff.questions.length > 0 ? "The operator's answer" : "The operator's note on that run";
     lines.push("", `${what} (${operator.who}, ${stamp(operator.at)}): ${oneLine(operator.note)}`);
+  } else if (handoff.dismissed !== null) {
+    lines.push("", "The operator saw these questions and chose not to act on them. Do not act on them, and do not ask them again unless the facts changed.");
   } else if (handoff.questions.length > 0) {
     lines.push("", "The operator has not answered yet. Do not act on these questions, and do not ask them again unless the facts changed.");
   }

@@ -31,10 +31,11 @@ import { ritualState } from "../src/core/due.ts";
 import type { Command, ParsedArgs } from "../src/cli/registry.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
-import { readLedger } from "../src/core/ledger.ts";
+import { appendLine, readLedger } from "../src/core/ledger.ts";
 import { UsageError } from "../src/core/model.ts";
 import type { Ritual } from "../src/core/model.ts";
-import { openProject } from "../src/core/store.ts";
+import { openProject, putBlob } from "../src/core/store.ts";
+import { handoffLines, latestHandoff } from "../src/core/handoff.ts";
 import { writeLink } from "../src/core/links.ts";
 import { commitAll, initRepo, NO_GIT } from "./helpers/git.ts";
 
@@ -553,6 +554,85 @@ test("by hand: run start, ritual show and run show print the handoff of the late
   assert.equal(plain.code, 0, "a by-hand run may skip the block");
   const third = JSON.parse((await runCli(runCommand, project, ["start", "heartbeat", "--json"])).stdout);
   assert.equal(third.handoff.run, first, "a run without a result leaves the note in place");
+});
+
+interface AskBlock {
+  v: number;
+  status: string;
+  summary: string;
+  questions: { text: string }[];
+  handoff?: string;
+}
+
+/** Completes a started run with one question for the operator, and a note when `handoff` is given. */
+async function completeAsking(project: string, run: string, handoff?: string): Promise<void> {
+  const block: AskBlock = { v: 1, status: "attention", summary: "one question", questions: [{ text: "Delete the card?" }] };
+  if (handoff !== undefined) block.handoff = handoff;
+  const done = await runCli(runCommand, project, ["complete", run, "--outcome", "complete", "--findings-stdin"], `done\n\`\`\`darius-result\n${JSON.stringify(block)}\n\`\`\`\n`);
+  assert.equal(done.code, 0, done.stdout);
+}
+
+function handoffTextOf(project: string): string {
+  const store = openProject(project);
+  const handoff = latestHandoff(store, readLedger(store), "heartbeat");
+  assert.ok(handoff !== null, "the run left a handoff");
+  return handoffLines(handoff).join("\n");
+}
+
+const DISMISSED_LINE = "The operator saw these questions and chose not to act on them. Do not act on them, and do not ask them again unless the facts changed.";
+
+test("handoff: a bare acknowledgement of a run with questions says the operator chose not to act (0.68.0)", async () => {
+  const project = "handoff-dismissed";
+  await addRitual(project, "heartbeat");
+  const run = await startRun(project, "heartbeat");
+  await completeAsking(project, run);
+
+  const waiting = handoffTextOf(project);
+  assert.match(waiting, /The operator has not answered yet\. Do not act on these questions, and do not ask them again unless the facts changed\./u);
+  assert.equal(waiting.includes(DISMISSED_LINE), false, "no acknowledgement, no dismissal");
+  assert.equal(latestHandoff(openProject(project), readLedger(openProject(project)), "heartbeat")?.dismissed, null);
+
+  const ack = await runCli(runCommand, project, ["ack", run, "--who", "web:owner"]);
+  assert.equal(ack.code, 0, ack.stdout);
+  const store = openProject(project);
+  const handoff = latestHandoff(store, readLedger(store), "heartbeat");
+  assert.equal(handoff?.dismissed?.who, "web:owner");
+  assert.equal(handoff?.operator, null);
+  const dismissed = handoffTextOf(project);
+  assert.ok(dismissed.includes(`\n\n${DISMISSED_LINE}`), "the dismissal closes the handoff");
+  assert.equal(dismissed.includes("has not answered yet"), false);
+  assert.match(dismissed, /^1\. Delete the card\?$/mu, "the questions stay listed");
+  assert.equal(dismissed.includes("The operator's answer"), false);
+});
+
+test("handoff: an acknowledgement with a note stays the operator's answer, and the note leaves no dismissal (0.68.0)", async () => {
+  const project = "handoff-answered";
+  await addRitual(project, "heartbeat");
+  const run = await startRun(project, "heartbeat");
+  await completeAsking(project, run, "Check post 7 again.");
+  const ack = await runCli(runCommand, project, ["ack", run, "--who", "owner", "--note", "yes, delete it"]);
+  assert.equal(ack.code, 0, ack.stdout);
+  const store = openProject(project);
+  assert.equal(latestHandoff(store, readLedger(store), "heartbeat")?.dismissed, null);
+  const answered = handoffTextOf(project);
+  assert.match(answered, /^The operator's answer \(owner, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\): yes, delete it$/mu);
+  assert.match(answered, /^Its note: Check post 7 again\.$/mu);
+  assert.equal(answered.includes(DISMISSED_LINE), false);
+  assert.equal(answered.includes("has not answered yet"), false);
+});
+
+test("handoff: a bare acknowledgement of a run with no questions changes nothing, and a dismissal needs no note (0.68.0)", () => {
+  const project = "handoff-no-questions";
+  const store = openProject(project, { create: true });
+  const run = "01JQUIET0000000000000000AA";
+  appendLine(store, { who: "timer", type: "run.started", item: "ritual/heartbeat", run });
+  appendLine(store, { who: "timer", type: "run.completed", item: "ritual/heartbeat", run, outcome: "complete", handoff: "Look at post 7 first.", result_sha: putBlob(store, "{}\n") });
+  const before = latestHandoff(store, readLedger(store), "heartbeat");
+  assert.equal(before?.note, "Look at post 7 first.");
+  appendLine(store, { who: "owner", type: "run.acknowledged", item: "ritual/heartbeat", run });
+  const after = latestHandoff(store, readLedger(store), "heartbeat");
+  assert.equal(after?.dismissed, null, "no questions, no dismissal");
+  assert.deepEqual(after && handoffLines(after), before && handoffLines(before));
 });
 
 const text = (n: number): string => `${"a".repeat(n)}\n`;
