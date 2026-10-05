@@ -1,8 +1,10 @@
 /**
- * `src/web/action-api.ts`: the run page's follow-up button (0.48.0). The
- * guards of `POST /api/run/follow-up`, the body it accepts, and what it
- * starts. Readiness and the spawn are stubs here; the real readiness is
- * covered in test/runner.test.ts, next to the CLI it mirrors.
+ * `src/web/action-api.ts`: the run page's follow-up button (0.48.0) and the
+ * Acknowledge button (0.68.0). The guards of `POST /api/run/follow-up`, the
+ * body it accepts, and what it starts. Readiness and the spawn are stubs
+ * here; the real readiness is covered in test/runner.test.ts, next to the CLI
+ * it mirrors. `POST /api/run/ack` runs the CLI and waits: most tests stub the
+ * runner, and one runs the real CLI against the sandbox store.
  *
  * SAFETY: the state and config dirs are `mkdtemp` dirs; no process starts.
  */
@@ -16,7 +18,7 @@ import { join } from "node:path";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
-import { actionApi, findingApi, LOOPBACK_CLOSE, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { actionApi, findingApi, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -62,6 +64,8 @@ function deps(readiness: FollowUpReadiness): ActionDeps & { started: Started[]; 
     start: (argv, log) => {
       started.push({ argv, log });
     },
+    // The follow-up tests start no CLI that waits; a call here is a bug in the test.
+    run: () => Promise.reject(new Error("the follow-up must not run the CLI and wait")),
   };
 }
 
@@ -316,4 +320,154 @@ test("close: when the CLI refuses, the answer is 409 with its reason", async () 
   const answer = await findingApi(closeRequest(CLOSE), { who: "owner" }, stub);
   assert.equal(answer.status, 409);
   assert.match(errorOf(answer.body), /already closed by someone/u);
+});
+
+// --- acknowledge a run (0.68.0) ------------------------------------------------------------
+
+const ACK = { project: PROJECT, run: RUN };
+
+/** The follow-up stubs plus a CLI that records its argv; nothing starts. */
+function ackDeps(answer: CliAnswer = { code: 0, error: "" }): ActionDeps & { calls: string[][] } {
+  const calls: string[][] = [];
+  return {
+    ...deps(READY),
+    calls,
+    run: (argv) => {
+      calls.push([...argv]);
+      return Promise.resolve(answer);
+    },
+  };
+}
+
+function ackRequest(body: JsonValue, overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return post(body, { path: "/api/run/ack", ...overrides });
+}
+
+test("ack: method 405, no or foreign Origin 403, other content 415, a large body 413, bad JSON 400, the loopback viewer 403; nothing runs", async () => {
+  const stub = ackDeps();
+  const who = { who: "owner" };
+  assert.equal((await actionApi(ackRequest(ACK, { method: "GET" }), who, stub)).status, 405);
+  const noOrigin = ackRequest(ACK, { headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  const refused = await actionApi(noOrigin, who, stub);
+  assert.equal(refused.status, 403);
+  assert.match(errorOf(refused.body), /must come from the darius page/u);
+  const foreign = ackRequest(ACK, { headers: new Headers({ origin: "http://evil.example", host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  assert.equal((await actionApi(foreign, who, stub)).status, 403);
+  const text = ackRequest(ACK, { headers: new Headers({ origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747", "content-type": "text/plain" }) });
+  assert.equal((await actionApi(text, who, stub)).status, 415);
+  assert.equal((await actionApi(ackRequest({ ...ACK, note: "x".repeat(5000) }), who, stub)).status, 413);
+  assert.equal((await actionApi(postRaw("{not json", { path: "/api/run/ack" }), who, stub)).status, 400);
+  const local = await actionApi(ackRequest(ACK), { who: "this host", local: true }, stub);
+  assert.equal(local.status, 403);
+  assert.equal(errorOf(local.body), LOOPBACK_ACK);
+  assert.match(LOOPBACK_ACK, /tailnet identity/u);
+  assert.deepEqual(stub.calls, [], "no guard that failed ran the CLI");
+});
+
+test("ack: a body that is not project, run and a plain note is 400, and nothing runs", async () => {
+  const stub = ackDeps();
+  const cases: [JsonValue, RegExp][] = [
+    ["ack", /send \{ project, run, note\? \}/u],
+    [[ACK], /send \{ project, run, note\? \}/u],
+    [{ ...ACK, approve: [1] }, /unknown field approve/u],
+    [{ ...ACK, grant: ["date"] }, /unknown field grant/u],
+    [{ project: PROJECT }, /run must be a run id/u],
+    [{ run: RUN }, /project must be a project name/u],
+    [{ ...ACK, project: "../etc" }, /project must be a project name/u],
+    [{ ...ACK, run: "../../x" }, /run must be a run id/u],
+    [{ ...ACK, run: "--note" }, /run must be a run id/u],
+    [{ ...ACK, run: 7 }, /run must be a run id/u],
+    [{ ...ACK, note: 7 }, /note must be text/u],
+    [{ ...ACK, note: "x".repeat(501) }, /note: at most 500 characters/u],
+    [{ ...ACK, note: "bell\u0007here" }, /note: plain text only, no control characters/u],
+  ];
+  for (const [body, message] of cases) {
+    const answer = await actionApi(ackRequest(body), { who: "owner" }, stub);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), message);
+  }
+  assert.deepEqual(stub.calls, [], "no bad body reached the CLI");
+  const edge = await actionApi(ackRequest({ ...ACK, note: "x".repeat(500) }), { who: "owner" }, stub);
+  assert.equal(edge.status, 200, "500 characters fit");
+});
+
+test("ack: an unknown project or run is 400, and nothing runs", async () => {
+  const stub = ackDeps();
+  const project = await actionApi(ackRequest({ ...ACK, project: "nope" }), { who: "owner" }, stub);
+  assert.equal(project.status, 400);
+  assert.match(errorOf(project.body), /no project nope/u);
+  const run = await actionApi(ackRequest({ ...ACK, run: "01JNOSUCHRUN0000000000000A" }), { who: "owner" }, stub);
+  assert.equal(run.status, 400);
+  assert.match(errorOf(run.body), /no run 01JNOSUCHRUN0000000000000A in demo/u);
+  assert.deepEqual(stub.calls, []);
+});
+
+test("ack: it runs run ack with the project, the viewer, the note and the run after --, and answers 200", async () => {
+  const stub = ackDeps();
+  const bare = await actionApi(ackRequest(ACK), { who: "owner on phone" }, stub);
+  assert.equal(bare.status, 200);
+  assert.deepEqual(bare.body, { ok: true });
+  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", RUN]);
+  const noted = await actionApi(ackRequest({ ...ACK, note: "  seen\nit, skip " }), { who: "owner" }, stub);
+  assert.equal(noted.status, 200);
+  assert.deepEqual(stub.calls[1], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--note", "seen it, skip", "--", RUN]);
+  const blank = await actionApi(ackRequest({ ...ACK, note: " \n " }), { who: "owner" }, stub);
+  assert.equal(blank.status, 200);
+  assert.ok(!(stub.calls[2] ?? []).includes("--note"), "a blank note is no note");
+  assert.deepEqual([stub.started, stub.asked], [[], []], "an acknowledgement starts no follow-up");
+});
+
+test("ack: when the CLI refuses (held, already acknowledged, wrong outcome), the answer is 409 with its sentence", async () => {
+  const refusals = [
+    `run '${RUN}' is held: answer and resume it`,
+    `run '${RUN}' is already acknowledged by owner at 2026-10-05T10:00:00.000Z`,
+    `run '${RUN}' is closed (complete); only a failed or abandoned run, or a complete one with questions, can be acknowledged`,
+  ];
+  for (const error of refusals) {
+    const stub = ackDeps({ code: 1, error });
+    const answer = await actionApi(ackRequest(ACK), { who: "owner" }, stub);
+    assert.equal(answer.status, 409);
+    assert.deepEqual(answer.body, { ok: false, error });
+  }
+});
+
+test("ack: against the real CLI, a failed run is acknowledged once, with the viewer and the note; a held and a complete run are refused", async () => {
+  const project = openProject(PROJECT);
+  const failed = "01JFAILED000000000000000AA";
+  const held = "01JHELD00000000000000000AA";
+  const complete = "01JCOMPLETE0000000000000AA";
+  appendLine(project, { who: "timer", type: "run.started", item: "ritual/daily", run: failed });
+  appendLine(project, { who: "timer", type: "run.completed", item: "ritual/daily", run: failed, outcome: "failed" });
+  appendLine(project, { who: "timer", type: "run.started", item: "ritual/daily", run: held });
+  appendLine(project, { who: "claude:1", type: "run.held", item: "ritual/daily", run: held, questions: ["may I push?"] });
+  appendLine(project, { who: "timer", type: "run.started", item: "ritual/daily", run: complete });
+  appendLine(project, { who: "timer", type: "run.completed", item: "ritual/daily", run: complete, outcome: "complete" });
+  const real: ActionDeps = { ...deps(READY), run: runCli };
+  const viewer = { who: "owner on phone" };
+
+  const first = await actionApi(ackRequest({ project: PROJECT, run: failed, note: "known, skip" }), viewer, real);
+  assert.deepEqual(first, { status: 200, body: { ok: true } });
+  const line = readLedger(project).find((candidate) => candidate.type === "run.acknowledged" && candidate.run === failed);
+  assert.equal(line?.who, "web:owner on phone");
+  assert.equal(line?.note, "known, skip");
+
+  const again = await actionApi(ackRequest({ project: PROJECT, run: failed }), viewer, real);
+  assert.equal(again.status, 409);
+  assert.match(errorOf(again.body), /already acknowledged by web:owner on phone/u);
+
+  const refusedHeld = await actionApi(ackRequest({ project: PROJECT, run: held }), viewer, real);
+  assert.equal(refusedHeld.status, 409);
+  assert.match(errorOf(refusedHeld.body), /is held: answer and resume it/u);
+
+  const refusedComplete = await actionApi(ackRequest({ project: PROJECT, run: complete }), viewer, real);
+  assert.equal(refusedComplete.status, 409);
+  assert.match(errorOf(refusedComplete.body), /closed \(complete\); only a failed or abandoned run/u);
+
+  const acknowledged = readLedger(project).filter((candidate) => candidate.type === "run.acknowledged");
+  assert.equal(acknowledged.length, 1, "only the first acknowledgement was written");
+});
+
+test("the web context lets a tailnet viewer write and refuses the loopback viewer (0.68.0)", () => {
+  assert.equal(webContext("owner on phone").canWrite, true);
+  assert.equal(webContext("this host", undefined, true).canWrite, false);
 });

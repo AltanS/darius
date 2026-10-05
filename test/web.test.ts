@@ -613,6 +613,26 @@ test("findings through the WebContext: rows carry their project, the status carr
   assert.deepEqual(projects.find((entry) => entry.name === "web-no-findings")?.findings, { needsYou: 0, open: 0 });
 });
 
+test("serve dispatches POST /api/run/ack to the action API; the loopback viewer is refused and a read is 405 (0.68.0)", async () => {
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const serving = serveCommand.run(parseArgs(["--port", "47995", "--bind", "127.0.0.1"]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const body = JSON.stringify({ project: "demo", run: "01JX" });
+    const loopback = await call(47_995, { method: "POST", path: "/api/run/ack", headers: { "content-type": "application/json" }, body });
+    assert.equal(loopback.status, 403);
+    assert.match(loopback.type, /^application\/json/u);
+    assert.match(loopback.body, /acknowledging a run needs a tailnet identity/u);
+    assert.equal((await call(47_995, { method: "GET", path: "/api/run/ack" })).status, 405);
+    assert.equal((await call(47_995, { method: "POST", path: "/api/run/acknowledge", headers: { "content-type": "application/json" }, body })).status, 404);
+    process.emit("SIGTERM");
+    assert.equal(await serving, 0);
+  } finally {
+    console.log = log;
+  }
+});
+
 test("serve dispatches POST /api/finding/close to the finding API; the loopback viewer is refused and a read is 405", async () => {
   const log = console.log;
   console.log = () => undefined;

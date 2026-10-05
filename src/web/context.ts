@@ -44,11 +44,12 @@ export function newNonce(): string {
   return randomBytes(16).toString("base64");
 }
 
-/** `local` is the loopback viewer: its run page offers no follow-up, as the POST would refuse it. */
+/** `local` is the loopback viewer: its pages offer no follow-up and no Acknowledge button, as the POST would refuse it. */
 export function webContext(viewer: string, nonce: string = newNonce(), local = false): WebContext {
   return {
     viewer,
     nonce,
+    canWrite: !local,
     status: () => collectStatus(),
     ritual: (project, slug) => ritualDetail(project, slug),
     run: (project, run) => runDetail(project, run),

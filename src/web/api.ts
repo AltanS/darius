@@ -534,6 +534,8 @@ export interface RitualHandoff {
   questions: ResultQuestion[];
   /** The operator's note from `darius run ack --note`; null until then. */
   operator: { who: string; at: string; note: string } | null;
+  /** Set when the run asked questions and someone acknowledged it with no note (0.68.0): the operator chose not to act. */
+  dismissed: { who: string; at: string } | null;
 }
 
 export interface RitualDetail {
@@ -676,6 +678,12 @@ export interface WebContext {
   findings(): Promise<FindingRow[]>;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
+  /**
+   * Whether the viewer may write through the page (0.68.0): false for the
+   * loopback viewer, whose POSTs the server refuses. The page hides the
+   * Acknowledge button when it is false.
+   */
+  canWrite: boolean;
 }
 
 /**

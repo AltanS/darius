@@ -1,5 +1,5 @@
 /**
- * The run page's one action (0.48.0; docs/concept.md, "Follow-up runs"):
+ * The run page's actions (0.48.0; docs/concept.md, "Follow-up runs"):
  *
  *   POST /api/run/follow-up   body { project, run, approve: [N, ...], note? }
  *                             (approve may be [] when the note carries the operator's decision, 0.65.0)
@@ -21,6 +21,20 @@
  * The loopback viewer ("this host", src/web/auth.ts) may not start one: any
  * process on this host is that viewer, and a run that may `curl` could set
  * its own Origin. Only a tailnet identity starts a follow-up.
+ *
+ * The other is the Acknowledge button (0.68.0; docs/concept.md, "Acknowledge"):
+ *
+ *   POST /api/run/ack         body { project, run, note? }
+ *                             200 { ok: true } | { ok: false, error }
+ *
+ * It runs `darius run ack --project P --who "web:<who>" --json [--note N] --
+ * <run>` and waits for it: the acknowledgement is one ledger line, so the page
+ * can reload and show it. The guards are the follow-up's: the Origin, JSON,
+ * MAX_BODY, a tailnet identity (the loopback viewer is refused for the same
+ * reason: a run could acknowledge its own failure), a known project, a body
+ * with no other key, a plain one-line note and a run that exists. What the
+ * run may be acknowledged as is the CLI's rule (a held, a running or an
+ * already acknowledged run is refused): its sentence comes back as 409.
  *
  * The findings page has one action too (0.62.0; docs/concept.md,
  * "Findings"):
@@ -56,6 +70,7 @@ export const ACTION_API_PREFIX = "/api/run/";
 export const FINDING_API_PREFIX = "/api/finding/";
 const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
+const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 
 /** The operator's note, at most this many characters. */
 export const NOTE_MAX = 500;
@@ -66,6 +81,50 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const RUN_ID = /^[0-9A-Za-z]{1,64}$/u;
 
 const CLI = fileURLToPath(new URL("../../bin/darius", import.meta.url));
+
+/** The CLI answers in well under a second; a hung one is stopped after this long. */
+const CLI_TIMEOUT_MS = 15_000;
+
+/** What running the CLI gave back. */
+export interface CliAnswer {
+  code: number;
+  /** One plain line that says why it failed; empty on success. */
+  error: string;
+}
+
+/** Runs the CLI with `argv` and waits for it. */
+export type CliRunner = (argv: readonly string[]) => Promise<CliAnswer>;
+
+/** The first line of a CLI answer: the `error` of its `--json` output, else the first line of stderr. */
+function cliError(stdout: string, stderr: string): string {
+  try {
+    const parsed: JsonValue = JSON.parse(stdout);
+    if (isRecord(parsed) && isText(parsed.error)) return parsed.error;
+  } catch {
+    // Not JSON: fall through to stderr.
+  }
+  const line = stderr.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
+  return line.replace(/^darius: /u, "").trim() || "the command failed";
+}
+
+export const runCli: CliRunner = (argv) =>
+  new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(CLI, [...argv], { stdio: ["ignore", "pipe", "pipe"], timeout: CLI_TIMEOUT_MS });
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (cause) => {
+      resolve({ code: 1, error: `could not start darius: ${errorMessage(cause)}` });
+    });
+    child.on("close", (code) => {
+      resolve({ code: code ?? 1, error: code === 0 ? "" : cliError(stdout, stderr) });
+    });
+  });
 
 /** Starts the CLI with `argv`, detached, its output appended to `log`. */
 export type FollowUpStarter = (argv: readonly string[], log: string) => void;
@@ -83,10 +142,12 @@ export const startDetachedFollowUp: FollowUpStarter = (argv, log) => {
   }
 };
 
-/** What the endpoint needs from the host; tests stub both. */
+/** What the endpoints need from the host; tests stub all three. */
 export interface ActionDeps {
   readiness: (project: string, run: string) => Promise<FollowUpReadiness>;
   start: FollowUpStarter;
+  /** Runs the CLI and waits: the acknowledgement. */
+  run: CliRunner;
 }
 
 /** Who the access check let in: `local` is the loopback caller, "this host". */
@@ -101,7 +162,10 @@ export const LOOPBACK_FOLLOW_UP = "the follow-up button needs a tailnet identity
 /** Why the loopback viewer cannot close a finding; the same reason as the follow-up. */
 export const LOOPBACK_CLOSE = "closing a finding needs a tailnet identity; open the page by its tailnet address";
 
-const DEFAULT_DEPS: ActionDeps = { readiness: followUpReadiness, start: startDetachedFollowUp };
+/** Why the loopback viewer cannot acknowledge a run; the same reason as the follow-up, and the page hides the button for it (src/web/context.ts). */
+export const LOOPBACK_ACK = "acknowledging a run needs a tailnet identity; open the page by its tailnet address";
+
+const DEFAULT_DEPS: ActionDeps = { readiness: followUpReadiness, start: startDetachedFollowUp, run: runCli };
 
 export interface ActionRequest {
   method: string;
@@ -153,21 +217,34 @@ function readBody(parsed: JsonValue): FollowUpBody {
   return { project, run, approve: numbers, note: line };
 }
 
+/** What the shared guards found: a reply that ends the request, or the JSON body to check further. */
+type Guarded = { reply: PushApiReply } | { parsed: JsonValue };
+
+/** The guards the follow-up and the acknowledgement share, in order: method, viewer, Origin, content type, size, JSON. */
+function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: string): Guarded {
+  if (request.method !== "POST") return { reply: fail(405, "POST only") };
+  if (viewer.local === true) return { reply: fail(403, loopbackReason) };
+  if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return { reply: fail(403, "the request must come from the darius page") };
+  if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return { reply: fail(415, "send JSON") };
+  if (request.body.length > MAX_BODY) return { reply: fail(413, "too large") };
+  try {
+    return { parsed: JSON.parse(request.body) };
+  } catch {
+    return { reply: fail(400, "not valid JSON") };
+  }
+}
+
 /** One request under ACTION_API_PREFIX, already past the access check. `viewer` is who the access check let in. */
 export async function actionApi(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps = DEFAULT_DEPS): Promise<PushApiReply> {
-  if (request.path !== FOLLOW_UP_PATH) return fail(404, "no such endpoint");
-  if (request.method !== "POST") return fail(405, "POST only");
-  if (viewer.local === true) return fail(403, LOOPBACK_FOLLOW_UP);
-  if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return fail(403, "the request must come from the darius page");
-  if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return fail(415, "send JSON");
-  if (request.body.length > MAX_BODY) return fail(413, "too large");
-  let parsed: JsonValue;
-  try {
-    parsed = JSON.parse(request.body);
-  } catch {
-    return fail(400, "not valid JSON");
-  }
-  const body = readBody(parsed);
+  if (request.path === FOLLOW_UP_PATH) return startFollowUp(request, viewer, deps);
+  if (request.path === ACK_PATH) return acknowledge(request, viewer, deps);
+  return fail(404, "no such endpoint");
+}
+
+async function startFollowUp(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_FOLLOW_UP);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readBody(guarded.parsed);
   if ("error" in body) return fail(400, body.error);
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
   if (viewRun(readLedger(openProject(body.project)), body.run).item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
@@ -190,56 +267,47 @@ export async function actionApi(request: ActionRequest, viewer: ActionViewer, de
   return { status: 202, body: { ok: true, pending: true } };
 }
 
+// --- acknowledge a run (0.68.0) ------------------------------------------------------------
+
+const ACK_KEYS: ReadonlySet<string> = new Set(["project", "run", "note"]);
+
+type AckBody = { project: string; run: string; note?: string } | { error: string };
+
+/** Checks the body's shape: known keys only, a project name, a run id, a plain one-line note. */
+function readAckBody(parsed: JsonValue): AckBody {
+  if (!isRecord(parsed)) return { error: "send { project, run, note? }" };
+  const extra = Object.keys(parsed).find((key) => !ACK_KEYS.has(key));
+  if (extra !== undefined) return { error: `unknown field ${extra.slice(0, 40)}` };
+  const { project, run } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  if (!isText(run) || !RUN_ID.test(run)) return { error: "run must be a run id" };
+  const note = readNote(parsed.note);
+  if ("error" in note) return note;
+  return { project, run, ...note };
+}
+
+/** Whether the run may be acknowledged is the CLI's rule (`ackable()` in src/runner/hold.ts); its sentence is the 409. */
+async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_ACK);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readAckBody(guarded.parsed);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  if (viewRun(readLedger(openProject(body.project)), body.run).item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
+  const argv = ["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json"];
+  if (body.note !== undefined) argv.push("--note", body.note);
+  argv.push("--", body.run);
+  const answer = await deps.run(argv);
+  if (answer.code !== 0) return fail(409, answer.error);
+  return { status: 200, body: { ok: true } };
+}
+
 // --- close a finding (0.62.0) --------------------------------------------------------------
 
 /** The longest key the endpoint takes: a key the run gave has at most 120 characters, a key darius made from the title may have more. */
 const FINDING_KEY_MAX = 1000;
 const CLOSE_KEYS: ReadonlySet<string> = new Set(["project", "ritual", "key", "note"]);
 const RITUAL_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-/** The CLI answers in well under a second; a hung one is stopped after this long. */
-const CLOSE_TIMEOUT_MS = 15_000;
-
-/** What running the CLI gave back. */
-export interface CliAnswer {
-  code: number;
-  /** One plain line that says why it failed; empty on success. */
-  error: string;
-}
-
-/** Runs the CLI with `argv` and waits for it. */
-export type CliRunner = (argv: readonly string[]) => Promise<CliAnswer>;
-
-/** The first line of a CLI answer: the `error` of its `--json` output, else the first line of stderr. */
-function cliError(stdout: string, stderr: string): string {
-  try {
-    const parsed: JsonValue = JSON.parse(stdout);
-    if (isRecord(parsed) && isText(parsed.error)) return parsed.error;
-  } catch {
-    // Not JSON: fall through to stderr.
-  }
-  const line = stderr.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
-  return line.replace(/^darius: /u, "").trim() || "the command failed";
-}
-
-export const runCli: CliRunner = (argv) =>
-  new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    const child = spawn(CLI, [...argv], { stdio: ["ignore", "pipe", "pipe"], timeout: CLOSE_TIMEOUT_MS });
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (cause) => {
-      resolve({ code: 1, error: `could not start darius: ${errorMessage(cause)}` });
-    });
-    child.on("close", (code) => {
-      resolve({ code: code ?? 1, error: code === 0 ? "" : cliError(stdout, stderr) });
-    });
-  });
-
 /** What the close endpoint needs from the host; tests stub both. */
 export interface FindingDeps {
   /** The findings of a known project. */
