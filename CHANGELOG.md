@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.68.0] - 2026-10-06
+
+### Added
+
+- The web page has an Acknowledge button. It is on a question card ("Asks you") and a failed card of the Overview, and in the "Record your decision" card and the "What happens next" card of the run page and the ritual page. One click marks the run as seen and the card moves to Last night. A note sits behind a small fold and is empty by default. A refusal of the CLI (held, already acknowledged, wrong outcome) shows as its own sentence and the card stays. The terminal command stays under the button.
+- `POST /api/run/ack` with `{ project, run, note? }`. It runs `darius run ack` and waits, with the guards of `POST /api/finding/close`: the page's Origin, JSON, a size cap, a tailnet identity, a known project and run, no other body key and a plain one-line note of at most 500 characters. A refusal of the CLI is 409 with its sentence. It adds no ledger line type.
+- `WebContext.canWrite` is false for the loopback viewer, whose POSTs the server refuses. The page hides the Acknowledge button for it and keeps the command.
+
+### Changed
+
+- `POST /api/run/*` dispatches by path: `follow-up` and `ack`. `ActionDeps` gains `run`, the CLI runner, as `FindingDeps` has.
+- A bare acknowledgement (no note) of a run that asked questions is a dismissal. The handoff of its ritual says: "The operator saw these questions and chose not to act on them. Do not act on them, and do not ask them again unless the facts changed." An acknowledgement with a note is still the operator's answer, and a run with no questions is unchanged. `Handoff` and `RitualHandoff` gain `dismissed`, and the ritual page says so.
+- The web dev server answers `POST /api/run/ack` with a stub: ok in the demo, a plain refusal on real data. The demo shows the button to every viewer.
+
 ## [0.67.0] - 2026-10-05
 
 ### Added
