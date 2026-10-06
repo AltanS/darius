@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.70.0] - 2026-10-06
+
+### Added
+
+- `icon` in a v3 `.darius.toml`, the workspace icon. It is one emoji (`icon = "🎯"`) or a relative path to a `.svg`, `.png` or `.webp` file in the repo (`icon = "assets/logo.svg"`). Any other value is a marker error. Update every host before a marker uses it: an older darius refuses the unknown key.
+- The web app shows the workspace icon in the Places rows, the Workspaces list and the phone top bar. A workspace without an icon looks as before.
+- `GET /api/workspace-icon/<project>` serves the image the marker names. The file must be inside the checkout, a regular file of at most 64 KB, and a real PNG, WebP or SVG whose content matches its extension. Anything else gets a plain 404 that names no path.
+- `darius marker check` prints the icon. It warns when an image icon is missing or not a valid image in the checkout.
+
+### Changed
+
+- The status JSON has an `icon` field for each project.
+- `darius marker factor` keeps the `icon` line, and its check names an icon that it lost or changed.
+
 ## [0.69.0] - 2026-10-06
 
 ### Added

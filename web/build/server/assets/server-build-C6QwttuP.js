@@ -9061,6 +9061,31 @@ function KindIcon({ kind, size = 16, titled = false, className }) {
 	});
 }
 //#endregion
+//#region app/components/workspace-icon.tsx
+/** The path of the icon endpoint (WORKSPACE_ICON_PREFIX in src/web/workspace-icon.ts; the app imports `src/` as types only). */
+var ICON_PATH = "/api/workspace-icon/";
+/** The edge of the square box, in pixels: the size of the nav icons in Places (app.css, `.ws-icon`). */
+var ICON_SIZE = 18;
+function WorkspaceGlyph({ icon, className, fallback = null }) {
+	const base = className === void 0 ? "ws-icon" : `ws-icon ${className}`;
+	if (icon === null) return fallback;
+	if (icon.kind === "emoji") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: `${base} ws-icon-emoji`,
+		"aria-hidden": "true",
+		children: icon.text
+	});
+	if (!icon.src.startsWith(ICON_PATH)) return fallback;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+		className: `${base} ws-icon-img`,
+		src: icon.src,
+		alt: "",
+		width: ICON_SIZE,
+		height: ICON_SIZE,
+		loading: "lazy",
+		decoding: "async"
+	});
+}
+//#endregion
 //#region app/lib/format.ts
 /** Text helpers for times, ids and commands. Pure, so server and client agree. */
 var MINUTE = 6e4;
@@ -9521,16 +9546,20 @@ function closeOnLink(event) {
 	if (event.target instanceof Element && event.target.closest("a") !== null) closeMenus();
 }
 /** A scope in the tree: its name and what needs you there. */
-function ScopeRow({ to, name, icon, needs, unreadable = false, current }) {
+function ScopeRow({ to, name, icon, needs, unreadable = false, current, workspaceIcon = null }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
 		to,
 		className: current ? "places-row places-scope on" : "places-row places-scope",
 		"aria-current": current ? "true" : void 0,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
-				name: icon,
-				size: 18,
-				className: "places-ico"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspaceGlyph, {
+				icon: workspaceIcon,
+				className: "places-ico",
+				fallback: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
+					name: icon,
+					size: 18,
+					className: "places-ico"
+				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "places-text",
@@ -9656,7 +9685,8 @@ function Places({ data, scope, lit }) {
 			vigils: 0,
 			rituals: 0,
 			findings: 0
-		}
+		},
+		icon: null
 	}];
 	const tabsOf = (name) => name === null ? data.allTabs : listed.find((entry) => entry.name === name)?.tabs ?? {
 		vigils: 0,
@@ -9717,6 +9747,7 @@ function Places({ data, scope, lit }) {
 					}),
 					name: entry.name,
 					icon: "workspace",
+					workspaceIcon: entry.icon,
 					needs: entry.needs,
 					unreadable: entry.error,
 					current: scope === entry.name
@@ -11105,6 +11136,10 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		]
 	};
 }
+/** The icon a workspace shows: none when darius could not read it, or when the status has none. */
+function workspaceIcon(project) {
+	return project.error === null ? project.icon ?? null : null;
+}
 /**
 * One row per workspace in the scope, the ones that need you first (most
 * first), then by name. A workspace that cannot be read has no next item.
@@ -11134,7 +11169,8 @@ function workspaceRows(status, scope = ALL_WORKSPACES$1) {
 			href: href({
 				to: "overview",
 				ws: project.name
-			})
+			}),
+			icon: workspaceIcon(project)
 		};
 	}).toSorted((left, right) => right.needs - left.needs || left.name.localeCompare(right.name));
 }
@@ -11342,7 +11378,8 @@ function workspaceEntries(status, settings, needsBy) {
 		name: project.name,
 		error: project.error !== null,
 		needs: needsBy[project.name] ?? 0,
-		tabs: tabCounts([project], status.today)
+		tabs: tabCounts([project], status.today),
+		icon: workspaceIcon(project)
 	}));
 }
 function shellData(status, request) {
@@ -11398,6 +11435,7 @@ function closeDrawer(event) {
 /** The phone top bar: one button that opens Places as a drawer. A desktop does not show it. */
 function TopBar({ data, scope, host, pathKey }) {
 	const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
+	const icon = host || scope === null ? null : data.workspaces.find((entry) => entry.name === scope)?.icon ?? null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 		"data-menu": true,
 		className: "drawer",
@@ -11410,9 +11448,12 @@ function TopBar({ data, scope, host, pathKey }) {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "topbar-cap",
 						children: host ? "Host" : "Workspace"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "topbar-now",
-						children: host ? data.host : scope ?? "All workspaces"
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspaceGlyph, {
+							icon,
+							className: "topbar-icon"
+						}), host ? data.host : scope ?? "All workspaces"]
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NavIcon, {
@@ -13278,10 +13319,13 @@ function WorkspaceItem({ row }) {
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "rw-main",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
 					to: row.href,
 					className: "rw-title",
-					children: row.name
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspaceGlyph, {
+						icon: row.icon,
+						className: "ws-title-icon"
+					}), row.name]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "rw-line",
@@ -18389,19 +18433,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-Dkq1LnQ4.js",
+			"module": "/assets/root-j0l7UHMT.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/nav-icons-CyBWLN6t.js",
 				"/assets/kind-CbYiwFqF.js",
+				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/view-CIvKJVtw.js",
 				"/assets/agenda-DgpBtP1m.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-_xp8olad.css"],
+			"css": ["/assets/root-BwwG550e.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -18441,10 +18486,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-E5AMRc83.js",
+			"module": "/assets/overview-Z4dfYYkD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
@@ -18477,10 +18523,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-E5AMRc83.js",
+			"module": "/assets/overview-Z4dfYYkD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
@@ -19265,8 +19312,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-62e1d9f3.js",
-	"version": "62e1d9f3",
+	"url": "/assets/manifest-2920c6b2.js",
+	"version": "2920c6b2",
 	"sri": void 0
 };
 //#endregion
