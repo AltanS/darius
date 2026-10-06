@@ -5026,6 +5026,112 @@
     gap: 4px;
   }
 
+  /* --- proposals (0.69.0) ------------------------------------------------------------- */
+  /* What an item proposes: the current and the proposed text as two labelled boxes, one column on a phone. */
+
+  .proposal {
+    display: grid;
+    gap: 10px;
+  }
+
+  .proposal-pair {
+    display: grid;
+    gap: 10px;
+  }
+
+  @media (min-width: 900px) {
+    .proposal-pair {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .proposal-one {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .proposal-block {
+    display: grid;
+    align-content: start;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .proposal-label {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .proposal-text {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-night);
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-parchment);
+  }
+
+  .proposal-new {
+    border-color: var(--color-gold);
+  }
+
+  .proposal-note {
+    font-size: 14px;
+  }
+
+  /* The proposals of the follow-up card: one row each, a checkbox, the title, the key, the proposal in a fold. */
+
+  .fu-props {
+    display: grid;
+    gap: 12px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .fu-prop {
+    display: grid;
+    gap: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-sand);
+  }
+
+  .fu-prop .fold {
+    margin-top: 4px;
+  }
+
+  .fu-prop-title {
+    overflow-wrap: anywhere;
+  }
+
+  .fu-all {
+    font-weight: 600;
+  }
+
+  /* A parent's follow-ups: each with its state, summary, actions and items. */
+
+  .fu-kids {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .fu-kid {
+    display: grid;
+    gap: 10px;
+  }
+
+  .fu-kid-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+  }
+
   /* --- the status page: machine, hosts, projects ------------------------------------- */
 
   .sy-path {

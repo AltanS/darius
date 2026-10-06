@@ -5,14 +5,15 @@ import { KindWord } from "../components/chip.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { FollowUpCard } from "../components/follow-up.tsx";
 import { Markdown } from "../components/markdown.tsx";
-import { ResultPanel } from "../components/result.tsx";
+import { Actions, Items, ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
-import { Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
+import { Empty, Facts, Section, Status, Time, TitleText } from "../components/ui.tsx";
 import { duration, shortRun } from "../lib/format.ts";
 import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
+import { resultTone, resultWord } from "../lib/result.ts";
 import { excerpt, itemLabel, itemSlug, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
@@ -28,18 +29,23 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
   // A closed, complete ritual run with a result can have a follow-up from this page (0.65.0: with no command
   // question it carries a decision note). The check runs on the server. A run with no command question shows
-  // the card only when the check passes, so a run that cannot be followed up gets no "off" card.
+  // the card only when the check passes, so a run that cannot be followed up gets no "off" card. A run that
+  // proposes changes (0.69.0: a needs-decision item with a key) is meant to be followed up, so it shows the
+  // card either way, with the reason when it is off.
   const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
+  const hasProposals = (run.result?.items ?? []).some((item) => item.state === "needs-decision" && item.key !== undefined);
   const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
   const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
-  const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
-  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, canWrite: context.canWrite };
+  const followUp = checked !== null && (hasCommands || (hasProposals && isFollowable) || checked.ready) ? checked : null;
+  // Each follow-up with its state word against the runs of the project (0.69.0).
+  const children = run.children.map((child) => ({ ...child, state: runState(child.row, project?.runs ?? []) }));
+  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, state, next, followUp, canWrite } = loaderData;
+  const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite } = loaderData;
   const { row, project } = run;
   const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -106,11 +112,57 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
               afterQuestions={
                 followUp === null ? null : (
                   <Section title="Follow-up">
-                    <FollowUpCard project={project} run={row.run} readiness={followUp} questions={run.result.questions} />
+                    <FollowUpCard project={project} run={row.run} readiness={followUp} questions={run.result.questions} items={run.result.items} />
                   </Section>
                 )
               }
             />
+          )}
+
+          {children.length === 0 ? null : (
+            <Section title={children.length === 1 ? "Its follow-up" : "Its follow-ups"}>
+              <ol className="fu-kids">
+                {children.map((child) => (
+                  <li key={child.row.run} className="card fu-kid">
+                    <p className="fu-kid-head">
+                      <Link to={href({ to: "run", ws: project, run: child.row.run })}>
+                        <code>{shortRun(child.row.run)}</code>
+                      </Link>
+                      <StateWord state={child.state} />
+                      <span className="text-muted">
+                        started <Time iso={child.row.startedAt} />, by {child.row.who}
+                      </span>
+                    </p>
+                    {child.approved.length === 0 && child.items.length === 0 ? null : (
+                      <p className="ritem-key">
+                        approved {[...child.approved.map((n) => `question ${n}`), ...child.items.map((key) => `item ${key}`)].join(", ")}
+                      </p>
+                    )}
+                    {child.result === null ? (
+                      <p className="text-muted">{child.row.phase === "closed" ? "It handed in no result." : "No result yet."}</p>
+                    ) : (
+                      <>
+                        <p>
+                          <Status tone={resultTone(child.result.status)} label={resultWord(child.result.status)} /> {child.result.summary}
+                        </p>
+                        {child.result.actions.length === 0 ? null : (
+                          <div>
+                            <p className="fu-label">What it changed</p>
+                            <Actions actions={child.result.actions} />
+                          </div>
+                        )}
+                        {child.result.items.length === 0 ? null : (
+                          <div>
+                            <p className="fu-label">What it reported</p>
+                            <Items items={child.result.items} />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </Section>
           )}
 
           {body !== null ? (

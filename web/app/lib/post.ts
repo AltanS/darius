@@ -14,6 +14,12 @@ export interface PostOk {
   started: boolean;
   /** `count` of a bucket check; null when the answer has none. */
   count: number | null;
+  /** `run` of a follow-up start (0.69.0): the new run; null when the answer has none. */
+  run: string | null;
+  /** `host` of a follow-up start: where the run started. */
+  host: string | null;
+  /** `message` of an answer that is ok but not done yet, such as a follow-up still starting. */
+  message: string | null;
 }
 
 export interface PostFailed {
@@ -27,7 +33,7 @@ export type PostResult = PostOk | PostFailed;
 
 /** What the endpoints take as a body: JSON values only. */
 export type PostBody = {
-  readonly [key: string]: string | number | boolean | null | readonly number[] | { readonly [key: string]: string | number | boolean | null };
+  readonly [key: string]: string | number | boolean | null | readonly number[] | readonly string[] | { readonly [key: string]: string | number | boolean | null };
 };
 
 function failed(status: number, error: string): PostFailed {
@@ -45,7 +51,19 @@ function parse(status: number, text: string): PostResult {
   const error = reply.get("error");
   if (reply.get("ok") !== true) return failed(status, error === undefined || error === null || error === "" ? `The host answered ${status}.` : String(error));
   const count = reply.get("count");
-  return { ok: true, status, started: reply.get("started") === true, count: count === undefined || count === null || !Number.isInteger(count) ? null : Number(count) };
+  const textOf = (key: string): string | null => {
+    const value = reply.get(key);
+    return value === undefined || value === null || value === "" ? null : String(value);
+  };
+  return {
+    ok: true,
+    status,
+    started: reply.get("started") === true,
+    count: count === undefined || count === null || !Number.isInteger(count) ? null : Number(count),
+    run: textOf("run"),
+    host: textOf("host"),
+    message: textOf("message"),
+  };
 }
 
 /** POST `body` as JSON to `path` on this origin. */

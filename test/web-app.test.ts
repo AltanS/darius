@@ -153,7 +153,7 @@ const RITUAL: RitualDetail = {
   project: "demo",
   row: STATUS.projects[0]!.rituals[0]!,
   anchor: "due",
-  policy: { mode: "report", may: ["git fetch"], hold: ["git push"], onHold: "stop", notes: "Be brief.", model: null, maxTurns: 40, profile: "careful" },
+  policy: { mode: "report", may: ["git fetch"], hold: ["git push"], onHold: "stop", followUpMay: [], followUp: "attended", notes: "Be brief.", model: null, maxTurns: 40, profile: "careful" },
   body: [
     { kind: "heading", level: 1, content: [{ kind: "text", text: "Steps" }] },
     { kind: "list", ordered: true, start: 1, items: [[{ kind: "text", text: "Read the log" }], [{ kind: "code", text: "darius due" }]] },
@@ -234,6 +234,7 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
           ],
     followUpOf: null,
     followUps: [],
+    children: [],
     skillHash: null,
   };
 }
@@ -909,7 +910,7 @@ function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: str
 }
 
 test("a question's command lines show as written, and the follow-up card offers a button on this host", async () => {
-  const ctx = followUpContext({ ready: true, host: "host-a", profile: "opus-skip", questions: [{ n: 1, commands: [COMMAND, "git push origin main"] }] });
+  const ctx = followUpContext({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [{ n: 1, commands: [COMMAND, "git push origin main"] }], items: [] });
   const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   assert.deepEqual(ctx.calls, [`demo/${ASKS}`]);
   assert.ok(page.includes("A yes runs, as written:"));
@@ -920,7 +921,7 @@ test("a question's command lines show as written, and the follow-up card offers 
   assert.ok(section !== -1 && section < found, "the card follows the questions");
   const card = textOf(between(page, section, found));
   assert.match(card, /Approve the commands ofQuestion 1 \(2 lines\)/u);
-  assert.match(card, /Start follow-up on host-a/u);
+  assert.match(card, /Start follow-up with 1 approved/u, "0.69.0: the button counts what is approved");
   assert.equal(card.includes("Yes, start it"), false, "the confirm box needs the first press");
   assert.match(page, /<input type="checkbox" checked=""/u, "one question with commands: picked");
   assertScriptsCarryNonce(page, "run page with a follow-up card");
@@ -939,7 +940,7 @@ test("the follow-up card says why it is off and gives the command; a run without
 
 test("a complete run with no command question gets a decision card when it is ready (0.65.0)", async () => {
   const base = asksContext(null);
-  const ctx: WebContext = { ...base, followUp: () => Promise.resolve<FollowUpReadiness>({ ready: true, host: "host-a", profile: "opus-skip", questions: [] }) };
+  const ctx: WebContext = { ...base, followUp: () => Promise.resolve<FollowUpReadiness>({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [], items: [] }) };
   const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   const card = textOf(page);
   assert.match(card, /Operator decision for the follow-up/u);
@@ -949,15 +950,18 @@ test("a complete run with no command question gets a decision card when it is re
   assert.match(page, /<button[^>]*disabled=""[^>]*>Start follow-up on host-a/u, "nothing picked and no decision yet");
 });
 
-test("on a host without the checkout the follow-up card names the right host and gives the ssh command to copy (0.50.0)", async () => {
-  const command = `ssh host-b darius run follow-up ${ASKS} --approve 1 --project demo`;
-  const ctx = followUpContext({ ready: false, host: "host-a", reason: `runs on host-b; open this page on host-b, or: ${command}`, rightHost: "host-b", command });
-  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
-  const card = textOf(page);
-  assert.match(card, /off This ritual runs on host-b\. Open this page on host-b, or run:/u);
-  assert.ok(card.includes(command), "the ssh command, in a copy box");
-  assert.ok(page.includes('class="copy"'), "a copy button");
-  assert.equal(card.includes("Start follow-up on"), false, "no button: the page never forwards");
+test("the ritual runs on another host: ready there, the button names it; off there, the card gives the reason and no command to copy (0.69.0)", async () => {
+  const ready = followUpContext({ ready: true, host: "host-b", via: "host-a", profile: "opus-skip", surface: "headless", questions: [{ n: 1, commands: [COMMAND] }], items: [] });
+  const card = textOf(await readPage(`/w/demo/runs/${ASKS}`, ready));
+  assert.match(card, /Start follow-up with 1 approved/u);
+  assert.match(card, /It runs on host-b, forwarded from host-a and carries out only what you approve/u);
+  assert.match(card, /The run is headless on host-b\./u);
+  const off = followUpContext({ ready: false, host: "host-a", reason: "on host-b: ssh to host-b failed: ssh: connect to host host-b port 22: No route to host", rightHost: "host-b" });
+  const page = await readPage(`/w/demo/runs/${ASKS}`, off);
+  assert.match(textOf(page), /off This ritual runs on host-b, and a follow-up cannot start there now: on host-b: ssh to host-b failed/u);
+  const section = between(page, page.indexOf('<h2 class="label">Follow-up</h2>'), page.indexOf('<h2 class="label">What it found</h2>'));
+  assert.equal(section.includes('class="copy"'), false, "no command to copy");
+  assert.equal(textOf(section).includes("darius run follow-up"), false);
 });
 
 test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
@@ -1802,4 +1806,112 @@ test("the crawl reads the scope from the cookie on a host page, and a section pa
   const read = async (path: string, scope: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`, { headers: { Cookie: `darius_scope=${scope}` } }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
   assert.equal(anchorsOf(navOf(await read("/status", "atlas"), "Tabs"))[0], "/w/atlas");
   assert.equal(anchorsOf(navOf(await read("/w/demo/vigils", "atlas"), "Tabs"))[0], "/w/demo", "the page wins over the cookie");
+});
+
+// --- proposals and follow-ups (0.69.0) ---------------------------------------------------------
+
+const PROPOSING: RunResult = {
+  v: 1,
+  status: "attention",
+  summary: "Two pages could rank better.",
+  metrics: [],
+  questions: [],
+  actions: [],
+  items: [
+    {
+      key: "post-12/title",
+      title: "Title misses the main query",
+      severity: "medium",
+      state: "needs-decision",
+      target: "post 12",
+      proposal: { current: `Old <b>title</b>\nline two`, proposed: `New title ${EVIL}`, why: "The query is missing.", effect: "Rank 8 to top 5." },
+    },
+    { key: "post-40/intro", title: "Intro is thin", severity: "low", state: "needs-decision", proposal: { proposed: "A longer intro" } },
+  ],
+};
+
+const PROPOSALS_READY: FollowUpReadiness = {
+  ready: true,
+  host: "host-a",
+  profile: "opus-skip",
+  surface: "headless",
+  questions: [],
+  items: [
+    { key: "post-12/title", title: "Title misses the main query" },
+    { key: "post-40/intro", title: "Intro is thin" },
+  ],
+};
+
+/** The asks run with a result that proposes and asks nothing, with the readiness given. */
+function proposingContext(readiness: FollowUpReadiness, children: RunDetail["children"] = []): WebContext {
+  const base = asksContext(null);
+  return {
+    ...base,
+    run: (name, run) => {
+      const detail = base.run(name, run);
+      if (detail === null || run !== ASKS) return detail;
+      return { ...detail, result: PROPOSING, followUps: children.map((child) => child.row.run), children };
+    },
+    followUp: () => Promise.resolve(readiness),
+  };
+}
+
+test("a run that proposes and asks nothing still gets the follow-up card, with a checkbox per proposal, select all and one button", async () => {
+  const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext(PROPOSALS_READY));
+  assert.equal(page.includes('<h2 class="label">Questions for you</h2>'), false);
+  const section = page.indexOf('<h2 class="label">Follow-up</h2>');
+  const found = page.indexOf('<h2 class="label">What it found</h2>');
+  assert.ok(section !== -1 && section < found, "the card shows before the items, with no questions");
+  const card = between(page, section, found);
+  assert.equal((card.match(/type="checkbox"/gu) ?? []).length, 3, "select all, then one per proposal");
+  assert.match(textOf(card), /Approve the proposalsSelect all proposals \(2\)/u);
+  assert.match(textOf(card), /post 12 · key post-12\/title/u);
+  assert.match(card, /<button[^>]*disabled=""[^>]*>Start follow-up on host-a/u, "nothing picked, no note yet");
+  assert.match(textOf(card), /The run is headless on host-a\./u);
+  assert.equal(page.includes(EVIL), false, "proposal text never becomes a script");
+  assert.ok(card.includes('<p class="proposal-text">Old &lt;b&gt;title&lt;/b&gt;\nline two</p>'), "current, as text, newline kept");
+  assert.ok(card.includes(`<p class="proposal-text proposal-new">New title ${EVIL.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`), "proposed, as text");
+  assert.match(textOf(card), /Why: The query is missing\..*Expected effect: Rank 8 to top 5\./su);
+  assertScriptsCarryNonce(page, "run page with proposals");
+});
+
+test("the items list shows a proposal in a fold, current and proposed as labelled blocks", async () => {
+  const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext(PROPOSALS_READY));
+  const found = between(page, page.indexOf('<h2 class="label">What it found</h2>'), page.length);
+  assert.match(found, /<summary>Proposal<\/summary>/u);
+  assert.match(textOf(found), /CurrentOld &lt;b&gt;title&lt;\/b&gt;\nline twoProposedNew title &lt;script&gt;/u);
+});
+
+test("a run that proposes but cannot be followed up shows the card with the reason", async () => {
+  const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext({ ready: false, host: "host-a", reason: "no-workdir: a follow-up runs in a checkout" }));
+  assert.match(textOf(page), /off A follow-up cannot start from this page: no-workdir: a follow-up runs in a checkout/u);
+});
+
+test("the parent page shows each follow-up with its state, summary, approvals, actions and items", async () => {
+  const child: RunDetail["children"][number] = {
+    row: { ...runRow(CHILD, "closed", "complete"), startedAt: "2026-09-28T08:20:00.000Z", who: "web:owner on phone" },
+    approved: [],
+    items: ["post-12/title"],
+    result: {
+      v: 1,
+      status: "ok",
+      summary: `Changed the title of post 12 ${EVIL}.`,
+      metrics: [],
+      questions: [],
+      items: [{ key: "post-12/title", title: "Title misses the main query", severity: "medium", state: "fixed" }],
+      actions: [{ text: "Updated the title block", state: "done", target: "post 12" }],
+    },
+  };
+  const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext(PROPOSALS_READY, [child]));
+  const at = page.indexOf('<h2 class="label">Its follow-up</h2>');
+  assert.ok(at !== -1, "a section for the follow-up");
+  const kid = textOf(between(page, at, page.indexOf('<h2 class="label">Report</h2>')));
+  assert.match(kid, new RegExp(`${CHILD.slice(-8)}Complete`, "u"));
+  assert.match(kid, /by web:owner on phone/u);
+  assert.match(kid, /approved item post-12\/title/u);
+  assert.match(kid, /Result ok Changed the title of post 12 &lt;script&gt;/u);
+  assert.match(kid, /What it changedUpdated the title blockpost 12done/u);
+  assert.match(kid, /What it reported.*Title misses the main query.*fixed/su);
+  assert.ok(page.includes(`href="/w/demo/runs/${CHILD}"`));
+  assert.equal(page.includes(EVIL), false);
 });

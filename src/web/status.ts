@@ -36,6 +36,7 @@ import type {
   MilestoneRow,
   ProfileRow,
   ProjectStatus,
+  FollowUpChild,
   RitualDetail,
   RitualRow,
   RunDetail,
@@ -380,6 +381,14 @@ export function runDetail(projectName: string, run: string): RunDetail | null {
   const findings = row.findingsSha === null ? null : getBlobText(project, row.findingsSha);
   const [itemKind = "", itemSlug = ""] = row.item.split("/");
   const result = runResult(project, ledger, run);
+  const rows = runRows(ledger);
+  const children = followUpsOf(ledger, run).flatMap((child): FollowUpChild[] => {
+    const childRow = rows.find((candidate) => candidate.run === child);
+    if (childRow === undefined) return [];
+    const started = ledger.find((line) => line.run === child && line.type === "run.started");
+    const approved = Array.isArray(started?.approved) ? started.approved.filter((n): n is number => typeof n === "number") : [];
+    return [{ row: childRow, approved, items: textList(started?.items), result: runResult(project, ledger, child) }];
+  });
   return {
     project: projectName,
     row,
@@ -390,6 +399,7 @@ export function runDetail(projectName: string, run: string): RunDetail | null {
     result,
     followUpOf: followUpOf(ledger, run) ?? null,
     followUps: followUpsOf(ledger, run),
+    children,
     skillHash: text(ledger.find((line) => line.run === run && line.type === "run.started")?.skill_hash),
   };
 }
@@ -426,6 +436,8 @@ export function ritualDetail(projectName: string, slug: string, now: Date = new 
       may: [...policy.may],
       hold: [...policy.hold],
       onHold: policy.on_hold ?? "stop",
+      followUpMay: [...(policy.follow_up_may ?? [])],
+      followUp: doc.header.follow_up ?? "attended",
       notes: policy.notes ?? null,
       model: policy.model ?? null,
       maxTurns: policy.max_turns ?? null,

@@ -205,11 +205,13 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
                 <Facts
                   facts={[
                     { label: "May run", value: <Chips items={policy.may} none="only the read-only defaults" /> },
+                    ...(policy.followUpMay.length === 0 ? [] : [{ label: "A follow-up may also run", value: <Chips items={policy.followUpMay} none="nothing more" /> }]),
                     { label: "Stops at", value: <Chips items={policy.hold} none="nothing" /> },
                     {
                       label: "On a match",
                       value: policy.onHold === "deny" ? "refuses the command; the run goes on and records it for a decision" : "holds the run until someone answers",
                     },
+                    { label: "Follow-ups", value: policy.followUp === "headless" ? "run headless, without herdr" : "open a herdr tab, attended" },
                     { label: "Max turns", value: policy.maxTurns ?? <span className="text-muted">default</span> },
                     { label: "Profile", value: policy.profile === null ? <span className="text-muted">default</span> : <Link to={href({ to: "host", page: "profiles", hash: `profile-${policy.profile}` })}>{policy.profile}</Link> },
                     ...(policy.notes === null ? [] : [{ label: "Notes", value: policy.notes }]),

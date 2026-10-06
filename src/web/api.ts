@@ -523,6 +523,10 @@ export interface RitualPolicy {
   hold: string[];
   /** What a hold match does (0.66.0): "stop" holds the run, "deny" refuses the call and the run goes on. */
   onHold: "stop" | "deny";
+  /** What only a follow-up run may also run (0.69.0); empty when the policy sets none. */
+  followUpMay: string[];
+  /** How a follow-up runs (0.69.0): "attended" in a herdr tab, or "headless". */
+  followUp: "attended" | "headless";
   notes: string | null;
   model: string | null;
   maxTurns: number | null;
@@ -585,8 +589,21 @@ export interface RunDetail {
   followUpOf: string | null;
   /** The runs that follow this one up, oldest first. */
   followUps: string[];
+  /** The same follow-ups with what each did (0.69.0), oldest first: the parent page shows them. */
+  children: FollowUpChild[];
   /** The sha256 hex of the ritual skill's SKILL.md at launch (0.56.0); null for a run that recorded none. */
   skillHash: string | null;
+}
+
+/** A follow-up of a run as its parent's page shows it (0.69.0): its row, what the operator approved, and its result. */
+export interface FollowUpChild {
+  row: RunRow;
+  /** The question numbers approved on its `run.started` line. */
+  approved: number[];
+  /** The item keys approved on its `run.started` line. */
+  items: string[];
+  /** Null until it handed in a result. */
+  result: RunResult | null;
 }
 
 /** The command lines of one question a follow-up may approve. */

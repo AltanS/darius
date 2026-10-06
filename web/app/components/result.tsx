@@ -5,7 +5,7 @@
  * as text only, never as markdown, HTML or a link.
  */
 
-import type { ResultAction, ResultItem, ResultMetric, ResultQuestion, RunResult, RunResultSummary, RunRow } from "../../../src/web/api.ts";
+import type { ResultAction, ResultItem, ResultMetric, ResultProposal, ResultQuestion, RunResult, RunResultSummary, RunRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { decideCommand } from "../lib/format.ts";
 import { actionTag, groupItems, itemStateTag, itemsText, metricTag, resultTone, resultWord, severityTone, summaryTags, type TagSpec } from "../lib/result.ts";
@@ -126,6 +126,45 @@ function Tiles({ metrics }: TilesProps): React.ReactNode {
   );
 }
 
+interface ProposalViewProps {
+  proposal: ResultProposal;
+}
+
+/**
+ * The change a needs-decision item proposes (0.69.0): the current text and
+ * the proposed text as two labelled blocks, side by side on a wide screen
+ * and one under the other on a phone, then why and the expected effect.
+ * Plain text: newlines stay, nothing becomes markup.
+ */
+export function ProposalView({ proposal }: ProposalViewProps): React.ReactNode {
+  return (
+    <div className="proposal">
+      <div className={proposal.current === undefined ? "proposal-pair proposal-one" : "proposal-pair"}>
+        {proposal.current === undefined ? null : (
+          <div className="proposal-block">
+            <p className="proposal-label">Current</p>
+            <p className="proposal-text">{proposal.current}</p>
+          </div>
+        )}
+        <div className="proposal-block">
+          <p className="proposal-label">Proposed</p>
+          <p className="proposal-text proposal-new">{proposal.proposed}</p>
+        </div>
+      </div>
+      {proposal.why === undefined ? null : (
+        <p className="proposal-note">
+          <span className="rec-label">Why:</span> {proposal.why}
+        </p>
+      )}
+      {proposal.effect === undefined ? null : (
+        <p className="proposal-note">
+          <span className="rec-label">Expected effect:</span> {proposal.effect}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface ItemRowProps {
   item: ResultItem;
 }
@@ -145,6 +184,11 @@ function ItemRow({ item }: ItemRowProps): React.ReactNode {
             <p className="ritem-detail">{item.detail}</p>
           </Fold>
         )}
+        {item.proposal === undefined ? null : (
+          <Fold summary="Proposal">
+            <ProposalView proposal={item.proposal} />
+          </Fold>
+        )}
       </div>
       <span className="ritem-state">
         <Tag tag={itemStateTag(item.state)} />
@@ -158,7 +202,7 @@ interface ItemsProps {
 }
 
 /** The items by group, the worst first in each; the items without a group last. */
-function Items({ items }: ItemsProps): React.ReactNode {
+export function Items({ items }: ItemsProps): React.ReactNode {
   const groups = groupItems(items);
   const isNamed = groups.some((group) => group.name !== null);
   return (
@@ -181,7 +225,7 @@ interface ActionsProps {
   actions: readonly ResultAction[];
 }
 
-function Actions({ actions }: ActionsProps): React.ReactNode {
+export function Actions({ actions }: ActionsProps): React.ReactNode {
   return (
     <ul className="rows">
       {actions.map((action, index) => (
@@ -205,7 +249,7 @@ interface ResultPanelProps {
   result: RunResult;
   /** False for the loopback viewer: the Acknowledge button does not draw. */
   canWrite: boolean;
-  /** Drawn right after the questions: the follow-up card of the run page (0.48.0). */
+  /** Drawn right after the questions, or after the banner when there are none (0.69.0): the follow-up card of the run page (0.48.0). */
   afterQuestions?: React.ReactNode;
 }
 
@@ -224,6 +268,9 @@ export function ResultPanel({ project, row, result, canWrite, afterQuestions = n
         </div>
         {hasQuestions ? null : tiles}
       </Section>
+
+      {/* 0.69.0: a run that proposes changes and asks nothing still gets its follow-up card. */}
+      {hasQuestions ? null : afterQuestions}
 
       {hasQuestions ? (
         <>
