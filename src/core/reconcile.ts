@@ -73,7 +73,9 @@ const MS_PER_MINUTE = 60_000;
  */
 export function mirrorDefinition(marker: Marker, ritual: RepoRitual): RepoRitual {
   const zone = ritual.tz ?? marker.tz;
-  const resolved: RepoRitual = { ...ritual, policy: { ...ritual.policy, may: [...ritual.policy.may], hold: [...ritual.policy.hold] } };
+  const policy = { ...ritual.policy, may: [...ritual.policy.may], hold: [...ritual.policy.hold] };
+  if (ritual.policy.follow_up_may !== undefined) policy.follow_up_may = [...ritual.policy.follow_up_may];
+  const resolved: RepoRitual = { ...ritual, policy };
   if (zone !== undefined) resolved.tz = zone;
   return resolved;
 }
@@ -141,6 +143,7 @@ function mirroredPolicy(ritual: RepoRitual): Policy {
   const policy: Policy = { mode: ritual.policy.mode, may: [...ritual.policy.may], hold: [...ritual.policy.hold] };
   if (ritual.policy.notes !== undefined) policy.notes = ritual.policy.notes;
   if (ritual.policy.on_hold !== undefined) policy.on_hold = ritual.policy.on_hold;
+  if (ritual.policy.follow_up_may !== undefined) policy.follow_up_may = [...ritual.policy.follow_up_may];
   if (ritual.model !== undefined) policy.model = ritual.model;
   if (ritual.maxTurns !== undefined) policy.max_turns = ritual.maxTurns;
   if (ritual.profile !== undefined) policy.profile = ritual.profile;
@@ -176,12 +179,13 @@ function mirrored(base: Ritual, definition: Definition, at: Checkout): Ritual {
     def_at: at.now.toISOString(),
     updated: at.now.toISOString(),
   };
-  for (const key of ["cadence", "at", "tz", "from", "args", "timeout", "def_commit"] as const) delete header[key];
+  for (const key of ["cadence", "at", "tz", "from", "args", "timeout", "follow_up", "def_commit"] as const) delete header[key];
   if (ritual.cadence !== undefined) header.cadence = ritual.cadence;
   if (ritual.at !== undefined) header.at = ritual.at;
   if (ritual.tz !== undefined) header.tz = ritual.tz;
   if (ritual.from !== undefined) header.from = ritual.from;
   if (ritual.args !== undefined) header.args = ritual.args;
+  if (ritual.followUp !== undefined) header.follow_up = ritual.followUp;
   if (definition.timeout !== undefined) header.timeout = definition.timeout;
   if (at.commit !== undefined) header.def_commit = at.commit;
   return header;

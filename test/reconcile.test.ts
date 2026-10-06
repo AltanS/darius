@@ -434,3 +434,25 @@ test("on_hold deny mirrors into the store item, and the prompt and policy.json c
   const plain = buildPrompt({ project: project.name, run: "r2", ritual: { ...mirrored, policy: { mode: "report", may: [], hold: [] } }, body: "Do it." });
   assert.ok(plain.includes("a match holds the run"), "the default prompt is as before");
 });
+
+test("follow_up_may and follow_up = headless mirror into the store item and read back; only a follow-up's run files merge it (0.69.0)", { skip: NO_GIT }, () => {
+  const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\nmax_mode = "act"\n[policies.guarded]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'\\bpush\\b\']\nfollow_up_may = ["Bash(pnpm cli blocks update *)"]\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "guarded"\nfollow_up = "headless"\n';
+  const { project, dir } = setup({ git: true, marker });
+  assert.equal(reconcileProject(project, dir, HOST, T1).ok, true);
+  const mirrored = ritual(project, "daily");
+  assert.deepEqual(mirrored.policy.follow_up_may, ["Bash(pnpm cli blocks update *)"]);
+  assert.equal(mirrored.follow_up, "headless");
+  const item = readItemText(project, "ritual", "daily") ?? "";
+  assert.match(item, /follow_up: headless/u);
+  assert.match(item, /follow_up_may:/u);
+  const scheduled = writeRunFiles(project.root, { project: project.name, run: "r1", ritual: mirrored, body: "Do it." });
+  assert.deepEqual(JSON.parse(readFileSync(scheduled.policy, "utf8")).may, ["Bash(date)"], "a scheduled run never gets follow_up_may");
+  const followUp = writeRunFiles(project.root, { project: project.name, run: "r2", ritual: mirrored, body: "Do it.", followUp: ["## Follow-up"] }, "shell", { grants: [], followUpOf: "r0", cwd: dir });
+  assert.deepEqual(JSON.parse(readFileSync(followUp.policy, "utf8")).may, ["Bash(date)", "Bash(pnpm cli blocks update *)"]);
+  assert.equal(reconcileProject(project, dir, HOST, T2).unchanged.includes("daily"), true, "a second reconcile finds nothing new");
+  writeFileSync(join(dir, ".darius.toml"), marker.replace('project = "acme-web"', `project = "${project.name}"`).replace('follow_up = "headless"\n', "").replace('follow_up_may = ["Bash(pnpm cli blocks update *)"]\n', ""));
+  commitAll(dir, "drop");
+  assert.deepEqual(reconcileProject(project, dir, HOST, T3).updated, ["daily"]);
+  assert.equal(ritual(project, "daily").follow_up, undefined, "a removed key leaves the mirror");
+  assert.equal(ritual(project, "daily").policy.follow_up_may, undefined);
+});

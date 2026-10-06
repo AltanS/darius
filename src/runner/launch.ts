@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { findingsSection } from "../core/finding-index.ts";
 import { handoffSection, type Handoff } from "../core/handoff.ts";
-import type { Ritual } from "../core/model.ts";
+import type { Document, Policy, Ritual } from "../core/model.ts";
 import { RESULT_PROMPT, STYLE_PROMPT } from "../core/result.ts";
 import type { HarnessAdapter, RunFiles } from "../harness/contract.ts";
 import { allowsSubagents, type GateScope, type RunPolicy } from "../harness/gate.ts";
@@ -204,7 +204,7 @@ export function buildPrompt(input: PromptInput): string {
     "## Policy",
     "",
     "Allowed tool rules:",
-    bulletList(ritual.policy.may),
+    bulletList(runMay(ritual.policy, input.followUp !== undefined)),
     "",
     holdListHeader,
     bulletList(ritual.policy.hold),
@@ -221,6 +221,22 @@ export function buildPrompt(input: PromptInput): string {
     input.body.trim(),
     "",
   ].join("\n");
+}
+
+/**
+ * The `may` a run uses: the policy's, and for a follow-up run (0.69.0) the
+ * policy's `follow_up_may` added after it, duplicates dropped. A scheduled
+ * run never gets `follow_up_may`. `hold` is not touched, so it still wins.
+ */
+export function runMay(policy: Policy, isFollowUp: boolean): string[] {
+  return isFollowUp ? [...new Set([...policy.may, ...(policy.follow_up_may ?? [])])] : [...policy.may];
+}
+
+/** The ritual as a follow-up run sees it: `follow_up_may` merged into `may` (runMay). */
+export function followUpRitual(doc: Document<Ritual>): Document<Ritual> {
+  const { policy } = doc.header;
+  if ((policy.follow_up_may ?? []).length === 0) return doc;
+  return { ...doc, header: { ...doc.header, policy: { ...policy, may: runMay(policy, true) } } };
 }
 
 /** policy.json as written: a run without grants leaves the key out, so its file reads as before 0.46.0. */
@@ -242,7 +258,8 @@ export function writeRunFiles(projectRoot: string, input: PromptInput, scope: Ga
     ritual: input.ritual.slug,
     run: input.run,
     mode: policy.mode,
-    may: [...policy.may],
+    // A follow-up run (granted set) may also use follow_up_may (0.69.0); a scheduled run never does.
+    may: runMay(policy, granted !== undefined),
     hold: [...policy.hold],
     grants: [...(granted?.grants ?? [])],
   };

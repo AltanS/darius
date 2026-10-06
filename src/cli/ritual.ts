@@ -404,6 +404,9 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.policy.may.length > 0) console.log(`  may: ${doc.header.policy.may.join(", ")}`);
   if (doc.header.policy.hold.length > 0) console.log(`  hold: ${doc.header.policy.hold.join(", ")}`);
   if (doc.header.policy.on_hold !== undefined) console.log(`  on_hold: ${doc.header.policy.on_hold} (a hold-list match refuses the call; the run goes on)`);
+  const followUpMay = doc.header.policy.follow_up_may ?? [];
+  if (followUpMay.length > 0) console.log(`  follow_up_may: ${followUpMay.join(", ")} (a follow-up run only)`);
+  if (doc.header.follow_up !== undefined) console.log(`follow_up: ${doc.header.follow_up} (a follow-up runs without herdr)`);
   if (doc.header.policy.notes !== undefined) console.log(`  notes: ${doc.header.policy.notes}`);
   if (handoff !== null) console.log(`\nhandoff to the next run:\n${handoffLines(handoff).join("\n")}`);
   console.log(`\n${doc.body}`);

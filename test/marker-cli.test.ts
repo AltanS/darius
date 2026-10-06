@@ -363,3 +363,11 @@ test("marker check shows the kinds, in text and in --json", async () => {
   const plain = JSON.parse((await runCli(markerCommand, ["check", checkout('project = "acme-web"\n'), "--json"])).stdout);
   assert.deepEqual(plain.kinds, ["ritual"]);
 });
+
+test("marker check --resolved lists follow_up_may, in text and JSON (0.69.0)", async () => {
+  const dir = checkout(`v = 3\nproject = "acme-web"\ntz = "UTC"\n[policies.p]\nmode = "report"\nhold = ['x']\nfollow_up_may = ["Bash(b *)"]\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "p"\nfollow_up_may_extra = ["Bash(a *)"]\n`);
+  const text = await runCli(markerCommand, ["check", dir, "--resolved", "daily"]);
+  assert.equal(text.stdout, "mode: report\nhold: x\nfollow_up_may: Bash(a *)\nfollow_up_may: Bash(b *)");
+  const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--resolved", "daily", "--json"])).stdout);
+  assert.deepEqual(json.follow_up_may, ["Bash(a *)", "Bash(b *)"]);
+});

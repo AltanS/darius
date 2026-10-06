@@ -279,9 +279,9 @@ export function withFileLock<R>(lockPath: string, fn: () => R, timing: LockTimin
 const RITUAL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "cadence", "anchor",
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
-  "source", "at", "tz", "from", "args", "timeout", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
+  "source", "at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
-const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "model", "max_turns", "profile"];
+const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "follow_up_may", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "tags",
   "harness", "model", "effort", "permissions", "surface", "max_turns", "args",
@@ -379,6 +379,7 @@ function decodePolicy(reader: FieldReader | undefined, where: string): Policy {
   };
   const notes = reader.optionalString("notes");
   const onHold = reader.optionalString("on_hold");
+  const followUpMay = reader.stringList("follow_up_may");
   const model = reader.optionalString("model");
   const maxTurns = reader.optionalInteger("max_turns");
   const profile = reader.optionalString("profile");
@@ -387,6 +388,7 @@ function decodePolicy(reader: FieldReader | undefined, where: string): Policy {
     if (onHold !== "deny") throw new Error(`${where}: 'policy.on_hold' must be stop or deny, got '${onHold}'`);
     policy.on_hold = onHold;
   }
+  if (followUpMay.length > 0) policy.follow_up_may = followUpMay;
   if (model !== undefined) policy.model = model;
   if (maxTurns !== undefined) policy.max_turns = maxTurns;
   if (profile !== undefined) policy.profile = profile;
@@ -432,6 +434,11 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
     if (value !== undefined) ritual[key] = value;
   }
   if (reader.optionalString("def_dirty") !== undefined) ritual.def_dirty = reader.boolean("def_dirty", false);
+  const followUp = reader.optionalString("follow_up");
+  if (followUp !== undefined && followUp !== "attended") {
+    if (followUp !== "headless") throw new Error(`${where}: 'follow_up' must be headless or attended, got '${followUp}'`);
+    ritual.follow_up = followUp;
+  }
 }
 
 function decodeVigil(reader: FieldReader): Vigil {
@@ -514,6 +521,7 @@ function encodePolicy(policy: Policy): FrontmatterMap {
   entries.hold = [...policy.hold];
   putIfSet(entries, "notes", policy.notes);
   putIfSet(entries, "on_hold", policy.on_hold);
+  if (policy.follow_up_may !== undefined && policy.follow_up_may.length > 0) entries.follow_up_may = [...policy.follow_up_may];
   putIfSet(entries, "model", policy.model);
   putIfSet(entries, "max_turns", policy.max_turns === undefined ? undefined : String(policy.max_turns));
   putIfSet(entries, "profile", policy.profile);
@@ -538,7 +546,7 @@ function encodeHeader(item: Item): FrontmatterHeader {
     putIfSet(entries, "skill", item.skill);
     putIfSet(entries, "host", item.host);
     putIfSet(entries, "source", item.source);
-    for (const key of ["at", "tz", "from", "args", "timeout", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
+    for (const key of ["at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
     putIfSet(entries, "def_dirty", item.def_dirty === undefined ? undefined : String(item.def_dirty));
     putIfSet(entries, "def_host", item.def_host);
     putIfSet(entries, "def_at", item.def_at);

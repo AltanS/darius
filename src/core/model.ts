@@ -28,6 +28,12 @@ export interface Policy {
   notes?: string;
   /** "deny" (0.66.0): a hold-list match refuses the one call and the run goes on. Absent: it holds the run. */
   on_hold?: "deny";
+  /**
+   * Rules a follow-up run of the ritual may use on top of `may` (0.69.0).
+   * Merged into `may` only in a follow-up's run files, never in a scheduled
+   * run. `hold` still wins over them. Absent when empty.
+   */
+  follow_up_may?: string[];
   model?: string;
   max_turns?: number;
   /** A harness profile by name (docs/concept.md, "Profiles"). */
@@ -65,6 +71,11 @@ export interface Ritual extends ItemHeader {
   args?: string;
   /** The mirrored per-run budget, as written: `30m`, `2h`. */
   timeout?: string;
+  /**
+   * `follow_up = "headless"` in the marker (0.69.0): a follow-up of this
+   * ritual runs headless, without herdr. Absent: attended, in a herdr tab.
+   */
+  follow_up?: "headless";
   /** `definitionHash` of the mirrored definition. */
   def_hash?: string;
   /** The short commit of the checkout that reconcile read; absent outside git. */

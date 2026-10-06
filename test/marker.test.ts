@@ -395,6 +395,11 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["on_hold not a string", v3(`${RITUAL}on_hold = true\n`), /:9: on_hold must be "stop" or "deny"/u],
   ["on_hold bad in a policy table", v3('[policies.p]\nmode = "off"\non_hold = "Deny"\n'), /:7: on_hold must be "stop" or "deny"/u],
   ["policy with on_hold", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\non_hold = "deny"\n`), /:12: on_hold cannot be combined with policy = "p"/u],
+  ["policy with follow_up_may", v3(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nfollow_up_may = ["Read"]\n`), /:12: follow_up_may cannot be combined with policy = "p"; put it in \[policies\.p\]/u],
+  ["follow_up_may not rules", v3(`${RITUAL}mode = "report"\nfollow_up_may = ["not a rule!"]\n`), /:10: follow_up_may must be a list of Claude Code permission rules/u],
+  ["follow_up_may_extra not a list", v3(`${RITUAL}mode = "report"\nfollow_up_may_extra = "Read"\n`), /:10: follow_up_may_extra must be a list of strings/u],
+  ["follow_up_may bad in a policy table", v3('[policies.p]\nmode = "off"\nfollow_up_may = "Read"\n'), /:7: follow_up_may must be a list of strings/u],
+  ["follow_up not headless or attended", v3(`${RITUAL}follow_up = "tab"\n`), /:9: follow_up must be "headless" or "attended"/u],
   ["args not a string", v3(`${RITUAL}args = ["--site", "acme"]\n`), /:9: args must be a string: args = "--site acme"/u],
   ["args empty", v3(`${RITUAL}args = ""\n`), /:9: args must be not empty/u],
   ["args with a newline", v3(`${RITUAL}args = "--site acme\\n--dry"\n`), /:9: args must be one line, with no newline/u],
@@ -544,6 +549,40 @@ test("--resolved shows on_hold: deny after the mode, and nothing for the default
   const stop = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\n`);
   assert.deepEqual(resolvedLines(resolvedPolicy(stop)), ["mode: report", "hold: x"]);
   assert.equal(resolvedPolicy(stop).on_hold, "stop");
+});
+
+// --- follow_up_may and follow_up (0.69.0) -------------------------------------------
+
+test("follow_up_may: on a ritual or on the policy it names, follow_up_may_extra adds to it; follow_up = headless is kept, attended is no key", () => {
+  const inline = firstRitual(`${RITUAL}mode = "report"\nmay = ["Read"]\nfollow_up_may = ["Bash(pnpm cli blocks update *)", "Read"]\nfollow_up_may_extra = ["Bash(pnpm cli seo push *)"]\n`);
+  assert.deepEqual(inline.policy.may, ["Read"], "may is untouched");
+  assert.deepEqual(inline.policy.follow_up_may, ["Bash(pnpm cli blocks update *)", "Read", "Bash(pnpm cli seo push *)"]);
+  const named = firstRitual(`[policies.p]\nmode = "report"\nfollow_up_may = ["Bash(a *)", "Bash(a *)"]\n${RITUAL}policy = "p"\nfollow_up_may_extra = ["Bash(b *)"]\nfollow_up = "headless"\n`);
+  assert.deepEqual(named.policy.follow_up_may, ["Bash(a *)", "Bash(b *)"], "the policy's list, deduped, then the extra");
+  assert.equal(named.followUp, "headless");
+  const extraOnly = firstRitual(`[policies.p]\nmode = "report"\n${RITUAL}policy = "p"\nfollow_up_may_extra = ["Bash(b *)"]\n`);
+  assert.deepEqual(extraOnly.policy.follow_up_may, ["Bash(b *)"]);
+  const attended = firstRitual(`${RITUAL}mode = "report"\nfollow_up = "attended"\nfollow_up_may = []\n`);
+  assert.equal(attended.followUp, undefined, "attended is the default: no key");
+  assert.equal(attended.policy.follow_up_may, undefined, "an empty list is no key");
+});
+
+test("follow_up_may and follow_up: the hash of a ritual without them is the hash of 0.68.0", () => {
+  const text = 'v = 3\nproject = "acme"\nmax_mode = "act"\ntz = "Europe/Berlin"\n[policies.p]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'x\']\n[rituals.daily]\ntitle = "Daily"\ncadence = "1d"\nskill = "daily"\npolicy = "p"\nmay_extra = ["Read"]\n[rituals.own]\ntitle = "Own"\nskill = "own"\nmode = "report"\nmay = ["Grep"]\nhold = [\'y\']\non_hold = "deny"\n';
+  // Computed by darius 0.68.0 (91e348f) for this exact text.
+  const golden = ["e2266101cb605a9f4e3d22fdcc306342e134b74f17b7cf9260abeeb91c9763a7", "b4669ae2b1675a679c4137d2433c1af8ae848db81fb57fc82605d0ffd441e34c"];
+  assert.deepEqual(readMarker(checkout(text))?.rituals.map((ritual) => definitionHash(ritual)), golden);
+  const withDefaults = text.replace('on_hold = "deny"\n', 'on_hold = "deny"\nfollow_up = "attended"\nfollow_up_may = []\n');
+  assert.deepEqual(readMarker(checkout(withDefaults))?.rituals.map((ritual) => definitionHash(ritual)), golden, "the defaults written out change nothing");
+  const plain = firstRitual(`${RITUAL}mode = "report"\n`);
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nfollow_up = "headless"\n`)));
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nfollow_up_may = ["Read"]\n`)));
+});
+
+test("--resolved lists follow_up_may after hold, sorted, and nothing when there is none", () => {
+  const ritual = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\nfollow_up_may = ["Bash(z *)", "Bash(a *)"]\n`);
+  assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report", "hold: x", "follow_up_may: Bash(a *)", "follow_up_may: Bash(z *)"]);
+  assert.deepEqual(resolvedPolicy(firstRitual(`${RITUAL}mode = "report"\n`)).follow_up_may, []);
 });
 
 // --- may_extra and hold_extra -----------------------------------------------------

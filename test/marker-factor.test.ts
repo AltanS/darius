@@ -381,3 +381,9 @@ test("marker factor: a file that does not parse exits 1; no file and extra argum
   await assert.rejects(runFactor([empty]), (cause: Error) => cause instanceof UsageError && /no \.darius\.toml/u.test(cause.message));
   await assert.rejects(runFactor([empty, "extra"]), UsageError);
 });
+
+test("factor: a ritual with follow_up_may is left as it is (0.69.0)", () => {
+  const withFollowUp = (slug: string): string => inlineRitual(slug, HOLDS).replace(/\n$/u, '\nfollow_up_may = ["Bash(a *)"]\n');
+  const plan = planFactor(`${ROOT}${withFollowUp("a")}${withFollowUp("b")}`, FILE);
+  assert.equal(plan.groups.length, 0, "follow_up_may cannot sit next to policy, so factor does not touch the ritual");
+});

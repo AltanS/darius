@@ -5,7 +5,7 @@
  * so every ritual resolves to the same policy as before.
  *
  * Grouping. Only rituals with an inline policy take part; a ritual that names
- * a `policy` is never touched. Two rituals of the same mode and the same
+ * a `policy`, or one with `follow_up_may` (0.69.0), is never touched. Two rituals of the same mode and the same
  * `on_hold` (0.66.0) are linked when
  * their resolved `hold` lists overlap by the `marker check` rule
  * (`holdOverlap`: the shorter list has at least 5 patterns, and at least 80
@@ -106,7 +106,8 @@ function components(inline: readonly RepoRitual[]): RepoRitual[][] {
 
 /** The groups `marker factor` proposes for `marker`. Empty when nothing qualifies. */
 export function findGroups(marker: Marker): FactorGroup[] {
-  const inline = marker.rituals.filter((ritual) => ritual.policyName === undefined);
+  // A ritual with follow_up_may (0.69.0) stays as it is: the key cannot sit next to `policy`, and factor does not move it.
+  const inline = marker.rituals.filter((ritual) => ritual.policyName === undefined && ritual.policy.follow_up_may === undefined);
   const taken = new Set(Object.keys(marker.policies));
   const groups: FactorGroup[] = [];
   for (const members of components(inline)) {
@@ -289,6 +290,7 @@ function ritualFields(ritual: RepoRitual): Map<string, string> {
   fields.set("resolved hold", fieldText(policy.hold.toSorted(byCodeUnit)));
   fields.set("notes", fieldText(policy.notes));
   fields.set("on_hold", fieldText(policy.on_hold ?? "stop"));
+  fields.set("resolved follow_up_may", fieldText((policy.follow_up_may ?? []).toSorted(byCodeUnit)));
   return fields;
 }
 
@@ -303,7 +305,7 @@ function ritualDifference(before: RepoRitual, after: RepoRitual): string | undef
 }
 
 function policyText(policy: MarkerPolicy | undefined): string {
-  return policy === undefined ? "unset" : JSON.stringify([policy.mode, policy.may, policy.hold, policy.notes ?? null, policy.on_hold ?? "stop"]);
+  return policy === undefined ? "unset" : JSON.stringify([policy.mode, policy.may, policy.hold, policy.notes ?? null, policy.on_hold ?? "stop", policy.follow_up_may ?? []]);
 }
 
 function profilesText(profiles: Readonly<Record<string, ProfileFields>>): string {

@@ -21,15 +21,16 @@
  *
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
  *   kinds = ["ritual", "vigil"]        optional: the kinds the store owns (below)
- *   [policies.read-only]               mode, may, hold, notes, on_hold
+ *   [policies.read-only]               mode, may, hold, notes, on_hold, follow_up_may
  *   [rituals.daily-report]             title, skill, and optionally cadence,
  *   at = "07:00"                       anchor, at, tz, from, args, timeout,
- *   skill = "daily-report"             profile, model, max_turns, and either
- *   args = "--site acme"               `policy` or mode, may, hold, notes, on_hold
+ *   skill = "daily-report"             profile, model, max_turns, follow_up, and either
+ *   args = "--site acme"               `policy` or mode, may, hold, notes, on_hold, follow_up_may
  *   policy = "read-only"
  *   notes = "Reports only."            optional next to `policy`, see below
  *   may_extra = ["Bash(git log *)"]    adds to the policy's may (or the own may)
  *   hold_extra = ['\bpush\b']          adds to the policy's hold (or the own hold)
+ *   follow_up_may_extra = [...]        adds to the policy's follow_up_may (or the own)
  *
  * `kinds` (v = 3 only) says which kinds the darius store owns in this
  * project. The only valid values are `["ritual"]` (the default),
@@ -57,6 +58,19 @@
  * `policy` takes the policy's, and setting it next to `policy` is an error,
  * as for `mode`, `may` and `hold`. "stop" is stored as no key, so the
  * definition hash of a ritual without it does not change.
+ *
+ * `follow_up_may` (0.69.0) lists rules that only a follow-up run of the
+ * ritual may use, on top of `may`: the writes an approved proposal needs,
+ * which the scheduled run must not make. It is part of the policy, like
+ * `may`: next to `policy` it is an error, and `follow_up_may_extra` adds to
+ * the named policy's list. A scheduled run never sees it; `hold` still wins
+ * over it. An empty list is stored as no key, so the definition hash of a
+ * ritual without it does not change.
+ *
+ * `follow_up = "headless" | "attended"` (0.69.0) is a ritual key: how a
+ * follow-up of the ritual runs. "attended", the default, opens a herdr tab;
+ * "headless" runs without herdr, as `--headless` does. "attended" is stored
+ * as no key, so the hash of a ritual without it does not change.
  *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
@@ -108,6 +122,8 @@ export interface MarkerPolicy {
   notes?: string;
   /** Only "deny" is kept; "stop" is the default and is stored as no key. */
   on_hold?: "deny";
+  /** Rules only a follow-up run may use (0.69.0). Absent when empty. */
+  follow_up_may?: string[];
 }
 
 /** A ritual's `may_extra` and `hold_extra` as written: rules it adds to its base policy. */
@@ -133,6 +149,8 @@ export interface RepoRitual {
   profile?: string;
   model?: string;
   maxTurns?: number;
+  /** `follow_up = "headless"` (0.69.0): a follow-up runs without herdr. Absent: attended. */
+  followUp?: "headless";
   /** The `[policies.*]` name, for display. */
   policyName?: string;
   /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
@@ -183,8 +201,9 @@ const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
+  "follow_up_may", "follow_up_may_extra", "follow_up",
 ]);
-const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes", "on_hold"]);
+const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes", "on_hold", "follow_up_may"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 /** A repo ritual's slug. No dots: the TOML subset allows one dot in a header, the table separator. */
 export const REPO_SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
@@ -299,13 +318,14 @@ function validRegex(pattern: string): boolean {
   }
 }
 
-/** The `[policies.*]` and `[rituals.*]` shared fields: mode, may, hold, notes, on_hold. */
+/** The `[policies.*]` and `[rituals.*]` shared fields: mode, may, hold, notes, on_hold, follow_up_may. */
 interface Rules {
   mode?: Mode;
   may?: string[];
   hold?: string[];
   notes?: string;
   onHold?: "deny";
+  followUpMay?: string[];
 }
 
 type Fail = (key: string, expected: string) => Error;
@@ -333,7 +353,7 @@ function decodeHold(value: TomlValue, key: string, fail: Fail): string[] {
 function decodeRules(table: Table, section: string, source: Source): Rules {
   const fail = failAt(section, source);
   const rules: Rules = {};
-  const { mode, may, hold, notes, on_hold: onHold } = table;
+  const { mode, may, hold, notes, on_hold: onHold, follow_up_may: followUpMay } = table;
   if (mode !== undefined) {
     if (!isMode(mode)) throw fail("mode", '"off", "report" or "act"');
     rules.mode = mode;
@@ -348,6 +368,7 @@ function decodeRules(table: Table, section: string, source: Source): Rules {
     if (onHold !== "stop" && onHold !== "deny") throw fail("on_hold", '"stop" or "deny"');
     if (onHold === "deny") rules.onHold = onHold;
   }
+  if (followUpMay !== undefined) rules.followUpMay = decodeMay(followUpMay, "follow_up_may", fail);
   return rules;
 }
 
@@ -361,6 +382,7 @@ function decodePolicyTable(table: Table, section: string, source: Source): Marke
   const policy: MarkerPolicy = { mode: rules.mode, may: rules.may ?? [], hold: rules.hold ?? [] };
   if (rules.notes !== undefined) policy.notes = rules.notes;
   if (rules.onHold !== undefined) policy.on_hold = rules.onHold;
+  if (rules.followUpMay !== undefined && rules.followUpMay.length > 0) policy.follow_up_may = [...new Set(rules.followUpMay)];
   return policy;
 }
 
@@ -431,10 +453,12 @@ function decodeExtra(table: Table, section: string, source: Source): PolicyExtra
  * only add, so `hold` never loses a pattern. Notes are the base's; a ritual
  * that names a policy appends its own after that (`resolveRitualPolicy`).
  */
-function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined): ResolvedPolicy {
+function withExtra(base: MarkerPolicy, extra: PolicyExtra | undefined, followUpExtra: readonly string[] = []): ResolvedPolicy {
   const policy: MarkerPolicy = { mode: base.mode, may: addRules(base.may, extra?.may ?? []), hold: addRules(base.hold, extra?.hold ?? []) };
   if (base.notes !== undefined) policy.notes = base.notes;
   if (base.on_hold !== undefined) policy.on_hold = base.on_hold;
+  const followUpMay = addRules(base.follow_up_may ?? [], followUpExtra);
+  if (followUpMay.length > 0) policy.follow_up_may = followUpMay;
   return extra === undefined ? { policy } : { policy, policyExtra: { may: [...extra.may], hold: [...extra.hold] } };
 }
 
@@ -451,21 +475,23 @@ function resolveRitualPolicy(
   const named = table.policy;
   const own = decodeRules(table, section, source);
   const extra = decodeExtra(table, section, source);
+  const followUpExtra = table.follow_up_may_extra === undefined ? [] : decodeMay(table.follow_up_may_extra, "follow_up_may_extra", failAt(section, source));
   if (named === undefined) {
     const base: MarkerPolicy = { mode: own.mode ?? "off", may: own.may ?? [], hold: own.hold ?? [] };
     if (own.notes !== undefined) base.notes = own.notes;
     if (own.onHold !== undefined) base.on_hold = own.onHold;
-    return withExtra(base, extra);
+    if (own.followUpMay !== undefined) base.follow_up_may = own.followUpMay;
+    return withExtra(base, extra, followUpExtra);
   }
   const line = source.lines[`${section}.policy`];
   if (!isText(named) || named === "") throw new Error(`${where(source.file, line)}: policy must name a [policies.<name>] table`);
-  const clash = ["mode", "may", "hold", "on_hold"].find((key) => table[key] !== undefined);
+  const clash = ["mode", "may", "hold", "on_hold", "follow_up_may"].find((key) => table[key] !== undefined);
   if (clash !== undefined) {
     throw new Error(`${where(source.file, source.lines[`${section}.${clash}`])}: ${clash} cannot be combined with policy = "${named}"; put it in [policies.${named}]`);
   }
   const found = at.policies[named];
   if (found === undefined) throw new Error(`${where(source.file, line)}: policy = "${named}" names no [policies.${named}] table`);
-  const resolved = { ...withExtra(found, extra), policyName: named };
+  const resolved = { ...withExtra(found, extra, followUpExtra), policyName: named };
   if (own.notes === undefined) return resolved;
   resolved.policy.notes = found.notes === undefined ? own.notes : `${found.notes}\n\n${own.notes}`;
   return { ...resolved, ownNotes: own.notes };
@@ -535,6 +561,10 @@ function decodeRitual(
   if (maxTurns !== undefined && !isPositiveInteger(maxTurns)) {
     throw new Error(`${where(source.file, source.lines[`${section}.max_turns`])}: max_turns must be a positive integer`);
   }
+  const followUp = table.follow_up;
+  if (followUp !== undefined && followUp !== "headless" && followUp !== "attended") {
+    throw new Error(`${where(source.file, source.lines[`${section}.follow_up`])}: follow_up must be "headless" or "attended"`);
+  }
   const { policy, policyName, policyExtra, ownNotes } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
   if (cadence !== undefined) ritual.cadence = cadence;
@@ -546,6 +576,7 @@ function decodeRitual(
   if (profile !== undefined) ritual.profile = profile;
   if (model !== undefined) ritual.model = model;
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
+  if (followUp === "headless") ritual.followUp = followUp;
   if (policyName !== undefined) ritual.policyName = policyName;
   if (policyExtra !== undefined) ritual.policyExtra = policyExtra;
   if (ownNotes !== undefined) ritual.ownNotes = ownNotes;
@@ -762,6 +793,8 @@ export interface ResolvedView {
   on_hold: OnHold;
   may: string[];
   hold: string[];
+  /** What only a follow-up run may add to `may` (0.69.0); empty when the policy sets none. */
+  follow_up_may: string[];
 }
 
 /** Two `hold` lists overlap when the shorter one has at least this many patterns ... */
@@ -796,14 +829,14 @@ export function byCodeUnit(a: string, b: string): number {
 
 /** The effective mode, on_hold, may and hold of `ritual`, each list sorted by code unit. Two forms of one policy give the same view. */
 export function resolvedPolicy(ritual: RepoRitual): ResolvedView {
-  const { mode, may, hold, on_hold: onHold } = ritual.policy;
-  return { mode, on_hold: onHold ?? "stop", may: may.toSorted(byCodeUnit), hold: hold.toSorted(byCodeUnit) };
+  const { mode, may, hold, on_hold: onHold, follow_up_may: followUpMay } = ritual.policy;
+  return { mode, on_hold: onHold ?? "stop", may: may.toSorted(byCodeUnit), hold: hold.toSorted(byCodeUnit), follow_up_may: (followUpMay ?? []).toSorted(byCodeUnit) };
 }
 
 /**
  * The resolved view as plain lines: `mode: <mode>`, `on_hold: deny` when
- * set (the default "stop" prints nothing), then `may: <rule>` and
- * `hold: <pattern>`, one per line.
+ * set (the default "stop" prints nothing), then `may: <rule>`,
+ * `hold: <pattern>` and `follow_up_may: <rule>`, one per line.
  */
 export function resolvedLines(view: ResolvedView): string[] {
   return [
@@ -811,5 +844,6 @@ export function resolvedLines(view: ResolvedView): string[] {
     ...(view.on_hold === "deny" ? ["on_hold: deny"] : []),
     ...view.may.map((rule) => `may: ${rule}`),
     ...view.hold.map((pattern) => `hold: ${pattern}`),
+    ...view.follow_up_may.map((rule) => `follow_up_may: ${rule}`),
   ];
 }

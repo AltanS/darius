@@ -109,10 +109,12 @@ function ritualTable(ritual: Ritual, skill: string): string {
   if (policy.profile !== undefined) lines.push(`profile = ${tomlString(policy.profile)}`);
   if (policy.model !== undefined) lines.push(`model = ${tomlString(policy.model)}`);
   if (policy.max_turns !== undefined) lines.push(`max_turns = ${String(policy.max_turns)}`);
+  if (ritual.follow_up !== undefined) lines.push(`follow_up = ${tomlString(ritual.follow_up)}`);
   lines.push(`mode = ${tomlString(policy.mode)}`);
   lines.push(...listLines("may", policy.may, tomlString));
   lines.push(...listLines("hold", policy.hold, tomlLiteral));
   if (policy.on_hold !== undefined) lines.push(`on_hold = ${tomlString(policy.on_hold)}`);
+  lines.push(...listLines("follow_up_may", policy.follow_up_may ?? [], tomlString));
   if (policy.notes !== undefined && policy.notes !== "") lines.push(`notes = ${tomlText(policy.notes)}`);
   return lines.join("\n");
 }
