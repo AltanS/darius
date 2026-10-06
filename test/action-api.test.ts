@@ -11,14 +11,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
-import { actionApi, findingApi, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { actionApi, findingApi, followUpArgv, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -39,30 +39,48 @@ const READY: FollowUpReadiness = {
   ready: true,
   host: "host-a",
   profile: "opus-skip",
+  surface: "herdr",
   questions: [
     { n: 1, commands: ["pnpm -C tools cli fc --post 12 --confirm"] },
     { n: 3, commands: ["git push origin main"] },
   ],
+  items: [
+    { key: "post-12/title", title: "Title misses the query" },
+    { key: "it's $(odd) `key` \\", title: "A key with shell characters" },
+  ],
 };
+
+const CHILD = "01JCHILD000000000000000000";
 
 interface Started {
   argv: readonly string[];
   log: string;
 }
 
-/** Stubs that record what would start, with the readiness given. */
-function deps(readiness: FollowUpReadiness): ActionDeps & { started: Started[]; asked: string[] } {
+/** What the stub CLI does once started: the lines it writes to the log, and its exit code (undefined: still running). */
+interface Script {
+  output: string;
+  code?: number | null;
+}
+
+const STARTS: Script = { output: `darius run follow-up: started run ${CHILD} on host-a\n` };
+
+/** Stubs that record what would start, with the readiness given; the started CLI follows `script`. */
+function deps(readiness: FollowUpReadiness, script: Script = STARTS): ActionDeps & { started: Started[]; asked: string[] } {
   const started: Started[] = [];
   const asked: string[] = [];
   return {
     started,
     asked,
+    waitMs: 300,
     readiness: (project, run) => {
       asked.push(`${project}/${run}`);
       return Promise.resolve(readiness);
     },
     start: (argv, log) => {
       started.push({ argv, log });
+      appendFileSync(log, script.output);
+      return { exited: script.code === undefined ? new Promise(() => undefined) : Promise.resolve(script.code) };
     },
     // The follow-up tests start no CLI that waits; a call here is a bug in the test.
     run: () => Promise.reject(new Error("the follow-up must not run the CLI and wait")),
@@ -121,8 +139,16 @@ test("a wrong project or run is 400, and so is a body that is not question numbe
     [{ ...VALID, project: "../etc" }, /project must be a project name/u],
     [{ ...VALID, run: "01JNOSUCHRUN0000000000000A" }, /no run 01JNOSUCHRUN0000000000000A in demo/u],
     [{ ...VALID, run: "../../x" }, /run must be a run id/u],
-    [{ ...VALID, approve: [] }, /approve question numbers, or give a note with the operator's decision/u],
-    [{ ...VALID, approve: [], note: " \n " }, /approve question numbers, or give a note with the operator's decision/u],
+    [{ ...VALID, approve: [] }, /approve question numbers or proposals, or give a note with the operator's decision/u],
+    [{ ...VALID, approve: [], note: " \n " }, /approve question numbers or proposals, or give a note with the operator's decision/u],
+    [{ ...VALID, items: [] }, /items must list 1 to 20 item keys/u],
+    [{ ...VALID, items: "post-12/title" }, /items must list 1 to 20 item keys/u],
+    [{ ...VALID, items: Array.from({ length: 21 }, (_, n) => `k${String(n)}`) }, /items must list 1 to 20 item keys/u],
+    [{ ...VALID, items: [7] }, /each key is one line of plain text, at most 120 characters/u],
+    [{ ...VALID, items: [" "] }, /each key is one line of plain text/u],
+    [{ ...VALID, items: ["a\nb"] }, /each key is one line of plain text/u],
+    [{ ...VALID, items: ["k".repeat(121)] }, /at most 120 characters/u],
+    [{ ...VALID, items: ["post-12/title", "post-12/title"] }, /the key 'post-12\/title' is given twice/u],
     [{ project: PROJECT, run: RUN }, /approve must list question numbers/u],
     [{ ...VALID, approve: "1" }, /approve must list question numbers/u],
     [{ ...VALID, approve: [0] }, /approve must list question numbers/u],
@@ -181,11 +207,11 @@ test("not ready here: 409 with the reason, nothing starts", async () => {
   assert.deepEqual(stub.started, []);
 });
 
-test("ready: it starts run follow-up detached with the approved numbers, the note and the viewer, and answers pending", async () => {
+test("ready: it starts run follow-up detached with the approved numbers, the note and the viewer, and answers with the new run", async () => {
   const stub = deps(READY);
   const answer = await actionApi(post({ ...VALID, approve: [3, 1, 3], note: "  push it\nnow " }), { who: "owner on phone" }, stub);
   assert.equal(answer.status, 202);
-  assert.deepEqual(answer.body, { ok: true, pending: true });
+  assert.deepEqual(answer.body, { ok: true, run: CHILD, host: "host-a" });
   assert.equal(stub.started.length, 1);
   const [started] = stub.started;
   assert.deepEqual(started?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "3", "--approve", "1", "--note", "push it now", "--who", "web:owner on phone"]);
@@ -197,7 +223,7 @@ test("ready: it starts run follow-up detached with the approved numbers, the not
 });
 
 test("decision follow-up: approve [] with a note starts the CLI with --note and no --approve (0.65.0)", async () => {
-  const stub = deps({ ready: true, host: "host-a", profile: "opus-skip", questions: [] });
+  const stub = deps({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [], items: [] });
   const answer = await actionApi(post({ ...VALID, approve: [], note: "  fix the five\nposts " }), { who: "owner" }, stub);
   assert.equal(answer.status, 202);
   assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--note", "fix the five posts", "--who", "web:owner"]);
@@ -206,6 +232,75 @@ test("decision follow-up: approve [] with a note starts the CLI with --note and 
   assert.equal(noNote.status, 400, "neither numbers nor a note is refused");
   const grant = await actionApi(post({ ...VALID, approve: [], note: "x", grant: ["date"] }), { who: "owner" }, stub);
   assert.equal(grant.status, 400, "the key allowlist stands");
+});
+
+// --- approve proposals by key, forward, wait for the outcome (0.69.0) -------------------------
+
+test("items: approved keys go to the CLI as --item words, after the numbers, never through a shell", async () => {
+  const stub = deps(READY);
+  const odd = "it's $(odd) `key` \\";
+  const answer = await actionApi(post({ ...VALID, approve: [], items: ["post-12/title", odd] }), { who: "owner" }, stub);
+  assert.equal(answer.status, 202, JSON.stringify(answer.body));
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--item", "post-12/title", "--item", odd, "--who", "web:owner"]);
+  const both = deps(READY);
+  await actionApi(post({ ...VALID, approve: [1], items: ["post-12/title"], note: "go" }), { who: "owner" }, both);
+  assert.deepEqual(both.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "1", "--item", "post-12/title", "--note", "go", "--who", "web:owner"]);
+});
+
+test("items: a key that is not an approvable item of the parent is 400 with a sentence, and nothing starts", async () => {
+  const stub = deps(READY);
+  const answer = await actionApi(post({ ...VALID, approve: [], items: ["post-99/title"] }), { who: "owner" }, stub);
+  assert.equal(answer.status, 400);
+  assert.equal(errorOf(answer.body), `run ${RUN} has no needs-decision item with the key 'post-99/title' to approve`);
+  assert.deepEqual(stub.started, []);
+});
+
+test("forwarded: when readiness ran on the ritual's host, the CLI gets --on <host> last", async () => {
+  const stub = deps({ ...READY, host: "minibuch", via: "host-a" }, { output: `darius run follow-up: started run ${CHILD} on minibuch\n` });
+  const note = `it's "done"; $(rm -rf ~) \`id\` \\`;
+  const answer = await actionApi(post({ ...VALID, items: ["post-12/title"], note }), { who: "owner" }, stub);
+  assert.deepEqual(answer, { status: 202, body: { ok: true, run: CHILD, host: "minibuch" } });
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "1", "--item", "post-12/title", "--note", note, "--who", "web:owner", "--on", "minibuch"]);
+  assert.deepEqual(followUpArgv({ project: "p", run: "r", approve: [], items: [], note: "n" }, { who: "w" }, undefined), ["run", "follow-up", "r", "--project", "p", "--note", "n", "--who", "web:w"], "no --on for this host");
+});
+
+test("outcome: a refusal or a skip is 409 with the CLI's sentence; an ssh failure is 503; nothing comes in time is 202 pending with a message", async () => {
+  const cases: [Script, number, RegExp][] = [
+    [{ output: "! follow-up 01X of run 'R' is still open; finish it first\n", code: 1 }, 409, /^follow-up 01X of run 'R' is still open; finish it first$/u],
+    [{ output: "heartbeat: skipped\ndarius run follow-up: lease-held: host-b holds the lease\n", code: 1 }, 409, /^lease-held: host-b holds the lease$/u],
+    [{ output: "darius: run follow-up: item 'k' of run 'R' is fixed; only a needs-decision item can be approved\n", code: 2 }, 409, /^run follow-up: item 'k' of run 'R' is fixed/u],
+    [{ output: "ssh: connect to host minibuch port 22: No route to host\n", code: 255 }, 503, /^host-a did not answer: ssh: connect to host minibuch port 22: No route to host$/u],
+    [{ output: "", code: 0 }, 409, /ended without starting a run/u],
+  ];
+  for (const [script, status, reason] of cases) {
+    const answer = await actionApi(post(VALID), { who: "owner" }, deps(READY, script));
+    assert.equal(answer.status, status, script.output);
+    assert.match(errorOf(answer.body), reason, script.output);
+  }
+  const slow = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "" }));
+  assert.equal(slow.status, 202);
+  assert.ok(isRecord(slow.body) && slow.body.pending === true && isText(slow.body.message) && /did not start within 10 s/u.test(slow.body.message), JSON.stringify(slow.body));
+});
+
+test("outcome: the wait reads only what this start wrote, and a started line before the exit wins", async () => {
+  const dir = mkdtempSync(join(sandbox, "outcome-"));
+  const log = join(dir, "follow-up.log");
+  writeFileSync(log, `darius run follow-up: started run ${"01JOLDRUN0000000000000000A"} on host-a\n`);
+  const offset = Buffer.byteLength(`darius run follow-up: started run ${"01JOLDRUN0000000000000000A"} on host-a\n`);
+  appendFileSync(log, "! run 'R' ended failed; a follow-up needs a complete run\n");
+  assert.deepEqual(await waitForOutcome({ exited: Promise.resolve(1) }, { log, offset, waitMs: 500 }), { ended: 1, sentence: "run 'R' ended failed; a follow-up needs a complete run" });
+  appendFileSync(log, `darius run follow-up: started run ${CHILD} on host-a\n`);
+  assert.deepEqual(await waitForOutcome({ exited: Promise.resolve(0) }, { log, offset, waitMs: 500 }), { started: CHILD, host: "host-a" });
+});
+
+test("the real starter: the CLI runs detached with argv as given, and its exit code comes back", async () => {
+  const dir = mkdtempSync(join(sandbox, "starter-"));
+  const log = join(dir, "follow-up.log");
+  const started = startDetachedFollowUp(["run", "follow-up", "01JNORUN00000000000000000A", "--project", "nope-project", "--note", "it's $(id)"], log);
+  const code = await started.exited;
+  assert.notEqual(code, 0);
+  const outcome = await waitForOutcome({ exited: Promise.resolve(code) }, { log, offset: 0, waitMs: 500 });
+  assert.ok("ended" in outcome && outcome.sentence !== "", JSON.stringify(outcome));
 });
 
 // --- close a finding (0.62.0) --------------------------------------------------------------

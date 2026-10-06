@@ -597,21 +597,41 @@ export interface FollowUpQuestion {
   commands: string[];
 }
 
+/** A needs-decision item a follow-up may approve by its key (0.69.0). */
+export interface FollowUpItem {
+  key: string;
+  title: string;
+}
+
 /**
- * Whether this host can start a follow-up of a run from the run page
- * (0.48.0). Ready means the checks of `darius run follow-up` pass here now:
- * the run, the ritual, the checkout, the profile and herdr. `reason` says
+ * Whether a follow-up of a run can start from the run page (0.48.0). Ready
+ * means the checks of `darius run follow-up` pass now on `host`: the run,
+ * the ritual, the checkout, the profile and herdr. Since 0.69.0 `host` may
+ * be the ritual's host while the page is on another: then `via` names this
+ * host, and the server starts the follow-up there over ssh. `reason` says
  * what is off, in one line. The server checks again on the POST.
  */
 export type FollowUpReadiness =
-  | { ready: true; host: string; profile: string; questions: FollowUpQuestion[] }
+  | {
+      ready: true;
+      /** Where the follow-up starts. */
+      host: string;
+      /** This host, when the follow-up starts on `host` over ssh (0.69.0). */
+      via?: string;
+      profile: string;
+      /** How it runs (0.69.0): headless, or attended in a herdr tab. */
+      surface: "headless" | "herdr";
+      questions: FollowUpQuestion[];
+      /** The needs-decision items with a key the operator may approve (0.69.0). */
+      items: FollowUpItem[];
+    }
   | {
       ready: false;
       host: string;
       reason: string;
       /** The ritual's host when it is another one (0.50.0): its pin, or where its checkout is linked. */
       rightHost?: string;
-      /** The command to type for the follow-up there: `ssh <rightHost> darius run follow-up ...`. */
+      /** The command to type for the follow-up there; since 0.69.0 the page forwards and leaves it out. */
       command?: string;
     };
 

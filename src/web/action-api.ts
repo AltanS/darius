@@ -1,19 +1,32 @@
 /**
  * The run page's actions (0.48.0; docs/concept.md, "Follow-up runs"):
  *
- *   POST /api/run/follow-up   body { project, run, approve: [N, ...], note? }
- *                             (approve may be [] when the note carries the operator's decision, 0.65.0)
- *                             202 { ok: true, pending: true } | { ok: false, error }
+ *   POST /api/run/follow-up   body { project, run, approve: [N, ...], items?: [KEY, ...], note? }
+ *                             (approve may be [] when items or the note carry the decision, 0.65.0, 0.69.0)
+ *                             202 { ok: true, run, host } | 202 { ok: true, pending: true, message }
+ *                             | 409 or 503 { ok: false, error }
  *
- * It starts `darius run follow-up <run> --approve N ... --who "web:<who>"`
- * as a detached process, with its output in `runs/<run>/follow-up.log`, and
- * answers at once; the page reloads to see the new run. `darius serve`
- * calls it only after its access check.
+ * It starts `darius run follow-up <run> --approve N ... --item KEY ... --who
+ * "web:<who>"` as a detached process, with its output in
+ * `runs/<run>/follow-up.log`. Since 0.69.0 it then waits up to
+ * OUTCOME_WAIT_MS for the CLI's "started run <id>" line, or for the CLI to
+ * end: 202 names the new run, 409 carries the CLI's refusal or skip
+ * sentence (lease held, open run, wrong state), 503 says ssh failed. Only
+ * when neither came in time is it 202 with `pending` and a message that
+ * says so; the answer is never silent. `darius serve` calls it only after
+ * its access check.
  *
- * The body names question numbers only. A grant line never comes from the
- * page: the lines are the ones the parent's result lists, and a body with
- * any other key (`grant`, `grants`) is refused. Before the spawn the server
- * checks again that the follow-up is ready on this host
+ * When the ritual's host is another (0.69.0), readiness ran there (src/runner/
+ * follow-up-ready.ts) and says `via`: the argv gets `--on <host>`, and the
+ * CLI's own ssh forward starts the follow-up there (src/core/ssh.ts quotes
+ * each word for that host's shell). The argv never passes through a shell
+ * here: spawn gets it as a list.
+ *
+ * The body names question numbers and item keys only. A grant line never
+ * comes from the page: the lines are the ones the parent's result lists,
+ * and a body with any other key (`grant`, `grants`) is refused. An item key
+ * must name a needs-decision item of the parent with that key. Before the
+ * spawn the server checks again that the follow-up is ready
  * (src/runner/follow-up-ready.ts), and the CLI checks once more. Like the
  * other write endpoints, a request must come from the page itself (its
  * Origin), be JSON, and be at most MAX_BODY bytes.
@@ -52,7 +65,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,7 +73,8 @@ import type { JsonValue } from "../core/model.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import { readLedger } from "../core/ledger.ts";
 import { listProjects, openProject } from "../core/store.ts";
-import { followUpReadiness } from "../runner/follow-up-ready.ts";
+import { ITEMS_MAX } from "../runner/follow-up.ts";
+import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
 import { viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
 import type { FollowUpReadiness } from "./api.ts";
@@ -76,7 +90,16 @@ const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 export const NOTE_MAX = 500;
 /** A result has at most 10 questions (src/core/result.ts). */
 const APPROVE_MAX = 10;
-const BODY_KEYS: ReadonlySet<string> = new Set(["project", "run", "approve", "note"]);
+const BODY_KEYS: ReadonlySet<string> = new Set(["project", "run", "approve", "items", "note"]);
+/** An item key a run gave has at most 120 characters (src/core/result.ts, KEY_MAX). */
+const ITEM_KEY_MAX = 120;
+/** How long the POST waits for the follow-up to start or end (0.69.0). */
+export const OUTCOME_WAIT_MS = 10_000;
+const OUTCOME_POLL_MS = 100;
+/** The stderr line of `darius run follow-up` once the run started (src/cli/run-due.ts, STARTED_PREFIX). */
+const STARTED_LINE = /^darius run follow-up: started run ([0-9A-Z]{26}) on (\S+)$/mu;
+/** ssh exits 255 when it cannot connect (src/core/ssh.ts). */
+const SSH_EXIT = 255;
 const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const RUN_ID = /^[0-9A-Za-z]{1,64}$/u;
 
@@ -126,17 +149,30 @@ export const runCli: CliRunner = (argv) =>
     });
   });
 
+/** A started follow-up process: `exited` settles with its exit code, null when it could not start or a signal ended it. */
+export interface StartedFollowUp {
+  exited: Promise<number | null>;
+}
+
 /** Starts the CLI with `argv`, detached, its output appended to `log`. */
-export type FollowUpStarter = (argv: readonly string[], log: string) => void;
+export type FollowUpStarter = (argv: readonly string[], log: string) => StartedFollowUp;
 
 export const startDetachedFollowUp: FollowUpStarter = (argv, log) => {
   const fd = openSync(log, "a", 0o600);
   try {
+    // No shell: the operator's note and the item keys reach the CLI as argv words, as they are.
     const child = spawn(CLI, [...argv], { detached: true, stdio: ["ignore", fd, fd] });
-    child.on("error", (cause) => {
-      console.error(`darius serve: could not start a follow-up: ${errorMessage(cause)}`);
+    const exited = new Promise<number | null>((resolve) => {
+      child.on("error", (cause) => {
+        console.error(`darius serve: could not start a follow-up: ${errorMessage(cause)}`);
+        resolve(null);
+      });
+      child.on("exit", (code) => {
+        resolve(code);
+      });
     });
     child.unref();
+    return { exited };
   } finally {
     closeSync(fd);
   }
@@ -148,6 +184,8 @@ export interface ActionDeps {
   start: FollowUpStarter;
   /** Runs the CLI and waits: the acknowledgement. */
   run: CliRunner;
+  /** How long the follow-up POST waits for the outcome; OUTCOME_WAIT_MS when absent. Tests shorten it. */
+  waitMs?: number;
 }
 
 /** Who the access check let in: `local` is the loopback caller, "this host". */
@@ -191,11 +229,26 @@ function isCount(value: JsonValue): value is number {
 }
 
 /** A request the endpoint can act on, or why not. */
-type FollowUpBody = { project: string; run: string; approve: number[]; note?: string } | { error: string };
+type FollowUpBody = { project: string; run: string; approve: number[]; items: string[]; note?: string } | { error: string };
 
-/** Checks the body's shape: known keys only, names that are names, numbers that are question numbers, a short note. */
+/** `items` of the body (0.69.0): absent, or 1 to ITEMS_MAX distinct item keys, each one plain line. */
+function readItems(value: JsonValue | undefined): string[] | { error: string } {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length === 0 || value.length > ITEMS_MAX) return { error: `items must list 1 to ${String(ITEMS_MAX)} item keys` };
+  const keys: string[] = [];
+  for (const key of value) {
+    if (!isText(key) || key.trim() === "" || [...key].length > ITEM_KEY_MAX || /\p{Cc}/u.test(key)) {
+      return { error: `items: each key is one line of plain text, at most ${String(ITEM_KEY_MAX)} characters` };
+    }
+    if (keys.includes(key)) return { error: `items: the key '${key.slice(0, 80)}' is given twice` };
+    keys.push(key);
+  }
+  return keys;
+}
+
+/** Checks the body's shape: known keys only, names that are names, numbers that are question numbers, item keys, a short note. */
 function readBody(parsed: JsonValue): FollowUpBody {
-  if (!isRecord(parsed)) return { error: "send { project, run, approve: [N], note? }" };
+  if (!isRecord(parsed)) return { error: "send { project, run, approve: [N], items?: [KEY], note? }" };
   const extra = Object.keys(parsed).find((key) => !BODY_KEYS.has(key));
   if (extra !== undefined) {
     return { error: `unknown field ${extra.slice(0, 40)}; the page approves question numbers only, and grant lines are for darius run follow-up on the command line` };
@@ -207,14 +260,17 @@ function readBody(parsed: JsonValue): FollowUpBody {
     return { error: `approve must list question numbers, 1 to ${String(APPROVE_MAX)}` };
   }
   const numbers = [...new Set(approve.filter((n) => isCount(n)))];
-  const noDecision = { error: "approve question numbers, or give a note with the operator's decision" };
-  if (note === undefined || note === null) return numbers.length === 0 ? noDecision : { project, run, approve: numbers };
+  const items = readItems(parsed.items);
+  if ("error" in items) return items;
+  const noDecision = { error: "approve question numbers or proposals, or give a note with the operator's decision" };
+  const isEmpty = numbers.length === 0 && items.length === 0;
+  if (note === undefined || note === null) return isEmpty ? noDecision : { project, run, approve: numbers, items };
   if (!isText(note)) return { error: "note must be text" };
   const line = note.replaceAll(/\s+/gu, " ").trim();
   if (/\p{Cc}/u.test(line)) return { error: "note: plain text only, no control characters" };
   if ([...line].length > NOTE_MAX) return { error: `note: at most ${String(NOTE_MAX)} characters` };
-  if (line === "") return numbers.length === 0 ? noDecision : { project, run, approve: numbers };
-  return { project, run, approve: numbers, note: line };
+  if (line === "") return isEmpty ? noDecision : { project, run, approve: numbers, items };
+  return { project, run, approve: numbers, items, note: line };
 }
 
 /** What the shared guards found: a reply that ends the request, or the JSON body to check further. */
@@ -253,18 +309,85 @@ async function startFollowUp(request: ActionRequest, viewer: ActionViewer, deps:
   const known = new Set(ready.questions.map((question) => question.n));
   const unknown = body.approve.find((n) => !known.has(n));
   if (unknown !== undefined) return fail(400, `question ${String(unknown)} lists no commands to approve`);
-  const argv = ["run", "follow-up", body.run, "--project", body.project];
-  for (const n of body.approve) argv.push("--approve", String(n));
-  if (body.note !== undefined) argv.push("--note", body.note);
-  argv.push("--who", `web:${viewer.who}`);
+  const keys = new Set(ready.items.map((item) => item.key));
+  const missing = body.items.find((key) => !keys.has(key));
+  if (missing !== undefined) return fail(400, `run ${body.run} has no needs-decision item with the key '${missing.slice(0, 80)}' to approve`);
+  const argv = followUpArgv(body, viewer, ready.via === undefined ? undefined : ready.host);
   const dir = join(openProject(body.project).root, "runs", body.run);
+  const log = join(dir, "follow-up.log");
+  let started: StartedFollowUp;
+  let offset: number;
   try {
     mkdirSync(dir, { recursive: true });
-    deps.start(argv, join(dir, "follow-up.log"));
+    offset = existsSync(log) ? statSync(log).size : 0;
+    started = deps.start(argv, log);
   } catch (cause) {
     return fail(500, `the follow-up could not be started: ${errorMessage(cause)}`);
   }
-  return { status: 202, body: { ok: true, pending: true } };
+  return outcomeReply(await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS }), ready.host);
+}
+
+/**
+ * The argv of the follow-up: the verb, the approved question numbers and
+ * item keys, the note, who, and `--on <host>` when it starts on the ritual's
+ * host (0.69.0). Every value is one argv word, never a shell string.
+ */
+export function followUpArgv(body: { project: string; run: string; approve: readonly number[]; items: readonly string[]; note?: string }, viewer: ActionViewer, on: string | undefined): string[] {
+  const argv = ["run", "follow-up", body.run, "--project", body.project];
+  for (const n of body.approve) argv.push("--approve", String(n));
+  for (const key of body.items) argv.push("--item", key);
+  if (body.note !== undefined) argv.push("--note", body.note);
+  argv.push("--who", `web:${viewer.who}`);
+  if (on !== undefined) argv.push("--on", on);
+  return argv;
+}
+
+/** What the follow-up did within the wait: started a run, ended without one, or neither yet. */
+export type FollowUpOutcome = { started: string; host: string } | { ended: number | null; sentence: string } | { pending: true };
+
+/** The log text written since `offset`. */
+function logSince(log: string, offset: number): string {
+  try {
+    return readFileSync(log).subarray(offset).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Waits for the CLI's "started run" line in the log, or for the CLI to end,
+ * at most `waitMs`. A line that came before the end wins: a run that
+ * started and ended fast still started.
+ */
+export async function waitForOutcome(started: StartedFollowUp, at: { log: string; offset: number; waitMs: number }): Promise<FollowUpOutcome> {
+  const settled = started.exited.then((code) => ({ code }));
+  const deadline = Date.now() + at.waitMs;
+  let ended: { code: number | null } | null = null;
+  for (;;) {
+    const output = logSince(at.log, at.offset);
+    const line = STARTED_LINE.exec(output);
+    if (line !== null) return { started: line[1] ?? "", host: line[2] ?? "" };
+    if (ended !== null) return { ended: ended.code, sentence: lastSentence(output) };
+    if (Date.now() >= deadline) return { pending: true };
+    const pause = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), OUTCOME_POLL_MS);
+    });
+    ended = await Promise.race([settled, pause]);
+  }
+}
+
+/** The answer for an outcome: 202 with the run, 409 or 503 with the CLI's sentence, or 202 pending with a message. */
+function outcomeReply(outcome: FollowUpOutcome, host: string): PushApiReply {
+  if ("started" in outcome) return { status: 202, body: { ok: true, run: outcome.started, host: outcome.host } };
+  if ("pending" in outcome) {
+    const message = `The follow-up did not start within ${String(OUTCOME_WAIT_MS / 1000)} s and may still start on ${host}. Its output is in runs/<run>/follow-up.log on this host.`;
+    return { status: 202, body: { ok: true, pending: true, message } };
+  }
+  const isSsh = outcome.ended === SSH_EXIT || outcome.ended === null;
+  const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
+  if (isSsh) return fail(503, `${host} did not answer: ${sentence}`);
+  if (outcome.ended === 0) return fail(409, `the follow-up ended without starting a run: ${sentence}`);
+  return fail(409, sentence);
 }
 
 // --- acknowledge a run (0.68.0) ------------------------------------------------------------
