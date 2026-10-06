@@ -16,6 +16,10 @@
  *                            src/web/action-api.ts)
  *   POST /api/finding/close  the findings page's close button (0.62.0,
  *                            src/web/action-api.ts)
+ *   GET /api/workspace-icon/<project>
+ *                            the image icon a project's marker names
+ *                            (0.70.0, src/web/workspace-icon.ts); 404 for
+ *                            anything that is not a checked image
  *   GET <file>               a file of the built app (web/build/client)
  *   GET anything else        the web app (web/, React Router framework
  *                            mode): darius imports its committed server
@@ -54,6 +58,7 @@ import { plainPage, renderForbidden } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
 import { collectStatus } from "../web/status.ts";
+import { WORKSPACE_ICON_PREFIX, workspaceIconReply } from "../web/workspace-icon.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -244,6 +249,8 @@ export async function respond(method: string, url: URL, requestHeaders: Headers,
   const path = url.pathname;
   if (path === "/healthz") return reply(200, "text/plain", "ok\n");
   if (path === "/api/status.json") return reply(200, "application/json", `${JSON.stringify(collectStatus())}\n`, "default-src 'none'");
+  // The path names the project only; the file comes from its marker (src/web/workspace-icon.ts).
+  if (path.startsWith(WORKSPACE_ICON_PREFIX)) return workspaceIconReply(path, requestHeaders.get("if-none-match"));
   const file = staticFile(app.build, path);
   if (file !== null) return fileReply(file, path);
   const loaded = await app.load();

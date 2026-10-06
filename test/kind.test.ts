@@ -44,7 +44,7 @@ test("each kind has its own word", () => {
 
 test("the activity rows carry the kind of their item", () => {
   const runs = [run("ritual/auto", "2026-09-30T01:00:00Z"), run("ritual/hand", "2026-09-30T02:00:00Z"), run("vigil/soak", "2026-09-30T03:00:00Z")];
-  const project: ProjectStatus = { name: "p", checkout: null, maxMode: null, lastSync: null, rituals: [ritual("auto"), ritual("hand", { mode: "off" })], runs, vigils: [], milestones: [], milestonesArchived: 0, error: null };
+  const project: ProjectStatus = { name: "p", icon: null, checkout: null, maxMode: null, lastSync: null, rituals: [ritual("auto"), ritual("hand", { mode: "off" })], runs, vigils: [], milestones: [], milestonesArchived: 0, error: null };
   const kinds = Object.fromEntries(activity([project], { withImported: true }).map((row) => [row.slug, [row.kind, row.manual]]));
   assert.deepEqual(kinds, { auto: ["ritual", false], hand: ["ritual", true], soak: ["vigil", false] });
 });

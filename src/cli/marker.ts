@@ -12,10 +12,13 @@
  * the exit code: a policy no ritual names, a v3 marker with no rituals, two
  * rituals whose resolved `hold` lists mostly overlap (factor them into a
  * `[policies.<name>]` with `hold_extra`), and a `notes` text over 300
- * characters (procedure belongs in the skill, rules in `hold`).
+ * characters (procedure belongs in the skill, rules in `hold`). A root
+ * `icon` prints an `icon:` line (`icon` in the JSON); an image `icon` whose
+ * file is missing here or is not a valid image is a warning, because the web
+ * then shows no icon (src/web/workspace-icon.ts holds the file rules).
  *
- * The parser never touches the file system; the skill-file check lives here
- * (and in run-due's preflight).
+ * The parser never touches the file system; the skill-file and icon-file
+ * checks live here (and in run-due's preflight and the web).
  *
  * `--resolved <slug>` prints the effective policy of one ritual instead: the
  * policy it names plus its `may_extra` and `hold_extra`, which is what a run
@@ -37,11 +40,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { findMarker, holdOverlap, MARKER_FILE, shellOperatorIn, readMarker, resolvedLines, resolvedPolicy, type Marker, type ResolvedView } from "../core/marker.ts";
+import { findMarker, holdOverlap, MARKER_FILE, shellOperatorIn, readMarker, resolvedLines, resolvedPolicy, type Marker, type MarkerIcon, type ResolvedView } from "../core/marker.ts";
 import { planFactor, type FactorGroup } from "../core/marker-factor.ts";
 import { markerDirty } from "../core/reconcile.ts";
 import { unifiedDiff } from "../core/text-diff.ts";
 import { errorMessage } from "../runtime.ts";
+import { readWorkspaceIcon } from "../web/workspace-icon.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 import { atomicWrite } from "./ritual-export.ts";
 
@@ -52,6 +56,8 @@ interface CheckReport {
   file?: string;
   version?: number;
   kinds?: readonly string[];
+  /** The root `icon` as parsed, when the marker has one. */
+  icon?: MarkerIcon;
   rituals?: number;
   policies?: number;
   errors: string[];
@@ -127,10 +133,19 @@ function operatorWarnings(marker: Marker): string[] {
   return warnings;
 }
 
+/** A warning when an image `icon` does not resolve to a valid image file in this checkout: the web then shows none. */
+function iconWarnings(marker: Marker): string[] {
+  const { icon } = marker;
+  if (icon?.kind !== "image") return [];
+  const read = readWorkspaceIcon(marker.dir, icon.path);
+  return read.ok ? [] : [`icon "${icon.path}": ${read.reason}; the web shows no icon`];
+}
+
 /** The warnings for a parsed marker. */
 function warningsFor(marker: Marker): string[] {
   const warnings: string[] = [];
   if (marker.version !== 3) return warnings;
+  warnings.push(...iconWarnings(marker));
   if (marker.rituals.length === 0) warnings.push("no [rituals.<slug>] tables: this v3 marker defines no rituals");
   const used = new Set(marker.rituals.map((ritual) => ritual.policyName));
   for (const name of Object.keys(marker.policies)) {
@@ -166,6 +181,7 @@ function check(dir: string | undefined): CheckReport {
   report.file = marker.file;
   report.version = marker.version;
   report.kinds = marker.kinds;
+  if (marker.icon !== undefined) report.icon = marker.icon;
   report.rituals = marker.rituals.length;
   report.policies = Object.keys(marker.policies).length;
   report.errors = skillErrorsFor(marker);
@@ -181,6 +197,7 @@ function printReport(report: CheckReport): void {
   const counts = report.version === 3 ? `, ${String(report.rituals)} rituals, ${String(report.policies)} policies` : "";
   console.log(`ok: v${String(report.version)}${counts}`);
   if (report.kinds !== undefined) console.log(`kinds: ${report.kinds.join(", ")}`);
+  if (report.icon !== undefined) console.log(`icon: ${report.icon.kind === "emoji" ? report.icon.text : `${report.icon.path} (image)`}`);
 }
 
 /** What `--resolved <slug> --json` prints. */

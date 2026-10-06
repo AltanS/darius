@@ -371,3 +371,30 @@ test("marker check --resolved lists follow_up_may, in text and JSON (0.69.0)", a
   const json = JSON.parse((await runCli(markerCommand, ["check", dir, "--resolved", "daily", "--json"])).stdout);
   assert.deepEqual(json.follow_up_may, ["Bash(a *)", "Bash(b *)"]);
 });
+
+test("marker check shows an icon, in text and in --json (0.70.0)", async () => {
+  const dir = checkout('v = 3\nproject = "acme-web"\ntz = "UTC"\nicon = "🎯"\n');
+  const text = await runCli(markerCommand, ["check", dir]);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /^icon: 🎯$/mu);
+  assert.doesNotMatch(text.stdout, /warning: icon/u);
+  assert.deepEqual(JSON.parse((await runCli(markerCommand, ["check", dir, "--json"])).stdout).icon, { kind: "emoji", text: "🎯" });
+  const none = JSON.parse((await runCli(markerCommand, ["check", checkout('v = 3\nproject = "acme-web"\ntz = "UTC"\n'), "--json"])).stdout);
+  assert.equal(none.icon, undefined);
+});
+
+test("marker check warns when an image icon is missing or not an image here, and exits 0 (0.70.0)", async () => {
+  const dir = checkout('v = 3\nproject = "acme-web"\ntz = "UTC"\nicon = "assets/logo.svg"\n');
+  const missing = await runCli(markerCommand, ["check", dir]);
+  assert.equal(missing.code, 0, missing.stderr);
+  assert.match(missing.stdout, /^icon: assets\/logo\.svg \(image\)$/mu);
+  assert.match(missing.stdout, /^warning: icon "assets\/logo\.svg": the icon file cannot be found: .*; the web shows no icon$/mu);
+  mkdirSync(join(dir, "assets"));
+  writeFileSync(join(dir, "assets", "logo.svg"), "not an image\n");
+  assert.match((await runCli(markerCommand, ["check", dir])).stdout, /^warning: icon "assets\/logo\.svg": the icon file is not a PNG, WebP or SVG image; the web shows no icon$/mu);
+  writeFileSync(join(dir, "assets", "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>\n');
+  const valid = await runCli(markerCommand, ["check", dir, "--json"]);
+  const report = JSON.parse(valid.stdout);
+  assert.deepEqual(report.icon, { kind: "image", path: "assets/logo.svg" });
+  assert.deepEqual(report.warnings, ["no [rituals.<slug>] tables: this v3 marker defines no rituals"]);
+});

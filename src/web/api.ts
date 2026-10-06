@@ -332,8 +332,18 @@ export interface MilestoneRow {
   specs: SpecRow[];
 }
 
+/**
+ * A workspace's icon (0.70.0), from the root `icon` of its v3 marker. An
+ * emoji is its text; the app draws it as text, never as HTML. An image is the
+ * app path of `GET /api/workspace-icon/<project>?v=<hash>`, whose file darius
+ * has checked; the hash changes with the file, so a cached copy is never stale.
+ */
+export type WorkspaceIcon = { kind: "emoji"; text: string } | { kind: "image"; src: string };
+
 export interface ProjectStatus {
   name: string;
+  /** The workspace icon; null with no checkout, no v3 marker, no `icon` key, or an image file that is missing or not valid. */
+  icon: WorkspaceIcon | null;
   /** This host's checkout, from `darius link`; null when the project has none here. */
   checkout: string | null;
   maxMode: string | null;

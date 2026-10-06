@@ -46,6 +46,7 @@ import type {
   VigilRow,
 } from "./api.ts";
 import { parseMarkdown } from "./markdown.ts";
+import { workspaceIconOf } from "./workspace-icon.ts";
 
 export type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow } from "./api.ts";
 
@@ -297,7 +298,7 @@ export function lastSync(name: string): string | null {
 
 function projectStatus(name: string, now: Date): ProjectStatus {
   const checkout = linkedDir(name) ?? null;
-  const status: ProjectStatus = { name, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null };
+  const status: ProjectStatus = { name, icon: null, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null };
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
@@ -311,6 +312,8 @@ function projectStatus(name: string, now: Date): ProjectStatus {
     status.milestones = tracked.milestones;
     status.milestonesArchived = tracked.milestonesArchived;
     if (checkout !== null) status.maxMode = readMarker(checkout)?.maxMode ?? null;
+    // Last, so a project darius could not read shows no icon. It never throws.
+    status.icon = workspaceIconOf(name, checkout);
   } catch (cause) {
     status.error = errorMessage(cause);
   }

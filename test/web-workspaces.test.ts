@@ -50,7 +50,7 @@ function vigil(slug: string, extra: Partial<VigilRow> = {}): VigilRow {
 }
 
 function project(name: string, rituals: RitualRow[] = [], vigils: VigilRow[] = [], extra: Partial<ProjectStatus> = {}): ProjectStatus {
-  return { name, checkout: null, maxMode: null, lastSync: null, rituals, runs: [], vigils, milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null, ...extra };
+  return { name, icon: null, checkout: null, maxMode: null, lastSync: null, rituals, runs: [], vigils, milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null, ...extra };
 }
 
 function status(projects: ProjectStatus[]): HostStatus {
