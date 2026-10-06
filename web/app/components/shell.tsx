@@ -19,6 +19,7 @@ import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
 import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
+import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import type { Kind } from "../lib/kind.ts";
 import { href, placeOf, type Place, type Section } from "../lib/paths.ts";
 import { effectiveScope, type TabCounts } from "../lib/scope.ts";
@@ -59,13 +60,17 @@ function closeDrawer(event: React.MouseEvent<HTMLButtonElement>): void {
 function TopBar({ data, scope, host, pathKey }: TopBarProps): React.ReactNode {
   // A dot when a scope other than this one needs you: another workspace, or on a host page any workspace. All workspaces already holds them all.
   const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
+  const icon = host || scope === null ? null : (data.workspaces.find((entry) => entry.name === scope)?.icon ?? null);
   return (
     <details key={pathKey} data-menu className="drawer">
       <summary className="topbar">
         <Gem size={28} />
         <span className="topbar-lab">
           <span className="topbar-cap">{host ? "Host" : "Workspace"}</span>
-          <span className="topbar-now">{host ? data.host : (scope ?? "All workspaces")}</span>
+          <span className="topbar-now">
+            <WorkspaceGlyph icon={icon} className="topbar-icon" />
+            {host ? data.host : (scope ?? "All workspaces")}
+          </span>
         </span>
         <NavIcon name="chevron" size={16} className="topbar-chev" />
         {others ? (

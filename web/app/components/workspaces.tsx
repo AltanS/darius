@@ -12,6 +12,7 @@ import type { WorkspaceRow } from "../lib/home.ts";
 import type { Badge } from "../lib/tone.ts";
 import { RowList, StateWord } from "./row.tsx";
 import { Empty, SectHead } from "./ui.tsx";
+import { WorkspaceGlyph } from "./workspace-icon.tsx";
 
 /** What a workspace says about itself: the state word and the rail tone, when it needs attention. */
 interface WorkspaceState {
@@ -35,6 +36,7 @@ function WorkspaceItem({ row }: WorkspaceItemProps): React.ReactNode {
     <li className={`rw ws-row${rail === null ? "" : ` rw-rail tone-${rail}`}`}>
       <div className="rw-main">
         <Link to={row.href} className="rw-title">
+          <WorkspaceGlyph icon={row.icon} className="ws-title-icon" />
           {row.name}
         </Link>
         <p className="rw-line">

@@ -2908,6 +2908,40 @@
     color: var(--color-gold);
   }
 
+  /* A workspace icon (0.70.0): an emoji or a checked image in the box of a nav icon, so rows with and without one line up. Plain: no frame, square corners. */
+
+  .ws-icon {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    overflow: hidden;
+  }
+
+  .ws-icon-emoji {
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    font-size: 15px;
+    font-style: normal;
+    line-height: 1;
+  }
+
+  .ws-icon-img {
+    display: inline-block;
+    object-fit: contain;
+  }
+
+  .ws-title-icon {
+    margin-right: 8px;
+    vertical-align: -3px;
+  }
+
+  .topbar-icon {
+    margin-right: 6px;
+    vertical-align: -3px;
+  }
+
   .places-need {
     flex: none;
     padding: 2px 6px;

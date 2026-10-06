@@ -31,7 +31,7 @@
  * decision.
  */
 
-import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
+import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./agenda.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
@@ -651,6 +651,13 @@ export interface WorkspaceRow {
   next: WorkspaceNext | null;
   /** The Overview of the workspace. */
   href: string;
+  /** The icon its marker names; null when it has none or is unreadable. */
+  icon: WorkspaceIcon | null;
+}
+
+/** The icon a workspace shows: none when darius could not read it, or when the status has none. */
+export function workspaceIcon(project: ProjectStatus): WorkspaceIcon | null {
+  return project.error === null ? (project.icon ?? null) : null;
 }
 
 /**
@@ -663,7 +670,7 @@ export function workspaceRows(status: HostStatus, scope: HomeScope = ALL_WORKSPA
     const needs = projectNeeds(clock, status.generatedAt, project);
     const row = project.error === null ? buildAgenda({ projects: [project], today: clock.today }).next : null;
     const next = row === null || row.date === null ? null : { title: row.title, date: row.date, when: datePhrase(clock.today, row.date) };
-    return { name: project.name, needs: needsSize(needs), unreadable: needs.unreadable, next, href: href({ to: "overview", ws: project.name }) };
+    return { name: project.name, needs: needsSize(needs), unreadable: needs.unreadable, next, href: href({ to: "overview", ws: project.name }), icon: workspaceIcon(project) };
   });
   return rows.toSorted((left, right) => right.needs - left.needs || left.name.localeCompare(right.name));
 }

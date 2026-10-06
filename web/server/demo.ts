@@ -3,7 +3,9 @@
  * state the pages draw (running, held, asks you, failed, flagged vigil,
  * overdue, dormant, no schedule, dated and event-waiting vigils), so a design change can be judged without waiting for
  * the real store to be in that state. A second, quieter project (atlas-docs)
- * gives the home page a cross-project view. Times are relative to the
+ * gives the home page a cross-project view, and a third (field-notes) is all
+ * clear. The first two have an emoji icon and the third none, so the
+ * workspace rows show both forms. Times are relative to the
  * request, so "3 min ago" stays true. Run and ritual detail pages are not
  * part of it; the milestone detail page is, for M12 of demo-shop.
  */
@@ -208,6 +210,7 @@ function project(now: number): ProjectStatus {
   ];
   return {
     name: "demo-shop",
+    icon: { kind: "emoji", text: "🛒" },
     checkout: "/home/user/projects/demo-shop",
     maxMode: "report",
     lastSync: ago(now, 2 * MINUTE),
@@ -254,6 +257,7 @@ function atlas(now: number): ProjectStatus {
   const done = run(now, "release-notes", "closed", "complete", 9 * 60 * MINUTE);
   return {
     name: "atlas-docs",
+    icon: { kind: "emoji", text: "📚" },
     checkout: "/home/user/projects/atlas-docs",
     maxMode: "report",
     lastSync: ago(now, 14 * MINUTE),
@@ -274,6 +278,25 @@ function atlas(now: number): ProjectStatus {
   };
 }
 
+/** A third project with no icon and nothing that needs you: the plain workspace row next to the two with icons. */
+function fieldNotes(now: number): ProjectStatus {
+  const done = run(now, "notes-index", "closed", "complete", 5 * 60 * MINUTE);
+  return {
+    name: "field-notes",
+    icon: null,
+    checkout: "/home/user/projects/field-notes",
+    maxMode: "report",
+    lastSync: ago(now, 6 * MINUTE),
+    error: null,
+    runs: [done],
+    rituals: [ritual("notes-index", "Notes index (djinn)", { skill: "notes-index", nextDue: day(now, 0, 1), lastCompleted: day(now, 0, 0) })],
+    vigils: [],
+    milestones: [],
+    milestonesArchived: 0,
+    findings: { needsYou: 0, open: 0 },
+  };
+}
+
 export function demoStatus(now: number = Date.now()): HostStatus {
   return {
     host: "demo",
@@ -282,7 +305,7 @@ export function demoStatus(now: number = Date.now()): HostStatus {
     today: new Date(now - new Date(now).getTimezoneOffset() * MINUTE).toISOString().slice(0, 10),
     utcOffset: -new Date(now).getTimezoneOffset(),
     profiles: [],
-    projects: [project(now), atlas(now)],
+    projects: [project(now), atlas(now), fieldNotes(now)],
   };
 }
 

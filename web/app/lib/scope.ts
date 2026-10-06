@@ -10,9 +10,9 @@
 
 import { data } from "react-router";
 
-import type { HostStatus, ProjectStatus } from "../../../src/web/api.ts";
+import type { HostStatus, ProjectStatus, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, vigilsDue } from "./agenda.ts";
-import { needCounts, scopeProjects, selftestLines, type HomeScope, type SelftestLine } from "./home.ts";
+import { needCounts, scopeProjects, selftestLines, workspaceIcon, type HomeScope, type SelftestLine } from "./home.ts";
 import type { Place } from "./paths.ts";
 import { readScopeCookie, readSettings, type Settings } from "./settings.ts";
 
@@ -87,6 +87,8 @@ export interface WorkspaceEntry {
   /** The things that need the operator here. */
   needs: number;
   tabs: TabCounts;
+  /** The icon its marker names; null when it has none or darius could not read it. */
+  icon: WorkspaceIcon | null;
 }
 
 /** The workspaces Places lists: the self-test one only when it is shown. */
@@ -96,6 +98,7 @@ export function workspaceEntries(status: HostStatus, settings: Settings, needsBy
     error: project.error !== null,
     needs: needsBy[project.name] ?? 0,
     tabs: tabCounts([project], status.today),
+    icon: workspaceIcon(project),
   }));
 }
 

@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -57,6 +57,7 @@ const STATUS: HostStatus = {
   projects: [
     {
       name: "demo",
+      icon: null,
       checkout: "/home/test/demo",
       maxMode: "report",
       lastSync: "2026-09-28T08:55:00.000Z",
@@ -1914,4 +1915,71 @@ test("the parent page shows each follow-up with its state, summary, approvals, a
   assert.match(kid, /What it reported.*Title misses the main query.*fixed/su);
   assert.ok(page.includes(`href="/w/demo/runs/${CHILD}"`));
   assert.equal(page.includes(EVIL), false);
+});
+
+// --- workspace icons (0.70.0) ------------------------------------------------------
+
+/** The context with the demo project changed: its icon, and any other field. */
+function iconContext(icon: WorkspaceIcon | null, extra: Partial<ProjectStatus> = {}): WebContext {
+  const project = STATUS.projects[0]!;
+  return { ...context, status: () => ({ ...STATUS, projects: [{ ...project, icon, ...extra }] }) };
+}
+
+async function pageWith(ctx: WebContext, path: string): Promise<string> {
+  return (await (await handler(new Request(`http://darius.test${path}`), ctx)).text()).replaceAll("<!-- -->", "");
+}
+
+/** The Places row of the demo workspace, from its link to its end. */
+function placesRow(body: string): string {
+  return /<a class="places-row places-scope[^"]*"[^>]*href="\/w\/demo"[^>]*>.*?<\/a>/su.exec(body)?.[0] ?? "";
+}
+
+test("an emoji icon is a span with aria-hidden in Places, the workspace list and the top bar; the name stays text", async () => {
+  const ctx = iconContext({ kind: "emoji", text: "🎯" });
+  const all = await pageWith(ctx, "/all");
+  const row = placesRow(all);
+  assert.match(row, /<span class="ws-icon places-ico ws-icon-emoji" aria-hidden="true">🎯<\/span><span class="places-text"><span class="places-name">demo<\/span>/u);
+  assert.doesNotMatch(row, /<svg/u, "the emoji takes the place of the generic workspace icon");
+  assert.match(all, /<a class="rw-title" href="\/w\/demo"[^>]*><span class="ws-icon ws-title-icon ws-icon-emoji" aria-hidden="true">🎯<\/span>demo<\/a>/u);
+  assert.match(all, /<a class="places-row places-scope[^"]*"[^>]*href="\/all"[^>]*><svg class="nav-icon places-ico"/u, "All workspaces keeps its own icon");
+  const workspace = await pageWith(ctx, "/w/demo");
+  assert.match(workspace, /<span class="topbar-now"><span class="ws-icon topbar-icon ws-icon-emoji" aria-hidden="true">🎯<\/span>demo<\/span>/u);
+  assertScriptsCarryNonce(workspace, "/w/demo");
+});
+
+test("an image icon is an img of the endpoint with an empty alt, a fixed size, lazy loading and async decoding", async () => {
+  const src = "/api/workspace-icon/demo?v=0123456789abcdef";
+  const all = await pageWith(iconContext({ kind: "image", src }), "/all");
+  const img = `<img class="ws-icon places-ico ws-icon-img" src="${src}" alt="" width="18" height="18" loading="lazy" decoding="async"/>`;
+  assert.ok(placesRow(all).includes(img), placesRow(all));
+  assert.ok(all.includes(`<img class="ws-icon ws-title-icon ws-icon-img" src="${src}" alt="" width="18" height="18" loading="lazy" decoding="async"/>demo</a>`));
+  assertScriptsCarryNonce(all, "/all");
+});
+
+test("no icon gives today's markup: the generic workspace icon in Places, the bare name in the list and the top bar", async () => {
+  const all = await pageWith(iconContext(null), "/all");
+  assert.doesNotMatch(all, /ws-icon/u);
+  assert.match(placesRow(all), /^<a [^>]*><svg class="nav-icon places-ico"[^>]*>.*<\/svg><span class="places-text"><span class="places-name">demo<\/span>/su);
+  assert.match(all, /<a class="rw-title" href="\/w\/demo"[^>]*>demo<\/a>/u);
+  assert.match(await pageWith(iconContext(null), "/w/demo"), /<span class="topbar-now">demo<\/span>/u);
+  assert.equal(await pageWith(iconContext(null), "/all"), await pageWith(context, "/all"), "an explicit null and the fixture render the same bytes");
+});
+
+test("a workspace darius could not read shows no icon, even when the status carries one", async () => {
+  const all = await pageWith(iconContext({ kind: "emoji", text: "🎯" }, { error: "the ledger is broken" }), "/all");
+  assert.doesNotMatch(all, /ws-icon/u);
+  assert.match(placesRow(all), /unreadable/u);
+});
+
+test("store text never becomes markup: an image src off the endpoint is not drawn, and emoji text is escaped", async () => {
+  for (const src of ["javascript:alert(1)", "https://example.com/x.png", "//example.com/x.png", "/assets/x.png"]) {
+    const all = await pageWith(iconContext({ kind: "image", src }), "/all");
+    assert.doesNotMatch(all, /<img class="ws-icon/u, src);
+    assert.ok(!all.includes(`src="${src}"`), src);
+    assert.match(placesRow(all), /<svg class="nav-icon places-ico"/u, "the generic icon instead");
+  }
+  // The marker decoder refuses this text (test/marker.test.ts); the renderer escapes it anyway.
+  const all = await pageWith(iconContext({ kind: "emoji", text: `<img src=x onerror=alert(1)>${EVIL}` }), "/all");
+  assert.ok(all.includes("&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.ok(!all.includes("<img src=x"));
 });

@@ -11,9 +11,11 @@
 import { useEffect } from "react";
 import { Link } from "react-router";
 
+import type { WorkspaceIcon } from "../../../src/web/api.ts";
 import type { RootData } from "../root.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Gem, NavIcon, type NavIconName } from "./nav-icons.tsx";
+import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import { clockTime } from "../lib/format.ts";
 import { href, type Section } from "../lib/paths.ts";
 import type { TabCounts } from "../lib/scope.ts";
@@ -116,13 +118,15 @@ interface ScopeRowProps {
   needs: number;
   unreadable?: boolean;
   current: boolean;
+  /** The workspace's own icon (0.70.0): it takes the place of `icon` in the same box. Null or absent: `icon`. */
+  workspaceIcon?: WorkspaceIcon | null;
 }
 
 /** A scope in the tree: its name and what needs you there. */
-function ScopeRow({ to, name, icon, needs, unreadable = false, current }: ScopeRowProps): React.ReactNode {
+function ScopeRow({ to, name, icon, needs, unreadable = false, current, workspaceIcon = null }: ScopeRowProps): React.ReactNode {
   return (
     <Link to={to} className={current ? "places-row places-scope on" : "places-row places-scope"} aria-current={current ? "true" : undefined}>
-      <NavIcon name={icon} size={18} className="places-ico" />
+      <WorkspaceGlyph icon={workspaceIcon} className="places-ico" fallback={<NavIcon name={icon} size={18} className="places-ico" />} />
       <span className="places-text">
         <span className="places-name">{name}</span>
         {unreadable ? <span className="places-need tone-bad">unreadable</span> : needs > 0 ? <span className="places-need">{`${needs} ${needs === 1 ? "needs" : "need"} you`}</span> : <span className="places-clear">all clear</span>}
@@ -198,7 +202,7 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
 export function Places({ data, scope, lit }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
-  const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 } }];
+  const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 }, icon: null }];
   const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 }));
   return (
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
@@ -222,7 +226,7 @@ export function Places({ data, scope, lit }: PlacesProps): React.ReactNode {
         </li>
         {listed.map((entry) => (
           <li key={entry.name}>
-            <ScopeRow to={href({ to: "overview", ws: entry.name })} name={entry.name} icon="workspace" needs={entry.needs} unreadable={entry.error} current={scope === entry.name} />
+            <ScopeRow to={href({ to: "overview", ws: entry.name })} name={entry.name} icon="workspace" workspaceIcon={entry.icon} needs={entry.needs} unreadable={entry.error} current={scope === entry.name} />
             {scope === entry.name ? <ScopePlaces scope={entry.name} tabs={tabsOf(entry.name)} lit={lit} /> : null}
           </li>
         ))}
