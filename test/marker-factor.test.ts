@@ -271,6 +271,18 @@ test("proofDifference: equal markers give none; a lost root key or a changed pol
   assert.equal(proofDifference(before, decodeMarker(widened, FILE), []), "[policies.read-only] changed");
 });
 
+test("factor keeps a root icon byte for byte, and the proof names a lost or changed icon (0.70.0)", () => {
+  const withIcon = THREE.replace('tz = "Europe/Berlin"\n', 'tz = "Europe/Berlin"\nicon = "🎯"  # the workspace icon\n');
+  assert.notEqual(withIcon, THREE);
+  const text = proposed(withIcon);
+  assert.match(text, /^icon = "🎯" {2}# the workspace icon$/mu);
+  assert.deepEqual(decodeMarker(text, FILE).icon, { kind: "emoji", text: "🎯" });
+  const before = decodeMarker(withIcon, FILE);
+  assert.equal(proofDifference(before, decodeMarker(THREE, FILE), []), 'icon: was {"kind":"emoji","text":"🎯"}, proposed unset');
+  const image = decodeMarker(withIcon.replace('icon = "🎯"', 'icon = "assets/logo.svg"'), FILE);
+  assert.equal(proofDifference(before, image, []), 'icon: was {"kind":"emoji","text":"🎯"}, proposed {"kind":"image","path":"assets/logo.svg"}');
+});
+
 test("factor refuses a layout it cannot edit safely, naming the ritual", () => {
   const commented = THREE.replace("  '\\bkubectl\\s+apply\\b',\n", "  '\\bkubectl\\s+apply\\b', # cluster writes\n");
   assert.notEqual(commented, THREE);

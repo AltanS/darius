@@ -823,3 +823,71 @@ test("ownedKinds: a marker that does not parse gives the parser's message and ne
   assert.ok(!named.ok);
   assert.match(named.error, /kinds must be one of/u);
 });
+
+// --- icon (0.70.0) ----------------------------------------------------------------
+
+function iconOf(value: string): Marker["icon"] {
+  return readMarker(checkout(`${V3}icon = ${value}\n`))?.icon;
+}
+
+test("icon: one emoji reads back as an emoji, a ZWJ sequence, a flag and a keycap included", () => {
+  for (const emoji of ["🎯", "👩‍👩‍👧", "🇩🇪", "1️⃣", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "❤️", "🧑🏽‍🚀"]) {
+    assert.deepEqual(iconOf(tomlString(emoji)), { kind: "emoji", text: emoji }, emoji);
+  }
+  assert.equal(readMarker(checkout(V3))?.icon, undefined, "no key, no icon");
+});
+
+test("icon: a relative path to a .svg, .png or .webp file reads back as an image, any case of the extension", () => {
+  for (const path of ["assets/logo.svg", "logo.PNG", "a/b-c/d_e.webp", "docs/icon.Svg", ".github/logo.png"]) {
+    assert.deepEqual(iconOf(tomlString(path)), { kind: "image", path }, path);
+  }
+});
+
+test("icon: every other value is a marker error at its line that says what is valid", () => {
+  const rule = /\.darius\.toml:4: icon must be one emoji or a relative path to a \.svg, \.png, \.webp file in the repo, for example icon = "🎯" or icon = "assets\/logo\.svg"/u;
+  const cases: [string, RegExp][] = [
+    ['""', /it is empty$/u],
+    ['"🎯🎯"', /more than one emoji, or a word$/u],
+    ['"rocket"', /more than one emoji, or a word$/u],
+    ['"a"', /one character but not an emoji$/u],
+    ['"1"', /one character but not an emoji$/u],
+    ['"<img src=x onerror=alert(1)>"', /more than one emoji, or a word$/u],
+    ['"/srv/logo.svg"', /must be relative to the repo root/u],
+    ['"~/logo.svg"', /must be relative to the repo root/u],
+    ['"../logo.svg"', /may not hold a \.\. part$/u],
+    ['"assets/../../logo.svg"', /may not hold a \.\. part$/u],
+    ['"assets//logo.svg"', /empty or \. part$/u],
+    ['"./logo.svg"', /empty or \. part$/u],
+    ["'assets\\logo.svg'", /may not hold a backslash$/u],
+    ['"logo.gif"', /must end in \.svg, \.png, \.webp$/u],
+    ['"logo.svg.txt"', /must end in \.svg, \.png, \.webp$/u],
+    ['"a\\u0000.svg"', /control character$/u],
+    ['"a\\nb.svg"', /control character$/u],
+    [tomlString(`${"a/".repeat(99)}x.svg`), /at most 200 characters$/u],
+    [tomlString(`🎯${"️".repeat(15)}`), /one character but not an emoji$/u],
+    ["1", /repo, for example icon = "🎯" or icon = "assets\/logo\.svg"$/u],
+    ['["🎯"]', /repo, for example/u],
+  ];
+  for (const [value, reason] of cases) {
+    assert.throws(() => iconOf(value), rule, value);
+    assert.throws(() => iconOf(value), reason, value);
+  }
+});
+
+test("icon needs v = 3, as tz and kinds do", () => {
+  assert.throws(() => readMarker(checkout('v = 2\nproject = "ws"\nicon = "🎯"\n')), /\.darius\.toml:3: icon needs v = 3 at the top of \.darius\.toml/u);
+  assert.throws(() => readMarker(checkout('project = "ws"\nicon = "assets/logo.svg"\n')), /\.darius\.toml:2: icon needs v = 3/u);
+});
+
+test("icon is a root key: the same key in a ritual table is still unknown", () => {
+  const text = `${V3}\n[rituals.r]\ntitle = "R"\nskill = "r"\nicon = "🎯"\n`;
+  assert.throws(() => readMarker(checkout(text)), /unknown key "icon"/u);
+});
+
+test("icon does not change a ritual's definition hash", () => {
+  const ritual = `\n[rituals.r]\ntitle = "R"\nskill = "r"\n`;
+  const plain = readMarker(checkout(`${V3}${ritual}`))?.rituals[0];
+  const withIcon = readMarker(checkout(`${V3}icon = "🎯"\n${ritual}`))?.rituals[0];
+  assert.ok(plain !== undefined && withIcon !== undefined);
+  assert.equal(definitionHash(withIcon), definitionHash(plain));
+});

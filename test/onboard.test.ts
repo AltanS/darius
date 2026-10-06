@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { withKinds } from "../src/cli/onboard.ts";
+import { decodeMarker } from "../src/core/marker.ts";
 import { NO_GIT } from "./helpers/git.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
@@ -335,6 +336,14 @@ test("withKinds sets or inserts the root kinds line and keeps every other byte",
   const crlf = 'v = 3\r\nproject = "a"\r\ntz = "UTC"\r\n';
   assert.equal(withKinds(crlf, file, ["ritual", "vigil", "milestone"]), 'v = 3\r\nproject = "a"\r\ntz = "UTC"\r\nkinds = ["ritual", "vigil", "milestone"]\r\n');
   assert.equal(existsSync(file), false);
+});
+
+test("withKinds keeps a root icon line and the marker still reads it (0.70.0)", () => {
+  const file = "/x/.darius.toml";
+  const text = 'v = 3\nproject = "a"\ntz = "UTC"\nicon = "assets/logo.svg"\n\n[rituals.x]\ntitle = "X"\nskill = "x"\n';
+  const edited = withKinds(text, file, ["ritual", "vigil"]);
+  assert.equal(edited, 'v = 3\nproject = "a"\ntz = "UTC"\nicon = "assets/logo.svg"\nkinds = ["ritual", "vigil"]\n\n[rituals.x]\ntitle = "X"\nskill = "x"\n');
+  assert.deepEqual(decodeMarker(edited, file).icon, { kind: "image", path: "assets/logo.svg" });
 });
 
 /** A vigil record without `path` and without the fields the native list adds. */

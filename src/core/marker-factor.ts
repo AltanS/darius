@@ -315,6 +315,10 @@ function profilesText(profiles: Readonly<Record<string, ProfileFields>>): string
   return JSON.stringify(sorted);
 }
 
+function iconText(marker: Marker): string {
+  return marker.icon === undefined ? "unset" : JSON.stringify(marker.icon);
+}
+
 function ritualSlugs(marker: Marker): string {
   return marker.rituals.map((ritual) => ritual.slug).join(", ");
 }
@@ -330,6 +334,7 @@ export function proofDifference(before: Marker, after: Marker, groups: readonly 
     ["project", fieldText(before.project), fieldText(after.project)],
     ["max_mode", fieldText(before.maxMode), fieldText(after.maxMode)],
     ["tz", fieldText(before.tz), fieldText(after.tz)],
+    ["icon", iconText(before), iconText(after)],
     ["profiles", profilesText(before.profiles), profilesText(after.profiles)],
     ["[defaults] ritual", fieldText(before.defaultRitual), fieldText(after.defaultRitual)],
     ["[defaults] follow_up", fieldText(before.defaultFollowUp), fieldText(after.defaultFollowUp)],

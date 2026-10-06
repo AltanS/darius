@@ -21,6 +21,7 @@
  *
  *   tz = "Europe/Berlin"               the zone of every ritual's `at` and day
  *   kinds = ["ritual", "vigil"]        optional: the kinds the store owns (below)
+ *   icon = "🎯"                        optional: the workspace icon (below)
  *   [policies.read-only]               mode, may, hold, notes, on_hold, follow_up_may
  *   [rituals.daily-report]             title, skill, and optionally cadence,
  *   at = "07:00"                       anchor, at, tz, from, args, timeout,
@@ -38,6 +39,16 @@
  * store owns this project's vigils. `milestone`: the store owns the whole
  * tracker tree (milestones, specs, worklogs, archive). A host on an older
  * darius refuses the unknown key, so update every host first.
+ *
+ * `icon` (v = 3 only, 0.70.0) is the workspace icon the web app shows next
+ * to the project name. It is one emoji (`icon = "🎯"`: one grapheme with a
+ * pictographic character, a flag or a keycap, at most 16 UTF-16 units) or a
+ * path to an image in the repo (`icon = "assets/logo.svg"`: relative, no `..`
+ * part, no backslash, no control characters, at most 200 characters, ending
+ * in .svg, .png or .webp). Anything else is an error. The parser checks the
+ * text only; `marker check` and the web check the file. A host on an older
+ * darius refuses the unknown key and skips the project, so update every
+ * host before a marker with `icon` is pulled.
  *
  * `args` is input for the skill, one line of at most 256 characters. The
  * run prompt passes it on under `## Arguments`. It is part of the definition
@@ -163,6 +174,13 @@ export interface RepoRitual {
   line: number;
 }
 
+/**
+ * A root `icon` as parsed: one emoji, or the path of an image file relative
+ * to the checkout root. The path is checked as text only; whether the file is
+ * there and is a real image is for `readWorkspaceIcon` (src/web/workspace-icon.ts).
+ */
+export type MarkerIcon = { kind: "emoji"; text: string } | { kind: "image"; path: string };
+
 export interface Marker {
   /** The directory holding the file: the checkout root. */
   dir: string;
@@ -180,6 +198,8 @@ export interface Marker {
    * (milestones, specs, worklogs, archive).
    */
   kinds: readonly OwnedKind[];
+  /** Root `icon` (v3 only, 0.70.0): the workspace icon. Absent when the key is. */
+  icon?: MarkerIcon;
   /** `[rituals.<slug>]` tables in file order. Empty below v3. */
   rituals: RepoRitual[];
   /** `[policies.<name>]` tables, by name. Empty below v3. */
@@ -192,7 +212,20 @@ export interface Marker {
   defaultFollowUp?: string;
 }
 
-const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz", "kinds"]);
+const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz", "kinds", "icon"]);
+/** The longest emoji `icon`, in UTF-16 code units: room for a ZWJ family or a subdivision flag. */
+export const MAX_ICON_EMOJI_UNITS = 16;
+/** The longest image path `icon`, in characters. */
+export const MAX_ICON_PATH_LENGTH = 200;
+/** The image types an `icon` path may name, by its extension (lowercase, without the dot). */
+export const ICON_IMAGE_EXTENSIONS = ["svg", "png", "webp"] as const;
+export type IconImageExtension = (typeof ICON_IMAGE_EXTENSIONS)[number];
+const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+const FLAG_PAIR = /^\p{Regional_Indicator}{2}$/u;
+const KEYCAP = /^[0-9#*]️?⃣$/u;
+/** A control character: C0 (NUL included), DEL or C1. */
+const CONTROL = /\p{Cc}/u;
+const ICON_EXAMPLES = 'for example icon = "🎯" or icon = "assets/logo.svg"';
 /** The only valid `kinds` lists, in this order: each one adds a kind to the one before. */
 const VALID_KINDS: readonly (readonly OwnedKind[])[] = [["ritual"], ["ritual", "vigil"], ["ritual", "vigil", "milestone"]];
 const ABSENT_KINDS: readonly OwnedKind[] = ["ritual"];
@@ -661,6 +694,7 @@ export function decodeMarker(text: string, file: string): Marker {
   }
   decodeRootZone(root.tz, version, { file, lines }, marker);
   decodeKinds(root.kinds, { file, lines }, marker);
+  decodeIcon(root.icon, { file, lines }, marker);
   decodeSections(document, file, marker);
   return marker;
 }
@@ -694,6 +728,66 @@ function decodeKinds(kinds: TomlValue | undefined, at: { file: string; lines: Li
     throw new Error(`${where(at.file, line)}: kinds must be one of ${forms}, in this order`);
   }
   marker.kinds = valid;
+}
+
+function graphemeCount(text: string): number {
+  return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+}
+
+/** True when `text` is one emoji: one grapheme with a pictographic character, a flag pair or a keycap, at most 16 code units. */
+export function isIconEmoji(text: string): boolean {
+  if (text === "" || text.length > MAX_ICON_EMOJI_UNITS || CONTROL.test(text)) return false;
+  if (graphemeCount(text) !== 1) return false;
+  return PICTOGRAPHIC.test(text) || FLAG_PAIR.test(text) || KEYCAP.test(text);
+}
+
+/** The extension of an image `icon` path, lowercased, when it is one of the three; else undefined. */
+export function iconImageExtension(path: string): IconImageExtension | undefined {
+  const dot = path.lastIndexOf(".");
+  const extension = dot === -1 ? "" : path.slice(dot + 1).toLowerCase();
+  return ICON_IMAGE_EXTENSIONS.find((known) => known === extension);
+}
+
+/** Why `path` is not a valid image `icon` path, or undefined when it is. */
+export function iconPathProblem(path: string): string | undefined {
+  if (path.length > MAX_ICON_PATH_LENGTH) return `a path is at most ${String(MAX_ICON_PATH_LENGTH)} characters`;
+  if (CONTROL.test(path)) return "a path may not hold a control character";
+  if (path.includes("\\")) return "a path uses / and may not hold a backslash";
+  if (path.startsWith("/") || path.startsWith("~")) return "a path must be relative to the repo root, not start with / or ~";
+  const parts = path.split("/");
+  if (parts.includes("..")) return "a path may not hold a .. part";
+  if (parts.some((part) => part === "" || part === ".")) return "a path may not hold an empty or . part";
+  if (iconImageExtension(path) === undefined) return `a path must end in ${ICON_IMAGE_EXTENSIONS.map((extension) => `.${extension}`).join(", ")}`;
+  return undefined;
+}
+
+/** Why `text` is neither one emoji nor a valid image path; a path-like text gets the path rule it breaks. */
+function iconProblem(text: string): string {
+  if (text === "") return "it is empty";
+  const isPathLike = text.includes("/") || text.includes(".") || text.includes("\\");
+  if (isPathLike) return iconPathProblem(text) ?? "it is not valid";
+  if (graphemeCount(text) > 1) return "it is more than one emoji, or a word";
+  return "it is one character but not an emoji";
+}
+
+/** Root `icon`: one emoji or an image path in the repo, and only at v = 3. Absent means no icon. */
+function decodeIcon(icon: TomlValue | undefined, at: { file: string; lines: Lines }, marker: Marker): void {
+  if (icon === undefined) return;
+  const line = at.lines.icon;
+  if (marker.version !== REPO_VERSION) {
+    throw new Error(`${where(at.file, line)}: icon needs v = ${String(REPO_VERSION)} at the top of ${MARKER_FILE}`);
+  }
+  const rule = `icon must be one emoji or a relative path to a ${ICON_IMAGE_EXTENSIONS.map((extension) => `.${extension}`).join(", ")} file in the repo, ${ICON_EXAMPLES}`;
+  if (!isText(icon)) throw new Error(`${where(at.file, line)}: ${rule}`);
+  if (isIconEmoji(icon)) {
+    marker.icon = { kind: "emoji", text: icon };
+    return;
+  }
+  if (iconPathProblem(icon) === undefined) {
+    marker.icon = { kind: "image", path: icon };
+    return;
+  }
+  throw new Error(`${where(at.file, line)}: ${rule}; ${iconProblem(icon)}`);
 }
 
 /** The marker in `dir` itself, or null. A malformed file throws. */
