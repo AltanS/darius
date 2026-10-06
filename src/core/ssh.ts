@@ -27,10 +27,17 @@ export function sshProgram(): string {
 /**
  * One word for a POSIX shell, bash, zsh or fish: ssh hands the command line
  * to the host's login shell. A word of safe characters stays as it is; any
- * other word goes in single quotes, and each `'` in it becomes `'\''`.
+ * other word goes in single quotes. Each `'` and each `\` in it closes the
+ * quotes, is written escaped, and opens them again: `'\''` and `'\\'`.
+ *
+ * Inside single quotes a POSIX shell keeps a backslash as it is, but fish
+ * reads `\'` and `\\` there as escapes (0.69.0). So a word that ends in a
+ * backslash, quoted the POSIX way, left the quotes open in fish, and the
+ * next word ran as code. Outside quotes `\'` and `\\` mean the same in all
+ * four shells, so the word reads back the same in each.
  */
 export function shellWord(word: string): string {
-  return /^[A-Za-z0-9._/:@=+-]+$/u.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+  return /^[A-Za-z0-9._/:@=+-]+$/u.test(word) ? word : `'${word.replaceAll(/['\\]/gu, (char) => `'\\${char}'`)}'`;
 }
 
 /** The words as one line a person can paste into a shell. */
