@@ -41,6 +41,8 @@ const EXIT_FAILED = 1;
 const EXIT_INCONCLUSIVE = 3;
 const DEFAULT_WHO = "timer";
 const RITUAL_PREFIX = "ritual/";
+/** The stderr line `run follow-up` prints when the run started (0.69.0); the web reads the run id after it. */
+export const STARTED_PREFIX = "darius run follow-up: started run ";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -336,7 +338,7 @@ function approveFlags(args: ParsedArgs): number[] {
 
 /**
  * `darius run follow-up <run> [--project P] [--approve N ...] [--grant LINE ...]
- * [--note TEXT] [--headless] [--timeout S] [--dry-run] [--json] [--who W]`:
+ * [--item KEY ...] [--note TEXT] [--headless] [--timeout S] [--dry-run] [--json] [--who W]`:
  * a new run of the ritual of complete run `<run>`, attended in a herdr tab,
  * that may run the command lines of the approved questions and the
  * `--grant` lines as written (docs/concept.md, "Follow-up runs";
@@ -345,6 +347,11 @@ function approveFlags(args: ParsedArgs): number[] {
  * parent or ritual that cannot have a follow-up now exits 1, and so does a
  * call from inside a run (DARIUS_RUN set): a run never grants itself. `--dry-run`
  * prints the grants and where the run would open, and writes nothing.
+ *
+ * `--item KEY` (0.69.0, repeatable) approves the proposal of the parent's
+ * `needs-decision` item with that key; the run carries out exactly those.
+ * Right after the run starts, stderr gets one line, `darius run follow-up:
+ * started run <id> on <host>`: the web page waits for it (src/web/action-api.ts).
  */
 export async function runFollowUp(args: ParsedArgs): Promise<number> {
   // A run must never grant itself lines: the operator starts a follow-up, not a session darius started.
@@ -359,12 +366,13 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
   const ledger = readLedger(store);
   const approved = [...new Set(approveFlags(args))];
   const note = stringFlag(args, "note");
-  const request: FollowUpRequest = { parent, approve: approved, grant: args.repeated.grant ?? [] };
+  const request: FollowUpRequest = { parent, approve: approved, grant: args.repeated.grant ?? [], items: args.repeated.item ?? [] };
   if (note !== undefined) request.note = note;
   const plan = planFollowUp(ledger, parentResult(store, ledger, parent), request);
   if ("usage" in plan) throw new UsageError(`run follow-up: ${plan.usage}`);
   if ("refused" in plan) return refuseResume(args, parent, plan.refused);
   const followUp: FollowUp = { parent, approved, grants: plan.grants };
+  if (plan.items.length > 0) followUp.items = plan.items;
   if (note !== undefined && note !== "") followUp.note = note;
   if (args.flags.headless === true) followUp.headless = true;
   const isDryRun = args.flags["dry-run"] === true;
@@ -380,10 +388,14 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
     who: stringFlag(args, "who") ?? defaultWho(),
     timeoutMs: timeoutFlag(args),
     followUp,
+    onStarted: (run) => {
+      console.error(`${STARTED_PREFIX}${run} on ${hostId()}`);
+    },
   };
   if (isDryRun && !args.json) {
     console.log(`follow-up of run ${parent}, ${String(plan.grants.length)} granted line(s):`);
     for (const line of plan.grants) console.log(`  ${line}`);
+    if (plan.items.length > 0) console.log(`approved item(s): ${plan.items.join(", ")}`);
   }
   const { report, cfg } = await runDue(options);
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });

@@ -28,7 +28,8 @@ import { profileCommand } from "../src/cli/profile.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
-import { forwardsRun, isProtocolCommand, REPORT_MODE_WRITE_VERBS } from "../src/harness/gate.ts";
+import type { ToolCall } from "../src/harness/contract.ts";
+import { decide as gateDecide, forwardsRun, isProtocolCommand, REPORT_MODE_WRITE_VERBS } from "../src/harness/gate.ts";
 import type { Command } from "../src/cli/registry.ts";
 import { reportScope, runDueCommand, runDueExitCode, verbArgv } from "../src/cli/run-due.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
@@ -204,7 +205,7 @@ const HEARTBEAT_POLICY: Policy = {
   max_turns: 6,
 };
 
-function seedRitual(project: string, opts: { slug?: string; policy?: Policy; importedFrom?: string } = {}): string {
+function seedRitual(project: string, opts: { slug?: string; policy?: Policy; importedFrom?: string; followUp?: "headless" } = {}): string {
   const slug = opts.slug ?? "heartbeat";
   const now = new Date().toISOString();
   const header: Ritual = {
@@ -220,6 +221,7 @@ function seedRitual(project: string, opts: { slug?: string; policy?: Policy; imp
     policy: opts.policy ?? HEARTBEAT_POLICY,
   };
   if (opts.importedFrom !== undefined) header.imported_from = opts.importedFrom;
+  if (opts.followUp !== undefined) header.follow_up = opts.followUp;
   openProject(project, { create: true }).writeItem(
     { header, body: "Run `darius --version` and `date`, then complete the run.\n" },
     { who: "test" },
@@ -2389,9 +2391,11 @@ const FOLLOW_UP_RESULT = {
 };
 
 /** A linked act ritual with a complete run whose result asks two questions; the first lists a hold-listed command. */
-async function seedParent(project: string, opts: { marker?: string; mode?: Policy["mode"]; link?: boolean; result?: object } = {}): Promise<string> {
+async function seedParent(project: string, opts: { marker?: string; mode?: Policy["mode"]; link?: boolean; result?: object; policy?: Partial<Policy>; followUp?: "headless" } = {}): Promise<string> {
   if (opts.link !== false) linkedCheckout(project, opts.marker ?? "");
-  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, mode: opts.mode ?? "act" } });
+  const seeded: Parameters<typeof seedRitual>[1] = { policy: { ...HEARTBEAT_POLICY, mode: opts.mode ?? "act", ...opts.policy } };
+  if (opts.followUp !== undefined) seeded.followUp = opts.followUp;
+  seedRitual(project, seeded);
   const run: string = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", project, "--json"])).stdout).run;
   const findings = `# Check\n\n\`\`\`darius-result\n${JSON.stringify(opts.result ?? FOLLOW_UP_RESULT)}\n\`\`\`\n`;
   const done = await runCli(runCommand, ["complete", run, "--project", project, "--outcome", "complete", "--findings-stdin"], findings);
@@ -2525,7 +2529,14 @@ test("follow-up readiness for the web button: ready with the approvable question
   const parent = await seedParent("fu-ready");
   const before = readLedger(openProject("fu-ready")).length;
   const ready = await withFakeHerdr({}, () => followUpReadiness("fu-ready", parent));
-  assert.deepEqual(ready, { ready: true, host: hostId(), profile: "built-in", questions: [{ n: 1, commands: ["git push origin main"] }] });
+  assert.deepEqual(ready, {
+    ready: true,
+    host: hostId(),
+    profile: "built-in",
+    surface: "herdr",
+    questions: [{ n: 1, commands: ["git push origin main"] }],
+    items: [{ key: "main-not-pushed", title: "Branch not pushed" }],
+  });
   assert.equal(readLedger(openProject("fu-ready")).length, before, "no ledger line");
   assert.equal(existsSync(join(openProject("fu-ready").root, "runs")), false, "no run dir");
   assert.deepEqual(herdrCalls().filter((line) => !line.startsWith("status")), [], "no tab");
@@ -2542,14 +2553,9 @@ test("follow-up readiness for the web button: ready with the approvable question
   assert.match(await notReady("fu-nope", parent), /^no project fu-nope/u);
   const elsewhere = await seedParent("fu-ready-elsewhere");
   assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", "fu-ready-elsewhere", "--host", "host-b"])).code, 0);
-  const command = `ssh host-b darius run follow-up ${elsewhere} --approve 1 --project fu-ready-elsewhere`;
-  assert.deepEqual(await followUpReadiness("fu-ready-elsewhere", elsewhere), {
-    ready: false,
-    host: hostId(),
-    reason: `runs on host-b; open this page on host-b, or: ${command}`,
-    rightHost: "host-b",
-    command,
-  });
+  // 0.69.0: the page forwards the check to the ritual's host (see the forwarding tests below).
+  const forwarded = await followUpReadiness("fu-ready-elsewhere", elsewhere, () => Promise.resolve({ code: 255, stdout: "", stderr: "ssh: connect to host host-b port 22: No route to host\n" }));
+  assert.deepEqual(forwarded, { ready: false, host: hostId(), reason: "on host-b: ssh to host-b failed: ssh: connect to host host-b port 22: No route to host", rightHost: "host-b" });
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-ready", "--json"])).stdout).run;
   assert.match(await notReady("fu-ready", open), /is running; a follow-up needs a closed run/u);
   assert.match(await withFakeHerdr({}, () => notReady("fu-ready", parent)), new RegExp(`^run ${open.slice(-6).toLowerCase()} of heartbeat is running; a follow-up starts when no run is open$`, "u"));
@@ -2567,7 +2573,14 @@ const DECISION_RESULT = {
 test("decision follow-up: a note alone starts a run with no grants, readiness needs no command question (0.65.0)", async () => {
   const project = "fu-decision";
   const parent = await seedParent(project, { result: DECISION_RESULT });
-  assert.deepEqual(await withFakeHerdr({}, () => followUpReadiness(project, parent)), { ready: true, host: hostId(), profile: "built-in", questions: [] });
+  assert.deepEqual(await withFakeHerdr({}, () => followUpReadiness(project, parent)), {
+    ready: true,
+    host: hostId(),
+    profile: "built-in",
+    surface: "herdr",
+    questions: [],
+    items: [{ key: "stale-paragraphs", title: "Stale paragraphs" }],
+  });
   process.env.FAKE_CLAUDE_MODE = "complete";
   const result = await withFakeHerdr({}, () => followUp(parent, project, ["--note", "Fix all five posts", "--headless"]));
   assert.equal(result.code, 0, result.stdout + result.stderr);
@@ -2590,8 +2603,8 @@ test("decision follow-up: a note alone starts a run with no grants, readiness ne
 test("planFollowUp: a note alone is a plan with no grants; no line and no note is a usage error (0.65.0)", () => {
   const parent = "01PARENTRUN000000000000000";
   const base = [bareLine("run.started", parent), bareLine("run.completed", parent, "ritual/heartbeat", { outcome: "complete" })];
-  assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [], note: " fix the posts " }), { grants: [] });
-  const nothing = { usage: "nothing to do: pass --approve N, --grant LINE or --note TEXT" };
+  assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [], note: " fix the posts " }), { grants: [], items: [] });
+  const nothing = { usage: "nothing to do: pass --approve N, --grant LINE, --item KEY or --note TEXT" };
   assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [] }), nothing);
   assert.deepEqual(planFollowUp(base, null, { parent, approve: [], grant: [], note: " \n\t " }), nothing);
   assert.ok("refused" in planFollowUp([bareLine("run.started", parent)], null, { parent, approve: [], grant: [], note: "x" }), "the other checks stand");
@@ -2621,7 +2634,7 @@ test("a follow-up waits while any run of the project is running; a held run does
   const result: RunResult = { v: 1, status: "attention", summary: "s", metrics: [], items: [], actions: [], questions: [{ text: "Push?", commands: ["git push origin main"] }] };
   const base = [bareLine("run.started", parent), bareLine("run.completed", parent, "ritual/heartbeat", { outcome: "complete" })];
   const request = { parent, approve: [1], grant: [] };
-  const granted = { grants: ["git push origin main"] };
+  const granted = { grants: ["git push origin main"], items: [] };
   assert.deepEqual(planFollowUp(base, result, request), granted);
   const running = [...base, bareLine("run.started", other, "ritual/sweep")];
   assert.deepEqual(planFollowUp(running, result, request), { refused: "run abcdef of sweep is running; a follow-up starts when no run is open" });
@@ -2662,8 +2675,8 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
   await usage("fu-refuse", parent, ["--approve", "x"], /--approve must name a question by its number/u);
   await usage("fu-refuse", parent, ["--grant", "cd tools && pnpm cli x"], /--grant "cd tools && pnpm cli x" is not one plain command: more than one command/u);
   await usage("fu-refuse", parent, ["--grant", "echo $(id)"], /not one plain command/u);
-  await usage("fu-refuse", parent, [], /nothing to do: pass --approve N, --grant LINE or --note TEXT/u);
-  await usage("fu-refuse", parent, ["--note", "   "], /nothing to do: pass --approve N, --grant LINE or --note TEXT/u);
+  await usage("fu-refuse", parent, [], /nothing to do: pass --approve N, --grant LINE, --item KEY or --note TEXT/u);
+  await usage("fu-refuse", parent, ["--note", "   "], /nothing to do: pass --approve N, --grant LINE, --item KEY or --note TEXT/u);
   await usage("fu-refuse", "01NOPE", ["--grant", "date"], /no run '01NOPE'/u);
 
   const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "fu-refuse", "--json"])).stdout).run;
@@ -2708,4 +2721,158 @@ test("run follow-up refuses what it cannot run, each with one line, and starts n
 
   appendLine(openProject("fu-vigil", { create: true }), { who: "test", type: "run.started", item: "vigil/soak", run: "01VIGILRUN" });
   await usage("fu-vigil", "01VIGILRUN", ["--grant", "date"], /belongs to vigil\/soak; only a ritual run has follow-ups/u);
+});
+
+// --- approved proposals, follow_up_may, headless rituals, forwarding (0.69.0) -------------------
+
+const PROPOSAL_RESULT = {
+  v: 1,
+  status: "attention",
+  summary: "two pages could rank better; one link is broken",
+  items: [
+    {
+      key: "post-12/title",
+      title: "Title misses the main query",
+      severity: "medium",
+      state: "needs-decision",
+      target: "post 12",
+      detail: "Rank 8 for the main query.\nThe title does not hold it.",
+      proposal: { current: "Old title", proposed: "New title with the query", why: "The query is missing.", effect: "Rank 8 to top 5 in four weeks." },
+    },
+    { key: "post-40/intro", title: "Intro is thin", severity: "low", state: "needs-decision", target: "post 40", proposal: { proposed: "A longer intro" } },
+    { key: "link-3", title: "Broken link", severity: "high", state: "open", target: "post 3" },
+    { key: "done-1", title: "Old banner", severity: "low", state: "fixed" },
+  ],
+  actions: [],
+  questions: [],
+};
+
+test("--item: an unknown key, a key of an item in another state and a key given twice are usage errors; nothing starts", async () => {
+  const project = "fu-items-refuse";
+  const parent = await seedParent(project, { result: PROPOSAL_RESULT });
+  const started = linesOf(project, "run.started").length;
+  const usage = (extra: string[], reason: RegExp): Promise<void> => assert.rejects(withFakeHerdr({}, () => followUp(parent, project, extra)), reason);
+  await usage(["--item", "post-99/x"], new RegExp(`run '${parent}' has no item with key 'post-99/x'`, "u"));
+  await usage(["--item", "link-3"], new RegExp(`item 'link-3' of run '${parent}' is open; only a needs-decision item can be approved`, "u"));
+  await usage(["--item", "done-1"], /item 'done-1' of run '\S+' is fixed; only a needs-decision item can be approved/u);
+  await usage(["--item", "post-12/title", "--item", "post-12/title"], /--item 'post-12\/title' is given twice/u);
+  assert.equal(linesOf(project, "run.started").length, started);
+  const twice = { ...PROPOSAL_RESULT, items: [PROPOSAL_RESULT.items[0], { ...PROPOSAL_RESULT.items[1], key: "post-12/title" }] };
+  const dupParent = await seedParent("fu-items-dup", { result: twice });
+  await assert.rejects(withFakeHerdr({}, () => followUp(dupParent, "fu-items-dup", ["--item", "post-12/title"])), /has 2 items with key 'post-12\/title'; an item is approved by a key that only one item has/u);
+});
+
+test("--item: the prompt prints each approved proposal in full and the other open items as one line; run.started and the ack note name the keys", async () => {
+  const project = "fu-items";
+  const parent = await seedParent(project, { result: { ...PROPOSAL_RESULT, questions: [{ text: "Push?", commands: ["git push origin main"] }] } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await withFakeHerdr({}, () => followUp(parent, project, ["--item", "post-12/title", "--approve", "1", "--headless"]));
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const child: string = JSON.parse(result.stdout).projects[0].rituals[0].run;
+  assert.match(result.stderr, new RegExp(`^darius run follow-up: started run ${child} on ${hostId()}$`, "mu"), "the web reads the run id from this line");
+  const started = linesOf(project, "run.started").find((line) => line.run === child);
+  assert.deepEqual([started?.approved, started?.items, started?.grants], [[1], ["post-12/title"], ["git push origin main"]]);
+  assert.equal(linesOf(project, "run.acknowledged").find((line) => line.run === parent)?.note, `follow-up ${child}, approved 1, items post-12/title`);
+  const prompt = readFileSync(join(openProject(project).root, "runs", child, "prompt.md"), "utf8");
+  const section = prompt.slice(prompt.indexOf("## Follow-up"), prompt.indexOf("## Protocol"));
+  assert.match(section, /Approved proposals\. The operator approved this item of that run, each by its key:\n\n- key: post-12\/title\n {2}title: Title misses the main query\n {2}target: post 12\n {2}detail: Rank 8 for the main query\.\n {4}The title does not hold it\.\n {2}current: Old title\n {2}proposed: New title with the query\n {2}why: The query is missing\.\n {2}expected effect: Rank 8 to top 5 in four weeks\.\n/u);
+  assert.match(section, /Other open items of that run, not approved:\n- low needs-decision: Intro is thin \[post 40\] \{post-40\/intro\}\n- high open: Broken link \[post 3\] \{link-3\}\n/u);
+  assert.doesNotMatch(section, /A longer intro|Old banner/u, "an unapproved proposal and a fixed item are not printed");
+  assert.match(section, /Carry out exactly the approved proposals above, within this run's policy: may and hold apply as usual.*Do not act on any other open item of that run\. Verify each change\. In your result, report each approved key once, with the parent's key: state fixed when the change is made and verified; state open, with the reason in detail, when it could not be done\. Do not copy the proposal into the item\. List each write you made as an action\./u);
+  assert.match(section, /Run the granted lines as written, then verify each result\./u);
+});
+
+test("followUpSection: without approved items the text is as before; with only items no line is granted", () => {
+  const result: RunResult = { v: 1, status: "attention", summary: "s", metrics: [], items: [{ key: "k", title: "T", severity: "low", state: "needs-decision", proposal: { proposed: "P" } }], actions: [], questions: [] };
+  const plain = followUpSection({ parent: "01P", approved: [], grants: [], note: "Fix all five" }, result).join("\n");
+  assert.match(plain, /Open items of that run:\n- low needs-decision: T \{k\}/u);
+  assert.match(plain, /No lines are granted\. Carry out the operator's decision/u);
+  const items = followUpSection({ parent: "01P", approved: [], grants: [], items: ["k"], note: "keep the tone" }, result).join("\n");
+  assert.match(items, /\nOperator note: keep the tone\n/u, "with an approved item the note is a note, not the decision");
+  assert.doesNotMatch(items, /Granted lines|No lines are granted|Open items of that run/u);
+  assert.match(items, /- key: k\n {2}title: T\n {2}proposed: P\n/u);
+});
+
+test("follow_up_may: a follow-up's policy.json and prompt have it in may; a scheduled run's never do; hold still wins", async () => {
+  const project = "fu-may";
+  const extra = "Bash(pnpm cli blocks update *)";
+  const parent = await seedParent(project, { result: PROPOSAL_RESULT, policy: { may: ["Bash(darius *)", "Bash(date)"], hold: ["git push", "rm -rf", "blocks update .*--all"], follow_up_may: [extra, "Bash(git push *)"] } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await withFakeHerdr({}, () => followUp(parent, project, ["--item", "post-12/title", "--headless"]));
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const child: string = JSON.parse(result.stdout).projects[0].rituals[0].run;
+  const childDir = join(openProject(project).root, "runs", child);
+  const followUpPolicy = readRunPolicy(join(childDir, "policy.json"));
+  assert.deepEqual(followUpPolicy.may, ["Bash(darius *)", "Bash(date)", extra, "Bash(git push *)"]);
+  assert.match(readFileSync(join(childDir, "prompt.md"), "utf8"), /Allowed tool rules:\n- `Bash\(darius \*\)`\n- `Bash\(date\)`\n- `Bash\(pnpm cli blocks update \*\)`/u);
+  const call = (command: string): ToolCall => ({ class: "shell", name: "Bash", command, cwd: join(SANDBOX, `${project}-checkout`) });
+  assert.equal(gateDecide(call("pnpm cli blocks update 12 --site bild"), { policy: followUpPolicy, isHeld: false }).verdict, "allow", "follow_up_may allows the write");
+  assert.equal(gateDecide(call("git push origin main"), { policy: followUpPolicy, isHeld: false }).verdict, "hold", "hold wins over follow_up_may");
+  assert.equal(gateDecide(call("pnpm cli blocks update 12 --all"), { policy: followUpPolicy, isHeld: false }).verdict, "hold", "a hold pattern still holds a follow_up_may command");
+
+  const scheduled = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+  const run: string = JSON.parse(scheduled.stdout).projects[0].rituals[0].run;
+  const scheduledDir = join(openProject(project).root, "runs", run);
+  assert.deepEqual(readRunPolicy(join(scheduledDir, "policy.json")).may, ["Bash(darius *)", "Bash(date)"], "a scheduled run never gets follow_up_may");
+  assert.doesNotMatch(readFileSync(join(scheduledDir, "prompt.md"), "utf8"), /blocks update \*/u);
+});
+
+test("follow_up = headless: the CLI and the readiness check run the follow-up headless, without herdr and without --headless", async () => {
+  const project = "fu-headless";
+  const parent = await seedParent(project, { result: PROPOSAL_RESULT, followUp: "headless" });
+  const ready = await followUpReadiness(project, parent);
+  assert.equal(ready.ready, true, JSON.stringify(ready));
+  assert.equal(ready.ready && ready.surface, "headless");
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await followUp(parent, project, ["--item", "post-40/intro"]);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).projects[0].rituals[0].surface, "headless");
+  const attended = await seedParent("fu-attended", { result: PROPOSAL_RESULT });
+  assert.match(await notReady("fu-attended", attended), /^no herdr on \S+: a follow-up opens a herdr tab/u, "without the key a follow-up stays attended");
+});
+
+test("forwarded readiness: a dry run on the ritual's host by the CLI's ssh forward; ready there, or the reason there", async () => {
+  const project = "fu-forward";
+  const parent = await seedParent(project, { result: PROPOSAL_RESULT });
+  assert.equal((await runCli(ritualCommand, ["set", "heartbeat", "--project", project, "--host", "host-b"])).code, 0);
+  const calls: string[][] = [];
+  const answering = (stdout: string, code = 0) => (argv: readonly string[]) => {
+    calls.push([...argv]);
+    return Promise.resolve({ code, stdout, stderr: "" });
+  };
+  const wouldStart = JSON.stringify({ ok: true, projects: [{ project, rituals: [{ slug: "heartbeat", action: "would-start", profile: "fu", surface: "headless" }] }] });
+  assert.deepEqual(await followUpReadiness(project, parent, answering(`some text\n${wouldStart}\n`)), {
+    ready: true,
+    host: "host-b",
+    via: hostId(),
+    profile: "fu",
+    surface: "headless",
+    questions: [],
+    items: [
+      { key: "post-12/title", title: "Title misses the main query" },
+      { key: "post-40/intro", title: "Intro is thin" },
+    ],
+  });
+  assert.deepEqual(calls[0], ["run", "follow-up", parent, "--project", project, "--note", "decision", "--dry-run", "--json", "--on", "host-b"]);
+  const skipped = JSON.stringify({ ok: false, projects: [{ project, rituals: [{ slug: "heartbeat", action: "skipped", reason: "not-followable", detail: "a follow-up opens a herdr tab, and no herdr server is running; start herdr, or pass --headless" }] }] });
+  const off = await followUpReadiness(project, parent, answering(skipped, 1));
+  assert.equal(off.ready === false && off.reason, "on host-b: no herdr on host-b: a follow-up opens a herdr tab, and no herdr server is running; start herdr, or pass --headless");
+  const refused = await followUpReadiness(project, parent, answering(JSON.stringify({ ok: false, run: parent, error: "run x is running" }), 1));
+  assert.equal(refused.ready === false && refused.reason, "on host-b: run x is running");
+  assert.equal(refused.ready === false && refused.command, undefined, "no ssh command to copy");
+});
+
+test("forwarded start: the note and item keys reach the other host's darius as the same words, quotes, $(), backticks, newlines and backslashes included", () => {
+  rmSync(`${FAKE_SSH_LOG}.words`, { force: true });
+  const env = { ...process.env, DARIUS_SSH: FAKE_SSH, FAKE_SSH_EXIT: "0", DARIUS_RUN: "", DARIUS_RUN_POLICY: "" };
+  const note = `it's "done"; $(touch /tmp/pwned) \`id\` \\ and\na newline`;
+  const keys = ["ends in \\", "; touch /tmp/pwned; echo '", "b\\"];
+  const argv = ["run", "follow-up", "01RUNID", "--project", "fu-fwd", ...keys.flatMap((key) => ["--item", key]), "--note", note, "--who", "web:op@phone", "--on", "host-b"];
+  const ran = spawnSync(join(BIN, "darius"), argv, { env, encoding: "utf8" });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.deepEqual(sshWords(), [
+    "host-b", "bash", "-l", "-c", 'exec darius "$@"', "darius",
+    "run", "follow-up", "01RUNID", "--project", "fu-fwd", ...keys.flatMap((key) => ["--item", key]), "--note", note, "--who", "web:op@phone",
+  ]);
+  assert.equal(existsSync("/tmp/pwned"), false);
 });

@@ -22,7 +22,7 @@
  *   run show <run>             the run's findings and its result block (0.24.0)
  *   run now <ritual> [--profile NAME] [--timeout S] [--dry-run]   (src/cli/run-due.ts)
  *   run resume <run> [--timeout S]                                (src/cli/run-due.ts)
- *   run follow-up <run> [--approve N] [--grant LINE] [--note T]   (src/cli/run-due.ts)
+ *   run follow-up <run> [--approve N] [--grant LINE] [--item KEY] [--note T]   (src/cli/run-due.ts)
  *                  These three run on the ritual's host only, and refuse
  *                  elsewhere with the ssh command; `--on HOST` forwards
  *                  them over ssh (0.50.0).

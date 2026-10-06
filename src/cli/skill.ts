@@ -114,14 +114,14 @@ function trackerVerbs(): string {
 }
 
 const TAIL = `
-\`run now\` starts a ritual unattended in its own session and refuses a ritual with mode off. For that one, run \`run start\`, do the work, then \`run complete\`.
-\`run follow-up <run> --approve N\` is for a person: a new attended run that may run the command lines of question N as written.
+\`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, do the work, then \`run complete\`.
+\`run follow-up <run> --approve N|--item KEY\` is for a person: a new run that runs the lines of question N as written, or the proposal of item KEY.
 Findings are items a ritual reports with a \`key\`. \`finding list|show\` read them; \`finding close|reopen <key>\` and \`finding reset\` are for a person.
 On the wrong host \`run now\`, \`run resume\` and \`run follow-up\` refuse and print the \`ssh <host> darius ...\` command for the right one; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
 
-A snapshot is a dated tar.gz of this host's darius store, in a local folder and optionally in an S3 bucket.
+A snapshot is a dated tar.gz of this host's store, in a local folder and optionally an S3 bucket.
 
 - Read: \`snapshot status\`, \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
 - Act: \`snapshot create\` makes one now. \`snapshot check\` tests the bucket.
