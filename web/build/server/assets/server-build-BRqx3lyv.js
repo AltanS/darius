@@ -11766,11 +11766,18 @@ function parse(status, text) {
 	const error = reply.get("error");
 	if (reply.get("ok") !== true) return failed(status, error === void 0 || error === null || error === "" ? `The host answered ${status}.` : String(error));
 	const count = reply.get("count");
+	const textOf = (key) => {
+		const value = reply.get(key);
+		return value === void 0 || value === null || value === "" ? null : String(value);
+	};
 	return {
 		ok: true,
 		status,
 		started: reply.get("started") === true,
-		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count)
+		count: count === void 0 || count === null || !Number.isInteger(count) ? null : Number(count),
+		run: textOf("run"),
+		host: textOf("host"),
+		message: textOf("message")
 	};
 }
 /** POST `body` as JSON to `path` on this origin. */
@@ -12450,6 +12457,63 @@ function Tiles({ metrics }) {
 		})
 	});
 }
+/**
+* The change a needs-decision item proposes (0.69.0): the current text and
+* the proposed text as two labelled blocks, side by side on a wide screen
+* and one under the other on a phone, then why and the expected effect.
+* Plain text: newlines stay, nothing becomes markup.
+*/
+function ProposalView({ proposal }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "proposal",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: proposal.current === void 0 ? "proposal-pair proposal-one" : "proposal-pair",
+				children: [proposal.current === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "proposal-block",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "proposal-label",
+						children: "Current"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "proposal-text",
+						children: proposal.current
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "proposal-block",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "proposal-label",
+						children: "Proposed"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "proposal-text proposal-new",
+						children: proposal.proposed
+					})]
+				})]
+			}),
+			proposal.why === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "proposal-note",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rec-label",
+						children: "Why:"
+					}),
+					" ",
+					proposal.why
+				]
+			}),
+			proposal.effect === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "proposal-note",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rec-label",
+						children: "Expected effect:"
+					}),
+					" ",
+					proposal.effect
+				]
+			})
+		]
+	});
+}
 function ItemRow({ item }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: item.state === "fixed" ? "ritem ritem-done" : "ritem",
@@ -12482,6 +12546,10 @@ function ItemRow({ item }) {
 							className: "ritem-detail",
 							children: item.detail
 						})
+					}),
+					item.proposal === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+						summary: "Proposal",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProposalView, { proposal: item.proposal })
 					})
 				]
 			}),
@@ -12557,6 +12625,7 @@ function ResultPanel({ project, row, result, canWrite, afterQuestions = null }) 
 				]
 			}), hasQuestions ? null : tiles]
 		}),
+		hasQuestions ? null : afterQuestions,
 		hasQuestions ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 				title: "Questions for you",
@@ -15386,6 +15455,13 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 										none: "only the read-only defaults"
 									})
 								},
+								...policy.followUpMay.length === 0 ? [] : [{
+									label: "A follow-up may also run",
+									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
+										items: policy.followUpMay,
+										none: "nothing more"
+									})
+								}],
 								{
 									label: "Stops at",
 									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
@@ -15396,6 +15472,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 								{
 									label: "On a match",
 									value: policy.onHold === "deny" ? "refuses the command; the run goes on and records it for a decision" : "holds the run until someone answers"
+								},
+								{
+									label: "Follow-ups",
+									value: policy.followUp === "headless" ? "run headless, without herdr" : "open a herdr tab, attended"
 								},
 								{
 									label: "Max turns",
@@ -15438,16 +15518,23 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 //#endregion
 //#region app/components/follow-up.tsx
 /**
-* The follow-up card of a run page (0.48.0; `darius run follow-up`). When
-* this host can start one, the operator picks the questions to approve,
-* may add a note, and presses "Start follow-up on <host>". A second press
-* on the confirm box, which lists every line the run will be granted, posts
-* to `/api/run/follow-up`. The page sends question numbers only, never a
-* command line. When no question lists commands, or none is picked, the
-* note is the operator's decision and the run is granted no line (0.65.0).
-* When this host cannot start one, the card says why and
-* gives the command for a host that can. When the ritual runs on another
-* host (0.50.0), the card names it and gives the ssh command for it.
+* The follow-up card of a run page (0.48.0; `darius run follow-up`). When a
+* follow-up can start, the operator picks the questions whose command lines
+* to approve and, since 0.69.0, the proposals of needs-decision items, may
+* add a note, and presses one button. The page sends question numbers and
+* item keys only, never a command line. When nothing is picked, the note is
+* the operator's decision and the run is granted no line (0.65.0).
+*
+* A press posts at once, unless the run would be granted command lines:
+* then a confirm box lists every line first (0.48.0). The answer names the
+* new run with a link, or says why it did not start (0.69.0): the POST waits
+* for the CLI.
+*
+* The follow-up may start on another host, the ritual's (0.69.0): the
+* server forwards it over ssh, and the card names that host. When a
+* follow-up cannot start, the card says why. For a reason on this host it
+* gives the command for a host that can; for a reason on the ritual's host
+* it gives the reason only.
 */
 /** The CLI command for the same follow-up, for a host where the button is off. */
 function followUpCommand(run, project, numbers) {
@@ -15457,12 +15544,20 @@ function followUpCommand(run, project, numbers) {
 function commandQuestions(questions) {
 	return questions.flatMap((question, index) => (question.commands ?? []).length > 0 ? [index + 1] : []);
 }
-/** After the POST the new run appears within seconds: look again twice. */
+/** After a start the new run shows below within seconds: look again twice. */
 var RELOAD_AFTER_MS = [1500, 5e3];
-function FollowUpCard({ project, run, readiness, questions }) {
+function toggled(set, value) {
+	const next = new Set(set);
+	if (next.has(value)) next.delete(value);
+	else next.add(value);
+	return next;
+}
+function FollowUpCard({ project, run, readiness, questions, items }) {
 	const { revalidate } = useRevalidator();
 	const offered = readiness.ready ? readiness.questions : [];
-	const [picked, setPicked] = (0, import_react.useState)(() => new Set(offered.length === 1 ? offered.map((question) => question.n) : []));
+	const proposals = readiness.ready ? readiness.items : [];
+	const [picked, setPicked] = (0, import_react.useState)(() => new Set(offered.length === 1 && proposals.length === 0 ? offered.map((question) => question.n) : []));
+	const [keys, setKeys] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
 	const [note, setNote] = (0, import_react.useState)("");
 	const [asking, setAsking] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -15487,6 +15582,22 @@ function FollowUpCard({ project, run, readiness, questions }) {
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: readiness.command })
 		})]
 	});
+	if (!readiness.ready && readiness.rightHost !== void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "card fu",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "fu-off",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+					tone: "idle",
+					label: "off"
+				}),
+				" This ritual runs on ",
+				readiness.rightHost,
+				", and a follow-up cannot start there now: ",
+				readiness.reason
+			]
+		})
+	});
 	if (!readiness.ready) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card fu",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -15505,47 +15616,106 @@ function FollowUpCard({ project, run, readiness, questions }) {
 		})]
 	});
 	const chosen = offered.filter((question) => picked.has(question.n));
+	const chosenKeys = proposals.filter((proposal) => keys.has(proposal.key)).map((proposal) => proposal.key);
 	const lines = [...new Set(chosen.flatMap((question) => question.commands))];
 	const decision = note.trim();
-	const toggle = (n) => {
-		const next = new Set(picked);
-		if (next.has(n)) next.delete(n);
-		else next.add(n);
-		setPicked(next);
-		setAsking(false);
-	};
+	const approved = chosen.length + chosenKeys.length;
+	const isAllPicked = proposals.length > 0 && chosenKeys.length === proposals.length;
+	const where = readiness.via === void 0 ? readiness.host : `${readiness.host}, forwarded from ${readiness.via}`;
+	const how = readiness.surface === "headless" ? `The run is headless on ${readiness.host}.` : `The run opens in a herdr tab on ${readiness.host}, attended.`;
 	const start = async () => {
 		setBusy(true);
 		setNotice(null);
-		const approve = chosen.map((question) => question.n);
-		const result = await postJson("/api/run/follow-up", decision === "" ? {
+		const body = {
 			project,
 			run,
-			approve
-		} : {
-			project,
-			run,
-			approve,
-			note: decision
-		});
+			approve: chosen.map((question) => question.n)
+		};
+		if (chosenKeys.length > 0) body.items = chosenKeys;
+		if (decision !== "") body.note = decision;
+		const result = await postJson("/api/run/follow-up", body);
 		setBusy(false);
 		setAsking(false);
 		if (!result.ok) {
 			setNotice({
 				tone: "bad",
-				text: result.error
+				text: `Not started. ${result.error}`
 			});
 			return;
 		}
-		setNotice({
+		if (result.run === null) setNotice({
 			tone: "ok",
-			text: `Started on ${readiness.host}. The new run opens in a herdr tab there and shows below in a moment.`
+			text: result.message ?? `The follow-up is starting on ${readiness.host}.`
+		});
+		else setNotice({
+			tone: "ok",
+			text: `Started run ${shortRun(result.run)} on ${result.host ?? readiness.host}.`,
+			child: result.run
 		});
 		for (const delay of RELOAD_AFTER_MS) setTimeout(() => void revalidate(), delay);
+	};
+	const press = () => {
+		if (lines.length > 0) setAsking(true);
+		else start();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card fu",
 		children: [
+			proposals.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+				className: "fu-picks",
+				disabled: busy,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+						className: "fu-label",
+						children: "Approve the proposals"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "fu-pick fu-all",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: isAllPicked,
+								onChange: () => {
+									setKeys(isAllPicked ? /* @__PURE__ */ new Set() : new Set(proposals.map((proposal) => proposal.key)));
+								}
+							}),
+							"Select all proposals (",
+							proposals.length,
+							")"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "fu-props",
+						children: proposals.map((proposal) => {
+							const item = items.find((candidate) => candidate.key === proposal.key);
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+								className: "fu-prop",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "fu-pick",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+											type: "checkbox",
+											checked: keys.has(proposal.key),
+											onChange: () => setKeys(toggled(keys, proposal.key))
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fu-prop-title",
+											children: proposal.title
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "ritem-key",
+										children: [item?.target === void 0 ? null : `${item.target} · `, `key ${proposal.key}`]
+									}),
+									item?.proposal === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+										summary: "Proposal",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProposalView, { proposal: item.proposal })
+									})
+								]
+							}, proposal.key);
+						})
+					})
+				]
+			}),
 			offered.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
 				className: "fu-picks",
 				disabled: busy,
@@ -15558,7 +15728,10 @@ function FollowUpCard({ project, run, readiness, questions }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							type: "checkbox",
 							checked: picked.has(question.n),
-							onChange: () => toggle(question.n)
+							onChange: () => {
+								setPicked(toggled(picked, question.n));
+								setAsking(false);
+							}
 						}),
 						"Question ",
 						question.n,
@@ -15571,13 +15744,13 @@ function FollowUpCard({ project, run, readiness, questions }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
 				className: "fu-label",
 				htmlFor: `fu-note-${run}`,
-				children: "Operator decision for the follow-up"
+				children: approved === 0 ? "Operator decision for the follow-up" : "Note for the follow-up (optional)"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				id: `fu-note-${run}`,
 				className: "st-input",
 				type: "text",
 				maxLength: 500,
-				required: chosen.length === 0,
+				required: approved === 0,
 				value: note,
 				disabled: busy,
 				onChange: (event) => {
@@ -15590,32 +15763,24 @@ function FollowUpCard({ project, run, readiness, questions }) {
 				role: "group",
 				"aria-label": "Confirm the follow-up",
 				children: [
-					lines.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "fu-ask-q",
 						children: [
 							"Start a new run on ",
-							readiness.host,
-							" (profile ",
-							readiness.profile,
-							") that carries out this decision within the ritual's policy?"
-						]
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "fu-ask-q",
-						children: [
-							"Start a new run on ",
-							readiness.host,
+							where,
 							" (profile ",
 							readiness.profile,
 							") that may run ",
 							lines.length === 1 ? "this line" : `these ${lines.length} lines`,
-							" as written?"
+							" as written",
+							chosenKeys.length === 0 ? "?" : ` and carry out ${chosenKeys.length === 1 ? "1 approved proposal" : `${chosenKeys.length} approved proposals`}?`
 						]
 					}),
-					lines.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "q-cmds",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: lines.join("\n") }) })
 					}),
-					decision === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["Decision: ", decision] }),
+					decision === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["Note: ", decision] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "fu-acts",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -15635,22 +15800,34 @@ function FollowUpCard({ project, run, readiness, questions }) {
 				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "fu-acts",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "st-btn st-btn-main",
-					disabled: busy || chosen.length === 0 && decision === "",
-					onClick: () => setAsking(true),
-					children: ["Start follow-up on ", readiness.host]
+					disabled: busy || approved === 0 && decision === "",
+					onClick: press,
+					children: busy ? "Starting…" : approved === 0 ? `Start follow-up on ${readiness.host}` : `Start follow-up with ${approved} approved`
 				})
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "fu-off",
-				children: "Anything else the run tries still holds as usual. The run opens in a herdr tab, attended."
+				children: [
+					"It runs on ",
+					where,
+					" and carries out only what you approve, within the ritual's policy. Anything else the run tries still holds as usual. ",
+					how
+				]
 			}),
-			notice === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			notice === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: `bk-note tone-${notice.tone}`,
 				role: notice.tone === "bad" ? "alert" : "status",
-				children: notice.text
+				children: [notice.text, notice.child === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: href({
+						to: "run",
+						ws: project,
+						run: notice.child
+					}),
+					children: "Open the run"
+				})] })]
 			})
 		]
 	});
@@ -15675,9 +15852,14 @@ async function loader$10({ context, params }) {
 	});
 	const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
 	const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
+	const hasProposals = (run.result?.items ?? []).some((item) => item.state === "needs-decision" && item.key !== void 0);
 	const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
 	const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
-	const followUp = checked !== null && (hasCommands || checked.ready) ? checked : null;
+	const followUp = checked !== null && (hasCommands || hasProposals && isFollowable || checked.ready) ? checked : null;
+	const children = run.children.map((child) => ({
+		...child,
+		state: runState(child.row, project?.runs ?? [])
+	}));
 	return {
 		run,
 		kind: itemKind(run.row.item),
@@ -15688,12 +15870,13 @@ async function loader$10({ context, params }) {
 		state: runState(run.row, project?.runs ?? []),
 		next,
 		followUp,
+		children,
 		canWrite: context.canWrite
 	};
 }
 var meta$8 = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, kind, manual, label, stuck, state, next, followUp, canWrite } = loaderData;
+	const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite } = loaderData;
 	const { row, project } = run;
 	const badge = stuck === null ? state : {
 		tone: "late",
@@ -15785,8 +15968,68 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 							project,
 							run: row.run,
 							readiness: followUp,
-							questions: run.result.questions
+							questions: run.result.questions,
+							items: run.result.items
 						})
+					})
+				}),
+				children.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: children.length === 1 ? "Its follow-up" : "Its follow-ups",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+						className: "fu-kids",
+						children: children.map((child) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: "card fu-kid",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "fu-kid-head",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+											to: href({
+												to: "run",
+												ws: project,
+												run: child.row.run
+											}),
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: shortRun(child.row.run) })
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: child.state }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "text-muted",
+											children: [
+												"started ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: child.row.startedAt }),
+												", by ",
+												child.row.who
+											]
+										})
+									]
+								}),
+								child.approved.length === 0 && child.items.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "ritem-key",
+									children: ["approved ", [...child.approved.map((n) => `question ${n}`), ...child.items.map((key) => `item ${key}`)].join(", ")]
+								}),
+								child.result === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "text-muted",
+									children: child.row.phase === "closed" ? "It handed in no result." : "No result yet."
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+											tone: resultTone(child.result.status),
+											label: resultWord(child.result.status)
+										}),
+										" ",
+										child.result.summary
+									] }),
+									child.result.actions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "fu-label",
+										children: "What it changed"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Actions, { actions: child.result.actions })] }),
+									child.result.items.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "fu-label",
+										children: "What it reported"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Items, { items: child.result.items })] })
+								] })
+							]
+						}, child.row.run))
 					})
 				}),
 				body !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
@@ -18146,7 +18389,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-Dwt1-Z2Y.js",
+			"module": "/assets/root-Dkq1LnQ4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18158,7 +18401,7 @@ var server_manifest_default = {
 				"/assets/agenda-DgpBtP1m.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-BytfipkT.css"],
+			"css": ["/assets/root-_xp8olad.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -18198,7 +18441,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BK6EP2iu.js",
+			"module": "/assets/overview-E5AMRc83.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18206,14 +18449,14 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/result-B1yYSs48.js",
+				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18234,7 +18477,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BK6EP2iu.js",
+			"module": "/assets/overview-E5AMRc83.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18242,14 +18485,14 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/result-B1yYSs48.js",
+				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18338,23 +18581,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CwGR-IrJ.js",
+			"module": "/assets/rituals-D59ooB1o.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
@@ -18376,23 +18619,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CwGR-IrJ.js",
+			"module": "/assets/rituals-D59ooB1o.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/agenda-DgpBtP1m.js"
 			],
 			"css": [],
@@ -18414,16 +18657,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-0DgUcWKA.js",
+			"module": "/assets/findings-B3Hl_GpJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -18449,16 +18692,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-0DgUcWKA.js",
+			"module": "/assets/findings-B3Hl_GpJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -18546,13 +18789,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DSRVHeqi.js",
+			"module": "/assets/runs-Cg7pCu82.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18560,10 +18803,10 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18584,7 +18827,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-ZZEjMz8z.js",
+			"module": "/assets/ritual-_OXDrI_k.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18593,14 +18836,14 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18621,7 +18864,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-tTb_Qflv.js",
+			"module": "/assets/run-BwVHww9K.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18629,12 +18872,12 @@ var server_manifest_default = {
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js"
@@ -18772,13 +19015,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-HQKSQ_nP.js",
+			"module": "/assets/settings-backups-DQM-8309.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/nav-icons-CyBWLN6t.js",
 				"/assets/clock-D-5lOmZM.js",
-				"/assets/post-BAUIktA6.js",
+				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/settings-ui-ChNT_lIl.js",
@@ -18858,13 +19101,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DSRVHeqi.js",
+			"module": "/assets/runs-Cg7pCu82.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-COLfH5SP.js",
+				"/assets/runs-DRqR3g4R.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18872,10 +19115,10 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-DHkvXwcP.js",
+				"/assets/result-B1yYSs48.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/post-BAUIktA6.js"
+				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19022,8 +19265,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-e80c51fc.js",
-	"version": "e80c51fc",
+	"url": "/assets/manifest-62e1d9f3.js",
+	"version": "62e1d9f3",
 	"sri": void 0
 };
 //#endregion
