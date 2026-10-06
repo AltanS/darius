@@ -1,6 +1,6 @@
 {
   "name": "darius",
-  "version": "0.68.1",
+  "version": "0.69.0",
   "license": "MIT",
   "private": true,
   "description": "Rituals, vigils and milestones for agent-driven projects, synced to your own object storage",

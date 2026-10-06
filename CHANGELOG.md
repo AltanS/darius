@@ -2,6 +2,39 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.69.0] - 2026-10-06
+
+### Added
+
+- A `needs-decision` item of a run result may carry `proposal: {current?, proposed, why?, effect?}`, the exact change it proposes. `current` and `proposed` take at most 1500 characters, `why` and `effect` at most 400; newlines stay. A longer text is refused, not clipped. A proposal on an item in any other state is refused. The run prompt teaches the field.
+- `darius run follow-up <run> --item KEY` (repeatable) approves the proposal of the parent's needs-decision item with that key. It combines with `--approve`, `--grant` and `--note`. An unknown key, a key of an item in another state, a key two items share and a key given twice are usage errors. `run.started` records the keys as `items`, and the parent's acknowledgement note names them.
+- The follow-up prompt prints each approved proposal in full under "Approved proposals" and keeps every other open item to one line. The rule: carry out exactly the approved proposals within the policy, act on nothing else, verify, report each key once and list each write as an action.
+- `follow_up_may` on a v3 ritual or a `[policies.*]` table, and `follow_up_may_extra` on a ritual: rules only a follow-up run may use, on top of `may`. A scheduled run never gets them, and `hold` still wins. Next to `policy`, `follow_up_may` is an error.
+- `follow_up = "headless" | "attended"` on a v3 ritual. With `headless`, follow-ups of the ritual run headless without herdr, from the CLI and the web.
+- `run follow-up` prints `darius run follow-up: started run <id> on <host>` on stderr right after the run starts.
+- `darius run proposal <run> <key> [--field proposed|current|why|effect]` prints one field of an item's proposal (default `proposed`) to stdout byte for byte, with no newline added. A missing run, key or field is exit 1 with a sentence on stderr. The follow-up prompt tells the run to pipe it into the write, so the page gets exactly the approved text. A ritual allows it with `Bash(darius run proposal *)`; the gate judges each side of the pipe by `may`.
+- `POST /api/run/follow-up` takes `items: [KEY]`. Each key must name a needs-decision item of the parent, else 400 with a sentence.
+- The run page lists each proposal with a checkbox, its target and key, and the proposal in a fold: current and proposed as two labelled text blocks, then why and the expected effect. Select all proposals, one note field, and one button, "Start follow-up with N approved".
+- The parent run page shows each follow-up with its state, who started it, what was approved, its summary, its actions and its items. `RunDetail` gains `children`.
+- The ritual page shows what a follow-up may also run and how follow-ups run.
+
+### Changed
+
+- On a host that is not the ritual's, the web page now forwards the follow-up: readiness runs `run follow-up --dry-run --json --on <host>`, and the start adds `--on <host>`. A refusal there or an ssh failure shows on the card as its reason, not as a command to copy. `FollowUpReadiness` gains `surface`, `items` and `via`.
+- The follow-up POST waits up to 10 s for the run to start or the CLI to end: 202 with the new run id, 409 with the CLI's sentence, 503 when ssh did not connect, or 202 `pending` with a message. It was a silent 202.
+- A press on the card posts at once. Only command lines still get the confirm box that lists them.
+- The nothing-to-do rule of a follow-up counts questions, items or a note.
+- `marker check --resolved` lists `follow_up_may` lines, and its JSON adds `follow_up_may`. `marker factor` leaves a ritual with `follow_up_may` alone.
+
+### Fixed
+
+- The follow-up card now shows for a complete run that proposes changes and asks no question. It was drawn only next to questions.
+- `shellWord` quoted a word for POSIX shells only. In fish a word that ended in a backslash left the quote open, so with two such words the text between them ran as code on the other host of `--on`. Each `'` and `\` is now written outside the quotes, which reads the same in sh, bash, zsh and fish.
+
+### Upgrade note
+
+- Every host must run 0.69.0 before a marker uses `follow_up_may`, `follow_up_may_extra` or `follow_up`: an older host refuses the unknown key and cannot read the mirrored item. A ritual without them keeps its definition hash.
+
 ## [0.68.1] - 2026-10-06
 
 ### Fixed
