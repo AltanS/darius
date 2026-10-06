@@ -205,8 +205,14 @@ function approvedItemLines(item: ResultItem): string[] {
 
 const REPORT_RULE = "In your result, report only the items you changed or re-checked, with the key of the parent's item when it has one. Do not repeat the parent's other items.";
 
-const PROPOSAL_RULE =
-  "Carry out exactly the approved proposals above, within this run's policy: may and hold apply as usual, and the procedure's rules for writes (checks before a write, before-states, verify after) still hold. Do not act on any other open item of that run. Verify each change. In your result, report each approved key once, with the parent's key: state fixed when the change is made and verified; state open, with the reason in detail, when it could not be done. Do not copy the proposal into the item. List each write you made as an action.";
+/** The rule for approved proposals (0.69.0), naming the parent so the model can print each approved text. */
+function proposalRule(parent: string): string {
+  return [
+    "Carry out exactly the approved proposals above, within this run's policy: may and hold apply as usual, and the procedure's rules for writes (checks before a write, before-states, verify after) still hold. Do not act on any other open item of that run.",
+    `Print the approved text with \`darius run proposal ${parent} <key>\` (add \`--field current\` for the text there now) and pipe it into the write, so the page gets exactly the approved text, byte for byte. Do not retype it or quote it on the command line.`,
+    "Verify each change. In your result, report each approved key once, with the parent's key: state fixed when the change is made and verified; state open, with the reason in detail, when it could not be done. Do not copy the proposal into the item. List each write you made as an action.",
+  ].join(" ");
+}
 
 /**
  * The `## Follow-up` section of the run prompt, after the handoff. Facts
@@ -258,7 +264,7 @@ export function followUpSection(followUp: FollowUp, result: RunResult | null): s
   }
   const rule = [
     ...(hasGrants ? ["Run the granted lines as written, then verify each result."] : []),
-    ...(hasItems ? [PROPOSAL_RULE] : []),
+    ...(hasItems ? [proposalRule(followUp.parent)] : []),
     "Anything else holds as usual.",
     REPORT_RULE,
   ];

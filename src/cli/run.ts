@@ -20,6 +20,11 @@
  *   run ack <run> [--note TEXT] [--who W]                          (display only)
  *   run list [--open]
  *   run show <run>             the run's findings and its result block (0.24.0)
+ *   run proposal <run> <key> [--field proposed|current|why|effect]
+ *                  the raw text of one proposal field of the needs-decision
+ *                  item with that key (0.69.0), on stdout byte for byte, with
+ *                  no newline added. Read only. A follow-up pipes it into the
+ *                  write, so the page gets exactly what the operator approved.
  *   run now <ritual> [--profile NAME] [--timeout S] [--dry-run]   (src/cli/run-due.ts)
  *   run resume <run> [--timeout S]                                (src/cli/run-due.ts)
  *   run follow-up <run> [--approve N] [--grant LINE] [--item KEY] [--note T]   (src/cli/run-due.ts)
@@ -66,7 +71,8 @@ import { readStdin } from "./args.ts";
 import { runFollowUp, runNow, runResume } from "./run-due.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "start | hold | answer | resume | complete | ack | list | show | now | follow-up";
+const VERBS = "start | hold | answer | resume | complete | ack | list | show | proposal | now | follow-up";
+const PROPOSAL_FIELDS = ["proposed", "current", "why", "effect"] as const;
 const OUTCOMES = ["complete", "failed", "abandoned"] as const;
 type Outcome = (typeof OUTCOMES)[number];
 type RunPhase = "running" | "held" | "closed";
@@ -554,11 +560,47 @@ function runShow(args: ParsedArgs): number {
   return 0;
 }
 
+/** A refusal of `run proposal`: one sentence on stderr, nothing on stdout, exit 1. */
+function refuseProposal(reason: string): number {
+  console.error(`darius run proposal: ${reason}`);
+  return 1;
+}
+
+/**
+ * `run proposal <run> <key> [--field F]` (0.69.0): one field of the proposal
+ * of the needs-decision item with that key, as the result block holds it
+ * after the check (the text the run page shows and the operator approved).
+ * It goes to stdout as it is: no newline added, nothing else. A missing run,
+ * result, key, proposal or field is exit 1 with a sentence on stderr, so a
+ * pipe into a write gets nothing when there is nothing to write.
+ */
+function runProposal(args: ParsedArgs): number {
+  const runId = requirePositional(args, 1, "<run> id");
+  const key = requirePositional(args, 2, "<key>");
+  const field = stringFlag(args, "field") ?? "proposed";
+  const name = PROPOSAL_FIELDS.find((candidate) => candidate === field);
+  if (name === undefined) throw new UsageError(`--field must be one of ${PROPOSAL_FIELDS.join(", ")}, got '${field}'`);
+  const project = currentProject(args);
+  const ledger = readLedger(project);
+  if (!runRows(ledger).some((candidate) => candidate.run === runId)) return refuseProposal(`no run '${runId}' in ${project.name}`);
+  const result = storedResult(project, findRunLines(ledger, runId).findLast((line) => line.type === "run.completed"));
+  if (result === null) return refuseProposal(`run '${runId}' has no result block`);
+  const found = result.items.filter((item) => item.key === key);
+  if (found.length === 0) return refuseProposal(`run '${runId}' has no item with key '${key}'`);
+  if (found.length > 1) return refuseProposal(`run '${runId}' has ${String(found.length)} items with key '${key}'`);
+  const proposal = found[0]?.proposal;
+  if (proposal === undefined) return refuseProposal(`item '${key}' of run '${runId}' has no proposal`);
+  const text = proposal[name];
+  if (text === undefined) return refuseProposal(`the proposal of item '${key}' has no ${name}`);
+  process.stdout.write(text);
+  return 0;
+}
+
 // --- dispatch ---------------------------------------------------------------------
 
 export const runCommand: Command = {
   name: "run",
-  summary: "start, hold, answer, resume, complete, acknowledge, list and show ritual runs",
+  summary: "start, hold, answer, resume, complete, acknowledge, list and show ritual runs; proposal prints an approved text",
   audience: "session",
   usage: `run ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
@@ -578,6 +620,8 @@ export const runCommand: Command = {
         return runList(args);
       case "show":
         return runShow(args);
+      case "proposal":
+        return runProposal(args);
       case "now":
         return runNow(args);
       case "resume":
