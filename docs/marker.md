@@ -97,7 +97,7 @@ An older darius refuses the unknown key `kinds`. Update every host before you co
 | `from` | no | `YYYY-MM-DD`. The first date of the cadence grid. |
 | `timeout` | no | `<N>m` or `<N>h`, from `1m` to `12h`. The budget of one run. |
 | `profile`, `model`, `max_turns` | no | As on a v2 ritual. |
-| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold` or `on_hold`. Its `notes` may be combined with it. |
+| `policy` | no | Names a `[policies.<name>]` table. Do not combine it with `mode`, `may`, `hold`, `on_hold` or `follow_up_may`. Its `notes` may be combined with it. |
 | `mode` | no | `off` (default), `report` or `act`. Not above `max_mode`. |
 | `may` | no | A list of Claude Code permission rules, such as `Bash(date *)` or an MCP tool name such as `mcp__some-server__get_thing`. A tool name may hold `-` after its first character. |
 | `hold` | no | A list of regular expressions. Each must compile with the `u` flag. |
@@ -105,8 +105,11 @@ An older darius refuses the unknown key `kinds`. Update every host before you co
 | `notes` | no | Plain text, or a `"""` string. Keep it short: over 300 characters `marker check` warns. With a `policy`, the policy's notes come first, then a blank line, then these. |
 | `may_extra` | no | Rules to add to the `may` of the named policy, or of the ritual's own `may`. Same rules as `may`. |
 | `hold_extra` | no | Patterns to add to the `hold` of the named policy, or of the ritual's own `hold`. Same rules as `hold`. |
+| `follow_up_may` | no | Rules only a follow-up run of this ritual may use, on top of `may` (0.69.0). Same rules as `may`. A follow-up gets them in its run files; a scheduled run never does. `hold` still wins over them. Use it for the writes an approved proposal needs. |
+| `follow_up_may_extra` | no | Rules to add to the `follow_up_may` of the named policy, or of the ritual's own. |
+| `follow_up` | no | `attended` (default) or `headless` (0.69.0). How a follow-up of this ritual runs: in a herdr tab, or headless without herdr, from the CLI and from the web page. |
 
-`[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes` and `on_hold`, with the same rules.
+`[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes`, `on_hold` and `follow_up_may`, with the same rules.
 A policy's `on_hold` applies to every ritual that names the policy.
 `may_extra` and `hold_extra` only add. The effective `may` is the base `may` and then the
 extra rules; `hold` works the same way. A rule that is already there appears once. An extra can
@@ -137,13 +140,14 @@ one where a command may run code from its arguments, such as a pipe into `bash` 
 line the shell split refuses. A class such as `[^|;&]` or `[;&|(]` is fine. Each pattern is
 reported once, at the policy that holds it, or at the ritual for its own `hold` and `hold_extra`.
 `--resolved <slug>` prints `mode:`, then `on_hold: deny` when the policy sets it, then
-one `may:` and one `hold:` line per entry, each list sorted. An inline policy and a factored
+one `may:`, one `hold:` and one `follow_up_may:` line per entry, each list sorted. An inline policy and a factored
 one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked v3 checkout.
 
 Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`, and 0.57.0
-or later before it uses `args` or a `"""` string, and 0.66.0 or later before it uses `on_hold`:
+or later before it uses `args` or a `"""` string, 0.66.0 or later before it uses `on_hold`, and
+0.69.0 or later before it uses `follow_up_may`, `follow_up_may_extra` or `follow_up`:
 an older host refuses an unknown ritual key, and it cannot read a mirrored item that has `args`,
-`on_hold` or a note with a newline.
+`on_hold`, `follow_up_may`, `follow_up` or a note with a newline.
 
 ## Factor shared rules
 
@@ -154,7 +158,7 @@ darius marker factor          # print a summary and a diff; write nothing
 darius marker factor --write  # write .darius.toml; never runs git
 ```
 
-It groups rituals with an inline policy (no `policy = "<name>"`) that have the same mode and
+It groups rituals with an inline policy (no `policy = "<name>"`) and no `follow_up_may` that have the same mode and
 the same `on_hold`, and pass the overlap rule above. A group's `on_hold = "deny"` moves into its
 new policy table. A group is every ritual linked to another by that rule, in file
 order, with at least 2 rituals. The shared `may` and `hold` rules (the ones every member has) go
