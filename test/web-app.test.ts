@@ -1095,7 +1095,7 @@ test("the run page and the ritual page carry the button where the command is: th
   assertScriptsCarryNonce(await readPage(`/w/demo/runs/${FAILED}`, failedContext("failed", null)), "run page with an Acknowledge button");
 });
 
-test("the loopback viewer sees no Acknowledge button, only the terminal commands (canWrite false)", async () => {
+test("the loopback viewer sees no Acknowledge button, a line that says why, and the terminal commands (canWrite false)", async () => {
   const asks: WebContext = { ...asksContext(null), canWrite: false };
   const failed: WebContext = { ...failedContext("failed", null), canWrite: false };
   const pages: [string, WebContext, string][] = [
@@ -1109,11 +1109,13 @@ test("the loopback viewer sees no Acknowledge button, only the terminal commands
     const page = await readPage(path, ctx);
     assert.equal(page.includes("Acknowledge"), false, `${path}: no button`);
     assert.equal(page.includes("Add a note"), false, `${path}: no note fold`);
+    assert.ok(page.includes("this page was opened from this host"), `${path}: a line says why there is no button`);
     assert.ok(page.includes(command), `${path}: the command stays`);
   }
   const failedHome = await readPage("/all", failed);
   assert.ok(failedHome.includes('id="failed-demo-daily-report"'), "the failed card is still there");
   assert.equal(failedHome.includes("Acknowledge"), false);
+  assert.ok(failedHome.includes("this page was opened from this host"), "the failed card says why too");
 });
 
 test("an acknowledged run has no button: the card is plain and the run page says who", async () => {

@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 }) : target, mod));
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
 //#endregion
-//#region ../../../../web/node_modules/react/cjs/react.production.js
+//#region node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -419,12 +419,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../../../web/node_modules/react/index.js
+//#region node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region ../../../../web/node_modules/react-router/dist/development/chunk-OB3PAWPO.mjs
+//#region node_modules/react-router/dist/development/chunk-OB3PAWPO.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 /**
 * react-router v7.18.4
@@ -4790,7 +4790,7 @@ function encodeLocation(to) {
 	};
 }
 //#endregion
-//#region ../../../../web/node_modules/react-router/dist/development/chunk-H4DAEOV7.mjs
+//#region node_modules/react-router/dist/development/chunk-H4DAEOV7.mjs
 /**
 * react-router v7.18.4
 *

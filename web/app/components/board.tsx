@@ -192,8 +192,7 @@ interface CardViewProps {
  */
 export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
   const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-  const hasAck = card.ack !== null && canWrite;
-  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || hasAck;
+  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null;
   return (
     <article id={card.id} className={`card hcard ${edge}`}>
       <div className="hc-head">

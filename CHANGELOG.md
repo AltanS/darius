@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.68.1] - 2026-10-06
+
+### Fixed
+
+- A viewer who opens the page from this host (loopback) saw no Acknowledge button and no reason. A short line now takes its place: the page was opened from this host, and the card can be dismissed by the tailnet name or with the command. A page reached through the configured proxy is not loopback and still gets the button.
+
 ## [0.68.0] - 2026-10-06
 
 ### Added

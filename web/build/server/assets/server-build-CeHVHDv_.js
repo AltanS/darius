@@ -1,5 +1,5 @@
-import { C as __toESM, S as __require, _ as withComponentProps, a as Meta, b as __commonJSMin, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteLoaderData, h as useRouteError, i as Links, l as ScrollRestoration, m as useRevalidator, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withErrorBoundaryProps, x as __exportAll, y as require_react } from "./chunk-H4DAEOV7-CeX8RpdJ.js";
-//#region ../../../../web/node_modules/react-dom/cjs/react-dom.production.js
+import { C as __toESM, S as __require, _ as withComponentProps, a as Meta, b as __commonJSMin, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteLoaderData, h as useRouteError, i as Links, l as ScrollRestoration, m as useRevalidator, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withErrorBoundaryProps, x as __exportAll, y as require_react } from "./chunk-H4DAEOV7-Br-5CKvD.js";
+//#region node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -152,7 +152,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../../../web/node_modules/react-dom/index.js
+//#region node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -166,7 +166,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
+//#region node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
 /**
 * @license React
 * react-dom-server-legacy.node.production.js
@@ -4260,7 +4260,7 @@ var require_react_dom_server_legacy_node_production = /* @__PURE__ */ __commonJS
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server.node.production.js
+//#region node_modules/react-dom/cjs/react-dom-server.node.production.js
 /**
 * @license React
 * react-dom-server.node.production.js
@@ -8871,7 +8871,7 @@ var import_server_node = (/* @__PURE__ */ __commonJSMin(((exports) => {
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var NonceContext = (0, import_react.createContext)(void 0);
 //#endregion
-//#region ../../../../web/node_modules/react/cjs/react-jsx-runtime.production.js
+//#region node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -8906,7 +8906,7 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region ../../../../web/node_modules/react/jsx-runtime.js
+//#region node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
@@ -11913,8 +11913,11 @@ function Facts({ facts }) {
 * card moves to Last night as an acknowledged card. A refusal of the server
 * (the run is held, already acknowledged, and so on) shows as its own
 * sentence and the card stays. The button does not draw for a viewer who
-* cannot write: the server would refuse it, and the terminal command stays.
+* cannot write: the server would refuse it. A line says why, and the terminal
+* command stays.
 */
+/** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
+var NO_WRITE_HINT = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
 function AckButton({ project, run, canWrite, subject, hint }) {
 	const { revalidate } = useRevalidator();
 	const id = (0, import_react.useId)();
@@ -11922,7 +11925,10 @@ function AckButton({ project, run, canWrite, subject, hint }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [isDone, setDone] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)(null);
-	if (!canWrite) return null;
+	if (!canWrite) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fu-off",
+		children: NO_WRITE_HINT
+	});
 	const submit = async (event) => {
 		event.preventDefault();
 		setBusy(true);
@@ -12910,8 +12916,7 @@ function Commands({ card }) {
 */
 function CardView({ card, canWrite }) {
 	const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-	const hasAck = card.ack !== null && canWrite;
-	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || hasAck;
+	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
 		id: card.id,
 		className: `card hcard ${edge}`,
@@ -18193,7 +18198,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-C0FtfSb3.js",
+			"module": "/assets/overview-BK6EP2iu.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18201,13 +18206,13 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
@@ -18229,7 +18234,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-C0FtfSb3.js",
+			"module": "/assets/overview-BK6EP2iu.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18237,13 +18242,13 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/post-BAUIktA6.js"
 			],
 			"css": [],
@@ -18333,21 +18338,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CvEI-rfj.js",
+			"module": "/assets/rituals-CwGR-IrJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/agenda-DgpBtP1m.js"
@@ -18371,21 +18376,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CvEI-rfj.js",
+			"module": "/assets/rituals-CwGR-IrJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-whavXC1O.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/agenda-DgpBtP1m.js"
@@ -18409,7 +18414,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CluEcfB5.js",
+			"module": "/assets/findings-0DgUcWKA.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18418,7 +18423,7 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -18444,7 +18449,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CluEcfB5.js",
+			"module": "/assets/findings-0DgUcWKA.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18453,7 +18458,7 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -18541,13 +18546,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DUnkJ0mG.js",
+			"module": "/assets/runs-DSRVHeqi.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18555,7 +18560,7 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BAUIktA6.js"
@@ -18579,7 +18584,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-DXnQMr_s.js",
+			"module": "/assets/ritual-ZZEjMz8z.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18588,10 +18593,10 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js",
@@ -18616,7 +18621,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BM2GcUFx.js",
+			"module": "/assets/run-tTb_Qflv.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18626,10 +18631,10 @@ var server_manifest_default = {
 				"/assets/view-CIvKJVtw.js",
 				"/assets/post-BAUIktA6.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js"
@@ -18853,13 +18858,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DUnkJ0mG.js",
+			"module": "/assets/runs-DSRVHeqi.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-CVlfp1CA.js",
+				"/assets/runs-COLfH5SP.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -18867,7 +18872,7 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-CIvKJVtw.js",
-				"/assets/result-BNqVYGeP.js",
+				"/assets/result-DHkvXwcP.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BAUIktA6.js"
@@ -19017,8 +19022,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-97ce958b.js",
-	"version": "97ce958b",
+	"url": "/assets/manifest-e80c51fc.js",
+	"version": "e80c51fc",
 	"sri": void 0
 };
 //#endregion

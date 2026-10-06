@@ -8,7 +8,8 @@
  * card moves to Last night as an acknowledged card. A refusal of the server
  * (the run is held, already acknowledged, and so on) shows as its own
  * sentence and the card stays. The button does not draw for a viewer who
- * cannot write: the server would refuse it, and the terminal command stays.
+ * cannot write: the server would refuse it. A line says why, and the terminal
+ * command stays.
  */
 
 import { useId, useState } from "react";
@@ -17,10 +18,13 @@ import { useRevalidator } from "react-router";
 import { postJson } from "../lib/post.ts";
 import { Fold } from "./ui.tsx";
 
+/** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
+const NO_WRITE_HINT = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
+
 interface AckButtonProps {
   project: string;
   run: string;
-  /** False for the loopback viewer: nothing draws. */
+  /** False for the loopback viewer: a short line says why there is no button. */
   canWrite: boolean;
   /** What the run is called, for the button's accessible name. */
   subject: string;
@@ -35,7 +39,7 @@ export function AckButton({ project, run, canWrite, subject, hint }: AckButtonPr
   const [busy, setBusy] = useState(false);
   const [isDone, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!canWrite) return null;
+  if (!canWrite) return <p className="fu-off">{NO_WRITE_HINT}</p>;
 
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
