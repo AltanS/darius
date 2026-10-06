@@ -10,6 +10,7 @@ v = 3
 project = "acme-web"
 max_mode = "act"
 tz = "Europe/Berlin"
+icon = "🎯"
 
 [profiles.watch]
 surface = "herdr"
@@ -73,15 +74,34 @@ Root keys:
 
 | Key | Rule |
 |---|---|
-| `v` | 1, 2 or 3. `tz`, `[rituals.*]` and `[policies.*]` need 3. `[profiles.*]` and `[defaults]` need 2 or 3. |
+| `v` | 1, 2 or 3. `tz`, `kinds`, `icon`, `[rituals.*]` and `[policies.*]` need 3. `[profiles.*]` and `[defaults]` need 2 or 3. |
 | `project` | The project name. |
 | `max_mode` | `off`, `report` or `act`. The ceiling for every ritual. A ritual with `mode = "act"` needs `max_mode = "act"`. |
 | `tz` | Required when `v = 3`. An IANA zone name, such as `Europe/Berlin`. |
 | `kinds` | Optional, needs `v = 3`. The kinds the darius store owns in this project. Exactly one of `["ritual"]` (the default), `["ritual", "vigil"]` or `["ritual", "vigil", "milestone"]`. |
+| `icon` | Optional, needs `v = 3` (0.70.0). The workspace icon in the web app: one emoji, or a relative path to a `.svg`, `.png` or `.webp` file in the repo. |
 
 `kinds` says which kinds the store owns in this project. `ritual` is always owned. `vigil` means the store owns this project's vigils, so `darius vigil` verbs act on the store and not on `.tracker/vigils/`. `milestone` means the store owns the whole tracker tree: milestones, specs, worklogs and the archive. Each list adds one kind to the one before, so no other list is valid, and a wrong list is a marker error.
 
 An older darius refuses the unknown key `kinds`. Update every host before you commit the first marker with `kinds`. With `milestone`, `.tracker` in a checkout is a link to the store's working copy and `/.tracker` is in `.gitignore`. `darius onboard` adds the `kinds` line to a legacy repo; `darius init` writes it in a fresh one.
+
+`icon` puts an icon next to the workspace name in the web app: in Places, in the Workspaces list
+and in the phone top bar. Two forms are valid:
+
+- One emoji: `icon = "🎯"`. Exactly one grapheme with a pictographic character, a flag such as
+  `"🇩🇪"` or a keycap such as `"1️⃣"`. A ZWJ sequence such as `"👩‍👩‍👧"` counts as one. At most 16
+  UTF-16 units.
+- A path to an image in the repo: `icon = "assets/logo.svg"`. Relative to the repo root, with no
+  leading `/` or `~`, no `..` or empty part, no backslash and no control character. At most 200
+  characters. It ends in `.svg`, `.png` or `.webp`, in any case.
+
+Anything else, such as two emoji, a word or an absolute path, is a marker error. The parser checks
+the text only. The web checks the file before it shows it: the real path must stay inside the
+checkout (a symlink out of the repo is refused), it must be a regular file of at most 64 KB, and its
+first bytes must be a PNG, a WebP or an SVG that matches the extension. An SVG may start with a BOM,
+an XML prolog and comments, but not a DOCTYPE. An image that fails a check shows no icon, and
+`darius marker check` warns about it. An older darius refuses the unknown key `icon`. Update every
+host to 0.70.0 or later before you commit the first marker with `icon`.
 
 `[rituals.<slug>]` takes a slug of lowercase letters, digits, `-` and `_` (at most 64, no dots):
 
