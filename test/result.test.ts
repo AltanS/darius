@@ -191,3 +191,44 @@ test("needs-code is an item state that counts as open; an unknown state is refus
   assert.deepEqual(summarizeResult(result).open, { critical: 0, high: 1, medium: 0, low: 0, info: 0 });
   assert.match(errorsOf(JSON.stringify({ ...base, items: [{ title: "t", severity: "low", state: "needs-help" }] })).join("\n"), /items\[0\]\.state: must be one of open, fixed, needs-decision, needs-code, not-verified/u);
 });
+
+// --- proposals (0.69.0) ------------------------------------------------------------------
+
+function withItems(items: object[]): string {
+  return JSON.stringify({ v: 1, status: "attention", summary: "one proposal", items });
+}
+
+const DECISION = { key: "post-12/title", title: "Title misses the main query", severity: "medium", state: "needs-decision", target: "post 12" };
+
+test("a needs-decision item carries a proposal: proposed is required, newlines stay, nothing is clipped", () => {
+  const proposal = { current: "Old title\nsecond line", proposed: "New title", why: "The query is missing.", effect: "Rank 8 to top 5.", extra: "ignored" };
+  const result = parsed(withItems([{ ...DECISION, proposal }]));
+  assert.deepEqual(result.items[0]?.proposal, { current: "Old title\nsecond line", proposed: "New title", why: "The query is missing.", effect: "Rank 8 to top 5." });
+  assert.deepEqual(parsed(withItems([{ ...DECISION, proposal: { proposed: "Only this" } }])).items[0]?.proposal, { proposed: "Only this" });
+  assert.equal(parsed(withItems([DECISION])).items[0]?.proposal, undefined, "no proposal, no key");
+  const max = { current: "c".repeat(1500), proposed: "p".repeat(1500), why: "w".repeat(400), effect: "e".repeat(400) };
+  assert.deepEqual(parsed(withItems([{ ...DECISION, proposal: max }])).items[0]?.proposal, max, "a text at its cap is kept whole");
+});
+
+test("a proposal over its cap is refused, not clipped, and each field says its cap", () => {
+  const over = { current: "c".repeat(1501), proposed: "p".repeat(1501), why: "w".repeat(401), effect: "e".repeat(401) };
+  assert.deepEqual(errorsOf(withItems([{ ...DECISION, proposal: over }])), [
+    "items[0].proposal.proposed: at most 1500 characters, got 1501; make it shorter",
+    "items[0].proposal.current: at most 1500 characters, got 1501; make it shorter",
+    "items[0].proposal.why: at most 400 characters, got 401; make it shorter",
+    "items[0].proposal.effect: at most 400 characters, got 401; make it shorter",
+  ]);
+});
+
+test("a proposal needs proposed, an object shape and string fields", () => {
+  assert.deepEqual(errorsOf(withItems([{ ...DECISION, proposal: { current: "x" } }])), ["items[0].proposal.proposed: needs a non-empty string"]);
+  assert.deepEqual(errorsOf(withItems([{ ...DECISION, proposal: { proposed: "  " } }])), ["items[0].proposal.proposed: needs a non-empty string"]);
+  assert.deepEqual(errorsOf(withItems([{ ...DECISION, proposal: "New title" }])), ["items[0].proposal: must be an object with proposed and optional current, why, effect"]);
+  assert.deepEqual(errorsOf(withItems([{ ...DECISION, proposal: { proposed: "x", why: 3 } }])), ["items[0].proposal.why: must be a string"]);
+});
+
+test("a proposal on an item that is not needs-decision is refused", () => {
+  for (const state of ["open", "fixed", "needs-code", "not-verified"]) {
+    assert.deepEqual(errorsOf(withItems([{ ...DECISION, state, proposal: { proposed: "x" } }])), [`items[0].proposal: only a needs-decision item carries a proposal; this item is ${state}`], state);
+  }
+});

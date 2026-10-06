@@ -18,6 +18,15 @@
  * `key` (0.62.0) names an item across runs. Like `handoff`, it is never
  * clipped: a longer key is an error.
  *
+ * `proposal` (0.69.0) is the exact change a `needs-decision` item proposes:
+ * the current text, the proposed text, why, and the expected effect. The
+ * operator approves it by the item's key, and a follow-up run carries it
+ * out (src/runner/follow-up.ts). Its texts are never clipped either: a cut
+ * proposed text would be carried out cut, so a longer one is an error. On an
+ * item in any other state it is an error too: only a decision is approved,
+ * and a proposal that silently went away would hide that the model put it
+ * on the wrong item.
+ *
  * `handoff` (0.26.0) is a note of at most HANDOFF_MAX characters for the
  * next run of the same ritual (src/core/handoff.ts). It is the one text
  * darius does not clip: a cut note can lose its meaning, so a longer one is
@@ -63,6 +72,20 @@ export interface ResultItem {
   /** What the item is about, for example a post: plain text, never a link. */
   target?: string;
   detail?: string;
+  /** The exact change a `needs-decision` item proposes (0.69.0); the operator approves it by `key`. */
+  proposal?: ResultProposal;
+}
+
+/** The change a `needs-decision` item proposes (0.69.0). Plain text; newlines stay. */
+export interface ResultProposal {
+  /** What is there now, for example the current paragraph. */
+  current?: string;
+  /** What it should become. */
+  proposed: string;
+  /** Why the change is needed. */
+  why?: string;
+  /** What the change should bring, for example a rank or a click rate. */
+  effect?: string;
 }
 
 export interface ResultQuestion {
@@ -134,6 +157,9 @@ export const HANDOFF_MAX = 200;
 
 /** The longest item key, in characters. */
 export const KEY_MAX = 120;
+
+/** The longest proposal texts, in characters (0.69.0). Longer is an error, not a clip. */
+export const PROPOSAL_LIMITS = { current: 1500, proposed: 1500, why: 400, effect: 400 } as const;
 
 /** More entries than these are an error, not a clip: the page could not show them. */
 const COUNT_LIMITS = { metrics: 12, items: 100, questions: 10, actions: 100, commands: 20 } as const;
@@ -305,6 +331,49 @@ function item(check: Checker, record: JsonRecord, where: string): ResultItem {
   if (target !== undefined) out.target = target;
   const detail = check.optionalText(record, "detail", where, TEXT_LIMITS.detail, true);
   if (detail !== undefined) out.detail = detail;
+  const change = proposal(check, record, where, out.state);
+  if (change !== undefined) out.proposal = change;
+  return out;
+}
+
+/** One proposal text: control characters out, newlines kept, never clipped; longer than `max` is an error. */
+function proposalText(check: Checker, record: JsonRecord, at: { where: string; key: keyof typeof PROPOSAL_LIMITS; isRequired: boolean }): string | undefined {
+  const value = record[at.key];
+  const name = `${at.where}.proposal.${at.key}`;
+  if (value === undefined || value === null) {
+    if (at.isRequired) check.errors.push(`${name}: needs a non-empty string`);
+    return undefined;
+  }
+  if (!isText(value)) {
+    check.errors.push(`${name}: must be a string`);
+    return undefined;
+  }
+  const text = clean(value, Number.MAX_SAFE_INTEGER, true);
+  const max = PROPOSAL_LIMITS[at.key];
+  const length = [...text].length;
+  if (length > max) check.errors.push(`${name}: at most ${String(max)} characters, got ${String(length)}; make it shorter`);
+  if (text === "" && at.isRequired) check.errors.push(`${name}: needs a non-empty string`);
+  return text === "" ? undefined : text;
+}
+
+/** An item's `proposal`: only on a `needs-decision` item, with a non-empty `proposed`. */
+function proposal(check: Checker, record: JsonRecord, where: string, state: ItemState): ResultProposal | undefined {
+  const value = record.proposal;
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    check.errors.push(`${where}.proposal: must be an object with proposed and optional current, why, effect`);
+    return undefined;
+  }
+  if (state !== "needs-decision") {
+    check.errors.push(`${where}.proposal: only a needs-decision item carries a proposal; this item is ${state}`);
+    return undefined;
+  }
+  const proposed = proposalText(check, value, { where, key: "proposed", isRequired: true });
+  const out: ResultProposal = { proposed: proposed ?? "" };
+  for (const key of ["current", "why", "effect"] as const) {
+    const text = proposalText(check, value, { where, key, isRequired: false });
+    if (text !== undefined) out[key] = text;
+  }
   return out;
 }
 
@@ -438,7 +507,7 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
   "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",

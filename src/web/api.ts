@@ -155,6 +155,16 @@ export interface ResultItem {
   /** What the item is about, for example a post. Text, never a link. */
   target?: string;
   detail?: string;
+  /** The change a needs-decision item proposes (0.69.0). Plain text with newlines, shown as text. */
+  proposal?: ResultProposal;
+}
+
+/** The exact change a needs-decision item proposes (0.69.0); the operator approves it by the item's key. */
+export interface ResultProposal {
+  current?: string;
+  proposed: string;
+  why?: string;
+  effect?: string;
 }
 
 // --- findings (0.62.0) ---------------------------------------------------------------------
