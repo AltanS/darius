@@ -18186,7 +18186,7 @@ function Machine({ system }) {
 	});
 }
 /** The last backup of a host: its state, when the last good snapshot was made, and why the newest run failed. */
-function HostBackupLine({ host }) {
+function HostBackupLine({ host, differ }) {
 	const { backup } = host;
 	if (backup === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "sy-meta",
@@ -18215,11 +18215,15 @@ function HostBackupLine({ host }) {
 			backup.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "ink-bad",
 				children: backup.error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: differ ? "ink-late" : "ink-idle",
+				children: backup.bucket ?? "no bucket"
 			})
 		]
 	});
 }
-function HostRow({ host }) {
+function HostRow({ host, differ }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "sy-item",
 		children: [
@@ -18245,20 +18249,30 @@ function HostRow({ host }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: host.projects.length === 0 ? "no projects" : host.projects.join(", ") })
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostBackupLine, { host })
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostBackupLine, {
+				host,
+				differ
+			})
 		]
 	});
 }
-function Hosts({ hosts }) {
+function Hosts({ hosts, bucketsDiffer }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 		title: "Hosts",
 		children: hosts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "panel-empty panel",
 			children: "No host has written to this store yet."
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 			className: "sy-list panel",
-			children: hosts.map((host) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostRow, { host }, host.host))
-		})
+			children: hosts.map((host) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostRow, {
+				host,
+				differ: bucketsDiffer
+			}, host.host))
+		}), bucketsDiffer ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "page-warn tone-late",
+			role: "status",
+			children: "Hosts back up to different buckets."
+		}) : null] })
 	});
 }
 function ProjectRow({ project }) {
@@ -18396,7 +18410,10 @@ var status_default = withComponentProps(function StatusPage({ loaderData }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sy-grid",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Machine, { system }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Hosts, { hosts: system.hosts })]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Machine, { system }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Hosts, {
+					hosts: system.hosts,
+					bucketsDiffer: system.backupBucketsDiffer
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Projects, { system })
 		]
@@ -19250,7 +19267,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/status-f5y10SY5.js",
+			"module": "/assets/status-7TuEI1y0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19444,8 +19461,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-058ed4d7.js",
-	"version": "058ed4d7",
+	"url": "/assets/manifest-37b1e882.js",
+	"version": "37b1e882",
 	"sri": void 0
 };
 //#endregion

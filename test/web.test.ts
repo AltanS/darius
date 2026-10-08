@@ -133,7 +133,7 @@ test("status.json lists this host and every host with a snapshot line, each with
   const before = JSON.parse(text((await get("/api/status.json")).body));
   assert.deepEqual(before.hosts, [{ host: hostId(), self: true, backup: null }], "no snapshot line yet: this host, no backup");
 
-  appendLine(global, { who: "snapshot", type: "snapshot.ok", at: new Date(Date.now() - 2 * 3_600_000).toISOString(), name: "darius-self-x.tar.gz", bytes: 1, files: 1, store_bytes: 1, darius: "1.0.0", remote: null, bucket: null });
+  appendLine(global, { who: "snapshot", type: "snapshot.ok", at: new Date(Date.now() - 2 * 3_600_000).toISOString(), name: "darius-self-x.tar.gz", bytes: 1, files: 1, store_bytes: 1, darius: "1.0.0", remote: { ok: true, key: "k", error: null }, bucket: { endpoint_host: "s3.example.com", bucket: "backups", prefix: "darius" } });
   const peer = join(process.env.DARIUS_STATE_DIR ?? "", GLOBAL_PROJECT, "ledger", "host-zz");
   mkdirSync(peer, { recursive: true });
   const old = Date.now() - 50 * 3_600_000;
@@ -152,6 +152,8 @@ test("status.json lists this host and every host with a snapshot line, each with
   assert.ok(self.ageMs >= 2 * 3_600_000 && self.ageMs < 3 * 3_600_000);
   assert.equal(status.hosts[1].backup.error, "disk full");
   assert.equal(status.hosts[1].backup.lastOkAt, null);
+  assert.equal(status.hosts[0].backup.bucket, "s3.example.com/backups", "the short bucket text, default prefix left out");
+  assert.equal(status.hosts[1].backup.bucket, null, "a host with no good snapshot has no bucket");
 
   const system = collectSystem();
   assert.deepEqual(
@@ -162,6 +164,8 @@ test("status.json lists this host and every host with a snapshot line, each with
     ],
     "the hosts card lists a host that only wrote a snapshot line",
   );
+  assert.equal(system.hosts[0]?.backup?.bucket, "s3.example.com/backups");
+  assert.equal(system.backupBucketsDiffer, false, "one bucket: no mismatch");
   const zz = system.hosts.find((entry) => entry.host === "host-zz");
   assert.equal(zz?.chunks, 0);
   assert.ok(zz?.lastSeen !== null);

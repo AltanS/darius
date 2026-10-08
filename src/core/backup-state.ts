@@ -54,6 +54,29 @@ export interface BackupBucket {
   prefix: string;
 }
 
+/** The prefix a bucket has when nobody set one (`prefix` in docs/backups.md); the short text leaves it out. */
+const DEFAULT_PREFIX = "darius";
+
+/** `s3.example.com/bucket`, with `/prefix` only when the prefix is not the default. */
+export function bucketLabel(bucket: BackupBucket): string {
+  const prefix = bucket.prefix === "" || bucket.prefix === DEFAULT_PREFIX ? "" : `/${bucket.prefix}`;
+  return `${bucket.endpoint_host}/${bucket.bucket}${prefix}`;
+}
+
+/**
+ * True when the hosts that back up (ok, stale or failed) name more than one
+ * bucket. A switched bucket, from a bad config push for example, shows here.
+ * Hosts with no bucket, `off` hosts and `silent` hosts take no part.
+ */
+export function bucketsDiffer(states: readonly BackupState[]): boolean {
+  const labels = new Set<string>();
+  for (const state of states) {
+    if (state.bucket === null || state.state === "off" || state.state === "silent") continue;
+    labels.add(bucketLabel(state.bucket));
+  }
+  return labels.size > 1;
+}
+
 /** One host's backup state, from its newest snapshot lines. */
 export interface BackupState {
   host: string;

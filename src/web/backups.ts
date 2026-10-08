@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { hostId } from "../core/ledger.ts";
 import { configDir, stateDir } from "../core/paths.ts";
 import { listLocalSnapshots, parseSnapshotName, readSnapshotState, runningSnapshot } from "../core/snapshot.ts";
-import { classifyBackups, readGlobalLines, type BackupState } from "../core/backup-state.ts";
+import { bucketLabel, classifyBackups, readGlobalLines, type BackupState } from "../core/backup-state.ts";
 import { credentialsSource, maskPingUrl, resolveSnapshotSettings, type ResolvedSnapshotSettings, type SnapshotKey } from "../core/snapshot-settings.ts";
 import type { BackupField, BackupRow, BackupsStatus, HostBackup, HostBackupEntry } from "./api.ts";
 
@@ -99,7 +99,7 @@ export function readHostBackupStates(now: number = Date.now()): BackupState[] {
 }
 
 export function hostBackup(state: BackupState): HostBackup {
-  return { state: state.state, lastOkAt: state.last_ok_at, ageMs: state.age_ms, name: state.name, error: state.error, reason: state.reason };
+  return { state: state.state, lastOkAt: state.last_ok_at, ageMs: state.age_ms, name: state.name, error: state.error, reason: state.reason, bucket: state.bucket === null ? null : bucketLabel(state.bucket) };
 }
 
 /** This host first, then the others by name, each with its backup (null when it wrote no snapshot line). */

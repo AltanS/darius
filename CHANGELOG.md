@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.79.2] - 2026-10-08
+
+### Fixed
+
+- `snapshot status --hosts` rows and the hosts card on `/status` now show which bucket a host backs up to, as `<endpoint host>/<bucket>` (and `/<prefix>` when it is not `darius`). A host with no bucket shows `no bucket`. Only `--json` had it, so a bucket switched by a bad config push was invisible in the text view.
+- When hosts that back up name more than one bucket, `status --hosts` prints `! hosts back up to different buckets` under the rows, and the card shows the same line. Hosts with no bucket, `off` hosts and `silent` hosts take no part.
+- `/api/status.json` and the system status gain `hosts[].backup.bucket` (short text or null) and `backupBucketsDiffer`. No field is renamed.
+
 ## [0.79.1] - 2026-10-08
 
 ### Fixed

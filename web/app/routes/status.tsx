@@ -47,7 +47,7 @@ export default function StatusPage({ loaderData }: Route.ComponentProps): React.
       )}
       <div className="sy-grid">
         <Machine system={system} />
-        <Hosts hosts={system.hosts} />
+        <Hosts hosts={system.hosts} bucketsDiffer={system.backupBucketsDiffer} />
       </div>
       <Projects system={system} />
     </div>

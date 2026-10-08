@@ -328,8 +328,9 @@ darius snapshot status --hosts --json   # {hosts: [...], stale_after_ms}
 ```
 
 Each row shows the host, its state, the age of its last good snapshot, the snapshot name and size,
-and what the bucket copy did (`bucket ok`, `bucket failed: <why>` or `no bucket copy`). The state is
-one of five words:
+and what the bucket copy did (`bucket ok`, `bucket failed: <why>` or `no bucket copy`), followed by
+the bucket as `<endpoint host>/<bucket>`. The prefix is added (`/<prefix>`) only when it is not
+`darius`. A host with no bucket shows `no bucket`. The state is one of five words:
 
 | State | Meaning |
 |---|---|
@@ -340,8 +341,10 @@ one of five words:
 | `silent` | the host wrote no ledger line of any kind for 30 days: gone, not late. It does not count as stale and raises no alarm |
 
 `--json` is the full record of each host. Among other fields it holds `bucket`: the endpoint host
-name, the bucket and the prefix of the last good snapshot. The text rows do not show it. The text
-output names `silent` hosts in one last line and lists no row for them.
+name, the bucket and the prefix of the last good snapshot. If the hosts that back up (`ok`, `stale`
+or `failed`) name more than one bucket, the text output prints `! hosts back up to different
+buckets` under the rows. Hosts with no bucket take no part. The text output names `silent` hosts in
+one last line and lists no row for them.
 
 A host with a bucket is judged on its offsite copy. If the uploads fail every day (an expired key, a
 deleted bucket), its local archives stay fresh, but the host turns `stale` once 36 hours pass with no
@@ -360,10 +363,11 @@ Three things tell you that a backup failed or stopped.
 
 **The page.** On `/status`, each host in the Hosts list has a "last backup" line: a state word, the
 age of its last good snapshot, and "none" for a host that wrote no snapshot line. The states are the
-five of "See every host", and for a stale host the reason ("no upload for 40 h").
+five of "See every host", and for a stale host the reason ("no upload for 40 h"). It also shows the
+bucket of the host (`no bucket` when it has none). When hosts name different buckets, the card says
+so in one line.
 `/api/status.json` carries the same under `hosts[].backup` (`state`, `lastOkAt`, `ageMs`, `name`,
-`error`, `reason`). Both read the synced `_global` ledger and never reach a bucket. Neither shows
-which bucket a host uses.
+`error`, `reason`, `bucket`). Both read the synced `_global` ledger and never reach a bucket.
 
 **Push.** If a host has push keys and a subscribed device (see `darius push`), two alerts exist:
 
@@ -739,12 +743,14 @@ because the upload to the new bucket works, so the host stays `ok`. The change l
 and the prefix. The sync timer carries that line to every host. So on any host:
 
 ```bash
-darius snapshot status --hosts --json | jq -r '.hosts[] | "\(.host) \(.bucket.endpoint_host) \(.bucket.bucket) \(.bucket.prefix)"'
+darius snapshot status --hosts
 ```
 
-`jq` is a separate tool. Compare the output with the buckets you expect. The text rows of
-`snapshot status --hosts` and the page do not show the bucket, only `--json` does. A key never
-appears in a line, and a line names the endpoint by its host name only. Settings never travel
+Each row ends with the bucket of that host. Compare the rows with the buckets you expect. If the
+hosts name different buckets, a line under the rows says so, and the hosts card on `/status` shows
+the same line. The signal is a difference, so it stays quiet if you switch every host. `--json` has
+the full record (`hosts[].bucket`) for a script. A key never appears in a line, and a line names the
+endpoint by its host name only. Settings never travel
 through the sync bucket, so a bad object in that bucket cannot point a host elsewhere.
 
 **If the key leaks.** Disable the key at the service. Make a new pair with the same policy. Save it

@@ -8,6 +8,7 @@ import { existsSync, lstatSync, readdirSync, statfsSync, statSync } from "node:f
 import { freemem, loadavg, totalmem, uptime } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { bucketsDiffer, type BackupState } from "../core/backup-state.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { hostId, listChunks, readLedger } from "../core/ledger.ts";
 import { readLegacyMilestonesAt } from "../core/legacy-milestones.ts";
@@ -143,7 +144,7 @@ function newer(current: number | null, time: number | null): number | null {
   return time !== null && (current === null || time > current) ? time : current;
 }
 
-function collectHosts(projects: readonly string[], self: string): SystemHost[] {
+function collectHosts(projects: readonly string[], self: string, states: readonly BackupState[]): SystemHost[] {
   const seen = new Map<string, { newest: number | null; chunks: number; projects: Set<string> }>();
   const entry = (host: string) => {
     let found = seen.get(host);
@@ -155,7 +156,7 @@ function collectHosts(projects: readonly string[], self: string): SystemHost[] {
   };
   entry(self);
   // A host that only wrote snapshot lines (no project chunk yet) is still a host.
-  const backups = new Map(readHostBackupStates().map((state) => [state.host, state]));
+  const backups = new Map(states.map((state) => [state.host, state]));
   for (const [host, state] of backups) entry(host).newest = newer(entry(host).newest, Date.parse(state.seen_at));
   for (const name of projects) {
     try {
@@ -224,6 +225,7 @@ export function collectSystem(options: SystemOptions = {}): SystemStatus {
   const self = hostId();
   const walk = storeWalk(root, options.now ?? Date.now());
   const names = listProjects();
+  const backupStates = readHostBackupStates();
   const rows = names.map((name) => systemProject(name, walk));
   const disks = [diskFor("store", root), options.backupDir === undefined ? null : diskFor("backups", options.backupDir)].filter((disk) => disk !== null);
   const [one = 0, five = 0, fifteen = 0] = loadavg();
@@ -251,8 +253,9 @@ export function collectSystem(options: SystemOptions = {}): SystemStatus {
       milestones: sum((row) => row.milestones),
       specs: sum((row) => row.specs),
     },
-    hosts: collectHosts(names, self),
+    hosts: collectHosts(names, self, backupStates),
     projects: rows.map(({ milestones: _milestones, specs: _specs, ...project }) => project),
     syncRemote: syncRemote(),
+    backupBucketsDiffer: bucketsDiffer(backupStates),
   };
 }

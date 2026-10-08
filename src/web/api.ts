@@ -410,6 +410,8 @@ export interface HostBackup {
   error: string | null;
   /** Why the host is `stale` ("no upload for 40 h"); else null. */
   reason: string | null;
+  /** The bucket of its newest good snapshot as short text ("s3.example.com/backups"); null when it has none. */
+  bucket: string | null;
 }
 
 /** One host and its backup, for `/api/status.json`. `backup` is null for a host that wrote no snapshot line. */
@@ -488,6 +490,8 @@ export interface SystemStatus {
   projects: SystemProject[];
   /** The sync bucket, without any secret; null when this host has no `[remote]`. */
   syncRemote: { endpoint: string; bucket: string } | null;
+  /** True when the hosts that back up name more than one snapshot bucket. */
+  backupBucketsDiffer: boolean;
 }
 
 // --- backups (0.44.0) ------------------------------------------------------------------------

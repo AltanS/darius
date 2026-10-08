@@ -432,8 +432,8 @@ function demoSystem(now: number): SystemStatus {
     ],
     store: { path: "/home/user/.local/share/darius", bytes: 48 * 1024 * 1024, files: 1520, projects: 3, rituals: 7, vigils: 2, profiles: 3, runs: 214, milestones: 4, specs: 19 },
     hosts: [
-      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"], backup: { state: "ok", lastOkAt: back(3 * 3600_000), ageMs: 3 * 3600_000, name: "darius-host-a-x.tar.gz", error: null, reason: null } },
-      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"], backup: { state: "stale", lastOkAt: back(50 * 3600_000), ageMs: 50 * 3600_000, name: "darius-host-b-x.tar.gz", error: null, reason: "no upload for 50 h" } },
+      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"], backup: { state: "ok", lastOkAt: back(3 * 3600_000), ageMs: 3 * 3600_000, name: "darius-host-a-x.tar.gz", error: null, reason: null, bucket: "s3.example.com/backups" } },
+      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"], backup: { state: "stale", lastOkAt: back(50 * 3600_000), ageMs: 50 * 3600_000, name: "darius-host-b-x.tar.gz", error: null, reason: "no upload for 50 h", bucket: "s3.example.com/backups" } },
     ],
     projects: [
       { project: "project-one", lastSync: back(5 * 60_000), rituals: 4, vigils: 1, profiles: 2, runs: 150, bytes: 30 * 1024 * 1024 },
@@ -441,6 +441,7 @@ function demoSystem(now: number): SystemStatus {
       { project: "project-two", lastSync: back(2 * 3600_000), rituals: 2, vigils: 1, profiles: 1, runs: 55, bytes: 16 * 1024 * 1024 },
     ],
     syncRemote: { endpoint: "https://s3.example.com", bucket: "darius-sync" },
+    backupBucketsDiffer: false,
   };
 }
 

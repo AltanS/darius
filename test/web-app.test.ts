@@ -117,7 +117,7 @@ const STATUS: HostStatus = {
     },
   ],
   hosts: [
-    { host: "testhost", self: true, backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null } },
+    { host: "testhost", self: true, backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null, bucket: "s3.example.com/backups" } },
     { host: "other-host", self: false, backup: null },
   ],
 };
@@ -258,12 +258,13 @@ const SYSTEM: SystemStatus = {
   disks: [{ label: "store", path: "/home/test/.local/share/darius", freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3 }],
   store: { path: "/home/test/.local/share/darius", bytes: 5 * 1024 ** 2, files: 90, projects: 1, rituals: 1, vigils: 1, profiles: 1, runs: 3, milestones: 1, specs: 2 },
   hosts: [
-    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 4, projects: ["demo"], backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null } },
-    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: { state: "stale", lastOkAt: "2026-09-25T06:00:00.000Z", ageMs: 75 * 3600_000, name: null, error: null, reason: "no upload for 75 h" } },
+    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 4, projects: ["demo"], backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null, bucket: "s3.example.com/backups" } },
+    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: { state: "stale", lastOkAt: "2026-09-25T06:00:00.000Z", ageMs: 75 * 3600_000, name: null, error: null, reason: "no upload for 75 h", bucket: null } },
     { host: "third-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: null },
   ],
   projects: [{ project: "demo", lastSync: "2026-09-28T08:55:00.000Z", rituals: 1, vigils: 1, profiles: 1, runs: 3, bytes: 1024 ** 2 }],
   syncRemote: { endpoint: "https://sync.example.com", bucket: "sync-bucket" },
+  backupBucketsDiffer: false,
 };
 
 const BACKUPS: BackupsStatus = {
@@ -1439,6 +1440,9 @@ test("the status page: strip, machine, hosts, a link to the backups, and no back
   for (const text of ["Status", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs", "since backup", "Backed up", "Backup stale", "no upload for 75 h", "last backup: none"]) {
     assert.ok(body.includes(text), `the status page shows: ${text}`);
   }
+  assert.ok(body.includes("s3.example.com/backups"), "the hosts card shows the bucket of a host that has one");
+  assert.ok(body.includes("no bucket"), "and says so for a host that has none");
+  assert.equal(body.includes("different buckets"), false, "no warning while the hosts agree");
   for (const text of ["Back up now", "Snapshots", "Test the bucket", "Delete in bucket", "bk-secret", "DARIUS_SNAPSHOT_ENDPOINT"]) {
     assert.equal(body.includes(text), false, `the status page leaves out: ${text}`);
   }
@@ -1993,4 +1997,19 @@ test("store text never becomes markup: an image src off the endpoint is not draw
   const all = await pageWith(iconContext({ kind: "emoji", text: `<img src=x onerror=alert(1)>${EVIL}` }), "/all");
   assert.ok(all.includes("&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
   assert.ok(!all.includes("<img src=x"));
+});
+
+test("the status page marks hosts that back up to different buckets", async () => {
+  const split: SystemStatus = {
+    ...SYSTEM,
+    backupBucketsDiffer: true,
+    hosts: [
+      SYSTEM.hosts[0]!,
+      { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-other-x.tar.gz", error: null, reason: null, bucket: "s3.example.com/other" } },
+    ],
+  };
+  const response = await handler(new Request("http://darius.test/status"), { ...context, system: () => split });
+  const body = (await response.text()).replaceAll("<!-- -->", "");
+  assert.ok(body.includes("Hosts back up to different buckets."), "the card carries one warning line");
+  assert.ok(body.includes("s3.example.com/other"), "each host still shows its own bucket");
 });

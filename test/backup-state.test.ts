@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { LedgerLineInput } from "../src/core/ledger.ts";
-import { classifyBackups, type BackupRemote, snapshotLineFor, snapshotOffLine, SILENT_AFTER_MS, STALE_AFTER_MS, type BackupState } from "../src/core/backup-state.ts";
+import { bucketLabel, bucketsDiffer, classifyBackups, type BackupRemote, snapshotLineFor, snapshotOffLine, SILENT_AFTER_MS, STALE_AFTER_MS, type BackupState } from "../src/core/backup-state.ts";
 import type { LedgerLine } from "../src/core/model.ts";
 import { scrubForLedger } from "../src/core/redact.ts";
 import type { SnapshotRunResult } from "../src/core/snapshot.ts";
@@ -247,4 +247,21 @@ test("no bucket: the local archive decides, as before, with its own reason", () 
   assert.equal(one([line("a", "snapshot.failed", HOUR, { error: "x" })]).reason, "no good snapshot yet");
   const unbucketed = one([viaBucket("a", 70 * HOUR, UP), ok("a", HOUR)]);
   assert.equal(unbucketed.state, "ok", "the newest good line has no bucket, so the local rule applies");
+});
+
+test("bucketLabel: endpoint host and bucket, the prefix only when it is not the default", () => {
+  assert.equal(bucketLabel({ endpoint_host: "s3.example.com", bucket: "b", prefix: "darius" }), "s3.example.com/b");
+  assert.equal(bucketLabel({ endpoint_host: "s3.example.com", bucket: "b", prefix: "" }), "s3.example.com/b");
+  assert.equal(bucketLabel({ endpoint_host: "s3.example.com", bucket: "b", prefix: "team" }), "s3.example.com/b/team");
+});
+
+test("bucketsDiffer: two buckets among the hosts that back up; no bucket, off and silent hosts take no part", () => {
+  const on = (host: string, bucket: string, agoMs = HOUR): LedgerLine => ok(host, agoMs, { remote: { ok: true, key: "k", error: null }, bucket: { endpoint_host: "s3.example.com", bucket, prefix: "darius" } });
+  const states = (lines: LedgerLine[]): BackupState[] => classifyBackups(lines, NOW);
+  assert.equal(bucketsDiffer(states([on("a", "x"), on("b", "x")])), false);
+  assert.equal(bucketsDiffer(states([on("a", "x"), on("b", "y")])), true);
+  assert.equal(bucketsDiffer(states([on("a", "x"), ok("b", HOUR)])), false, "a host with no bucket is not a second bucket");
+  assert.equal(bucketsDiffer(states([on("a", "x"), on("b", "y", 60 * 24 * HOUR)])), false, "a silent host does not count");
+  assert.equal(bucketsDiffer(states([on("a", "x"), on("b", "y"), line("b", "snapshot.off", HOUR / 2)])), false, "an off host does not count");
+  assert.equal(bucketsDiffer([]), false);
 });

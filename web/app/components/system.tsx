@@ -166,10 +166,12 @@ export function Machine({ system }: MachineProps): React.ReactNode {
 
 interface HostRowProps {
   host: SystemHost;
+  /** True when the hosts name more than one snapshot bucket: each bucket shows in the late tone. */
+  differ: boolean;
 }
 
 /** The last backup of a host: its state, when the last good snapshot was made, and why the newest run failed. */
-function HostBackupLine({ host }: HostRowProps): React.ReactNode {
+function HostBackupLine({ host, differ }: HostRowProps): React.ReactNode {
   const { backup } = host;
   if (backup === null) {
     return (
@@ -186,11 +188,12 @@ function HostBackupLine({ host }: HostRowProps): React.ReactNode {
       {backup.lastOkAt === null ? <span className="ink-idle">no good snapshot yet</span> : <Time iso={backup.lastOkAt} />}
       {backup.reason === null ? null : <span className="ink-late">{backup.reason}</span>}
       {backup.error === null ? null : <span className="ink-bad">{backup.error}</span>}
+      <span className={differ ? "ink-late" : "ink-idle"}>{backup.bucket ?? "no bucket"}</span>
     </p>
   );
 }
 
-function HostRow({ host }: HostRowProps): React.ReactNode {
+function HostRow({ host, differ }: HostRowProps): React.ReactNode {
   return (
     <li className="sy-item">
       <p className="sy-item-head">
@@ -206,26 +209,35 @@ function HostRow({ host }: HostRowProps): React.ReactNode {
         </span>
         <span>{host.projects.length === 0 ? "no projects" : host.projects.join(", ")}</span>
       </p>
-      <HostBackupLine host={host} />
+      <HostBackupLine host={host} differ={differ} />
     </li>
   );
 }
 
 interface HostsProps {
   hosts: readonly SystemHost[];
+  /** `SystemStatus.backupBucketsDiffer`. */
+  bucketsDiffer: boolean;
 }
 
-export function Hosts({ hosts }: HostsProps): React.ReactNode {
+export function Hosts({ hosts, bucketsDiffer }: HostsProps): React.ReactNode {
   return (
     <Section title="Hosts">
       {hosts.length === 0 ? (
         <p className="panel-empty panel">No host has written to this store yet.</p>
       ) : (
-        <ul className="sy-list panel">
-          {hosts.map((host) => (
-            <HostRow key={host.host} host={host} />
-          ))}
-        </ul>
+        <>
+          <ul className="sy-list panel">
+            {hosts.map((host) => (
+              <HostRow key={host.host} host={host} differ={bucketsDiffer} />
+            ))}
+          </ul>
+          {bucketsDiffer ? (
+            <p className="page-warn tone-late" role="status">
+              Hosts back up to different buckets.
+            </p>
+          ) : null}
+        </>
       )}
     </Section>
   );

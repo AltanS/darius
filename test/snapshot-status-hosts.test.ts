@@ -115,13 +115,13 @@ test("one row per host in text and JSON: ok, stale, failed, off, and silent in i
   const text = await statusHosts();
   assert.equal(text.code, 0);
   const rows = text.out.split("\n");
-  assert.match(rows[0] ?? "", /^host-f +stale +1h ago .*bucket failed: denied +no upload for 60 h$/u);
+  assert.match(rows[0] ?? "", /^host-f +stale +1h ago .*bucket failed: denied +s3\.example\.com\/b\/p +no upload for 60 h$/u);
   assert.match(rows[1] ?? "", /^host-a +ok +2h ago +darius-host-a-x\.tar\.gz +3\.0 MiB +bucket ok$/u);
   assert.match(rows[2] ?? "", /^host-c +failed +5h ago .*bucket ok +last run failed: disk full$/u);
-  assert.match(rows[3] ?? "", /^host-b +stale +3d 0h ago .*no bucket copy +no snapshot for 72 h$/u);
+  assert.match(rows[3] ?? "", /^host-b +stale +3d 0h ago .*no bucket +no snapshot for 72 h$/u);
   assert.match(rows[4] ?? "", /^host-d +off .*snapshots are off on purpose$/u);
   assert.match(rows[5] ?? "", /^· silent for over 30 days, not counted as stale: host-e$/u);
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 6, "one bucket among the hosts that have one: no warning");
 });
 
 test("the CLI accepts a bare --hosts last and before another flag, and plain status is unchanged", () => {
@@ -140,4 +140,54 @@ test("the CLI accepts a bare --hosts last and before another flag, and plain sta
   const push = spawnSync(BIN, ["snapshot", "config", "push", "--hosts"], { encoding: "utf8", env, cwd: tmpdir(), timeout: 20_000 });
   assert.equal(push.status, 2);
   assert.match(push.stderr, /needs --hosts/u);
+});
+
+// --- the bucket in the row, and the mismatch warning ----------------------------------------------
+
+const GOOD = { name: "darius-x.tar.gz", bytes: 1_048_576, files: 3, store_bytes: 9, darius: "1.0.0" };
+const UP = { ok: true, key: "k", error: null };
+
+function resetLedger(): void {
+  rmSync(join(stateRoot, "_global"), { recursive: true, force: true });
+}
+
+test("a row ends the bucket text: endpoint host and bucket, the prefix only when it is not the default", async () => {
+  resetLedger();
+  writeHost("host-a", [entry("host-a", "snapshot.ok", HOUR, { ...GOOD, remote: UP, bucket: { endpoint_host: "s3.example.com", bucket: "backups", prefix: "darius" } })]);
+  writeHost("host-b", [entry("host-b", "snapshot.ok", 2 * HOUR, { ...GOOD, remote: UP, bucket: { endpoint_host: "s3.example.com", bucket: "backups", prefix: "team" } })]);
+  const text = await statusHosts();
+  const rows = text.out.split("\n");
+  assert.match(rows[0] ?? "", /^host-a +ok +1h ago .*bucket ok +s3\.example\.com\/backups$/u);
+  assert.match(rows[1] ?? "", /^host-b +ok +2h ago .*bucket ok +s3\.example\.com\/backups\/team$/u);
+  assert.match(rows[2] ?? "", /^! hosts back up to different buckets/u, "the prefix is part of the bucket");
+  assert.equal(rows.length, 3);
+});
+
+test("a host with no bucket shows 'no bucket'; a --no-upload run on a bucket host still names the bucket", async () => {
+  resetLedger();
+  writeHost("host-a", [entry("host-a", "snapshot.ok", HOUR, { ...GOOD, remote: null, bucket: null })]);
+  writeHost("host-b", [entry("host-b", "snapshot.ok", 2 * HOUR, { ...GOOD, remote: null, bucket: { endpoint_host: "s3.example.com", bucket: "backups", prefix: "darius" } })]);
+  const rows = (await statusHosts()).out.split("\n");
+  assert.match(rows[0] ?? "", /^host-a +ok .*1\.0 MiB +no bucket$/u);
+  assert.match(rows[1] ?? "", /^host-b +stale .*no bucket copy +s3\.example\.com\/backups +no upload yet$/u);
+  assert.equal(rows.length, 2, "a host with no bucket is not a different bucket");
+});
+
+test("the warning prints once, under the rows, when hosts name different buckets; --json is unchanged", async () => {
+  resetLedger();
+  const at = (bucket: string): Partial<LedgerLineInput> => ({ ...GOOD, remote: UP, bucket: { endpoint_host: "s3.example.com", bucket, prefix: "darius" } });
+  writeHost("host-a", [entry("host-a", "snapshot.ok", HOUR, at("backups"))]);
+  writeHost("host-b", [entry("host-b", "snapshot.ok", 2 * HOUR, at("other"))]);
+  writeHost("host-c", [entry("host-c", "snapshot.ok", 3 * HOUR, at("backups"))]);
+  writeHost("host-e", [entry("host-e", "snapshot.ok", 60 * DAY, at("old"))]);
+  const rows = (await statusHosts()).out.split("\n");
+  assert.equal(rows.filter((row) => row.startsWith("! ")).length, 1);
+  assert.equal(rows[3], "! hosts back up to different buckets, compare the rows above");
+  assert.match(rows[4] ?? "", /^· silent/u, "the silent line comes after the warning");
+  const parsed: { hosts: BackupState[] } = JSON.parse((await statusHosts({ json: true })).out);
+  assert.deepEqual(parsed.hosts.find((state) => state.host === "host-b")?.bucket, { endpoint_host: "s3.example.com", bucket: "other", prefix: "darius" });
+
+  writeHost("host-b", [entry("host-b", "snapshot.ok", 2 * HOUR, at("backups"))]);
+  assert.ok(!(await statusHosts()).out.includes("different buckets"), "all hosts on one bucket: no warning, and the silent host does not count");
+  resetLedger();
 });

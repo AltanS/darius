@@ -54,7 +54,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
-import { readBackupStates, recordSnapshotLine, snapshotLineFor, snapshotOffLine, STALE_AFTER_MS, type BackupState } from "../core/backup-state.ts";
+import { bucketLabel, bucketsDiffer, readBackupStates, recordSnapshotLine, snapshotLineFor, snapshotOffLine, STALE_AFTER_MS, type BackupState } from "../core/backup-state.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { hostId } from "../core/ledger.ts";
 import { stateDir } from "../core/paths.ts";
@@ -300,9 +300,11 @@ function spanWords(ms: number): string {
   return `${String(Math.floor(hours / 24))}d ${String(hours % 24)}h`;
 }
 
+/** What the bucket copy did, then which bucket: `bucket ok  s3.example.com/backups`, or `no bucket` for a host without one. */
 function bucketWords(state: BackupState): string {
-  if (state.remote === null) return "no bucket copy";
-  return state.remote.ok ? "bucket ok" : `bucket failed: ${state.remote.error ?? "unknown"}`;
+  const where = state.bucket === null ? "" : `  ${bucketLabel(state.bucket)}`;
+  if (state.remote === null) return state.bucket === null ? "no bucket" : `no bucket copy${where}`;
+  return `${state.remote.ok ? "bucket ok" : `bucket failed: ${state.remote.error ?? "unknown"}`}${where}`;
 }
 
 /** One row: host, state, age of the last good snapshot, what it was, and what the bucket did. */
@@ -328,6 +330,7 @@ function statusHosts(args: ParsedArgs): number {
   }
   const silent = states.filter((state) => state.state === "silent");
   for (const state of states) if (state.state !== "silent") console.log(hostRow(state));
+  if (bucketsDiffer(states)) console.log("! hosts back up to different buckets, compare the rows above");
   if (silent.length > 0) console.log(`· silent for over 30 days, not counted as stale: ${silent.map((state) => state.host).join(", ")}`);
   return 0;
 }
