@@ -17,7 +17,7 @@ command -v darius >/dev/null || { echo "darius is not installed. Install it: bas
 
 Reflect on what recent implementation work revealed and propose updates to tracker specs, new tasks discovered, tasks that turned out unnecessary, verification items that need updating, scope changes, or new specs/dependencies that emerged. Also produces **Lessons** when a milestone completes.
 
-Invoked manually, by the Work Loop driver (`/darius-work` Stage 6, and after a counsel rejection exposes a genuine gap), and automatically by `archive` at milestone completion.
+Invoked manually, by the Work Loop driver (`/darius-work` Stage 6, after a review block exposes a genuine gap, and after `STATUS: spec_invalid` from the spec check), and automatically by `archive` at milestone completion.
 
 ## Auto-Run Policy
 
@@ -51,7 +51,7 @@ Phase 4b (milestone Lessons) uses a separate idempotency check based on an HTML 
 4. **Load each spec's parsed state**:
    `!darius show <spec-path> --json`
 
-5. **Read counsel transcripts**: for each in-scope spec, read `{MILESTONE}/_counsel/{spec-slug}.md` if present.
+5. **Read review transcripts**: for each in-scope spec, read `{MILESTONE}/_counsel/{spec-slug}.md` if present. Since darius 0.74.0 it holds one reviewer's ```darius-review JSON block: five items (`data-loss`, `irreversible`, `hidden-scope`, `missing-test`, `rollback`), each `ok`, `concern` or `blocker` with one line of reason. Older transcripts hold four advisor sections with `**Verdict**: thumbs_*` lines. If you were invoked for `spec_invalid`, fix each listed problem and re-run `darius spec check <spec>` until it passes. A manual item needs a `- Manual: <reason>` line; a high-risk spec needs a `## Rollback` section with text.
 
 6. **Read recent work and code**:
    - `git log --oneline -30` and `git diff HEAD~10 --stat`
@@ -69,7 +69,7 @@ Compare what specs say against what actually exists:
 - **Signature-cascade tail**: a shared-signature change (job `handle()`, controller action, service method) that cascaded into many call-site/test updates the spec didn't budget. If the actual fan-out was materially larger than planned, note it in the spec's Overview as a forecast for *next* time and call it out in Lessons, the estimate prevents the next work-plan from looking smaller than reality.
 - **Missing dependencies**: `depends_on` that turned out to be critical
 - **New specs needed**: work revealed an entirely new feature deserving its own spec
-- **Counsel predictions vs reality**: did an advisor warn about something that came true?
+- **Review predictions vs reality**: did a reviewer `concern` or `blocker` (or an older advisor warning) come true?
 
 ## Phase 3: Propose Changes
 
@@ -97,8 +97,8 @@ Present findings as a structured proposal grouped by spec file:
 **depends_on update:**
 - add `02-session.md`, auth turned out to need the session store
 
-**Counsel echo:**
-- Advisor #3 warned about token rotation under load; confirmed in practice
+**Review echo:**
+- The reviewer's `hidden-scope` concern (token rotation under load) came true
 
 ### New spec needed:
 - "Token Refresh Flow", discovered during auth work, complex enough for its own spec
@@ -122,7 +122,7 @@ Present findings as a structured proposal grouped by spec file:
    - First non-blank line is `<!-- enriched: <ISO> -->` → enrich-authored, may be replaced.
    - Section non-empty and lacks the marker → human-authored. Print `LESSONS_HUMAN: M{N}` and stop.
    - Section empty (or contains only the placeholder comment) → proceed.
-4. Synthesize honestly. Skim counsel transcripts, worklog threads, recent diffs. Look for: counsel warnings that came true, plan misses added mid-flight, approaches worth templating, approaches that failed, weak verification commands.
+4. Synthesize honestly. Skim review transcripts, worklog threads, recent diffs. Look for: review concerns that came true, plan misses added mid-flight, approaches worth templating, approaches that failed, weak verification commands.
 5. **No-lessons path**: if nothing genuine surfaces, write exactly:
    ```
    <!-- enriched: <ISO> -->
@@ -134,9 +134,9 @@ Present findings as a structured proposal grouped by spec file:
 ## Rules
 
 - **Propose, don't auto-edit**: always show the proposal and get user approval before changing specs. Phase 4b writes the Lessons section directly, but only when empty or marked with a prior `<!-- enriched: -->` comment; never overwrite human-authored lessons.
-- **Be specific**: every proposed change must cite what triggered it (a commit, a file, a worklog finding, a counsel warning).
+- **Be specific**: every proposed change must cite what triggered it (a commit, a file, a worklog finding, a review concern).
 - **Don't re-sync status**: that's `/sync`'s job. Enrich changes content (tasks, descriptions, verification, depends_on), not status (`[ ]` → `[x]`).
 - **Don't inflate**: only propose changes that genuinely reflect learnings.
 - **Preserve verified items**: never modify or remove items already marked `[x]`.
-- **Respect counsel sidecars**: read them, quote them when relevant, never delete them.
+- **Respect review transcripts** (`_counsel/`): read them, quote them when relevant, never delete them.
 - If nothing to propose, say so: "Specs look accurate, no enrichment needed."

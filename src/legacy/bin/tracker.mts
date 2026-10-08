@@ -137,7 +137,13 @@ import {
   parseCounselTranscript,
   applyGate,
   applyRoundBudget,
+  isReviewTranscript,
+  parseReviewTranscript,
+  applyReviewGate,
+  ReviewFormatError,
+  REVIEW_ITEMS,
   type GateDecision,
+  type ReviewParseResult,
   type SingleDissentMode,
 } from "../lib/counsel-gate.ts";
 import {
@@ -338,7 +344,8 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write("  index --rebuild\n");
     process.stderr.write("  worklog index\n");
     process.stderr.write("  worklog set-stage <thread-id> <planned|dispatched|verified|committed|reviewed> [--commit <sha>] [--no-git] [--force --reason \"...\"]\n");
-    process.stderr.write("  counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--max-rounds N] [--json]\n");
+    process.stderr.write("  counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--max-rounds N] [--ack-dissent] [--json]\n");
+    process.stderr.write("      reads a ```darius-review block (one reviewer, 0.74.0) or the older four-advisor transcript.\n");
     process.stderr.write("  agents [--json]\n");
     process.stderr.write("  uncommitted-verified [--json]\n");
     process.stderr.write("  claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n");
@@ -2666,32 +2673,54 @@ function runCounselGate(args: string[]): void {
     process.exit(1);
   }
 
-  const threshold = resolveCounselThreshold(values.threshold);
-  // --ack-dissent collapses a confirm-mode lone dissent back to "surface" so
-  // the gate returns ready (the user has acknowledged it). The threshold count
-  // still owns blocking — ack never overrides a >= threshold rejection.
-  const singleDissentMode = values["ack-dissent"]
-    ? "surface"
-    : resolveSingleDissentMode(values["single-dissent"]);
+  const raw = readFileSync(transcriptPath, "utf-8");
 
-  let parse;
-  try {
-    const raw = readFileSync(transcriptPath, "utf-8");
-    parse = parseCounselTranscript(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker counsel-gate: parse error: ${message}\n`);
-    process.exit(1);
+  // The one-reviewer format (0.74.0): a fenced ```darius-review block. A
+  // transcript without one is the older four-advisor format, read as before.
+  let review: ReviewParseResult | null = null;
+  if (isReviewTranscript(raw)) {
+    try {
+      review = parseReviewTranscript(raw);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const prefix = err instanceof ReviewFormatError ? "bad review transcript" : "parse error";
+      process.stderr.write(`tracker counsel-gate: ${prefix}: ${message}\n`);
+      process.exit(2);
+    }
   }
 
-  if (parse.advisors.length === 0) {
-    process.stderr.write(
-      `tracker counsel-gate: no advisor verdicts found in ${transcriptPath}\n`,
-    );
-    process.exit(1);
-  }
+  let parse: { thumbsDown: number; thumbsUp: number; thumbsSideways: number };
+  let baseDecision: GateDecision;
+  if (review !== null) {
+    parse = { thumbsDown: review.blockers, thumbsSideways: review.concerns, thumbsUp: review.oks };
+    baseDecision = applyReviewGate(review, values["ack-dissent"] === true);
+  } else {
+    const threshold = resolveCounselThreshold(values.threshold);
+    // --ack-dissent collapses a confirm-mode lone dissent back to "surface" so
+    // the gate returns ready (the user has acknowledged it). The threshold count
+    // still owns blocking — ack never overrides a >= threshold rejection.
+    const singleDissentMode = values["ack-dissent"]
+      ? "surface"
+      : resolveSingleDissentMode(values["single-dissent"]);
 
-  const baseDecision = applyGate(parse, threshold, singleDissentMode);
+    let counsel;
+    try {
+      counsel = parseCounselTranscript(raw);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`tracker counsel-gate: parse error: ${message}\n`);
+      process.exit(1);
+    }
+
+    if (counsel.advisors.length === 0) {
+      process.stderr.write(
+        `tracker counsel-gate: no advisor verdicts found in ${transcriptPath}\n`,
+      );
+      process.exit(1);
+    }
+    parse = counsel;
+    baseDecision = applyGate(counsel, threshold, singleDissentMode);
+  }
 
   // Round budget is only meaningful with a --spec to read/persist the counter.
   // An --ack-dissent re-run resolves a confirm-mode dissent the user already
@@ -2708,11 +2737,11 @@ function runCounselGate(args: string[]): void {
   }
 
   if (values.json) {
-    process.stdout.write(JSON.stringify(decisionToJSON(decision, parse), null, 2) + "\n");
+    process.stdout.write(JSON.stringify(decisionToJSON(decision, parse, review), null, 2) + "\n");
     return;
   }
 
-  process.stdout.write(formatCounselGate(decision, parse));
+  process.stdout.write(formatCounselGate(decision, parse, review));
 }
 
 function resolveCounselThreshold(flagValue: string | undefined): number {
@@ -2886,9 +2915,26 @@ function writeCounselFrontmatter(
 function formatCounselGate(
   decision: GateDecision,
   parse: { thumbsDown: number; thumbsUp: number; thumbsSideways: number },
+  review: ReviewParseResult | null = null,
 ): string {
   const lines: string[] = [];
   lines.push(`STATUS: ${decision.status}`);
+  if (review !== null) {
+    lines.push("FORMAT: review");
+    lines.push(`REVIEWER: ${review.reviewer}`);
+    lines.push(`BLOCKERS: ${review.blockers}`);
+    lines.push(`CONCERNS: ${review.concerns}`);
+    lines.push(`OK: ${review.oks}`);
+    for (const name of REVIEW_ITEMS) {
+      lines.push(`ITEM ${name}: ${review.items[name].verdict}, ${review.items[name].reason}`);
+    }
+    if (typeof decision.rounds === "number") lines.push(`ROUNDS: ${decision.rounds}`);
+    if (typeof decision.maxRounds === "number") lines.push(`MAX_ROUNDS: ${decision.maxRounds}`);
+    lines.push(`REASON: ${decision.reason}`);
+    if (decision.dissentSummary) lines.push(`DISSENT_SUMMARY: ${decision.dissentSummary}`);
+    if (decision.blockingSummary) lines.push(`BLOCKING_SUMMARY: ${decision.blockingSummary}`);
+    return lines.join("\n") + "\n";
+  }
   lines.push(`THUMBS_DOWN: ${decision.thumbsDown}`);
   lines.push(`THUMBS_SIDEWAYS: ${parse.thumbsSideways}`);
   lines.push(`THUMBS_UP: ${parse.thumbsUp}`);
@@ -2912,8 +2958,14 @@ function formatCounselGate(
 function decisionToJSON(
   decision: GateDecision,
   parse: { thumbsDown: number; thumbsUp: number; thumbsSideways: number },
+  review: ReviewParseResult | null = null,
 ) {
+  // Every field the four-advisor format emitted stays. The review format
+  // fills them (thumbsDown = blockers, thumbsSideways = concerns, thumbsUp =
+  // ok) and adds format, reviewer and items.
   return {
+    format: review === null ? "counsel" : "review",
+    ...(review === null ? {} : { reviewer: review.reviewer, items: review.items }),
     status: decision.status,
     reason: decision.reason,
     thumbsDown: decision.thumbsDown,

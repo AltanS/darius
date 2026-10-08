@@ -336,3 +336,68 @@ describe("counsel-gate round budget", () => {
     expect(() => applyRoundBudget(blocked(), 1, 1.5)).toThrow(/positive integer/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// One-reviewer format (0.74.0)
+// ---------------------------------------------------------------------------
+
+import {
+  isReviewTranscript,
+  parseReviewTranscript,
+  applyReviewGate,
+  ReviewFormatError,
+  REVIEW_ITEMS,
+} from "../lib/counsel-gate.ts";
+
+function reviewBlock(verdicts: Record<string, string>): string {
+  const items: Record<string, { verdict: string; reason: string }> = {};
+  for (const [name, verdict] of Object.entries(verdicts)) {
+    items[name] = { verdict, reason: `${name} checked` };
+  }
+  return "# Review\n\n```darius-review\n" + JSON.stringify({ reviewer: "opus", items }) + "\n```\n";
+}
+
+const OK_ALL = Object.fromEntries(REVIEW_ITEMS.map((name) => [name, "ok"]));
+
+describe("counsel-gate review format", () => {
+  it("detects the block and leaves advisor transcripts alone", () => {
+    expect(isReviewTranscript(reviewBlock(OK_ALL))).toBe(true);
+    expect(isReviewTranscript(BRIEF_SECTION + ADVISOR_TEMPLATE(1, "A", "up", "x"))).toBe(false);
+  });
+
+  it("all ok is ready", () => {
+    const parse = parseReviewTranscript(reviewBlock(OK_ALL));
+    expect(parse.oks).toBe(5);
+    expect(applyReviewGate(parse).status).toBe("ready");
+  });
+
+  it("a concern needs an ack; the ack makes it ready", () => {
+    const parse = parseReviewTranscript(reviewBlock({ ...OK_ALL, "hidden-scope": "concern" }));
+    const decision = applyReviewGate(parse);
+    expect(decision.status).toBe("needs_ack");
+    expect(decision.dissentSummary).toBe("hidden-scope: hidden-scope checked");
+    expect(applyReviewGate(parse, true).status).toBe("ready");
+  });
+
+  it("a blocker blocks, even with an ack, and the round budget exhausts it", () => {
+    const parse = parseReviewTranscript(reviewBlock({ ...OK_ALL, rollback: "blocker" }));
+    const decision = applyReviewGate(parse, true);
+    expect(decision.status).toBe("blocked");
+    expect(decision.thumbsDown).toBe(1);
+    expect(applyRoundBudget(decision, 2, 2).status).toBe("counsel_exhausted");
+  });
+
+  it("refuses a missing item, an extra item, a bad verdict, a multi-line reason and bad JSON", () => {
+    const { rollback: _r, ...missing } = OK_ALL;
+    expect(() => parseReviewTranscript(reviewBlock(missing))).toThrow(/"rollback" is missing/);
+    expect(() => parseReviewTranscript(reviewBlock({ ...OK_ALL, tone: "ok" }))).toThrow(/unknown review item/);
+    expect(() => parseReviewTranscript(reviewBlock({ ...OK_ALL, rollback: "fine" }))).toThrow(ReviewFormatError);
+    const multi = "```darius-review\n" + JSON.stringify({
+      reviewer: "opus",
+      items: Object.fromEntries(REVIEW_ITEMS.map((n) => [n, { verdict: "ok", reason: "a\nb" }])),
+    }) + "\n```\n";
+    expect(() => parseReviewTranscript(multi)).toThrow(/one non-empty line/);
+    expect(() => parseReviewTranscript("```darius-review\n{nope}\n```\n")).toThrow(/not valid JSON/);
+    expect(() => parseReviewTranscript("```darius-review\n{}\n")).toThrow(/not closed/);
+  });
+});

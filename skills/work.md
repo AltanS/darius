@@ -2,7 +2,7 @@
 name: darius-work
 description: Drive the Work Loop, plan, delegate to expert agents, verify, commit, review, learn. Use when the user wants to work on the next tracked task or continue tracked implementation.
 argument-hint: "[--batch N] [task hint]"
-allowed-tools: Read, Glob, Grep, Bash, Skill, Task, Write
+allowed-tools: Read, Glob, Grep, Bash, Skill, Task, Agent, Write
 ---
 
 # Tracker Work Loop
@@ -27,7 +27,7 @@ $ARGUMENTS
    └── more tasks? loop back to 1
 ```
 
-**Pause only on:** `commit_first` (route to commit, then resume), counsel `blocked`/`counsel_exhausted`/`needs_ack` (see Counsel Handling), a verify failure you cannot auto-route, or an explicit user-input blocker flagged by the spec. Everything else lands in one turn. If a Task delegation is in flight when the turn would otherwise end, wait for it, work isn't done until Stage 3 verify passes (or a blocker is surfaced).
+**Pause only on:** `commit_first` (route to commit, then resume), review `blocked`/`counsel_exhausted`/`needs_ack` (see Review Handling), a verify failure you cannot auto-route, or an explicit user-input blocker flagged by the spec. Everything else lands in one turn. If a Task delegation is in flight when the turn would otherwise end, wait for it, work isn't done until Stage 3 verify passes (or a blocker is surfaced).
 
 ## Stage 1: Plan
 
@@ -35,8 +35,8 @@ Invoke `/darius-work-plan` (add `--batch N`, 2–5, when the user asks for multi
 
 - `ready` → proceed to Stage 2 with the returned `TASKS[]` (spec, thread id, agent, verification commands, worklog context).
 - `commit_first` → verified-but-uncommitted specs are open debt. Invoke `/darius-commit` scoped to the listed `SPECS:`, then re-invoke work-plan. Bypass only with `--skip-commit-first` when the user explicitly defers.
-- `counsel_required` / `blocked` / `counsel_exhausted` → see **Counsel Handling**.
-- A `COUNSEL_DISSENT` field on a `ready` plan is display, not a gate, surface it in one line and proceed.
+- `spec_invalid` → the deterministic spec check failed. Invoke `/darius-enrich` with the listed `PROBLEMS`, then re-invoke work-plan.
+- `review_required` / `blocked` / `counsel_exhausted` → see **Review Handling**.
 
 ## Stage 2: Execute
 
@@ -87,23 +87,31 @@ Rule of thumb: "this task is incomplete" → reopen. "Next time we'd plan differ
 
 ## Stage 6: Learn
 
-After spec/milestone completion, invoke `/darius-enrich` if the work revealed surprises: discovered tasks, unexpected approaches, unanticipated sibling dependencies, scope mis-sizing, changed verification commands, a counsel warning that came true. Straightforward work that matched the spec → skip. On milestone completion (unless `lessons: skip`): `/darius-enrich --milestone M{N}` first, then `/darius-archive`, which returns `needs_lessons` without it.
+After spec/milestone completion, invoke `/darius-enrich` if the work revealed surprises: discovered tasks, unexpected approaches, unanticipated sibling dependencies, scope mis-sizing, changed verification commands, a review concern that came true. Straightforward work that matched the spec → skip. On milestone completion (unless `lessons: skip`): `/darius-enrich --milestone M{N}` first, then `/darius-archive`, which returns `needs_lessons` without it.
 
 ## Exit Gate
 
 A Stop hook guards your turn end. It blocks only on threads your session owns (`worklog open` and `dispatch` record the session) that sit in a pre-terminal stage: `planned`, `dispatched`, `verified` or `committed`. `reviewed`, closed and parked threads are done. The bounce names the literal next action. Do it, or park the thread with a reason. Each thread may bounce a stop 2 times per 24 h; after that the hook reports it and lets the stop through, while your other threads still block. Threads of other sessions, or of none, show in one notice line and never block. Stage stamps ride the skills you already call. Never hand-edit a stage to silence the gate. Each stage needs its evidence, so a stage cannot be skipped.
 
-## Counsel Handling (only when `.tracker/config.yml` has `counsel_gate: on`)
+## Review Handling
 
-The gate is **off by default**, without that config line, work-plan never mentions counsel and none of this section applies.
+Since darius 0.74.0 every spec gets `darius spec check` (no model) in work-plan. Only a high-risk spec gets a reviewer, and only when `.tracker/config.yml` does not say `review_gate: off`.
 
-- `STATUS: counsel_required` → run `/dev-tools:counsel --four` with the returned `BRIEF` (advisors pinned to sonnet). Persist the transcript exactly as work-plan's step 3 specifies (content-addressed `.objects/` + symlink). Then run the deterministic gate, never count verdicts yourself:
-  `darius counsel-gate {TRANSCRIPT} --spec {SPEC}`
-  Act on the CLI's STATUS verbatim, then re-invoke work-plan:
-  - `ready` → proceed (surface any `DISSENT_SUMMARY` in one line).
-  - `needs_ack` → surface the dissent verbatim with your read (genuine gap / spec-authorized / taste); on user acknowledgement re-run with `--ack-dissent`; if the user calls it a gap, run `/darius-enrich` first.
-  - `blocked` → classify each thumbs_down from the transcript: **spec-authorized** (the spec already declared this scope/tradeoff) or **taste** (naming, style, no concrete cost) → stand ground; if ALL are authorized/taste, set `counsel: addressed` in spec frontmatter with a worklog note citing spec lines, re-invoke work-plan. A **genuine gap** (concrete unanticipated concern) → `/darius-enrich`, revise, re-invoke. Auto-routing every rejection to enrich is the loop trap, classify first.
-  - `counsel_exhausted` → the round budget is spent and the CLI stamped `counsel: exhausted`. Do NOT re-run counsel or auto-enrich. Surface the feedback + your per-advisor classification; the user chooses: `--override "<reason>"`, an explicit enrich, or park the spec.
+- `STATUS: review_required` → spawn ONE reviewer with the Agent tool: `subagent_type: general-purpose`, `model: opus`. Give it the `BRIEF`, the spec path, the `RISK_REASONS`, and this fixed checklist: `data-loss`, `irreversible`, `hidden-scope`, `missing-test`, `rollback`. Tell it to read the code the spec names, and to judge each item `ok`, `concern` or `blocker` with one line of reason. Tell it to answer only with this block:
+  ````
+  ```darius-review
+  {"reviewer":"<model>","items":{"data-loss":{"verdict":"ok","reason":"..."},"irreversible":{...},"hidden-scope":{...},"missing-test":{...},"rollback":{...}}}
+  ```
+  ````
+  Write the transcript: `BRIEF_HASH = sha256(brief)`; the reply goes to `{MILESTONE}/_counsel/.objects/{BRIEF_HASH}.md` (frontmatter: `model`, `timestamp`, `brief_hash`, `reviewer`), and the same bytes go to a plain copy at `{MILESTONE}/_counsel/{spec-slug}.md`. Never a symlink: the store does not sync links. Never delete old objects. Then run the deterministic gate, never count verdicts yourself:
+  `darius counsel-gate {MILESTONE}/_counsel/{spec-slug}.md --spec {SPEC}`
+  It exits 2 when an item is missing or the JSON is bad: send the reviewer the error and ask again. Act on the CLI's STATUS verbatim, then re-invoke work-plan:
+  - `ready` → proceed (the CLI stamped `counsel: <ISO>`).
+  - `needs_ack` → surface each concern (`DISSENT_SUMMARY`) verbatim with your read (genuine gap / spec-authorized / taste). On user acknowledgement re-run with `--ack-dissent`; if the user calls it a gap, run `/darius-enrich` first.
+  - `blocked` → classify each blocker first: **spec-authorized** (the spec already declared this scope or tradeoff) or **taste** (no concrete cost) → stand ground; if ALL are, set `counsel: addressed` in spec frontmatter with a worklog note citing spec lines, re-invoke work-plan. A **genuine gap** (a concrete, unanticipated risk) → `/darius-enrich`, revise, re-invoke. Auto-routing every block to enrich is the loop trap, classify first.
+  - `counsel_exhausted` → the round budget (`max_counsel_rounds:`, default 2) is spent and the CLI stamped `counsel: exhausted`. Do NOT re-run the review or auto-enrich. Surface the blockers and your classification; the user chooses: `--override "<reason>"`, an explicit enrich, or park the spec.
+
+Older transcripts with four advisor verdicts still parse; `counsel-gate` reads them as before.
 
 ## Hygiene
 

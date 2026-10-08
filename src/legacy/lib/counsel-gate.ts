@@ -365,3 +365,168 @@ function summarizeDissent(
     .map((a) => `${a.persona}: ${a.assessment || "(no assessment line)"}`)
     .join(" | ");
 }
+
+// ---------------------------------------------------------------------------
+// One-reviewer format (darius 0.74.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * The review gate replaced the four advisors (operator ruling 2026-10-08:
+ * two milestones of counsel produced zero blocks). One reviewer answers a
+ * fixed checklist in a fenced block:
+ *
+ *   ```darius-review
+ *   {"reviewer":"<model>","items":{"data-loss":{"verdict":"ok","reason":"..."}, ...}}
+ *   ```
+ *
+ * Every item of REVIEW_ITEMS must be present, and no other. A verdict is
+ * `ok`, `concern` or `blocker`; a reason is one non-empty line. Gate rule:
+ * any blocker → blocked, else any concern → needs_ack, else ready.
+ */
+export const REVIEW_ITEMS = [
+  "data-loss",
+  "irreversible",
+  "hidden-scope",
+  "missing-test",
+  "rollback",
+] as const;
+
+export type ReviewItem = (typeof REVIEW_ITEMS)[number];
+export type ReviewVerdict = "ok" | "concern" | "blocker";
+
+export type ReviewParseResult = {
+  reviewer: string;
+  items: Record<ReviewItem, { verdict: ReviewVerdict; reason: string }>;
+  blockers: number;
+  concerns: number;
+  oks: number;
+};
+
+/** A transcript in the review format that does not follow it. The CLI exits 2. */
+export class ReviewFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewFormatError";
+  }
+}
+
+const REVIEW_FENCE_RE = /^[ \t]*```darius-review[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```[ \t]*$/m;
+
+/** True when the transcript carries a ```darius-review block (the new format). */
+export function isReviewTranscript(raw: string): boolean {
+  return /^[ \t]*```darius-review\b/m.test(raw);
+}
+
+/** Parse the ```darius-review block. Throws ReviewFormatError on any defect. */
+export function parseReviewTranscript(raw: string): ReviewParseResult {
+  const fence = REVIEW_FENCE_RE.exec(raw);
+  if (fence === null) {
+    throw new ReviewFormatError("the ```darius-review block is not closed");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fence[1]!);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ReviewFormatError(`the darius-review block is not valid JSON: ${message}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new ReviewFormatError("the darius-review block must be a JSON object");
+  }
+  const reviewer = parsed["reviewer"];
+  if (typeof reviewer !== "string" || reviewer.trim() === "") {
+    throw new ReviewFormatError('the darius-review block needs a "reviewer" string');
+  }
+  const rawItems = parsed["items"];
+  if (!isPlainObject(rawItems)) {
+    throw new ReviewFormatError('the darius-review block needs an "items" object');
+  }
+  const known = new Set<string>(REVIEW_ITEMS);
+  const extra = Object.keys(rawItems).filter((key) => !known.has(key));
+  if (extra.length > 0) {
+    throw new ReviewFormatError(
+      `unknown review item(s): ${extra.join(", ")}; the items are exactly ${REVIEW_ITEMS.join(", ")}`,
+    );
+  }
+  const items = {} as ReviewParseResult["items"];
+  for (const name of REVIEW_ITEMS) {
+    const entry = rawItems[name];
+    if (entry === undefined) {
+      throw new ReviewFormatError(
+        `review item "${name}" is missing; the items are exactly ${REVIEW_ITEMS.join(", ")}`,
+      );
+    }
+    if (!isPlainObject(entry)) {
+      throw new ReviewFormatError(`review item "${name}" must be an object with verdict and reason`);
+    }
+    const verdict = entry["verdict"];
+    if (verdict !== "ok" && verdict !== "concern" && verdict !== "blocker") {
+      throw new ReviewFormatError(
+        `review item "${name}": verdict must be ok, concern or blocker, got ${JSON.stringify(verdict)}`,
+      );
+    }
+    const reason = entry["reason"];
+    if (typeof reason !== "string" || reason.trim() === "" || /[\r\n]/.test(reason.trim())) {
+      throw new ReviewFormatError(`review item "${name}": reason must be one non-empty line`);
+    }
+    items[name] = { verdict, reason: reason.trim() };
+  }
+  const verdicts = REVIEW_ITEMS.map((name) => items[name].verdict);
+  return {
+    reviewer: reviewer.trim(),
+    items,
+    blockers: verdicts.filter((v) => v === "blocker").length,
+    concerns: verdicts.filter((v) => v === "concern").length,
+    oks: verdicts.filter((v) => v === "ok").length,
+  };
+}
+
+/**
+ * Apply the review gate rule. `ackConcerns` (the `--ack-dissent` re-run)
+ * turns needs_ack into ready; it never clears a blocker.
+ *
+ * The legacy numeric fields are filled so `--json` keeps its shape:
+ * thumbsDown = blockers, threshold = 1 (one blocker blocks).
+ */
+export function applyReviewGate(
+  parse: ReviewParseResult,
+  ackConcerns: boolean = false,
+): GateDecision {
+  const base = { thumbsDown: parse.blockers, threshold: 1 };
+  if (parse.blockers > 0) {
+    return {
+      ...base,
+      status: "blocked",
+      reason: `review blocked (${parse.blockers} blocker(s))`,
+      blockingSummary: summarizeReview(parse, "blocker"),
+    };
+  }
+  if (parse.concerns > 0) {
+    const dissentSummary = summarizeReview(parse, "concern");
+    if (ackConcerns) {
+      return {
+        ...base,
+        status: "ready",
+        reason: `${parse.concerns} concern(s) acknowledged`,
+        dissentSummary,
+      };
+    }
+    return {
+      ...base,
+      status: "needs_ack",
+      reason: `${parse.concerns} concern(s) need acknowledgement before dispatch`,
+      dissentSummary,
+    };
+  }
+  return { ...base, status: "ready", reason: "every review item is ok" };
+}
+
+function summarizeReview(parse: ReviewParseResult, verdict: ReviewVerdict): string {
+  return REVIEW_ITEMS.filter((name) => parse.items[name].verdict === verdict)
+    .map((name) => `${name}: ${parse.items[name].reason}`)
+    .join(" | ");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

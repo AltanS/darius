@@ -16,7 +16,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
 ```
 
-Consolidate completed milestones into archive documents, clean up the active dashboard, and preserve the full audit trail (overview, spec content, counsel transcripts, lessons).
+Consolidate completed milestones into archive documents, clean up the active dashboard, and preserve the full audit trail (overview, spec content, review transcripts, lessons).
 
 This skill runs in a fork: it does not see the conversation and cannot ask the user. Everything it needs comes from `$ARGUMENTS` and the tracker. When it needs a decision, it stops and returns a `STATUS` block (see **Return**); the main thread asks the user and invokes the skill again with the answer as an argument.
 
@@ -45,7 +45,7 @@ This skill runs in a fork: it does not see the conversation and cannot ask the u
    - Spec list: `!darius list specs --milestone <slug> --json`
    - Each spec: `darius show <path> --json` for structured verification data.
    - Worklog: `!darius worklog list --milestone <slug> --json`
-   - Every counsel transcript in `.tracker/{milestone-slug}/_counsel/*.md`.
+   - Every review transcript in `.tracker/{milestone-slug}/_counsel/*.md` (the plain copies, not `.objects/`).
 
 5. **Resolve commits**: for each verified item, use `git log --until="<verified timestamp>" --format="%h %aI %s" -1 -- <artifact-paths>`.
 
@@ -58,7 +58,7 @@ This skill runs in a fork: it does not see the conversation and cannot ask the u
    - Commit Index table
    - Worklog content (all threads with updates and artifacts), inline it in full. There is no "too large to inline" escape hatch: step 8 preserves the original bytes verbatim under `archive/worklog-raw/`, so length is never a reason to substitute a placeholder note.
    - Full original spec content under `## Specs`
-   - **Counsel Transcripts** appendix, inline every `_counsel/*.md`
+   - **Review Transcripts** appendix, inline every `_counsel/*.md`. For a ```darius-review block (darius 0.74.0), add a one-line table per spec first: reviewer, then each of the five items with its verdict. Older four-advisor transcripts go in as they are.
 
    If the file already exists and there is no `--overwrite`, return `STATUS: needs_decision` with the choices overwrite / skip / cancel.
 
@@ -94,7 +94,7 @@ This skill runs in a fork: it does not see the conversation and cannot ask the u
     STATUS: archived | dry_run | refused | needs_decision | needs_lessons
     MILESTONE: {milestone-slug}
     ARCHIVE_DOC: .tracker/archive/{milestone-slug}.md
-    STATS: {specs} specs, {items} items verified, {duration}, {n} counsel transcripts
+    STATS: {specs} specs, {items} items verified, {duration}, {n} review transcripts
     REMOVED: {n} files | kept (--keep) | none
     WORKLOG: distilled {before} -> {after} bytes | left whole: {reason}
     UNDO: darius tree restore .tracker/{milestone-slug}/ | git checkout HEAD -- .tracker/{milestone-slug}/ (before the commit) | none
@@ -111,5 +111,5 @@ This skill runs in a fork: it does not see the conversation and cannot ask the u
 - Remove a milestone folder only with `darius milestone archive`, never with `rm`.
 - If the archive file already exists and there is no `--overwrite`, return `STATUS: needs_decision`: overwrite / skip / cancel.
 - Items without `Verified:` timestamps get current timestamp with a note.
-- Every counsel transcript MUST make it into the archive.
+- Every review transcript MUST make it into the archive.
 - The Lessons gate passes if: (a) `## Lessons` contains synthesized content, (b) frontmatter sets `lessons: skip`, or (c) section contains `_No lessons of note, mechanical milestone._`. Otherwise run enrich-lessons first, never archive with an empty Lessons section and no skip flag.

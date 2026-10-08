@@ -21,7 +21,7 @@ $ARGUMENTS
 
 Recognized flags:
 - `--batch N` (N ≥ 2): return up to N independent tasks for parallel execution. Default returns a single task.
-- `--override "<reason>"`: skip the counsel gate for blocked specs, recording the reason in worklog. Refuse without a non-empty reason.
+- `--override "<reason>"`: skip the review gate for a blocked or exhausted spec, recording the reason in worklog. Refuse without a non-empty reason. It never skips the spec check.
 - `--skip-commit-first`: bypass the commit-first gate (step 0). Use only when the uncommitted-verified work is intentionally being deferred.
 
 0. **Commit-first gate** (deterministic, runs before anything else):
@@ -43,28 +43,37 @@ Recognized flags:
 
 2. **Dependency gate**: For each candidate, check `depends_on` from `darius show --json`. A spec is ready only if every dependency's status is `Complete`. Record blocked-on-deps separately.
 
-3. **Counsel gate** (opt-in, **OFF by default**):
+3. **Spec check and review gate** (always on since darius 0.74.0):
 
-   - **Default: skip.** Unless `.tracker/config.yml` contains `counsel_gate: on`, skip this step entirely, do not run counsel, do not stamp frontmatter. (Two milestones of production history produced zero counsel blocks; the gate is reserved for projects that opt in for high-risk work.)
-   - **v9 upgrade notice (one line, first run only):** if the gate is off, no `counsel_gate:` key exists in config, AND any spec in the current milestone carries a `counsel:` stamp (evidence this project ran under v9's on-by-default gate), append to the output: `NOTE: counsel gate is now OFF by default (v10). This project has prior counsel stamps, set 'counsel_gate: on' in .tracker/config.yml to restore the old behavior.` Suppress the note once the config contains an explicit `counsel_gate:` key (either value).
-   - **`--override "<reason>"`** (only meaningful when the gate is on): skip gate for this spec. Set `counsel: overridden` in frontmatter. Log a `Counsel override: <reason>` note to worklog. Refuse without a non-empty reason.
+   For every candidate spec run the deterministic check. It uses no model:
+   `!darius spec check <spec-path> --json`
+   It returns `{ ok, risk, riskReasons, problems, reviewGate, reviewRequired, counsel }` and exits 0 (pass), 1 (problems) or 2 (usage).
 
-   When `counsel_gate: on`, evaluate the spec's `counsel` frontmatter:
-   - `counsel: <ISO>`, `overridden`, or `addressed` → gate already passed; proceed.
-   - `counsel: rejected` (and no `--override`, no `addressed`) → treat as blocked: return `STATUS: blocked / REASON: counsel rejected / SPEC: {path} / TRANSCRIPT: {path}`. The driver classifies the rejection (see `/darius-work` **Counsel Handling**) or the user runs `/darius-enrich`.
-   - `counsel: exhausted` (round budget spent; no `--override`, no `addressed`) → return `STATUS: counsel_exhausted` without re-running anything, the loop is closed. Only an explicit `--override "<reason>"` or a driver `counsel: addressed` classification clears it.
-   - **No `counsel` field** → counsel must run, but advisor-spawning belongs to the driving agent, not this forked skill. Compose the brief (goal, approach, tasks, verification criteria, dependencies, self-contained, readable without the spec) and return immediately:
+   - **`ok: false`** → do not plan this spec. Return immediately:
      ```
-     STATUS: counsel_required
+     STATUS: spec_invalid
      SPEC: {path}
-     BRIEF: |
-       {the composed brief}
+     PROBLEMS:
+       - {each entry of problems, verbatim}
      ```
-     The driver then: (1) runs `/dev-tools:counsel --four` with the brief (advisors pinned to sonnet); (2) writes the transcript content-addressed, `BRIEF_HASH = sha256(brief)`, full transcript to `{TRACKER_ROOT}/.tracker/{MILESTONE}/_counsel/.objects/{BRIEF_HASH}.md` (frontmatter: `model`, `timestamp`, `brief_hash`, `advisors`), stable symlink `{MILESTONE}/_counsel/{spec-slug}.md → .objects/{BRIEF_HASH}.md`, old objects never deleted; (3) runs the deterministic gate:
-     `darius counsel-gate {TRANSCRIPT_PATH} --spec {SPEC_PATH}`
-     and acts on its `STATUS` (`ready` / `needs_ack` / `blocked` / `counsel_exhausted`) per `/darius-work` **Counsel Handling**; (4) re-invokes work-plan, which now sees the stamped frontmatter.
+     The driver routes this to `/darius-enrich` to fix the spec, then re-plans. The checks are: every checklist item has a `Command:` and an `Expected:` in the verify grammar, or is manual (`Expected: manual (...)` or a shell no-op Command) with a `- Manual: <reason>` line; every `depends_on` target exists; a high-risk spec has a `## Rollback` section with text.
+   - **`reviewRequired: false`** (low risk, or `review_gate: off`) → no review; proceed.
+   - **`reviewRequired: true`** → read `counsel`, the spec's stamp:
+     - `<ISO>`, `overridden` or `addressed` → the review already passed; proceed.
+     - `rejected` (no `--override`) → return `STATUS: blocked / REASON: review rejected / SPEC: {path} / TRANSCRIPT: {path}`. The driver classifies it (see `/darius-work` **Review Handling**).
+     - `exhausted` (no `--override`) → return `STATUS: counsel_exhausted` and run nothing. Only `--override "<reason>"` or a driver `counsel: addressed` clears it.
+     - **no stamp** → the review must run, but spawning the reviewer belongs to the driver, not this forked skill. Compose a self-contained brief (goal, approach, tasks, verification, dependencies, rollback, and the files and code the spec names), readable without the spec. Return immediately:
+       ```
+       STATUS: review_required
+       SPEC: {path}
+       RISK_REASONS:
+         - {pattern} ({class}) line {line}: {text}
+       BRIEF: |
+         {the composed brief}
+       ```
+   - **`--override "<reason>"`**: skip the review for this spec. Set `counsel: overridden` in frontmatter. Log a `Review override: <reason>` note to worklog. Refuse without a non-empty reason.
 
-   **Important**: the threshold decision is owned by the CLI (`counsel_threshold:`, `max_counsel_rounds:`, `counsel_single_dissent:` in `.tracker/config.yml`), never by an LLM reading the verdicts. Earlier prompt-only thresholds (v9.6.0) were silently overridden by the model's "this looks severe → block" prior. Call the CLI, read its output, do what it says.
+   **Important**: the risk and the verdict are owned by the CLI, never by you. Risk comes from a fixed pattern list (`RISK_PATTERNS` in darius); frontmatter `risk: high` raises it, and nothing lowers it. Never edit a spec to make it look low risk. `review_gate: off` in `.tracker/config.yml` skips the reviewer; the old `counsel_gate:` key, `on` or `off`, now reads as `auto`.
 
 4. **Parallel-safety check** (batch mode only): at most one task per spec per batch. Warn if two selected specs touch overlapping file paths.
 
@@ -114,9 +123,9 @@ Recognized flags:
    Blocked summary (always present if non-empty):
    ```
    BLOCKED:
-     - SPEC: {spec-path}  REASON: {counsel rejected | depends_on: M2-api/01-auth.md | blocked item}
+     - SPEC: {spec-path}  REASON: {review rejected | spec invalid | depends_on: M2-api/01-auth.md | blocked item}
    ```
 
-If legacy v1 structure detected (flat specs at root), return `STATUS: blocked, REASON: Legacy v1 structure, run `darius doctor --fix`. Never write code, this skill only plans and prepares. Counsel sidecar path is stable: reference it by the symlink so enrich/archive can locate transcripts without re-inferring.
+If legacy v1 structure detected (flat specs at root), return `STATUS: blocked, REASON: Legacy v1 structure, run `darius doctor --fix`. Never write code, this skill only plans and prepares. The review transcript path is stable (`{MILESTONE}/_counsel/{spec-slug}.md`, a plain file): reference it so enrich/archive can locate transcripts without re-inferring.
 
 **Repo-relative paths in spec files.** The envelope fields above (`SPEC`, `WORKLOG_PATH`, `COUNSEL_TRANSCRIPT`) are runtime pointers and stay absolute. But any path the implementing agent writes *into the committed spec*, `Command:`/`Expected:` lines and prose, MUST be repo-relative (e.g. `src/x.ts`), never `/home/you/repo/...`. Verification runs from the repo root and `.tracker/` is shared (committed, or synced through the darius store), so absolute paths leak the author's home-dir layout and won't run on other machines. Carry this rule into the `VERIFICATION.command` strings you emit.

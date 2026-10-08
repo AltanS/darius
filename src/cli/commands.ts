@@ -32,6 +32,7 @@ import { serveCommand } from "./serve.ts";
 import { setupCommand } from "./setup.ts";
 import { skillCommand } from "./skill.ts";
 import { snapshotCommand } from "./snapshot.ts";
+import { specCommand } from "./spec.ts";
 import { syncCommand } from "./sync.ts";
 import { treeCommand } from "./tree.ts";
 import { tuiCommand } from "./tui.ts";
@@ -59,6 +60,7 @@ const COMMANDS: readonly Command[] = [
   setupCommand,
   skillCommand,
   snapshotCommand,
+  specCommand,
   syncCommand,
   treeCommand,
   tuiCommand,

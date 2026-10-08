@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.74.0] - 2026-10-08
+
+### Added
+
+- `darius spec check <spec> [--json]` checks a spec with no model. It fails (exit 1) when an item has no `Command:` or no `Expected:` in the verify grammar, when a manual item has no `- Manual: <reason>` line, when a `depends_on` target does not exist, or when a high-risk spec has no `## Rollback` section with text. JSON: `{ ok, risk, riskReasons, problems, reviewGate, reviewRequired, counsel }`.
+- Risk comes from a fixed pattern list (`RISK_PATTERNS`): destructive file ops, data ops, external writes, and concrete auth and secret terms (not bare words such as "author" or "token"). Each match names its pattern and line. Frontmatter `risk: high` raises the risk; `risk: low` never lowers it.
+- `darius counsel-gate` reads a one-reviewer transcript: a fenced `darius-review` JSON block with the items `data-loss`, `irreversible`, `hidden-scope`, `missing-test` and `rollback`, each `ok`, `concern` or `blocker`. Any blocker blocks, any concern needs an ack, else ready. A missing item or bad JSON exits 2. `--json` adds `format`, `reviewer` and `items`.
+- `.tracker/config.yml` takes `review_gate: auto | off` (default `auto`). `off` skips the reviewer, never the spec check.
+
+### Changed
+
+- The counsel gate is replaced (operator ruling 2026-10-08: four advisors produced zero blocks in two milestones). `darius-work-plan` runs `darius spec check` on every candidate and returns `spec_invalid` or `review_required`; `darius-work` spawns one opus reviewer for a high-risk spec only. `/dev-tools:counsel --four` is no longer used.
+- The old `counsel_gate:` key, `on` or `off`, now reads as `review_gate: auto`. Old four-advisor transcripts still parse as before.
+- The review transcript at `_counsel/<spec-slug>.md` is a plain copy of its `.objects/` file, not a symlink, because the tree sync keeps regular files only.
+- `darius-enrich` and `darius-archive` read the new transcript format.
+
 ## [0.73.0] - 2026-10-08
 
 ### Added
