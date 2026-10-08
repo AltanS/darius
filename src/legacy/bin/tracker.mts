@@ -184,6 +184,7 @@ import {
   appendCounselLog,
   checkCounselStamp,
   sha256OfFile,
+  specContentSha256,
   spentRounds,
 } from "../lib/counsel-stamp.ts";
 import { discoverAgents } from "../lib/agent-discovery.ts";
@@ -2956,7 +2957,9 @@ async function runCounselGate(args: string[]): Promise<void> {
     const sha256 = sha256OfFile(transcriptPath);
     const transcriptKey =
       trackerRoot !== null ? (canonicalSpecRef({ trackerRoot, ref: transcriptPath }) ?? transcriptPath) : transcriptPath;
-    writeCounselFrontmatter(specPath, decision, roundsUsed, { transcript: transcriptKey, sha256 });
+    // A missing spec is reported by writeCounselFrontmatter.
+    const specSha256 = existsSync(specPath) ? specContentSha256(readFileSync(specPath, "utf-8")) : "";
+    writeCounselFrontmatter(specPath, decision, roundsUsed, { transcript: transcriptKey, sha256, specSha256 });
     if (trackerRoot !== null && specKey !== null) {
       appendCounselLog(trackerRoot, {
         spec: specKey,
@@ -2965,6 +2968,7 @@ async function runCounselGate(args: string[]): Promise<void> {
         at: new Date().toISOString(),
         transcript: transcriptKey,
         sha256,
+        spec_sha256: specSha256,
         format: review === null ? "counsel" : "review",
         rounds: roundsUsed,
       });
@@ -3161,7 +3165,7 @@ function writeCounselFrontmatter(
   specPath: string,
   decision: GateDecision,
   roundsUsed: number,
-  transcript: { transcript: string; sha256: string },
+  transcript: { transcript: string; sha256: string; specSha256: string },
 ): void {
   if (!existsSync(specPath)) {
     process.stderr.write(`darius counsel-gate: --spec not found: ${specPath}\n`);
@@ -3193,6 +3197,8 @@ function writeCounselFrontmatter(
     // The stamp names the transcript and its hash (0.76.0); dispatch checks both.
     data["counsel_transcript"] = transcript.transcript;
     data["counsel_sha256"] = transcript.sha256;
+    // The hash of the spec text the review saw (0.77.0); dispatch refuses a changed spec.
+    data["counsel_spec_sha256"] = transcript.specSha256;
   }
 
   const updated = serializeFrontmatter(data, content);

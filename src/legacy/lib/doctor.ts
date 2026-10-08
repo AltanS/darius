@@ -69,6 +69,7 @@ import { scanWorklogDir, stageIntegrityProblems } from "./worklog.ts";
 import { rebuildIndex } from "./tracker-writer.ts";
 import { CURRENT_SCHEMA_VERSION } from "./version.ts";
 import { discoverAgents } from "./agent-discovery.ts";
+import { hasUnhashedStamp } from "./counsel-stamp.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,7 +91,8 @@ export type DoctorFinding = {
     | "vigil-unrunnable"
     | "vigil-command-shape"
     | "vigil-premise-unshipped"
-    | "vigil-heavy-command";
+    | "vigil-heavy-command"
+    | "counsel-stamp-unhashed";
   file: string;
   detail: string;
   /** If true, this finding is a warning only — doctor still exits healthy. */
@@ -667,6 +669,33 @@ export function runDoctor(opts: {
       file: v.file,
       detail:
         `heavy Command in vigil ${v.slug}: the daily sweep skips it unless --include-heavy`,
+      warnOnly: true,
+    });
+  }
+
+  // 13. Review stamps without a spec hash — INFO ONLY (0.77.0). A stamp from
+  // before 0.77.0 stays valid, but it cannot notice an edit made after the
+  // review. Re-running counsel-gate adds the hash.
+  const unhashed: string[] = [];
+  for (const folder of milestoneFolders) {
+    for (const specPath of getSpecFiles(folder)) {
+      try {
+        const { data } = parseFrontmatter(readFileSync(specPath, "utf-8"));
+        if (hasUnhashedStamp(data)) unhashed.push(basename(specPath));
+      } catch {
+        // Reported by the schema checks above.
+      }
+    }
+  }
+  if (unhashed.length > 0) {
+    warnings.push({
+      kind: "counsel-stamp-unhashed",
+      file: join(trackerRoot, "."),
+      detail:
+        `INFO: ${unhashed.length} spec(s) carry a review stamp without counsel_spec_sha256 ` +
+        `(${unhashed.slice(0, 5).join(", ")}${unhashed.length > 5 ? ", ..." : ""}). ` +
+        `The stamp stays valid, but an edit after the review goes unnoticed. ` +
+        `Run counsel-gate again to add the hash.`,
       warnOnly: true,
     });
   }

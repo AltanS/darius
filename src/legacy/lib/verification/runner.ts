@@ -352,18 +352,30 @@ const PORTABLE_ABSOLUTE_PATHS: ReadonlySet<string> = new Set([
   "/dev/stderr",
 ]);
 
+/** The roots a file system path argument starts with. Other `/x/y` words are URL paths or patterns. */
+const FILE_SYSTEM_ROOTS = /^(?:\/(?:home|Users|tmp|var|etc|opt|root|mnt|nix|usr)\/[^/]|~\/[^/])/;
+
+/** A quoted string, so `grep -q "/api/v1" file` does not read as a path (0.77.0). */
+const QUOTED_STRING = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+
 /**
- * The absolute paths a Command names, in order. The spec template forbids
- * them: a Command runs from the workspace root on any host. A path counts
- * when it starts a word (after a space, a quote, `=` or a redirect), so the
- * `//` of a URL and the `/` inside a relative path do not.
+ * The absolute file system paths a Command names, in order. The spec template
+ * forbids them: a Command runs from the workspace root on any host. Since
+ * 0.77.0 a path counts only when it is an unquoted word that starts with a
+ * common root (`/home/`, `/Users/`, `/tmp/`, `/var/`, `/etc/`, `/opt/`,
+ * `/root/`, `/mnt/`, `/nix/`, `/usr/`, or `~/`) and has at least two
+ * segments. Quoted strings and URL paths (`/api/v1`) are not paths. A path
+ * starts a word (after a space, `=` or a redirect), so the `//` of a URL and
+ * the `/` inside a relative path do not count.
  */
 export function absolutePathsIn(command: string): string[] {
   const found: string[] = [];
-  const re = /(?:^|[\s"'=<>(])(\/[A-Za-z0-9_.~+-][^\s"'`;|&)<>]*)/g;
-  for (const match of command.matchAll(re)) {
+  const unquoted = command.replace(QUOTED_STRING, " ");
+  const re = /(?:^|[\s=<>(])((?:\/|~\/)[A-Za-z0-9_.~+-][^\s"'`;|&)<>]*)/g;
+  for (const match of unquoted.matchAll(re)) {
     const path = match[1] as string;
     if (PORTABLE_ABSOLUTE_PATHS.has(path)) continue;
+    if (!FILE_SYSTEM_ROOTS.test(path)) continue;
     found.push(path);
   }
   return found;

@@ -262,6 +262,21 @@ describe("isPlaceholderCommand and absolutePathsIn", () => {
 
   it("lists absolute paths, but not /dev/null or a URL", () => {
     expect(absolutePathsIn("test -f /etc/hosts 2>/dev/null && curl https://example.com/x > out/a")).toEqual(["/etc/hosts"]);
-    expect(absolutePathsIn('grep -q x "/tmp/a"')).toEqual(["/tmp/a"]);
+    expect(absolutePathsIn("cat ~/notes.md > /var/log/x")).toEqual(["~/notes.md", "/var/log/x"]);
+    expect(absolutePathsIn("cp a --to=/opt/app/b")).toEqual(["/opt/app/b"]);
+  });
+
+  it("does not flag quoted strings, URL paths or one-segment words", () => {
+    for (const cmd of [
+      'grep -q "/api/v1" src/routes.ts',
+      "grep -q '/api/v1' src/routes.ts",
+      'grep -q x "/tmp/a"',
+      "grep -q /api/v1 src/routes.ts",
+      "grep -q /usr src/a.ts",
+      "grep -q /home src/a.ts",
+      "curl -sf http://localhost:3000/tmp/x",
+    ]) {
+      expect(absolutePathsIn(cmd), cmd).toEqual([]);
+    }
   });
 });

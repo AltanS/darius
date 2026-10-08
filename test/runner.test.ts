@@ -1171,6 +1171,15 @@ test("preflightGate refuses a gate that allows the synthetic call or does not st
   assert.equal(preflightGate([BASH, "-c", 'cat >/dev/null; echo "{\\"deny\\":1}"; exit 2'], claudeHarness, env), undefined);
 });
 
+test("preflightGate reads a gate that exits without reading stdin by its exit code, not as did-not-run", () => {
+  // A payload larger than the pipe buffer makes the write fail with EPIPE every time on Node.
+  const bulky = { ...claudeHarness, preflightPayload: "x".repeat(1 << 20) };
+  const env = { PATH: process.env.PATH ?? "" };
+  assert.match(preflightGate([BASH, "-c", "exit 0"], bulky, env) ?? "", /allowed the preflight call/u);
+  assert.match(preflightGate([BASH, "-c", "exit 1"], bulky, env) ?? "", /the gate exited 1/u);
+  assert.match(preflightGate([join(SANDBOX, "missing-gate")], bulky, env) ?? "", /the gate did not run/u);
+});
+
 // --- profiles ------------------------------------------------------------------------
 
 interface ProfiledEntry {

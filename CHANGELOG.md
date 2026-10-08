@@ -15,6 +15,8 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `darius tree restore` of a milestone folder warns about an archive document and a distilled worklog stub, with the commands that end each. The JSON adds `follow_up`.
 - `onboard scan` and `onboard --dry-run` on an onboarded repo print `already onboarded` and exit 0 (JSON: `status: "already-onboarded"`).
 - README: sections for milestones and specs, vigils, runs, cadence, worktrees and exit codes. `docs/concept.md` has a "CLI contract" section.
+- A ready counsel-gate stamp records `counsel_spec_sha256`, the hash of the spec body without its frontmatter and with all checklist box states read alike. The log line holds it as `spec_sha256`.
+- `darius doctor` prints an info line for a review stamp without `counsel_spec_sha256`. The stamp stays valid.
 
 ### Changed
 
@@ -27,6 +29,12 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - A git-mode `milestone archive` on a folder that git does not track says so, prints `rm -r`, and gives no `git checkout` line.
 - `tree restore --force` on a file that is live again reads `restore version <sha>`, not `undo the removal`.
 - Spec templates say tracker files are shared with other hosts and sessions (not that `.tracker/` is committed). Every `*_CMD` slot of the library, api-endpoint and ui-component templates is the failing placeholder Command, like the generic one.
+- `worklog dispatch` and `set-stage dispatched` refuse a spec whose text changed since its review. Ticking a box does not count as a change. Run the review again, or use `counsel-gate --override`.
+
+### Fixed
+
+- `spec check` no longer reports `grep -q "/api/v1" src/routes.ts` as an absolute path. Only an unquoted word with two segments that starts with a common root (`/home/`, `/tmp/`, `/etc/` and the like) or `~/` counts.
+- The runner preflight no longer reports "the gate did not run: EPIPE" when a gate exits without reading stdin. It reads the gate's exit code and output, as it does for any other gate.
 
 ## [0.76.0] - 2026-10-08
 

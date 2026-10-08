@@ -453,6 +453,17 @@ test("absolute paths in a Command are problems, /dev/null is not", () => {
   assert.ok(!url.problems.some((p) => p.includes("absolute path")), url.problems.join("; "));
 });
 
+test("an absolute path counts only as an unquoted file system argument", () => {
+  for (const command of [`grep -q "/api/v1" src/routes.ts`, `grep -q '/api/v1' src/routes.ts`, "grep -q /api/v1 src/routes.ts", `grep -q x "/tmp/out"`, "grep -q /etc src/a.ts"]) {
+    const result = check(spec(itemWith(command)));
+    assert.ok(!result.problems.some((p) => p.includes("absolute path")), `${command}: ${result.problems.join("; ")}`);
+  }
+  for (const command of ["cat /home/dev/x.txt", "test -f /nix/store/abc", "cat ~/notes.md", "ls /usr/local/bin"]) {
+    const result = check(spec(itemWith(command)));
+    assert.ok(result.problems.some((p) => p.includes("absolute path")), command);
+  }
+});
+
 test("verify-item agrees: a constant-pass Command with Expected exit 0 is a grammar error", async () => {
   const runner = await import("../src/legacy/lib/verification/runner.ts");
   for (const command of ["exit 0", "test 1", "grep -q x src/a.ts || true", `node -e "process.exit(0)"`]) {

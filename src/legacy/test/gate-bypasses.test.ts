@@ -429,6 +429,46 @@ describe("gate bypasses closed in 0.76.0", () => {
     expect(run(["worklog", "dispatch", id, "--agent", "x"]).exitCode).toBe(0);
   });
 
+  it("dispatch refuses a spec whose text changed after its review, but not a ticked box", () => {
+    highRisk();
+    const t = transcript(REVIEW_OK);
+    expect(run(["counsel-gate", t, "--spec", SPEC_REF]).exitCode).toBe(0);
+    expect(readFileSync(specPath, "utf-8")).toMatch(/counsel_spec_sha256: "?[0-9a-f]{64}/);
+    const id = open();
+    const reviewed = readFileSync(specPath, "utf-8");
+    // Editing the Command does.
+    writeFileSync(specPath, reviewed.replace("test -f src/a.ts", "test -f src/b.ts"));
+    const refused = run(["worklog", "dispatch", id, "--agent", "x"]);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("changed since its review");
+    expect(refused.stderr).toContain("--override");
+    expect(run(["worklog", "set-stage", id, "dispatched"]).exitCode).toBe(1);
+    // The hash in the stamp cannot be rewritten by hand to fit the new text.
+    const forged = readFileSync(specPath, "utf-8").replace(/counsel_spec_sha256: .*/, `counsel_spec_sha256: ${"0".repeat(64)}`);
+    writeFileSync(specPath, forged);
+    expect(run(["worklog", "dispatch", id, "--agent", "x"]).exitCode).toBe(1);
+    // Ticking a box and changing a frontmatter field do not touch the review.
+    writeFileSync(specPath, reviewed.replace("- [ ] the file exists", "- [x] the file exists").replace("updated: 2026-01-01", "updated: 2026-02-02"));
+    expect(run(["worklog", "dispatch", id, "--agent", "x"]).exitCode).toBe(0);
+  });
+
+  it("a stamp without counsel_spec_sha256 stays valid, and doctor prints an info line", () => {
+    highRisk();
+    const t = transcript(REVIEW_OK);
+    expect(run(["counsel-gate", t, "--spec", SPEC_REF]).exitCode).toBe(0);
+    const id = open();
+    // Deleting the field alone does not make a hashed review old: the log holds the hash.
+    writeFileSync(specPath, readFileSync(specPath, "utf-8").replace(/counsel_spec_sha256: .*\n/, "").replace("test -f src/a.ts", "test -f src/b.ts"));
+    expect(run(["worklog", "dispatch", id, "--agent", "x"]).stderr).toContain("changed since its review");
+    // A true old stamp: no hash in the frontmatter and none in the log.
+    writeFileSync(specPath, readFileSync(specPath, "utf-8").replace("test -f src/b.ts", "test -f src/a.ts"));
+    const logPath = join(trackerRoot, ".counsel-log.jsonl");
+    writeFileSync(logPath, readFileSync(logPath, "utf-8").replace(/,"spec_sha256":"[0-9a-f]{64}"/g, ""));
+    expect(run(["worklog", "dispatch", id, "--agent", "x"]).exitCode).toBe(0);
+    const doctor = run(["doctor"]);
+    expect(doctor.stdout).toContain("INFO: 1 spec(s) carry a review stamp without counsel_spec_sha256");
+  });
+
   it("counsel: overridden needs a recorded reason; --override records one", () => {
     highRisk();
     writeFileSync(specPath, readFileSync(specPath, "utf-8").replace("risk: high", "risk: high\ncounsel: overridden"));

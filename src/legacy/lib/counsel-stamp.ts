@@ -18,6 +18,11 @@
  * `counsel: overridden` and the log holds an override line with a reason.
  * A hand-written `counsel:` line has no log line, so it fails.
  *
+ * Since 0.77.0 the stamp also holds `counsel_spec_sha256`, the hash of the
+ * spec text the review saw (see `specContentSha256`): dispatch refuses a spec
+ * that changed after its review. A stamp without the field is from an older
+ * darius; it stays valid and `doctor` prints an info line.
+ *
  * The round budget counts the log's round lines for the spec, never less than
  * the spec's `counsel_rounds:`: deleting or lowering the frontmatter counter
  * does not reset the budget.
@@ -42,6 +47,8 @@ export type CounselLogLine = {
   /** Tracker-relative transcript path and its sha256 (absent on an override). */
   transcript?: string;
   sha256?: string;
+  /** Hash of the reviewed spec text (0.77.0), see `specContentSha256`. */
+  spec_sha256?: string;
   format?: "review" | "counsel";
   rounds?: number;
   /** An override's reason. */
@@ -54,6 +61,25 @@ export function counselLogPath(trackerRoot: string): string {
 
 export function sha256OfFile(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * The hash of the spec text a review covers (0.77.0): the body without the
+ * frontmatter, so the stamp, the ticks and the verification fields do not
+ * change it, with every checklist box state read as the same box, so ticking
+ * progress does not void the review. Line endings are normalised too.
+ */
+export function specContentSha256(raw: string): string {
+  let body = raw;
+  try {
+    body = parseFrontmatter(raw).content;
+  } catch {
+    // A spec whose frontmatter does not parse: hash all of it.
+  }
+  const normalised = body
+    .replace(/\r\n/g, "\n")
+    .replace(/^(\s*- \[)[ xX~!-](\] )/gm, "$1 $2");
+  return createHash("sha256").update(normalised).digest("hex");
 }
 
 export function appendCounselLog(trackerRoot: string, line: CounselLogLine): void {
@@ -131,9 +157,36 @@ export function checkCounselStamp(trackerRoot: string, spec: string, absSpecPath
   if (sha256OfFile(file) !== sha) {
     return { ok: false, reason: `the review transcript ${transcript} changed after counsel-gate stamped ${spec}. Re-run counsel-gate` };
   }
-  const logged = log.some((l) => l.sha256 === sha && l.status === "ready" && (l.kind === "round" || l.kind === "ack"));
+  // Old stamps (before 0.77.0) have no spec hash and stay valid. A stamp
+  // whose log line has a spec hash needs it: deleting the field from the
+  // frontmatter does not turn a hashed review into an old one.
+  const specSha = scalar(data["counsel_spec_sha256"]);
+  const loggedHash = log.some((l) => l.sha256 === sha && l.status === "ready" && typeof l.spec_sha256 === "string");
+  let current: string | null = null;
+  if ((specSha !== null && specSha !== "") || loggedHash) {
+    current = specContentSha256(readFileSync(absSpecPath, "utf-8"));
+    if (current !== specSha) {
+      return { ok: false, reason: `${spec} changed since its review. Run the review again, or use \`darius counsel-gate --spec ${spec} --override "<reason>"\`` };
+    }
+  }
+  const logged = log.some(
+    (l) =>
+      l.sha256 === sha &&
+      l.status === "ready" &&
+      (l.kind === "round" || l.kind === "ack") &&
+      (current === null || l.spec_sha256 === current),
+  );
   if (!logged) {
     return { ok: false, reason: `no counsel-gate run recorded a ready review of ${spec} with transcript ${sha.slice(0, 12)}. Re-run counsel-gate` };
   }
   return { ok: true, how: `reviewed ${counsel}` };
+}
+
+/** True when the spec has a counsel-gate stamp from before 0.77.0: no `counsel_spec_sha256`. */
+export function hasUnhashedStamp(data: Record<string, unknown>): boolean {
+  const counsel = scalar(data["counsel"]);
+  if (counsel === null || !/^\d{4}-\d{2}-\d{2}T/.test(counsel)) return false;
+  if (scalar(data["counsel_transcript"]) === null) return false;
+  const specSha = scalar(data["counsel_spec_sha256"]);
+  return specSha === null || specSha === "";
 }

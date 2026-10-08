@@ -308,7 +308,10 @@ export function preflightGate(gate: readonly string[], harness: HarnessAdapter, 
     encoding: "utf8",
     timeout: PREFLIGHT_TIMEOUT_MS,
   });
-  if (result.error !== undefined) return `the gate did not run: ${errorMessage(result.error)}`;
+  // A gate that decides and exits without reading stdin makes the write of the
+  // payload fail with EPIPE. It did run: its exit code and stdout are the answer.
+  const brokenPipe = result.error !== undefined && "code" in result.error && result.error.code === "EPIPE" && result.status !== null;
+  if (result.error !== undefined && !brokenPipe) return `the gate did not run: ${errorMessage(result.error)}`;
   if (result.status === expected.exitCode && result.stdout.includes("deny")) return undefined;
   if (result.status === 0) return "the gate allowed the preflight call; it must deny it";
   const stderr = result.stderr.trim().slice(-500);
