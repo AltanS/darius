@@ -208,7 +208,7 @@ describe("loop-check", () => {
     runLoopCheck({ trackerRoot, session: "s" });
     expect(JSON.parse(readFileSync(bouncePath, "utf-8"))[`thread:${id}`]).toBeDefined();
 
-    closeThread({ worklogPath, threadId: id, status: "done" });
+    closeThread({ worklogPath, threadId: id, status: "cancelled" });
     expect(runLoopCheck({ trackerRoot, session: "s" }).status).toBe("clean");
     expect(JSON.parse(readFileSync(bouncePath, "utf-8"))[`thread:${id}`]).toBeUndefined();
   });

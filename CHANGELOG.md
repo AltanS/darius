@@ -2,6 +2,16 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.79.1] - 2026-10-08
+
+### Fixed
+
+- Wrap-up skill: it closes only `reviewed` threads as `done`, reports `committed` threads for review, and parks stale unfinished ones. It closed every stale thread as `done`.
+- `worklog close --status done` refuses a thread whose stage is set and is not `reviewed`, with exit 1. Park it, or close it as `blocked` or `cancelled`. A thread without a stage closes as before.
+- Work Loop skill: on `STATUS: complete` the loop now lists the active threads and reviews any thread still at `committed` before it ends the turn or archives. A committed thread no one reviewed was left open.
+- Worklog skill: `worklog close --status done` is for a thread at stage `reviewed` only. Unfinished work is parked. An agent asked to "just mark it done" closed a `dispatched` thread and skipped every evidence stage.
+- Evals: the `review-before-stop`, `no-stage-skip` and `uncommitted-debt` graders read the CLI output in the trace, not the worklog file or a `git commit` line that `-q` hides. `no-stage-skip` also bans `worklog close`.
+
 ## [0.79.0] - 2026-10-08
 
 ### Added

@@ -135,7 +135,7 @@ describe("worklog lossless", () => {
     const worklogPath = join(worklogDir, "cycle.md");
     const id = openThread({ worklogPath, slug: "cycle", stage: "planned" });
     appendThread({ worklogPath, threadId: id, section: "note", message: "first note" });
-    closeThread({ worklogPath, threadId: id, status: "done" });
+    closeThread({ worklogPath, threadId: id, status: "cancelled" });
 
     const content = readFileSync(worklogPath, "utf-8");
 

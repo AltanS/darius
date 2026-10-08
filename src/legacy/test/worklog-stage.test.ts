@@ -154,11 +154,20 @@ describe("worklog stage", () => {
 
   it("transition: closed thread rejects stage changes", () => {
     const threadId = openThread({ worklogPath, slug: "closed", stage: "planned" });
-    closeThread({ worklogPath, threadId, status: "done" });
+    closeThread({ worklogPath, threadId, status: "cancelled" });
 
     expect(() => setStage({ worklogPath, threadId, stage: "dispatched" })).toThrow(
       /closed/,
     );
+  });
+
+  it("close: done needs stage reviewed; other statuses and unstaged threads close as before", () => {
+    const staged = openThread({ worklogPath, slug: "staged", stage: "dispatched" });
+    expect(() => closeThread({ worklogPath, threadId: staged, status: "done" })).toThrow(/needs stage reviewed/);
+    closeThread({ worklogPath, threadId: staged, status: "blocked" });
+    const plain = openThread({ worklogPath, slug: "plain" });
+    closeThread({ worklogPath, threadId: plain, status: "done" });
+    expect(listThreads({ trackerRoot }).find((t) => t.threadId === plain)?.closedAt).toBeDefined();
   });
 
   it("transition: unknown thread throws", () => {

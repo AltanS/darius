@@ -278,6 +278,14 @@ export function closeThread(opts: CloseThreadOpts): void {
     if (!thread) {
       throw new Error(`Thread not found: ${threadId}`);
     }
+    // 0.79.1: `done` ends the Work Loop, so a staged thread must be reviewed
+    // first. A thread without a stage (a plain note thread) closes as before.
+    if (status === "done" && thread.stage !== undefined && thread.stage !== "reviewed") {
+      throw new Error(
+        `${threadId} is at stage ${thread.stage}; --status done needs stage reviewed. ` +
+          "Finish the loop first, or park it (worklog park) or close it as blocked or cancelled",
+      );
+    }
 
     thread.closedAt = new Date().toISOString();
     thread.closeStatus = status;

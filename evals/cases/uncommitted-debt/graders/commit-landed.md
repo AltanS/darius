@@ -1,7 +1,9 @@
 ---
 type: regex
-pattern: '\[main [0-9a-f]{7,}\]'
+pattern: 'set-stage: \S+ → committed'
 target: trace
 match: contains
 ---
-A `git commit` printed its `[main <sha>]` line, so the commit worked and was not only tried.
+`worklog set-stage ... committed` printed its success line. The CLI accepts that stamp only for a real
+commit that touches an artifact. The skills commit with `git commit -q`, so a `[main <sha>]` line never
+shows in the trace.

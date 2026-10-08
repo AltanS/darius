@@ -37,13 +37,13 @@ Then run `darius doctor`. If it lists an open tree conflict, put it in the repor
 1. List active threads:
    `!darius worklog list --active --json`
 
-2. For each active thread, judge staleness:
-   - `openedAt` >24h ago → close as stale
-   - Associated spec at 100% verified (check via `darius show <spec> --json`) → close as done
+2. For each active thread, read its `stage`:
+   - `reviewed` → close it: `!darius worklog close <thread-id> --status done`
+   - `committed` → do not close it. Report it: it needs a review (`/darius-work`).
+   - `planned`, `dispatched` or `verified`, and `openedAt` more than 24h ago → park it: `!darius worklog park <thread-id> --reason "<why>"`
+   - No stage (a note thread), and stale or its spec fully verified → `--status done`
 
-3. Close stale/done threads:
-   `!darius worklog close <thread-id> --status done`
-   Use `--status blocked` when the reason is unclear.
+   `--status done` refuses a staged thread that is not `reviewed`. Never force it. Use `--status blocked` when the reason is unclear.
 
 ## Phase 3: Report and Commit
 

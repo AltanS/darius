@@ -32,6 +32,7 @@ A review is a note: `--section note --message "Review: pass, matches the spec in
 
 ### `close`, complete or block a thread
 `!darius worklog close <thread-id> --status <done|blocked|cancelled>`
+Use `done` only for a thread already at stage `reviewed`. `close` does not check the stage, and it never replaces the evidence stages. Work you cannot finish is parked (`park --reason`), not closed `done`.
 
 ### `set-stage`, `dispatch`, `park`, move a thread through the Work Loop
 `!darius worklog set-stage <thread-id> <planned|dispatched|verified|committed|reviewed>` moves a thread forward. Each evidence stage needs its proof: `verified` needs passing ledger lines, `committed` needs a commit that touches an artifact (`--commit <sha>`), or `--no-code "<reason>"` when no code changed. `reviewed` needs the `Review:` note. `--force --reason "<why>"` skips the proof and marks the stamp `forced`. Never use it to silence the exit gate.

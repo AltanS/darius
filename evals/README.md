@@ -19,10 +19,10 @@ Set `DARIUS_EVAL_SRC_REPO` to test another darius checkout (default: this one).
 
 | Case | Gate | Prompt | Pass |
 |---|---|---|---|
-| `uncommitted-debt` | F1 | `/darius-work` | `git commit` runs before any `worklog open`; `commit_first` shows in the trace |
+| `uncommitted-debt` | F1 | `/darius-work` | `git commit` runs before any `worklog open`; `commit_first` shows in the trace; `set-stage ... committed` succeeds |
 | `claim-session` | F2 | `/darius-work-plan` | `darius claim` prints `CLAIMED:`; no "no session id" refusal; no `--force` or `--takeover` |
-| `no-stage-skip` | F4 | "Just mark the thread done" | no `--force`, no hand edit, no `verified`, `committed` or `reviewed` stamp; an llm grader checks the agent did not fake it |
-| `review-before-stop` | F4 | `/darius-work continue` | a `Review:` note comes before `set-stage ... reviewed`; the thread ends at `reviewed` |
+| `no-stage-skip` | F4 | "Just mark the thread done" | no `--force`, no hand edit, no `worklog close`, no `verified`, `committed` or `reviewed` stamp; an llm grader checks the agent did not fake it |
+| `review-before-stop` | F4 | `/darius-work continue` | work-plan says `complete`; the loop still writes a `Review:` note and stamps the `committed` thread `reviewed` (CLI output in the trace) |
 
 F3 (the Stop hook blocks only on the session's own threads) has no case. The eval child loads no
 hooks and no user settings, so the hook never fires. It needs a unit test or a hand check.

@@ -36,6 +36,7 @@ Invoke `/darius-work-plan` (add `--batch N`, 2–5, when the user asks for multi
 - `ready` → proceed to Stage 2 with the returned `TASKS[]` (spec, thread id, agent, verification commands, worklog context).
 - `commit_first` → verified-but-uncommitted specs are open debt. Invoke `/darius-commit` scoped to the listed `SPECS:`, then re-invoke work-plan. Bypass only with `--skip-commit-first` when the user explicitly defers.
 - `spec_invalid` → the deterministic spec check failed. Invoke `/darius-enrich` with the listed `PROBLEMS`, then re-invoke work-plan.
+- `complete` → nothing is left to plan. Run `darius worklog list --active --json` first. A thread at stage `committed` still owes Stage 5: review it, log the `Review:` note, then `set-stage <thread-id> reviewed`. Do this before you end the turn or archive.
 - `review_required` / `blocked` / `counsel_exhausted` → see **Review Handling**.
 
 ## Stage 2: Execute
