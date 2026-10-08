@@ -1,11 +1,10 @@
 # skills/
 
-Static text of the Claude Code skills and the agent that darius installs.
+Static text of the Claude Code procedure skills that darius installs.
 
 - `<name>.md` is the procedure skill `darius-<name>` (11 files: work, work-plan, work-verify, commit, sync, archive, wrap-up, enrich, dream, worklog, structural-review).
-- `agent-darius.md` is the darius agent.
 
-`darius skill install` copies each file to `~/.claude/skills/darius-<name>/SKILL.md` (the agent to `~/.claude/agents/darius.md`) and adds a stamp as the last line. `darius setup` refreshes every stamped file, so `darius update` keeps every host current. The `darius` skill itself is generated from the command registry, not kept here.
+`darius skill install` copies each file to `~/.claude/skills/darius-<name>/SKILL.md` and adds a stamp as the last line. `darius setup` refreshes every stamped file, so `darius update` keeps every host current. The `darius` skill itself is generated from the command registry, not kept here. There is no darius agent since 0.71.0; install and setup remove a stamped `~/.claude/agents/darius.md`.
 
 Edit the text here and ship it with a release. Never patch the installed copies by hand: `darius skill status` reports them as `edited`.
 

@@ -71,7 +71,7 @@ A short stub from a long execution trace is the correct outcome, not a failure t
 
 **Size:** target ≤ 40 lines. Up to ~80 is permitted when the source is genuinely dense with durable content (a curated handoff for a large milestone), never to pad an execution trace. Over 4 KB the CLI warns and still writes; treat the warning as a prompt to cut, not as a pass.
 
-**Secrets:** a secret spotted in a source worklog is **never** copied into a stub, not redacted, not paraphrased. Stop, leave the file undistilled, and surface it to the user as compromised per `agents/darius.md` worklog hygiene: it must be rotated, not edited out.
+**Secrets:** a secret spotted in a source worklog is **never** copied into a stub, not redacted, not paraphrased. Stop, leave the file undistilled, and surface it to the user as compromised: it must be rotated, not edited out.
 
 ### Worked example
 

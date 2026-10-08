@@ -1,7 +1,8 @@
 /**
- * The skill set of 0.60.0: the generated skill, 11 static procedure skills and
- * the darius agent. Install, uninstall, status and the setup refresh, each in
- * a throwaway CLAUDE_CONFIG_DIR.
+ * The skill set: the generated skill and 11 static procedure skills. The
+ * darius agent was retired in 0.71.0: install and setup remove a stamped
+ * agents/darius.md and leave any other. Install, uninstall, status and the
+ * setup refresh, each in a throwaway CLAUDE_CONFIG_DIR.
  */
 
 import { test } from "node:test";
@@ -12,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { PROCEDURE_SKILLS, readStamp, skillSourceDir } from "../src/cli/skill.ts";
+import { PROCEDURE_SKILLS, readStamp, skillSourceDir, stampText } from "../src/cli/skill.ts";
 import { VERSION } from "../src/version.ts";
 
 const EM_DASH = String.fromCodePoint(0x2014);
@@ -52,10 +53,15 @@ function darius(env: NodeJS.ProcessEnv, argv: string[], runtime = "node"): CliRe
 }
 
 function allPaths(claude: string): string[] {
-  return [
-    ...SKILL_NAMES.map((name) => join(claude, "skills", name, "SKILL.md")),
-    join(claude, "agents", "darius.md"),
-  ];
+  return SKILL_NAMES.map((name) => join(claude, "skills", name, "SKILL.md"));
+}
+
+/** Puts a darius-stamped agents/darius.md in place, as a 0.70 install left it. */
+function writeOldAgent(claude: string): string {
+  const path = join(claude, "agents", "darius.md");
+  mkdirSync(join(claude, "agents"), { recursive: true });
+  writeFileSync(path, stampText("---\nname: darius\n---\nold agent\n", "0.70.0"));
+  return path;
 }
 
 interface Entry {
@@ -65,9 +71,9 @@ interface Entry {
   version: string | null;
 }
 
-test("the repo holds the static text: 11 skills and the agent, with no em dash and no plugin name left", () => {
+test("the repo holds the static text: 11 skills and no agent, with no em dash and no plugin name left", () => {
   const dir = skillSourceDir();
-  for (const name of [...PROCEDURE_SKILLS, "agent-darius"]) {
+  for (const name of PROCEDURE_SKILLS) {
     const text = readFileSync(join(dir, `${name}.md`), "utf8");
     assert.ok(text.startsWith("---\n"), name);
     assert.ok(!text.includes(EM_DASH), `${name} has an em dash`);
@@ -77,40 +83,66 @@ test("the repo holds the static text: 11 skills and the agent, with no em dash a
   for (const name of PROCEDURE_SKILLS) {
     assert.match(readFileSync(join(dir, `${name}.md`), "utf8"), new RegExp(`^---\\nname: darius-${name}\\n`, "u"), name);
   }
-  assert.match(readFileSync(join(dir, "agent-darius.md"), "utf8"), /^---\nname: darius\ndescription: /u);
+  assert.ok(!existsSync(join(dir, "agent-darius.md")), "the darius agent is retired");
   assert.match(readFileSync(join(dir, "work.md"), "utf8"), /canonical schema: `darius delegation`/u);
 });
 
-test("install writes 13 stamped files; a second install writes none", () => {
+test("install writes 12 stamped files and no agent; a second install writes none", () => {
   const { claude, env } = sandbox();
   const first = darius(env, ["skill", "install", "--json"]);
   assert.equal(first.code, 0, first.stderr);
   const files = JSON.parse(first.stdout).files;
-  assert.equal(files.length, 13);
+  assert.equal(files.length, 12);
   assert.ok(files.every((entry: { result: string }) => entry.result === "written"));
   for (const path of allPaths(claude)) {
     assert.ok(existsSync(path), path);
     const stamp = readStamp(readFileSync(path, "utf8"));
     assert.equal(stamp?.version, VERSION, path);
   }
+  assert.ok(!existsSync(join(claude, "agents", "darius.md")), "install no longer writes the agent");
+  assert.equal(JSON.parse(first.stdout).retired, "absent");
   const again = JSON.parse(darius(env, ["skill", "install", "--json"], "bun").stdout);
   assert.ok(again.files.every((entry: { result: string }) => entry.result === "unchanged"));
 });
 
 test("install refuses an unstamped file at one darius path, exit 1, and writes the rest", () => {
   const { claude, env } = sandbox();
-  mkdirSync(join(claude, "agents"), { recursive: true });
-  writeFileSync(join(claude, "agents", "darius.md"), "my own agent\n");
+  const mine = join(claude, "skills", "darius-sync", "SKILL.md");
+  mkdirSync(join(claude, "skills", "darius-sync"), { recursive: true });
+  writeFileSync(mine, "my own sync\n");
   const result = darius(env, ["skill", "install"]);
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /agents\/darius\.md exists and has no darius stamp/u);
-  assert.equal(readFileSync(join(claude, "agents", "darius.md"), "utf8"), "my own agent\n");
+  assert.match(result.stderr, /darius-sync\/SKILL\.md exists and has no darius stamp/u);
+  assert.equal(readFileSync(mine, "utf8"), "my own sync\n");
   assert.ok(existsSync(join(claude, "skills", "darius-work", "SKILL.md")));
 });
 
-test("uninstall removes the 13 files and their dirs, keeps agents/, and leaves an unstamped file", () => {
+test("install removes an old darius-owned agents/darius.md and keeps the agents dir", () => {
+  const { claude, env } = sandbox();
+  const agent = writeOldAgent(claude);
+  const result = darius(env, ["skill", "install", "--json"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).retired, "removed");
+  assert.ok(!existsSync(agent));
+  assert.ok(existsSync(join(claude, "agents")), "the agents dir is never removed");
+  assert.ok(existsSync(join(claude, "skills", "darius", "SKILL.md")));
+});
+
+test("install leaves an agents/darius.md that is not darius-owned alone, exit 0", () => {
+  const { claude, env } = sandbox();
+  const agent = join(claude, "agents", "darius.md");
+  mkdirSync(join(claude, "agents"), { recursive: true });
+  writeFileSync(agent, "my own agent\n");
+  const result = darius(env, ["skill", "install", "--json"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).retired, "kept");
+  assert.equal(readFileSync(agent, "utf8"), "my own agent\n");
+});
+
+test("uninstall removes the 12 files and their dirs, also an old stamped agent, keeps agents/, and leaves an unstamped file", () => {
   const { claude, env } = sandbox();
   darius(env, ["skill", "install"]);
+  const oldAgent = writeOldAgent(claude);
   const mine = join(claude, "skills", "darius-sync", "SKILL.md");
   writeFileSync(mine, "my own sync\n");
   const result = darius(env, ["skill", "uninstall"]);
@@ -118,30 +150,31 @@ test("uninstall removes the 13 files and their dirs, keeps agents/, and leaves a
   assert.match(result.stderr, /darius-sync\/SKILL\.md has no darius stamp; left alone/u);
   assert.equal(readFileSync(mine, "utf8"), "my own sync\n");
   for (const gone of allPaths(claude).filter((other) => other !== mine)) assert.ok(!existsSync(gone), gone);
+  assert.ok(!existsSync(oldAgent), "a stamped old agent goes with the rest");
   assert.ok(existsSync(join(claude, "agents")), "the agents dir is never removed");
   assert.deepEqual(readdirSync(join(claude, "skills")), ["darius-sync"]);
   const clean = sandbox();
   darius(clean.env, ["skill", "install"]);
   const removed = darius(clean.env, ["skill", "uninstall", "--json"]);
   assert.equal(removed.code, 0, removed.stderr);
-  assert.equal(JSON.parse(removed.stdout).files.filter((entry: { result: string }) => entry.result === "removed").length, 13);
+  assert.equal(JSON.parse(removed.stdout).files.filter((entry: { result: string }) => entry.result === "removed").length, 12);
   assert.deepEqual(readdirSync(join(clean.claude, "skills")), []);
 });
 
-test("status lists 13 files, one line each, all ok after install; --json is an array", () => {
+test("status lists 12 files, one line each, all ok after install; --json is an array", () => {
   const { env } = sandbox();
   darius(env, ["skill", "install"]);
   for (const runtime of ["node", "bun"]) {
     const plain = darius(env, ["skill", "status"], runtime);
     assert.equal(plain.code, 0, plain.stderr);
     const lines = plain.stdout.trim().split("\n");
-    assert.equal(lines.length, 13 + 3 + 1, "13 files, 3 hooks, the fix line");
-    assert.ok(lines.slice(0, 13).every((line) => line.startsWith("ok ")), plain.stdout);
-    assert.match(lines[13] ?? "", /^missing +hook SessionStart +.*settings\.json$/u);
+    assert.equal(lines.length, 12 + 3 + 1, "12 files, 3 hooks, the fix line");
+    assert.ok(lines.slice(0, 12).every((line) => line.startsWith("ok ")), plain.stdout);
+    assert.match(lines[12] ?? "", /^missing +hook SessionStart +.*settings\.json$/u);
     const entries: Entry[] = JSON.parse(darius(env, ["skill", "status", "--json"], runtime).stdout);
     assert.ok(Array.isArray(entries));
-    assert.deepEqual(entries.map((entry) => entry.name), [...SKILL_NAMES, "agent darius", "hook SessionStart", "hook Stop", "hook PostToolUse"]);
-    assert.ok(entries.slice(0, 13).every((entry) => entry.state === "ok" && entry.version === VERSION));
+    assert.deepEqual(entries.map((entry) => entry.name), [...SKILL_NAMES, "hook SessionStart", "hook Stop", "hook PostToolUse"]);
+    assert.ok(entries.slice(0, 12).every((entry) => entry.state === "ok" && entry.version === VERSION));
   }
 });
 
@@ -151,7 +184,6 @@ test("status tells outdated, edited, unstamped and missing apart", () => {
   const work = join(claude, "skills", "darius-work", "SKILL.md");
   const plan = join(claude, "skills", "darius-work-plan", "SKILL.md");
   const sync = join(claude, "skills", "darius-sync", "SKILL.md");
-  const agent = join(claude, "agents", "darius.md");
   const oldBody = "old text\n";
   writeFileSync(work, `${oldBody}<!-- darius-skill 0.1.0 ${createHash("sha256").update(oldBody).digest("hex").slice(0, 12)} -->\n`);
   writeFileSync(plan, readFileSync(plan, "utf8").replace("# ", "# patched by hand "));
@@ -161,7 +193,6 @@ test("status tells outdated, edited, unstamped and missing apart", () => {
   const state = (path: string): string | undefined => entries.find((entry) => entry.path === path)?.state;
   assert.equal(state(plan), "edited");
   assert.equal(state(sync), "unstamped");
-  assert.equal(state(agent), "ok");
   assert.equal(state(join(claude, "skills", "darius-dream", "SKILL.md")), "missing");
   assert.equal(state(work), "outdated");
   assert.equal(entries.find((entry) => entry.path === work)?.version, "0.1.0");
@@ -175,36 +206,49 @@ test("setup refreshes a changed stamped file of the set, leaves an unstamped one
 
   darius(env, ["skill", "install"]);
   const commit = join(claude, "skills", "darius-commit", "SKILL.md");
-  const agent = join(claude, "agents", "darius.md");
+  const sync = join(claude, "skills", "darius-sync", "SKILL.md");
   const current = readFileSync(commit, "utf8");
   writeFileSync(commit, "old text\n<!-- darius-skill 0.1.0 0123456789ab -->\n");
-  writeFileSync(agent, "my own agent\n");
+  writeFileSync(sync, "my own sync\n");
   const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
   assert.equal(step.skipped, false);
   assert.match(step.detail, /^refreshed .*darius-commit\/SKILL\.md/u);
-  assert.match(step.detail, /agents\/darius\.md has no darius stamp; left alone/u);
+  assert.match(step.detail, /darius-sync\/SKILL\.md has no darius stamp; left alone/u);
   assert.equal(readFileSync(commit, "utf8"), current);
-  assert.equal(readFileSync(agent, "utf8"), "my own agent\n");
+  assert.equal(readFileSync(sync, "utf8"), "my own sync\n");
+});
 
+test("setup removes an old stamped agents/darius.md and leaves one that is not darius-owned", () => {
+  const { claude, env } = sandbox();
+  darius(env, ["skill", "install"]);
+  const agent = writeOldAgent(claude);
+  const step = (): { skipped: boolean; detail: string } =>
+    JSON.parse(darius(env, ["setup", "--json"]).stdout).steps.find((entry: { what: string }) => entry.what === "skill");
+  const removed = step();
+  assert.equal(removed.skipped, false);
+  assert.match(removed.detail, /removed .*agents\/darius\.md/u);
+  assert.ok(!existsSync(agent));
+  assert.ok(existsSync(join(claude, "agents")));
+
+  writeFileSync(agent, "my own agent\n");
+  step();
+  assert.equal(readFileSync(agent, "utf8"), "my own agent\n");
 });
 
 test("setup installs a missing file of the set when the generated skill is stamped", () => {
   const { claude, env } = sandbox();
   darius(env, ["skill", "install"]);
   const sync = join(claude, "skills", "darius-sync", "SKILL.md");
-  const agent = join(claude, "agents", "darius.md");
   const commit = join(claude, "skills", "darius-commit", "SKILL.md");
   rmSync(join(claude, "skills", "darius-sync"), { recursive: true });
-  rmSync(agent);
   writeFileSync(commit, "my own commit\n");
   const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
   assert.equal(step.skipped, false);
-  assert.match(step.detail, /^installed .*darius-sync\/SKILL\.md, .*agents\/darius\.md; /u);
+  assert.match(step.detail, /^installed .*darius-sync\/SKILL\.md; /u);
   assert.match(step.detail, /darius-commit\/SKILL\.md has no darius stamp; left alone/u);
   assert.ok(existsSync(sync));
-  assert.ok(existsSync(agent));
   assert.equal(readFileSync(commit, "utf8"), "my own commit\n", "an unstamped file stays");
   assert.doesNotMatch(step.detail, /refreshed/u);
 });

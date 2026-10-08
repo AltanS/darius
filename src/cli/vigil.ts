@@ -13,7 +13,7 @@
  *               [--classify-only] [--dry-run] [--timeout SECONDS] [--who W]
  *
  * `add`, `set-body`, `list` and `close` take the command-line forms of the
- * legacy tracker's verbs, so skills, the darius agent and existing vigil
+ * legacy tracker's verbs, so skills and existing vigil
  * Commands keep working: the same flags, the same `--json` array, the same
  * text lines. `--content` is a file path as the legacy verb read it; a value
  * that is no file is taken as the body text. A body is checked with the

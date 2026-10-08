@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.71.0] - 2026-10-08
+
+### Changed
+
+- The generated `darius` skill now holds the rules that only the darius agent had: the CLI is the only read interface for tracker state, arm a vigil with its checklist in one call, dream rules (distill, never delete or `--force`), no secrets in worklogs, and the main thread drives the Work Loop and writes specs itself.
+- The size cap of the generated skill is 7168 bytes (was 6144), to hold those rules.
+- `darius skill install` writes 12 files (the generated skill and 11 procedure skills). `darius setup` and `darius skill uninstall` handle the same 12.
+
+### Removed
+
+- The darius subagent, `skills/agent-darius.md` and the installed `agents/darius.md`. It could not write or start agents, its report was hidden from the user, and its long prompt repeated the skills. `darius skill install`, `darius setup` and `darius skill uninstall` remove a darius-stamped `agents/darius.md`. A file there without a stamp is left alone. `darius skill status` no longer lists the agent.
+
 ## [0.70.1] - 2026-10-08
 
 ### Fixed

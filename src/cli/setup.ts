@@ -70,7 +70,7 @@ import { isNixStorePath, renderUnit, unitDarius, unitPath } from "../core/unit-p
 import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
-import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles, skillSource } from "./skill.ts";
+import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles, removeRetiredAgent, retiredAgentPath, skillSource } from "./skill.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -593,12 +593,13 @@ export function defaultDeps(): SetupDeps {
 
 /**
  * Rewrites every file of the skill set under `<claude>` (the generated skill,
- * the 11 procedure skills, the agent) that carries a darius stamp and differs
+ * the 11 procedure skills) that carries a darius stamp and differs
  * from this version's text, so `darius update` (which runs setup) keeps every
  * host current. When the generated skill is installed at user level and
  * stamped, it also installs a file of the set that is missing (a new procedure
  * skill); with no such skill it installs nothing, that is `darius skill
- * install`. An unstamped file is the operator's; left alone. On a host that
+ * install`. An unstamped file is the operator's; left alone. A stamped
+ * `agents/darius.md` (the agent retired in 0.71.0) is removed. On a host that
  * opted in (the generated skill is stamped at user level), the detail also
  * names a hook of `darius skill hook` that is not ok in settings.json. Setup
  * never writes settings.json.
@@ -606,7 +607,11 @@ export function defaultDeps(): SetupDeps {
 function refreshSkillStep(home: string): Step {
   try {
     const dir = claudeDir(home);
-    const result = refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir));
+    const refreshed = refreshSkillFiles(managedFiles(listCommands(), dir), findPluginSkill(dir));
+    const retired = removeRetiredAgent(dir) === "removed";
+    const result = retired
+      ? { ...refreshed, skipped: false, detail: refreshed.skipped ? `removed ${retiredAgentPath(dir)}` : `${refreshed.detail}; removed ${retiredAgentPath(dir)}` }
+      : refreshed;
     const note = skillSource(dir)?.kind === "user" ? hookNote(dir) : null;
     return { what: "skill", ...result, detail: note === null ? result.detail : `${result.detail}; ${note}` };
   } catch (cause) {

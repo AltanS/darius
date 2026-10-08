@@ -108,7 +108,6 @@ The `/darius-*` skills and the `darius` command do the work that the old `tracke
 ├── skills/
 │   ├── darius/SKILL.md             # teaches a session the darius commands
 │   └── darius-work/SKILL.md        # one of 11 procedure skills
-└── agents/darius.md
 ```
 
 ### A normal day

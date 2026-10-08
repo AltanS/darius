@@ -1,20 +1,23 @@
 /**
  * `darius skill [install|uninstall|status|hook]`: teach a Claude Code session
- * darius with one generated skill file, 11 static procedure skills and the
- * darius agent (docs/concept.md, "Claude Code sessions and skills").
+ * darius with one generated skill file and 11 static procedure skills
+ * (docs/concept.md, "Claude Code sessions and skills").
  *
  *   darius skill              print the generated SKILL.md text (also `darius --skill`)
- *   darius skill install      write 13 stamped files under <claude>, which is
+ *   darius skill install      write 12 stamped files under <claude>, which is
  *                             $CLAUDE_CONFIG_DIR, else ~/.claude:
  *                               skills/darius/SKILL.md          generated
  *                               skills/darius-<name>/SKILL.md   11 procedure skills
- *                               agents/darius.md                the darius agent
  *                             The static text lives in `skills/` of this repo
  *                             (see skills/README.md). No write when a file is
  *                             the same. A file there without a darius stamp is
  *                             refused (exit 1); the others are still written.
+ *                             The darius agent was retired in 0.71.0: a stamped
+ *                             agents/darius.md is removed, an unstamped one is
+ *                             the operator's and stays.
  *   darius skill uninstall    remove every stamped file, and its dir when empty
- *                             (never the `agents` dir)
+ *                             (also a stamped agents/darius.md, never the
+ *                             `agents` dir)
  *   darius skill status       one line per file: ok, outdated (older stamped
  *                             text), edited (the body no longer matches its
  *                             stamp), unstamped or missing; then one line per
@@ -36,7 +39,7 @@
  * generated skill is installed at user level and stamped (the operator opted
  * in), setup also installs any file of the set that is missing, such as a
  * procedure skill a new release adds. With no such skill, setup installs
- * nothing. Only the generated text is capped, at 6144 bytes.
+ * nothing. Only the generated text is capped, at 7168 bytes.
  */
 
 import { createHash } from "node:crypto";
@@ -49,7 +52,7 @@ import { claudeDir } from "../core/paths.ts";
 import { VERSION } from "../version.ts";
 import { listCommands, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-export const SKILL_MAX_BYTES = 6144;
+export const SKILL_MAX_BYTES = 7168;
 const STAMP = /^<!-- darius-skill (\S+) ([0-9a-f]{12}) -->$/mu;
 
 /** What the skill needs from a command: the registry's own fields. */
@@ -85,6 +88,11 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and .tracker/ in the checkout is a link to it; nothing under it is in git, so never \`git add\` it.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first, and \`onboard\` only when the operator asks.
 - In .tracker/, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
+- Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a milestone README or a spec file. Reading code, worklogs, counsel transcripts and CLAUDE.md is fine.
+- "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
+- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file (open-threads, milestone-active, not-archived, too-recent, already-distilled) with its reason; do not fix it.
+- A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.
+- The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself; it does not hand spec text to a worker.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first; darius says so.
 - In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
 - Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
@@ -207,9 +215,6 @@ export const PROCEDURE_SKILLS: readonly string[] = [
   "structural-review",
 ];
 
-/** The agent's static text is `skills/agent-darius.md`. */
-const AGENT_SOURCE = "agent-darius";
-
 /** The static skill text: `skills/` at the root of this checkout or install, found from this module. */
 export function skillSourceDir(): string {
   return fileURLToPath(new URL("../../skills/", import.meta.url));
@@ -217,17 +222,15 @@ export function skillSourceDir(): string {
 
 /** One file darius keeps under `<claude>`: its name, where it goes and the stamped text it should hold. */
 export interface ManagedFile {
-  /** `darius`, `darius-work`, ..., or `agent darius`. */
+  /** `darius`, `darius-work`, ... */
   name: string;
   path: string;
   text: string;
-  /** False for the agent, whose parent dir is Claude Code's own and never removed. */
-  ownsDir: boolean;
 }
 
 /**
- * The 13 files of the set, in order: the generated skill, the 11 procedure
- * skills, the agent. Throws when a static source file is missing.
+ * The 12 files of the set, in order: the generated skill, then the 11
+ * procedure skills. Throws when a static source file is missing.
  */
 export function managedFiles(
   commands: readonly SkillVerb[] = listCommands(),
@@ -236,23 +239,34 @@ export function managedFiles(
   sourceDir: string = skillSourceDir(),
 ): ManagedFile[] {
   const files: ManagedFile[] = [
-    { name: "darius", path: skillPath(dir), text: renderSkill(commands, version), ownsDir: true },
+    { name: "darius", path: skillPath(dir), text: renderSkill(commands, version) },
   ];
   for (const slug of PROCEDURE_SKILLS) {
     files.push({
       name: `darius-${slug}`,
       path: join(dir, "skills", `darius-${slug}`, "SKILL.md"),
       text: stampText(readFileSync(join(sourceDir, `${slug}.md`), "utf8"), version),
-      ownsDir: true,
     });
   }
-  files.push({
-    name: "agent darius",
-    path: join(dir, "agents", "darius.md"),
-    text: stampText(readFileSync(join(sourceDir, `${AGENT_SOURCE}.md`), "utf8"), version),
-    ownsDir: false,
-  });
   return files;
+}
+
+/** `<claude>/agents/darius.md`: the darius agent, retired in 0.71.0. */
+export function retiredAgentPath(dir: string = claudeDir()): string {
+  return join(dir, "agents", "darius.md");
+}
+
+export type RetiredAgentResult = "removed" | "absent" | "kept";
+
+/**
+ * Removes the retired darius agent when it carries a darius stamp. A file
+ * without a stamp is the operator's own and stays (`kept`). The `agents` dir
+ * is Claude Code's and is never removed.
+ */
+export function removeRetiredAgent(dir: string = claudeDir()): RetiredAgentResult {
+  const file = retiredAgentPath(dir);
+  if (!existsSync(file)) return "absent";
+  return uninstallSkill(file, false) === "removed" ? "removed" : "kept";
 }
 
 export type InstallResult = "written" | "unchanged" | "refused";
@@ -486,11 +500,13 @@ function install(args: ParsedArgs): number {
   const results = files.map((file) => ({ name: file.name, path: file.path, result: installSkill(file.text, file.path) }));
   const refused = results.filter((entry) => entry.result === "refused");
   const generated = results[0];
+  const retired = removeRetiredAgent();
   if (args.json) {
-    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results }));
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired }));
   } else {
     for (const entry of refused) console.error(`darius: ${entry.path} exists and has no darius stamp; move it away first`);
     for (const entry of results) if (entry.result !== "refused") console.log(entry.path);
+    if (retired === "removed") console.log(`removed ${retiredAgentPath()} (the darius agent is retired)`);
   }
   return refused.length === 0 ? 0 : 1;
 }
@@ -561,16 +577,18 @@ function status(args: ParsedArgs): number {
 
 function uninstall(args: ParsedArgs): number {
   const files = managedFiles();
-  const results = files.map((file) => ({ name: file.name, path: file.path, result: uninstallSkill(file.path, file.ownsDir) }));
+  const results = files.map((file) => ({ name: file.name, path: file.path, result: uninstallSkill(file.path) }));
   const refused = results.filter((entry) => entry.result === "refused");
   const generated = results[0];
+  const retired = removeRetiredAgent();
   if (args.json) {
-    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results }));
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired }));
   } else {
     for (const entry of refused) console.error(`darius: ${entry.path} has no darius stamp; left alone`);
     const removed = results.filter((entry) => entry.result === "removed");
     for (const entry of removed) console.log(`removed ${entry.path}`);
-    if (removed.length === 0 && refused.length === 0) console.log(`no skill at ${generated?.path ?? skillPath()}`);
+    if (retired === "removed") console.log(`removed ${retiredAgentPath()}`);
+    if (removed.length === 0 && retired !== "removed" && refused.length === 0) console.log(`no skill at ${generated?.path ?? skillPath()}`);
   }
   return refused.length === 0 ? 0 : 1;
 }
@@ -578,7 +596,7 @@ function uninstall(args: ParsedArgs): number {
 export const skillCommand: Command = {
   name: "skill",
   summary:
-    "print the Claude Code skill for darius; install | uninstall the skill, 11 procedure skills and the agent; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
+    "print the Claude Code skill for darius; install | uninstall the skill and 11 procedure skills; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

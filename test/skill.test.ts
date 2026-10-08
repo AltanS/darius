@@ -57,7 +57,7 @@ function darius(env: NodeJS.ProcessEnv, argv: string[], opts: { runtime?: string
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-test("the skill stays under 6144 bytes, and its stamp names this version and hashes the body", () => {
+test("the skill stays under 7168 bytes, and its stamp names this version and hashes the body", () => {
   const { env } = sandbox();
   for (const runtime of RUNTIMES) {
     const result = darius(env, ["skill"], { runtime });
@@ -126,7 +126,7 @@ test("skill status: exit 1 and the fix with no skill, exit 0 for a user-level or
   assert.equal(fromPlugin.code, 0, fromPlugin.stderr);
   const [generated, ...others] = JSON.parse(fromPlugin.stdout);
   assert.deepEqual(generated, { name: "darius", path: join(plugin, "skills", "darius", "SKILL.md"), state: "ok", version: VERSION, source: "plugin" });
-  assert.equal(others.length, 12 + 3, "12 files and 3 hooks");
+  assert.equal(others.length, 11 + 3, "11 files and 3 hooks");
   assert.ok(others.every((entry: { state: string; source: string }) => entry.state === "missing" && entry.source === "user"));
   const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");
