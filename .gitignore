@@ -32,3 +32,6 @@ CLAUDE.local.md
 # nix build out-links (at the repo root only: web/build has a chunk named result-<hash>.js)
 /result
 /result-*
+
+# Work Loop eval results
+/evals/results/
