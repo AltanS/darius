@@ -1,12 +1,12 @@
 /**
  * The tracker tree in the store: when a project's marker lists `milestone`,
  * the whole tracker tree (milestones, specs, worklogs, the archive) lives in
- * the darius store, byte for byte, and each checkout holds only a symlink
- * `.tracker` to it.
+ * the darius store, byte for byte. Since 0.78.0 a checkout holds no
+ * `.tracker` path at all: readers resolve the tree from the marker
+ * (src/core/tracker-root.ts).
  *
  *   <stateDir>/<project>/tracker/            the working copy on this host
  *   <stateDir>/<project>/tracker-index.json  host-local index, never synced
- *   <checkout>/.tracker -> <stateDir>/<project>/tracker
  *
  * The store is the source of truth across hosts. Every file version is a
  * blob, every change is a ledger line (no `item`):
@@ -61,24 +61,19 @@
 
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
-  realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
-  symlinkSync,
   unlinkSync,
-  utimesSync,
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
 import { isClaimsPath, mergeClaims } from "./claims-merge.ts";
 import { appendLines, defaultWho, readLedger, type LedgerLineInput } from "./ledger.ts";
@@ -92,9 +87,6 @@ import { errorMessage } from "../runtime.ts";
 /** The ledger line types of the tree. */
 export const TREE_PUT = "tree.put";
 export const TREE_REMOVED = "tree.removed";
-
-/** The folder in each checkout that links to the tree. */
-export const TRACKER_LINK = ".tracker";
 
 /**
  * Paths in the tree that are host-local or derived. They are never captured,
@@ -241,10 +233,6 @@ function indexPath(project: Project): string {
 export function isTreePath(path: string): boolean {
   if (path === "" || path.startsWith("/") || path.includes("\0")) return false;
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
-}
-
-function hasErrnoCode(cause: unknown, code: string): boolean {
-  return cause instanceof Error && "code" in cause && cause.code === code;
 }
 
 function isExec(stats: Stats): boolean {
@@ -771,110 +759,15 @@ export function syncTree(project: Project, options: { who?: string } = {}): { ca
   });
 }
 
-// --- the checkout link -------------------------------------------------------
-
-/** The entries under a folder: regular files, and anything that is neither a file nor a dir. */
-interface FolderListing {
-  files: string[];
-  odd: string[];
-}
-
-/** Every file under `dir` (relative paths), and every entry that is not a regular file or a dir. */
-function listFiles(dir: string): FolderListing {
-  const files: string[] = [];
-  const odd: string[] = [];
-  const walk = (at: string, prefix: string): void => {
-    for (const name of readdirSync(at).toSorted()) {
-      const path = prefix === "" ? name : `${prefix}/${name}`;
-      const stats = lstatSync(join(at, name));
-      if (stats.isDirectory()) walk(join(at, name), path);
-      else if (stats.isFile()) files.push(path);
-      else odd.push(path);
-    }
-  };
-  walk(dir, "");
-  return { files, odd };
-}
-
-/** Moves `from` to `to`; across file systems as a copy that keeps mode and mtime, then a delete. */
-function moveFile(from: string, to: string): void {
-  try {
-    renameSync(from, to);
-  } catch (cause) {
-    if (!hasErrnoCode(cause, "EXDEV")) throw cause;
-    const stats = lstatSync(from);
-    copyFileSync(from, to);
-    chmodSync(to, stats.mode & 0o7777);
-    utimesSync(to, stats.atime, stats.mtime);
-    unlinkSync(from);
-  }
-}
-
-function realOrResolved(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-}
+// --- the working copy --------------------------------------------------------
 
 /**
- * Makes `<checkout>/.tracker` a symlink to the tree of `project`:
- *
- *   missing                 create the tree dir and the link
- *   a link to the tree      fine
- *   a link elsewhere        refuse, naming both paths
- *   a folder of local files move them into the tree where it lacks them
- *                           (host-local files and the claims file),
- *                           remove the folder, create the link (what
- *                           `git pull` of the cutover commit leaves behind)
- *   any other folder        refuse
- *
- * Throws an Error with the operator message on a refusal.
+ * Makes sure the working copy of `project` exists. Since 0.78.0 a checkout
+ * holds no `.tracker` link: every reader resolves the tree from the marker
+ * (src/core/tracker-root.ts), so nothing is created in the checkout.
  */
-export function ensureTreeLink(checkout: string, project: Project): void {
-  const link = join(checkout, TRACKER_LINK);
-  const target = treeDir(project);
-  const stats = lstatSync(link, { throwIfNoEntry: false });
-  if (stats === undefined) {
-    mkdirSync(target, { recursive: true });
-    symlinkSync(target, link);
-    return;
-  }
-  if (stats.isSymbolicLink()) {
-    const points = resolve(dirname(link), readlinkSync(link));
-    if (points === target || realOrResolved(link) === realOrResolved(target)) {
-      mkdirSync(target, { recursive: true });
-      return;
-    }
-    throw new Error(`${link} links to ${points}, but the darius store keeps the tracker of ${project.name} in ${target}. Remove the link and run darius again.`);
-  }
-  const refusal = `the darius store owns the tracker of ${project.name}, but a .tracker/ folder is in this checkout. Remove it from git (git rm -r .tracker) or merge the commit that did.`;
-  if (!stats.isDirectory()) throw new Error(refusal);
-  const { files, odd } = listFiles(link);
-  // The claims file is git-ignored in a git tracker, so `git pull` of the
-  // cutover leaves it behind; since 0.75.0 it syncs, so it moves in like the rest.
-  if (odd.length > 0 || files.some((path) => !isLocalTreePath(path) && !isClaimsPath(path))) throw new Error(refusal);
-  mkdirSync(target, { recursive: true });
-  for (const path of files) {
-    const to = join(target, path);
-    if (existsSync(to)) continue;
-    mkdirSync(dirname(to), { recursive: true });
-    moveFile(join(link, path), to);
-  }
-  rmSync(link, { recursive: true, force: true });
-  symlinkSync(target, link);
-}
-
-/** The `.gitignore` line that keeps the `.tracker` link out of git. */
-export const TRACKER_IGNORE = "/.tracker";
-
-/** Makes sure `<checkout>/.gitignore` has the line `/.tracker`: appends it, or creates the file. */
-export function ignoreTrackerLink(checkout: string): "added" | "present" {
-  const file = join(checkout, ".gitignore");
-  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
-  if (text.split(/\r?\n/u).some((line) => line.trim() === TRACKER_IGNORE)) return "present";
-  const gap = text === "" || text.endsWith("\n") ? "" : "\n";
-  writeFileSync(file, `${text}${gap}${TRACKER_IGNORE}\n`);
-  return "added";
+export function ensureTreeDir(project: Pick<Project, "root">): string {
+  const dir = treeDir(project);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }

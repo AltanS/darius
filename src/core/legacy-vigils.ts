@@ -10,6 +10,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseHeader } from "./legacy-header.ts";
+import { trackerDirOfCheckout } from "./tracker-root.ts";
 
 /** What the page needs of one legacy vigil. */
 export interface LegacyVigil {
@@ -29,7 +30,7 @@ function valueOf(header: Map<string, string>, key: string): string | null {
 
 /** Legacy vigils of a checkout, the newest resolved first and the armed ones before them. */
 export function readLegacyVigils(checkout: string): LegacyVigil[] {
-  return readLegacyVigilsAt(join(checkout, ".tracker"));
+  return readLegacyVigilsAt(trackerDirOfCheckout(checkout));
 }
 
 /** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */

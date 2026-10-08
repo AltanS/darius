@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
+import { displayPath, isStoreTree, repoStylePath } from "./tracker-root.ts";
 import {
   isWorklogIndexFile,
   scanWorklogDir,
@@ -295,7 +296,12 @@ export function distillWorklogFile(opts: DistillOpts): DistillResult {
   const worklogPath = join(opts.trackerRoot, "worklog", fileName);
   const rawDir = join(opts.trackerRoot, WORKLOG_RAW_DIR);
   const rawTarget = join(rawDir, fileName);
-  const stampRawPath = `${basename(opts.trackerRoot)}/${WORKLOG_RAW_DIR}/${fileName}`;
+  // The stamp keeps the repo style (`.tracker/archive/...`) in both modes;
+  // the JSON `rawPath` is tracker-relative in store mode (0.78.0).
+  const stampRawPath = isStoreTree(opts.trackerRoot)
+    ? repoStylePath(opts.trackerRoot, rawTarget)
+    : `${basename(opts.trackerRoot)}/${WORKLOG_RAW_DIR}/${fileName}`;
+  const shownRawPath = isStoreTree(opts.trackerRoot) ? displayPath(opts.trackerRoot, rawTarget) : stampRawPath;
 
   let result!: DistillResult;
 
@@ -336,7 +342,7 @@ export function distillWorklogFile(opts: DistillOpts): DistillResult {
 
     result = {
       worklogFile: fileName,
-      rawPath: stampRawPath,
+      rawPath: shownRawPath,
       sourceSha256,
       distilledAt,
       rawPreserved,

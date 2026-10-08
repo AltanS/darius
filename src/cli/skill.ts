@@ -85,9 +85,9 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 ## Rules
 
 - Never edit darius store files (~/.local/share/darius). Use darius verbs.
-- \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and .tracker/ in the checkout is a link to it; nothing under it is in git, so never \`git add\` it.
+- \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and the checkout has no .tracker; \`darius root\` prints the tree. Spec paths are tracker-relative (\`M1-x/01-y.md\`); \`.tracker/...\` still works. None of it is in git.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first, and \`onboard\` only when the operator asks.
-- In .tracker/, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
+- In the tracker tree, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
 - Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a milestone README or a spec file. Reading code, worklogs, counsel transcripts and CLAUDE.md is fine.
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
 - A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file (open-threads, milestone-active, not-archived, too-recent, already-distilled) with its reason; do not fix it.
@@ -118,7 +118,7 @@ For worklog entries, findings, handoff and vigil bodies.
 
 function trackerVerbs(): string {
   const lines = TRACKER_VERB_GROUPS.map(([group, verbs]) => `- ${group}: ${verbs}`);
-  return `\nTracker verbs, on .tracker/ (each is \`darius <verb>\`):\n\n${lines.join("\n")}\n`;
+  return `\nTracker verbs, on the tracker tree (each is \`darius <verb>\`):\n\n${lines.join("\n")}\n`;
 }
 
 const TAIL = `

@@ -20,7 +20,7 @@ Atomically commit code changes alongside the tracker record.
 **Two modes.** Check `.tracker` first (`test -L .tracker`).
 
 - **Legacy mode** (`.tracker/` is a real folder in git): code and tracker files go into one commit. Steps 5 and 6 stage the tracker files too.
-- **Store mode** (`.tracker` is a link, because the project's `.darius.toml` `kinds` lists `milestone`): the tracker tree lives in the darius store and nothing under it is in git. The commit holds code only. Never `git add .tracker`. `darius uncommitted-verified` reads worklog thread stages here, not git. Steps 5 and 6 reduce to the code files.
+- **Store mode** (the project's `.darius.toml` `kinds` lists `milestone`; `darius root --json` says `mode: "store"`): the tracker tree lives in the darius store, the checkout has no `.tracker` path, and nothing of the tree is in git. The commit holds code only. `darius uncommitted-verified` reads worklog thread stages here, not git. Steps 5 and 6 reduce to the code files.
 
 **Scope** (read `$ARGUMENTS` first): if one or more milestone slugs / spec paths are passed (e.g. `M191` or `.tracker/M191-foo/04-thing.md`), this is a **scoped** commit. Stage ONLY the code artifacts recorded in the worklog threads of those specs (legacy mode: plus the spec files). Do not sweep unrelated dirty files (other milestones, unrelated specs) into the commit. With no scope argument, stage the changes belonging to the current work (default), or everything with `--all`. The commit-first gate in `/darius-work-plan` always passes a scope, honor it.
 

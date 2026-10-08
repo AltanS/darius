@@ -1,6 +1,6 @@
 ---
 type: regex
-pattern: 'CLAIMED: \.tracker/'
+pattern: 'CLAIMED: M[0-9]+-'
 target: trace
 match: contains
 ---

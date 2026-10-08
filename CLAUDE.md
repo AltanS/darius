@@ -81,15 +81,21 @@ Rules for the legacy verbs:
 - Each kind has one writer module, per project. The marker's `kinds` says which kinds the store
   owns (default `["ritual"]`). A kind it lists is written by the store code only. A kind outside it
   is written by `src/legacy/` only, and only under `.tracker/` in the checkout. In a project whose
-  marker lists `milestone`, the legacy engine writes only the store's working copy through the
-  `.tracker` link, native code records and applies the file versions, and nothing is written to
-  git. Otherwise darius native code never writes `.tracker/` files, and the legacy tree never
-  writes the store.
+  marker lists `milestone`, the legacy engine writes only the store's working copy, which the
+  router hands it in `DARIUS_TRACKER_ROOT` (the checkout in `DARIUS_CHECKOUT_ROOT`), native code
+  records and applies the file versions, and nothing is written to git. Otherwise darius native
+  code never writes `.tracker/` files, and the legacy tree never writes the store.
+- **Store mode has no `.tracker` link** (0.78.0, operator ruling 2026-10-08). darius never creates
+  or reads a `.tracker` path in a store-mode checkout. One resolver finds the tree from the marker:
+  `src/core/tracker-root.ts` for native code, `src/legacy/lib/tracker-root.ts` for the engine.
+  Never add code that walks up for `.tracker` in store mode or derives the checkout as "the parent
+  of `.tracker`". The next verb removes an old link into this project's own store tree (never a
+  real folder, never a foreign link); darius does not edit `.gitignore`.
 - `src/legacy/` is the vendored legacy CLI, frozen. It has carve-outs (its own oxlint and tsconfig
   settings, dev dependencies only), and `bun run test:legacy` is a gate next to `bun run check`.
   Milestones, specs and worklogs stay in `.tracker/` in git, unless the project's marker lists
-  `milestone` in `kinds` (0.67.0, operator ruling 2026-10-05): then the store owns the tree and
-  `.tracker` is a git-ignored link. `darius onboard` moves a repo.
+  `milestone` in `kinds` (0.67.0, operator ruling 2026-10-05): then the store owns the tree and the
+  checkout has no `.tracker` path (0.78.0). `darius onboard` moves a repo; git mode is deprecated.
 
 ## Versioning: MANDATORY
 

@@ -53,7 +53,7 @@ const VENDORED_WRITER = new URL("../legacy/lib/tracker-writer.ts", import.meta.u
 
 /** What darius needs from the writer module. */
 interface LegacyWriter {
-  initTracker(opts: { projectRoot: string }): void;
+  initTracker(opts: { projectRoot: string; trackerDir?: string }): void;
   rebuildIndex(trackerRoot: string): void;
 }
 
@@ -66,6 +66,18 @@ export async function scaffoldTracker(root: string): Promise<void> {
   const loaded = (await import(VENDORED_WRITER.href)) as Partial<LegacyWriter>;
   if (loaded.initTracker === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no initTracker()`);
   loaded.initTracker({ projectRoot: root });
+}
+
+/**
+ * Scaffolds the tracker tree in the store dir `tree` through the vendored
+ * writer (0.78.0): only `00-INDEX.md`, nothing in the checkout `root`.
+ * Throws when the tree already has an index.
+ */
+export async function scaffoldStoreTree(root: string, tree: string): Promise<void> {
+  // SAFETY: darius's own vendored module; `initTracker` is checked before it is called.
+  const loaded = (await import(VENDORED_WRITER.href)) as Partial<LegacyWriter>;
+  if (loaded.initTracker === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no initTracker()`);
+  loaded.initTracker({ projectRoot: root, trackerDir: tree });
 }
 
 /**

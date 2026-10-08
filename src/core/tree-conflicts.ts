@@ -110,7 +110,8 @@ export function readTreeConflicts(lines: readonly LedgerLine[]): TreeConflicts {
 
 /** The lines that tell the operator what was lost and the two ways out. */
 export function conflictAdvice(conflict: TreeConflict): string[] {
-  const target = `.tracker/${conflict.path}`;
+  // Tracker-relative (0.78.0): the tree verbs take this form, and the checkout has no `.tracker`.
+  const target = conflict.path;
   const kept = conflict.winnerSha === null ? `the removal by ${conflict.winnerHost}` : `the version of ${conflict.winnerHost}`;
   return [
     `concurrent edit of ${target} (${conflict.at}): kept ${kept}, the version of ${conflict.loserHost} is blob ${conflict.loserSha}`,

@@ -24,7 +24,8 @@ seed_darius_on_path() {
 }
 
 # A scratch git repo in store mode: .darius.toml with kinds = ["ritual",
-# "vigil", "milestone"], and .tracker as a git-ignored link into the store.
+# "vigil", "milestone"]. The tracker tree is in the store; since 0.78.0 the
+# checkout has no .tracker path and no .gitignore line for it.
 seed_repo() {
   seed_darius_on_path
   git init -q -b main
@@ -38,7 +39,7 @@ seed_repo() {
   git add -A
   git commit -q -m "chore: initial commit"
   darius init --project eval-demo --no-import >/dev/null
-  git add .darius.toml .gitignore
+  git add .darius.toml
   git commit -q -m "chore: darius init"
 }
 
@@ -48,11 +49,12 @@ seed_milestone() {
 }
 
 # seed_spec <milestone-slug> <name> <check-file> : one spec with one real task.
-# The task passes when <check-file> exists. Prints the spec path (repo-relative).
+# The task passes when <check-file> exists. Prints the spec path (the absolute
+# path in the store tree; every darius verb takes it).
 seed_spec() {
   local out path
   out="$(darius add spec --milestone "$1" --name "$2" --template generic)"
-  path="$(printf '%s\n' "$out" | sed -n 's/^tracker add spec: created \(.*\.md\)$/\1/p' | head -n1)"
+  path="$(printf '%s\n' "$out" | sed -n 's/^\(tracker\|darius\) add spec: created \(.*\.md\)$/\2/p' | head -n1)"
   path="${path#"$PWD"/}"
   cat > "$path" <<SPEC
 ---

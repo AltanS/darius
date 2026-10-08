@@ -25,8 +25,9 @@
  *   store mode (the marker's kinds list milestone): it removes the folder,
  *     one `tree.removed` line per file, all at one time, then the apply
  *     deletes them (src/core/tree-history.ts), and rebuilds `00-INDEX.md`
- *     through the legacy writer. `darius tree restore .tracker/<folder>/`
- *     brings the folder back; the verb prints that line.
+ *     through the legacy writer. `darius tree restore <folder>/` brings the
+ *     folder back; the verb prints that line. Paths are tracker-relative
+ *     (0.78.0: the checkout has no `.tracker` path).
  *   git mode: it writes nothing, because native code never writes a git
  *     `.tracker/`. It prints the command for the caller to run,
  *     `git rm -r -q .tracker/<folder>/` (`action: "print"`, `command` in
@@ -41,10 +42,10 @@ import { dirname, join } from "node:path";
 
 import { checklistItems, closeWorklogThreadDone, openWorklogThreads, rebuildTrackerIndex, worklogFiles, type LegacyThread } from "../core/legacy-entry.ts";
 import { findMarker } from "../core/marker.ts";
-import { findTrackerDir } from "../core/paths.ts";
 import type { Project } from "../core/store.ts";
 import { filesUnder, removeTreeFolder } from "../core/tree-history.ts";
-import { ensureTreeLink, syncTree, treeDir } from "../core/tree.ts";
+import { resolveTrackerRoot } from "../core/tracker-root.ts";
+import { ensureTreeDir, syncTree, treeDir } from "../core/tree.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 import { storeTree } from "./tree.ts";
@@ -71,14 +72,15 @@ function where(cwd: string, dryRun: boolean): Where {
     const tree = storeTree(cwd);
     if ("error" in tree) throw new Error(tree.error);
     if (!dryRun) {
-      // Like a tracker verb: the link, then this host's edits and the other hosts' changes.
-      ensureTreeLink(tree.checkout, tree.project);
+      // Like a tracker verb: the tree dir, then this host's edits and the other hosts' changes.
+      ensureTreeDir(tree.project);
       syncTree(tree.project);
     }
     return { mode: "store", root: treeDir(tree.project), project: tree.project };
   }
-  const root = findTrackerDir(cwd);
-  if (root === null) throw new Error("no .tracker/ here or above. Run darius init in the repo root to create one.");
+  const found = resolveTrackerRoot(cwd);
+  if (found.mode !== "git") throw new Error("no .tracker/ here or above. Run darius init in the repo root to create one.");
+  const root = found.trackerRoot;
   return { mode: "git", root };
 }
 
@@ -225,7 +227,7 @@ function trackedByGit(root: string, folder: string): boolean {
 }
 
 function undoLine(mode: Where["mode"], folder: string, tracked: boolean): string | null {
-  if (mode === "store") return `darius tree restore .tracker/${folder}/`;
+  if (mode === "store") return `darius tree restore ${folder}/`;
   return tracked ? `git checkout HEAD -- .tracker/${folder}/` : null;
 }
 
@@ -248,7 +250,9 @@ async function runArchive(args: ParsedArgs): Promise<number> {
   const threads = await threadCheck(place.root, folder);
   const open = await openItems(place.root, folder);
   const checks = [archiveCheck(place.root, folder), itemsCheck(open, incomplete), threads.check, await worklogNote(place.root, folder)];
-  const files = filesOf(place, folder).map((path) => `.tracker/${path}`);
+  // Store mode shows tracker-relative paths; git mode the `.tracker/` paths git knows.
+  const shown = place.mode === "store" ? "" : ".tracker/";
+  const files = filesOf(place, folder).map((path) => `${shown}${path}`);
   const refused = checks.some((check) => !check.ok);
   const tracked = place.mode === "git" && trackedByGit(place.root, folder);
   const undo = undoLine(place.mode, folder, tracked);
@@ -272,7 +276,7 @@ async function runArchive(args: ParsedArgs): Promise<number> {
       }
     }
     const removal = removeTreeFolder(place.project, folder, incomplete === undefined || open.length === 0 ? {} : { note: `archived incomplete: ${incomplete}` });
-    removed = removal.removed.map((path) => `.tracker/${path}`);
+    removed = removal.removed.map((path) => `${shown}${path}`);
     problems.push(...removal.problems);
     try {
       await rebuildTrackerIndex(place.root);

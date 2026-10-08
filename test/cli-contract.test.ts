@@ -12,7 +12,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -234,9 +234,11 @@ test("--json keeps stdout pure on errors: one {ok:false,error,code} object, the 
   const ok = darius(at, ["status", "--json"], dir);
   assert.equal(ok.code, 0);
   assert.equal(JSON.parse(ok.stdout).projectName, "Project");
-  mkdirSync(join(dir, ".tracker", "M1-x"), { recursive: true });
-  writeFileSync(join(dir, ".tracker", "M1-x", "02-bad.md"), "---\nupdated: 2026-01-01\nagent: a\ndepends_on: []\n---\n\n# Bad\n\n## Verification Checklist\n\n- [ ] bad\n  - Command: `test -d src`\n  - Expected: `exits zero`\n");
-  const failed = darius(at, ["spec", "check", ".tracker/M1-x/02-bad.md", "--json"], dir);
+  // Store mode: the spec is in the store tree, the checkout has no .tracker (0.78.0).
+  const tree = join(at.home, "state", "json-errors", "tracker");
+  mkdirSync(join(tree, "M1-x"), { recursive: true });
+  writeFileSync(join(tree, "M1-x", "02-bad.md"), "---\nupdated: 2026-01-01\nagent: a\ndepends_on: []\n---\n\n# Bad\n\n## Verification Checklist\n\n- [ ] bad\n  - Command: `test -d src`\n  - Expected: `exits zero`\n");
+  const failed = darius(at, ["spec", "check", "M1-x/02-bad.md", "--json"], dir);
   assert.equal(failed.code, 1);
   assert.equal(failed.stdout.trim().split("\n").length > 0 && JSON.parse(failed.stdout).ok, false, "the spec's own result");
   assert.equal(failed.stdout.includes('"code"'), false, "no second error object");
@@ -286,12 +288,17 @@ test("root --json reports git, none and store mode and changes nothing on disk",
   assert.equal(darius(at, ["root"], bare).code, 1, "the plain form still fails without a tracker");
 
   const store = storeRepo(at, "storemode");
-  writeFileSync(join(store, ".gitignore"), "/.tracker\n");
   commitAll(store, "marker");
   const tree = join(at.home, "state", "storemode", "tracker");
+  assert.deepEqual(JSON.parse(darius(at, ["root", "--json"], store).stdout), { mode: "store", trackerRoot: tree, project: "storemode", linked: false });
+  assert.equal(existsSync(join(store, ".tracker")), false, "store mode makes no link (0.78.0)");
+  // An old link (before 0.78.0) is reported, and root leaves it alone.
+  symlinkSync(tree, join(store, ".tracker"));
   assert.deepEqual(JSON.parse(darius(at, ["root", "--json"], store).stdout), { mode: "store", trackerRoot: tree, project: "storemode", linked: true });
+  assert.equal(lstatSync(join(store, ".tracker")).isSymbolicLink(), true, "root never migrates");
+  rmSync(join(store, ".tracker"));
 
-  // A new worktree has the marker but no link. root reports that and makes nothing.
+  // A new worktree has the marker and no link. root reports that and makes nothing.
   const worktree = join(at.home, "storemode-wt");
   const added = spawnSync("git", ["worktree", "add", "-q", worktree, "-b", "wt"], { cwd: store, env: at.env, encoding: "utf8" });
   assert.equal(added.status, 0, added.stderr);

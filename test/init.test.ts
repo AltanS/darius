@@ -12,7 +12,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -123,31 +123,30 @@ test("the done check: from nothing to darius next with the printed lines alone; 
   }
 });
 
-test("a fresh repo: marker with kinds, link, the tracker in the store, .gitignore and the commit line; the root is the git root", () => {
+test("a fresh repo: marker with kinds, link, the tracker in the store, no .tracker and no .gitignore, the commit line; the root is the git root", () => {
   const at = host();
   const dir = repo(at, "fresh");
   mkdirSync(join(dir, "deep", "er"), { recursive: true });
   const result = darius(at, ["init"], join(dir, "deep", "er"));
   assert.equal(result.code, 0, result.stderr);
   const lines = result.stdout.split("\n");
+  const tree = join(at.env.DARIUS_STATE_DIR ?? "", "fresh", "tracker");
   assert.deepEqual(lines.slice(0, 5), [
     '✓ wrote .darius.toml: project = "fresh"',
     `✓ linked fresh to ${dir} on this host`,
-    "✓ created the tracker in the darius store: .tracker links to it",
-    "✓ added /.tracker to .gitignore",
-    'Commit .darius.toml and .gitignore: git add .darius.toml .gitignore && git commit -m "darius init"',
+    `✓ created the tracker in the darius store: ${tree} (darius root prints it)`,
+    'Commit .darius.toml: git add .darius.toml && git commit -m "darius init"',
+    "Plan work in the tracker, then see the first open task:",
   ]);
   const marker = readFileSync(join(dir, ".darius.toml"), "utf8");
   assert.match(marker, /^v = 3\nproject = "fresh"\ntz = "[^"]+"\nkinds = \["ritual", "vigil", "milestone"\]\n$/mu);
   const zone = /tz = "([^"]+)"/u.exec(marker)?.[1] ?? "";
   assert.equal(zone, Intl.DateTimeFormat().resolvedOptions().timeZone);
   assert.equal(isZone(zone), true);
-  // The checkout holds a link, ignored by git; the tree is in the store.
-  const tree = join(at.env.DARIUS_STATE_DIR ?? "", "fresh", "tracker");
-  assert.equal(lstatSync(join(dir, ".tracker")).isSymbolicLink(), true);
-  assert.equal(readlinkSync(join(dir, ".tracker")), tree);
+  // The tree is in the store; the checkout holds no .tracker path and no .gitignore (0.78.0).
+  assert.equal(lstatSync(join(dir, ".tracker"), { throwIfNoEntry: false }), undefined);
   assert.ok(existsSync(join(tree, "00-INDEX.md")));
-  assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), "/.tracker\n");
+  assert.equal(existsSync(join(dir, ".gitignore")), false);
   const links = readFileSync(join(at.env.DARIUS_CONFIG_DIR ?? "", "links.toml"), "utf8");
   assert.match(links, new RegExp(`fresh = "${dir}"`, "u"));
 

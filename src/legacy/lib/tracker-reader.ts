@@ -6,11 +6,12 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, basename, relative } from "node:path";
+import { join, basename } from "node:path";
 import { parseFrontmatter } from "./markdown/frontmatter.ts";
 import { parseSpec } from "./documents/spec.ts";
 import type { SpecView, SpecStatusType } from "./documents/spec.ts";
 import { isDue, daysBetween } from "./dates.ts";
+import { displayPath } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
 // MilestoneJSON type — for tracker list milestones --json
@@ -509,7 +510,7 @@ function readSpecs(
     if (entry === "00-README.md") continue;
 
     const absolutePath = join(folderPath, entry);
-    const relativePath = relative(join(trackerRoot, ".."), absolutePath);
+    const relativePath = displayPath(trackerRoot, absolutePath);
     const raw = readFileSync(absolutePath, "utf-8");
 
     try {
@@ -555,6 +556,8 @@ function resolveDependencies(milestones: MilestoneEntry[]): void {
 
       // Also register "milestone/file" and "file" variants
       statusMap.set(`${milestone.slug}/${spec.file}`, spec.view.computedStatus);
+      // Store mode shows paths tracker-relative (0.78.0); a depends_on may still say `.tracker/...`.
+      statusMap.set(`.tracker/${milestone.slug}/${spec.file}`, spec.view.computedStatus);
       statusMap.set(spec.file, spec.view.computedStatus);
     }
   }

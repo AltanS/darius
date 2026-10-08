@@ -82,6 +82,8 @@ export function selectVerifiedThreads(
   threads: readonly ThreadForGate[],
   porcelain: string,
   prefix: string = "",
+  /** Where a thread without a spec points: `.tracker/worklog/`, or `worklog/` for a store tree (0.78.0). */
+  worklogDir: string = ".tracker/worklog/",
 ): UncommittedVerifiedSpec[] {
   const dirty: string[] = [];
   for (const rawLine of porcelain.split("\n")) {
@@ -103,7 +105,7 @@ export function selectVerifiedThreads(
     }
     const dirtyArtifacts = dirtyAmong(dirty, artifacts, prefix);
     result.push({
-      path: thread.specPath ?? `.tracker/worklog/${thread.worklogFile}`,
+      path: thread.specPath ?? `${worklogDir}${thread.worklogFile}`,
       gitStatus: THREAD_GIT_STATUS,
       source: "thread",
       threadId: thread.threadId,

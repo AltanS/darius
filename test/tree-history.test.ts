@@ -72,8 +72,10 @@ function storeRepo(runtime: Repo["runtime"] = "node"): Repo {
   return repo;
 }
 
+/** The tracker tree: a git-mode repo's `.tracker/` folder, else the store tree (a store-mode checkout has no `.tracker` path since 0.78.0). */
 function tracker(repo: Repo): string {
-  return join(repo.dir, ".tracker");
+  const folder = join(repo.dir, ".tracker");
+  return existsSync(folder) ? folder : join(SANDBOX, "state", repo.project, "tracker");
 }
 
 function closeThreads(repo: Repo): void {
@@ -227,7 +229,7 @@ test("tree restore --dry-run of a delete lists the plan and writes nothing", { s
   capture(repo);
   const ledger = ledgerLines(repo).length;
   const out = ok(repo, ["tree", "restore", ".tracker/M1-alpha/", "--dry-run"]);
-  assert.match(out, /restore .*\.tracker\/M1-alpha\/00-README\.md/u);
+  assert.match(out, /restore .*  M1-alpha\/00-README\.md/u);
   assert.equal(existsSync(folder), false);
   assert.equal(ledgerLines(repo).length, ledger);
 });
@@ -289,13 +291,13 @@ test("milestone archive in store mode: --dry-run writes nothing, the run records
 
       const dry: { outcome: string; files: string[]; undo: string } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--dry-run", "--json"]));
       assert.equal(dry.outcome, "dry-run");
-      assert.deepEqual(dry.files, [".tracker/M1-alpha/00-README.md", ".tracker/M1-alpha/01-spec-one.md"]);
-      assert.equal(dry.undo, "darius tree restore .tracker/M1-alpha/");
+      assert.deepEqual(dry.files, ["M1-alpha/00-README.md", "M1-alpha/01-spec-one.md"]);
+      assert.equal(dry.undo, "darius tree restore M1-alpha/");
       assert.equal(dirHash(folder), before);
       assert.equal(dirHash(join(SANDBOX, "state", repo.project, "ledger")), state, "a dry run writes no ledger line");
 
       const out = ok(repo, ["milestone", "archive", "alpha"]);
-      assert.match(out, /undo: darius tree restore \.tracker\/M1-alpha\//u);
+      assert.match(out, /undo: darius tree restore M1-alpha\//u);
       assert.equal(existsSync(folder), false);
       const removed = ledgerLines(repo).filter((line) => line.type === "tree.removed" && String(line.path).startsWith("M1-alpha/"));
       assert.equal(removed.length, 2);
@@ -488,12 +490,12 @@ test("tree restore of a milestone folder warns about its archive doc and its dis
 
   const out = ok(repo, ["tree", "restore", ".tracker/M1-alpha/"]);
   assert.match(out, /warning: M1-alpha has an archive document, archive\/M1-alpha\.md, so the milestone is now listed twice\./u);
-  assert.match(out, /rm \.tracker\/archive\/M1-alpha\.md/u);
-  assert.match(out, /mv \.tracker\/archive\/M1-alpha\.md/u);
+  assert.ok(out.includes(`rm ${join(tracker(repo), "archive", "M1-alpha.md")}`), out);
+  assert.ok(out.includes(`mv ${join(tracker(repo), "archive", "M1-alpha.md")}`), out);
   assert.match(out, /warning: worklog\/alpha\.md is a distilled stub/u);
   const before = /raw copied: .*sha256 ([0-9a-f]{12})/u.exec(distilled.stderr + distilled.stdout)?.[1];
   assert.ok(before !== undefined);
-  assert.match(out, new RegExp(`darius tree restore \\.tracker/worklog/alpha\\.md --at ${before}`, "u"));
+  assert.match(out, new RegExp(`darius tree restore worklog/alpha\\.md --at ${before}`, "u"));
   const json: { follow_up: string[] } = JSON.parse(ok(repo, ["tree", "restore", ".tracker/M1-alpha/", "--force", "--json"]));
   assert.deepEqual(json.follow_up, [], "nothing was written the second time, so no new warning");
 });

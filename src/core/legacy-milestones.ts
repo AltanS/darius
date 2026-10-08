@@ -15,6 +15,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseHeader } from "./legacy-header.ts";
+import { trackerDirOfCheckout } from "./tracker-root.ts";
 
 /** One spec file of a legacy milestone. */
 export interface LegacySpec {
@@ -238,7 +239,7 @@ function countArchived(root: string): number {
 
 /** The open milestones of a checkout, and how many are archived. */
 export function readLegacyMilestones(checkout: string): LegacyMilestones {
-  return readLegacyMilestonesAt(join(checkout, ".tracker"));
+  return readLegacyMilestonesAt(trackerDirOfCheckout(checkout));
 }
 
 /** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */

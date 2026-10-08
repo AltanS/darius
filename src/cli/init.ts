@@ -10,9 +10,10 @@
  *                                    `project` defaults to the dir name, kinds
  *                                    ritual, vigil and milestone), link this
  *                                    checkout, scaffold the tracker tree in the
- *                                    store through the vendored writer, make
- *                                    `.tracker` a link to it and add
- *                                    `/.tracker` to `.gitignore`.
+ *                                    store through the vendored writer. Nothing
+ *                                    else is written in the checkout: no
+ *                                    `.tracker` path, no `.gitignore` line
+ *                                    (0.78.0).
  *   no .darius.toml, a .tracker/     legacy repo: import its rituals, runs and
  *                                    verification log into the store (read-only
  *                                    on `.tracker/`), write the marker, link.
@@ -21,9 +22,8 @@
  *                                    scaffold `.tracker/` when it is missing,
  *                                    never import. Safe to re-run: a linked
  *                                    repo prints `already linked`. When its
- *                                    kinds list milestone: make the `.tracker`
- *                                    link and bring the tree up to date, never
- *                                    scaffold.
+ *                                    kinds list milestone: bring the store tree
+ *                                    up to date, never scaffold.
  *
  * Refusals, each with its fix on the line: the store already holds rituals
  * for the project and there is no marker yet (the import would run twice;
@@ -45,14 +45,14 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { importTracker, type ImportReport } from "../core/import.ts";
-import { scaffoldTracker } from "../core/legacy-entry.ts";
+import { scaffoldTracker, scaffoldStoreTree } from "../core/legacy-entry.ts";
 import { defaultWho } from "../core/ledger.ts";
 import { readLinks } from "../core/links.ts";
 import { findMarker, MARKER_FILE, MARKER_VERSION, readMarker } from "../core/marker.ts";
 import { findTrackerDir, projectDir } from "../core/paths.ts";
 import { isProjectName, openProject } from "../core/store.ts";
 import { tomlString } from "../core/toml.ts";
-import { captureTree, ensureTreeLink, ignoreTrackerLink, syncTree, TRACKER_IGNORE } from "../core/tree.ts";
+import { captureTree, ensureTreeDir, syncTree } from "../core/tree.ts";
 import { conflictingLink, linkCheckout } from "./link.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -228,11 +228,11 @@ function isV3(root: string): boolean {
 }
 
 /** The lines after the ✓ lines: what to run next. */
-function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracker: boolean; ignore: boolean }): NextSteps {
+function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracker: boolean }): NextSteps {
   const lines: string[] = [];
   const commands: string[] = [];
   const isTree = isTreeMarker(repo.root);
-  const paths = [wrote.marker ? MARKER_FILE : null, wrote.tracker && !isTree ? TRACKER : null, wrote.ignore ? ".gitignore" : null].filter((path) => path !== null);
+  const paths = [wrote.marker ? MARKER_FILE : null, wrote.tracker && !isTree ? TRACKER : null].filter((path) => path !== null);
   if (paths.length > 0) {
     const commit = `git add ${paths.join(" ")} && git commit -m "darius init"`;
     if (repo.inGit) {
@@ -249,11 +249,12 @@ function nextSteps(repo: Repo, project: string, wrote: { marker: boolean; tracke
     "darius next",
   ];
   const ritual = [`darius ritual add weekly-review --title "Weekly review" --cadence 7d --mode report`, "darius run now weekly-review --dry-run"];
+  const where = isTree ? "the tracker" : ".tracker/";
   if (wrote.tracker) {
-    lines.push("Plan work in .tracker/, then see the first open task:", ...plan.map((line) => `  ${line}`));
+    lines.push(`Plan work in ${where}, then see the first open task:`, ...plan.map((line) => `  ${line}`));
     commands.push(...plan);
   } else {
-    lines.push("See the next open task in .tracker/: darius next");
+    lines.push(`See the next open task in ${where}: darius next`);
     commands.push("darius next");
   }
   if (repo.hasTracker && !isTree && isV3(repo.root)) lines.push("Next: darius onboard moves the tracker into the darius store.");
@@ -315,24 +316,20 @@ async function run(args: ParsedArgs): Promise<number> {
   else out.push(`✓ linked ${project} to ${repo.root} on this host`);
 
   let trackerState: InitResult["tracker"] = "present";
-  let ignored = false;
   if (isTreeMarker(repo.root)) {
     const store = openProject(project, { create: true });
+    const tree = ensureTreeDir(store);
     if (markerState === "written") {
-      // The vendored writer scaffolds a real `.tracker/` with only the derived
-      // 00-INDEX.md; ensureTreeLink moves it into the store and links it.
-      await scaffoldTracker(repo.root);
-      ensureTreeLink(repo.root, store);
+      // The vendored writer scaffolds the tree in the store with only the
+      // derived 00-INDEX.md; nothing is written in the checkout.
+      if (!existsSync(join(tree, "00-INDEX.md"))) await scaffoldStoreTree(repo.root, tree);
       captureTree(store);
       trackerState = "created";
-      out.push(`✓ created the tracker in the darius store: ${TRACKER} links to it`);
+      out.push(`✓ created the tracker in the darius store: ${tree} (darius root prints it)`);
     } else {
-      ensureTreeLink(repo.root, store);
       const synced = syncTree(store);
-      out.push(`✓ ${TRACKER} links to the tracker in the darius store`, ...[...synced.capture.problems, ...synced.apply.problems].map((problem) => `! ${problem}`));
+      out.push(`✓ the tracker is in the darius store: ${tree}`, ...[...synced.capture.problems, ...synced.apply.problems].map((problem) => `! ${problem}`));
     }
-    ignored = ignoreTrackerLink(repo.root) === "added";
-    if (ignored) out.push(`✓ added ${TRACKER_IGNORE} to .gitignore`);
   } else if (!repo.hasTracker) {
     await scaffoldTracker(repo.root);
     trackerState = "created";
@@ -350,7 +347,7 @@ async function run(args: ParsedArgs): Promise<number> {
     );
   }
 
-  const next = nextSteps(repo, project, { marker: markerState === "written", tracker: trackerState === "created", ignore: ignored });
+  const next = nextSteps(repo, project, { marker: markerState === "written", tracker: trackerState === "created" });
   if (args.json) {
     const result: InitResult = { project, dir: repo.root, marker: markerState, link: linked.outcome, tracker: trackerState, import: report, next: next.commands };
     console.log(JSON.stringify(result));

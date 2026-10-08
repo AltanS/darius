@@ -30,7 +30,7 @@ import { openProject, type Project } from "../core/store.ts";
 import { planRestore, restoreRefusal, restoreTree, treeLog, treeTarget, type RestorePlan, type TreeTarget } from "../core/tree-history.ts";
 import { appendLines, defaultWho, readLedger } from "../core/ledger.ts";
 import { readTreeConflicts, TREE_RESOLVED } from "../core/tree-conflicts.ts";
-import { ensureTreeLink, foldTree, treeDir, TREE_PUT } from "../core/tree.ts";
+import { ensureTreeDir, foldTree, treeDir, TREE_PUT } from "../core/tree.ts";
 import type { TreeLine } from "../core/tree.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -52,8 +52,9 @@ function shortSha(sha: string | null): string {
 }
 
 function label(target: TreeTarget): string {
-  if (target.prefix === "") return ".tracker/";
-  return `.tracker/${target.prefix}${target.folder ? "/" : ""}`;
+  // Tracker-relative (0.78.0): the checkout has no `.tracker` path.
+  if (target.prefix === "") return "./";
+  return `${target.prefix}${target.folder ? "/" : ""}`;
 }
 
 function pathArg(args: ParsedArgs): string {
@@ -73,8 +74,8 @@ function runLog(args: ParsedArgs): number {
   const target = treeTarget(tree.project, pathArg(args), tree.checkout, history);
   const entries = treeLog(history, target);
   // A path with no history and no file is not in the tree: that is an error, not an empty log.
-  if (entries.length === 0 && target.prefix !== "" && !existsSync(join(tree.checkout, ".tracker", target.prefix))) {
-    throw new NotFoundError(`no tree lines and no file or folder at ${label(target)}; check the path (darius tree log .tracker/ lists the whole tree)`);
+  if (entries.length === 0 && target.prefix !== "" && !existsSync(join(treeDir(tree.project), target.prefix))) {
+    throw new NotFoundError(`no tree lines and no file or folder at ${label(target)}; check the path (darius tree log ./ lists the whole tree)`);
   }
   if (args.json) {
     console.log(JSON.stringify({ project: tree.project.name, path: label(target), folder: target.folder, lines: entries, problems }));
@@ -98,7 +99,7 @@ const STATE_WORDS = { restore: "restore", same: "same   ", differs: "differs", "
 function printPlan(plan: RestorePlan, heading: string): void {
   console.log(`${heading} (${plan.basis}):`);
   for (const step of plan.steps) {
-    console.log(`  ${STATE_WORDS[step.state]}  ${shortSha(step.sha)}  ${String(step.size).padStart(7)} B  .tracker/${step.path}`);
+    console.log(`  ${STATE_WORDS[step.state]}  ${shortSha(step.sha)}  ${String(step.size).padStart(7)} B  ${step.path}`);
   }
 }
 
@@ -126,8 +127,8 @@ async function restoreFollowUps(project: Project, target: TreeTarget, history: R
   if (archive !== undefined) {
     lines.push(
       `${folder} has an archive document, archive/${archive}, so the milestone is now listed twice.`,
-      `  Remove the document: rm .tracker/archive/${archive}`,
-      `  or rename it:        mv .tracker/archive/${archive} .tracker/archive/${archive.replace(/\.md$/u, "")}.old`,
+      `  Remove the document: rm ${join(archiveDir, archive)}`,
+      `  or rename it:        mv ${join(archiveDir, archive)} ${join(archiveDir, archive.replace(/\.md$/u, ""))}.old`,
     );
   }
   const names = new Set([`${folder.toLowerCase()}.md`, `${folder.toLowerCase().replace(/^m\d+-/u, "")}.md`]);
@@ -137,8 +138,8 @@ async function restoreFollowUps(project: Project, target: TreeTarget, history: R
     const sha = versionBeforeNewest(history, path) ?? "<sha of the pre-distill version>";
     lines.push(
       `worklog/${stub.worklogFile} is a distilled stub, so the threads of ${folder} are not in it.`,
-      `  Bring the threads back: darius tree restore .tracker/${path} --at ${sha} --force`,
-      `  (find the version with: darius tree log .tracker/${path})`,
+      `  Bring the threads back: darius tree restore ${path} --at ${sha} --force`,
+      `  (find the version with: darius tree log ${path})`,
     );
   }
   return lines;
@@ -167,7 +168,7 @@ async function runRestore(args: ParsedArgs): Promise<number> {
     }
     return refusal === null ? 0 : 1;
   }
-  ensureTreeLink(tree.checkout, tree.project);
+  ensureTreeDir(tree.project);
   const result = restoreTree(tree.project, target, { at: atValue, force });
   const followUp = result.restored.length > 0 ? await restoreFollowUps(tree.project, target, foldTree(tree.project, [])) : [];
   if (args.json) {
@@ -203,7 +204,7 @@ function runResolve(args: ParsedArgs): number {
     console.log(`no open conflict under ${label(target)}`);
     return 0;
   }
-  for (const path of paths) console.log(`resolved .tracker/${path}: the current version stays, the lost version stays a blob`);
+  for (const path of paths) console.log(`resolved ${path}: the current version stays, the lost version stays a blob`);
   return 0;
 }
 

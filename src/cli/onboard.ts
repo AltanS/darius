@@ -22,12 +22,13 @@
  *                 4. `.darius.toml`: kinds = ["ritual", "vigil", "milestone"]
  *                 5. check that every file left in `.tracker/` has an
  *                    identical copy in the tree dir or in git HEAD, `git rm
- *                    -r --cached .tracker`, remove the folder, link
- *                    `.tracker` to the tree dir, add `/.tracker` to
- *                    `.gitignore`, then write the store's vigils as files
- *                    under `.tracker/vigils/` (src/core/vigil-projection.ts)
- *               Nothing is committed: the operator commits the marker, the
- *               `.gitignore` and the staged removal. Imported open vigils
+ *                    -r --cached .tracker`, remove the folder, then write
+ *                    the store's vigils as files under `vigils/` of the
+ *                    tree (src/core/vigil-projection.ts). Since 0.78.0 no
+ *                    `.tracker` link is made and `.gitignore` is not touched:
+ *                    the checkout has no `.tracker` path after the move.
+ *               Nothing is committed: the operator commits the marker and
+ *               the staged removal. Imported open vigils
  *               are heavy, so the daily sweep skips them; the summary says
  *               so, and `darius vigil set <slug> --no-heavy` allows one.
  *   --only vigil  step 1, kinds = ["ritual", "vigil"], `git rm -r -q
@@ -59,17 +60,15 @@ import { openProject, type Project } from "../core/store.ts";
 import { parseToml } from "../core/toml.ts";
 import {
   captureTree,
-  ensureTreeLink,
-  ignoreTrackerLink,
+  ensureTreeDir,
   isLocalTreePath,
   pendingTreeChanges,
-  TRACKER_IGNORE,
-  TRACKER_LINK,
   TREE_PUT,
   TREE_REMOVED,
   treeDir,
   type TreeCapture,
 } from "../core/tree.ts";
+import { TRACKER_FOLDER as TRACKER_LINK } from "../core/tracker-root.ts";
 import { importLegacyVigils, type VigilImportResult } from "../core/vigil-import.ts";
 import { projectVigils } from "../core/vigil-projection.ts";
 import { errorMessage } from "../runtime.ts";
@@ -362,13 +361,15 @@ function survey(marker: Marker, scope: Scope): Survey {
       }
     }
   }
-  if (isTree && tracker === "link" && handle !== null) {
+  // Onboarded: no `.tracker` path (0.78.0), or an old link the next verb removes.
+  const storeOwned = isTree && (tracker === "missing" || tracker === "link");
+  if (storeOwned && handle !== null) {
     const pending = pendingTreeChanges(handle);
     result.pending = pending.changed;
     result.problems.push(...pending.problems);
   }
   addBlockers(result, scope);
-  result.onboarded = result.nothing && (scope === "vigil" ? result.kinds.includes("vigil") : isTree && tracker === "link");
+  result.onboarded = result.nothing && (scope === "vigil" ? result.kinds.includes("vigil") : storeOwned);
   return result;
 }
 
@@ -434,7 +435,7 @@ function surveyLines(result: Survey): string[] {
     lines.push(`vigil files: ${String(result.vigils.files)} (${String(result.vigils.open)} open, ${String(result.vigils.closed)} closed)`);
   }
   lines.push(`store: ${result.store.exists ? `${result.store.tree ? "holds a tree" : "no tree"}, ${String(result.store.vigils)} vigil items` : "none on this host"}`);
-  if (result.tracker === "link") lines.push(`pending tree changes: ${result.pending.length === 0 ? "none" : result.pending.join(", ")}`);
+  if (result.onboarded && result.scope === "all") lines.push(`pending tree changes: ${result.pending.length === 0 ? "none" : result.pending.join(", ")}`);
   lines.push(...result.problems.map((problem) => `! ${problem}`));
   if (result.onboarded) lines.unshift(`✓ ${onboardedLine(result.scope)}`);
   else if (result.nothing) lines.push("· nothing to do: there is no .tracker/ folder here");
@@ -586,33 +587,31 @@ function checkLeftovers(project: Project, root: string): void {
   }
 }
 
-/** Step 5: remove `.tracker/` from git and the checkout, then link it to the tree dir and ignore the link. */
+/** Step 5: remove `.tracker/` from git and the checkout. No link is made (0.78.0): readers resolve the tree from the marker. */
 function replaceFolder(project: Project, root: string): void {
   checkLeftovers(project, root);
   const removed = git(root, ["rm", "-r", "-q", "--cached", "--", TRACKER_LINK]);
   if (!removed.ok) throw new StepFailure(5, `git rm -r --cached .tracker failed: ${removed.err}`);
   rmSync(join(root, TRACKER_LINK), { recursive: true, force: true });
-  ensureTreeLink(root, project);
-  ignoreTrackerLink(root);
+  ensureTreeDir(project);
 }
 
 /** What to tell the operator when a step after 2 failed. */
 function recovery(step: number, root: string): string[] {
   const back = [
     `cd ${root}`,
-    "if [ -L .tracker ]; then rm .tracker; fi",
     "git checkout HEAD -- .tracker .darius.toml",
   ];
   const state = new Map([
     [3, "The tree copy is in the store, and the store may already hold tree lines. The checkout is unchanged."],
     [4, "The store holds the tree and the cutover line. .darius.toml may be unchanged."],
-    [5, "The store holds the tree, and .darius.toml lists milestone. .tracker/ may be removed from the git index or from disk, and the link may exist."],
+    [5, "The store holds the tree, and .darius.toml lists milestone. .tracker/ may be removed from the git index or from disk."],
   ]);
   return [
     state.get(step) ?? "",
-    "To get back to the old .tracker/ folder (remove the link first, so git does not write into the store):",
+    "To get back to the old .tracker/ folder:",
     ...back.map((line) => `  ${line}`),
-    "The store keeps its tree lines, so a new darius onboard refuses. To finish instead, do the remaining steps by hand: set kinds in .darius.toml, git rm -r --cached .tracker, remove the folder, run any tracker verb (it creates the link), add /.tracker to .gitignore.",
+    "The store keeps its tree lines, so a new darius onboard refuses. To finish instead, do the remaining steps by hand: set kinds in .darius.toml, git rm -r --cached .tracker, remove the folder.",
   ].filter((line) => line !== "");
 }
 
@@ -623,7 +622,7 @@ function printSteps(steps: readonly StepReport[]): void {
 }
 
 function nextCommands(scope: Scope): string[] {
-  const add = scope === "vigil" ? `git add ${MARKER_FILE}` : `git add ${MARKER_FILE} .gitignore`;
+  const add = `git add ${MARKER_FILE}`;
   const message = scope === "vigil" ? "chore(darius): the darius store owns the vigils" : COMMIT_MESSAGE;
   return [add, `git commit -m "${message}"`];
 }
@@ -714,12 +713,13 @@ async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<num
       } catch (cause) {
         throw cause instanceof StepFailure ? cause : new StepFailure(5, errorMessage(cause));
       }
-      steps.push({ step: 5, name: "link", summary: `.tracker removed from git (staged) and linked to ${treeDir(project)}, ${TRACKER_IGNORE} in .gitignore` });
+      // The step keeps its name "link" for --json readers; since 0.78.0 it makes no link.
+      steps.push({ step: 5, name: "link", summary: `.tracker removed from git (staged) and from the checkout; the tree is in ${treeDir(project)} (darius root)` });
       try {
-        // .tracker/vigils/ shows the store's vigils at once, not after the next verb.
+        // vigils/ of the tree shows the store's vigils at once, not after the next verb.
         projectVigils(project, treeDir(project));
       } catch (cause) {
-        warnings.push(`the vigil files under .tracker/vigils/ are not written yet (${errorMessage(cause)}); the next tracker verb writes them`);
+        warnings.push(`the vigil files under vigils/ of the tree are not written yet (${errorMessage(cause)}); the next tracker verb writes them`);
       }
     }
   } catch (cause) {

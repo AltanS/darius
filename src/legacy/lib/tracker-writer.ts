@@ -110,11 +110,16 @@ _None yet_
 /**
  * Scaffold a fresh .tracker/ directory.
  * Throws if .tracker/ already exists (idempotent guard).
+ *
+ * Store mode (0.78.0): `trackerDir` names the tree in the darius store, which
+ * may exist empty; then the guard is its `00-INDEX.md`. Nothing is written
+ * in the checkout.
  */
-export function initTracker(opts: { projectRoot: string }): void {
-  const trackerDir = join(opts.projectRoot, ".tracker");
+export function initTracker(opts: { projectRoot: string; trackerDir?: string }): void {
+  const trackerDir = opts.trackerDir ?? join(opts.projectRoot, ".tracker");
+  const guard = opts.trackerDir === undefined ? trackerDir : join(trackerDir, "00-INDEX.md");
 
-  if (existsSync(trackerDir)) {
+  if (existsSync(guard)) {
     throw new Error(
       `.tracker/ already exists at ${trackerDir}. Remove it first or use the existing tracker.`,
     );
@@ -1709,7 +1714,9 @@ function findMilestoneBySlug(trackerRoot: string, slug: string): string | null {
  * Resolve a milestone path from an argument like "M2-tracker-cli-refactor"
  * or just "tracker-cli-refactor".
  */
-export function resolveMilestonePath(trackerRoot: string, milestoneArg: string): string {
+export function resolveMilestonePath(trackerRoot: string, milestoneArgRaw: string): string {
+  // `.tracker/M1-x/` names the folder too (0.78.0: store mode has no `.tracker` path).
+  const milestoneArg = milestoneArgRaw.replace(/^(?:.*\/)?\.tracker\//, "").replace(/\/+$/, "") || milestoneArgRaw;
   // Direct match (full folder name)
   const directPath = join(trackerRoot, milestoneArg);
   if (existsSync(directPath)) return directPath;

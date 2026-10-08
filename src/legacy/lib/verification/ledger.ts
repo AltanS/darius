@@ -17,10 +17,11 @@
  */
 
 import { appendFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
-import { join, dirname, relative, resolve } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunOutcome } from "./runner.ts";
 import { gitHead, hostName } from "../host-stamp.ts";
+import { projectRootOf, repoStylePath } from "../tracker-root.ts";
 
 export const LEDGER_FILENAME = ".verification-log.jsonl";
 
@@ -154,8 +155,8 @@ export function ledgerPath(trackerRoot: string): string {
  * rule the specs themselves follow (runner.ts `stripCwdPrefix`).
  */
 export function toLedgerSpecPath(trackerRoot: string, specPath: string): string {
-  const repoRoot = dirname(resolve(trackerRoot));
-  return relative(repoRoot, resolve(specPath));
+  // Store mode keeps the `.tracker/...` form too, so old ledger lines still match.
+  return repoStylePath(trackerRoot, resolve(specPath));
 }
 
 /** Stable identity of one checklist item: `<repo-relative spec>#<index>`. */
@@ -209,7 +210,7 @@ export function appendLedgerEntry(opts: AppendLedgerOpts): boolean {
     outcome: opts.outcome,
     pluginVersion: getPluginVersion(),
     at: opts.at ?? new Date().toISOString(),
-    head: opts.head ?? gitHead(dirname(resolve(opts.trackerRoot))),
+    head: opts.head ?? gitHead(projectRootOf(opts.trackerRoot)),
     host: opts.host ?? hostName(),
   };
 

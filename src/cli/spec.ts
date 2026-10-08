@@ -11,9 +11,9 @@
  */
 
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { checkSpecFile, type SpecCheckResult } from "../core/spec-check.ts";
+import { resolveTreeArg } from "../core/tracker-root.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const USAGE = "usage: darius spec check <spec-path> [--json]";
@@ -35,7 +35,8 @@ async function runCheck(args: ParsedArgs): Promise<number> {
   const path = args.positional[1];
   if (path === undefined || args.positional.length > 2) throw new UsageError(USAGE);
   // A missing file is "not found" (exit 1), not a usage error: the command line was well formed.
-  if (!existsSync(resolve(process.cwd(), path))) throw new NotFoundError(`spec check: no spec at ${path}`);
+  // Store mode takes tracker-relative, `.tracker/...` and store paths (0.78.0).
+  if (!existsSync(resolveTreeArg(path, process.cwd()))) throw new NotFoundError(`spec check: no spec at ${path}`);
   const checked = await checkSpecFile(path, process.cwd());
   if (checked.warning !== undefined) console.error(`darius: ${checked.warning}`);
   const { result } = checked;

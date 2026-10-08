@@ -178,7 +178,8 @@ import {
   type SessionClaim,
 } from "../lib/session-claims.ts";
 import { atomicWriteFileSync } from "../lib/atomic.ts";
-import { StageRefusal, gitPrefix, projectRootOf } from "../lib/stage-evidence.ts";
+import { StageRefusal, gitPrefix } from "../lib/stage-evidence.ts";
+import { displayPath, findTrackerRoot, isStoreTree, projectRootOf, resolvePathArg } from "../lib/tracker-root.ts";
 import { hostName } from "../lib/host-stamp.ts";
 import {
   appendCounselLog,
@@ -434,34 +435,6 @@ function runRoot(args: string[]): void {
   process.stdout.write(`${trackerDir}\n`);
 }
 
-/**
- * Walk up from `startDir` looking for a `.tracker/` directory.
- * Returns the absolute path to the `.tracker/` directory, or null.
- */
-function findTrackerRoot(startDir: string): string | null {
-  let dir = resolve(startDir);
-
-  const maxDepth = 50;
-  let depth = 0;
-
-  while (depth < maxDepth) {
-    const candidate = join(dir, ".tracker");
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-
-    dir = parent;
-    depth++;
-  }
-
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // tracker show <spec-path> [--json]
 // ---------------------------------------------------------------------------
@@ -482,7 +455,7 @@ function runShow(args: string[]): void {
     process.exit(2);
   }
 
-  const filePath = resolve(pathArg);
+  const filePath = resolvePathArg(pathArg);
 
   if (!existsSync(filePath)) {
     process.stderr.write(`darius show: file not found: ${filePath}\n`);
@@ -496,7 +469,10 @@ function runShow(args: string[]): void {
 
     if (values.json) {
       const json = toSpecJSON(view, filePath);
-      process.stdout.write(JSON.stringify(json, null, 2) + "\n");
+      // Store mode (0.78.0): `path` is tracker-relative, `absPath` the file.
+      const tree = findTrackerRoot(process.cwd());
+      const out = tree !== null && isStoreTree(tree) ? { ...json, path: displayPath(tree, filePath), absPath: filePath } : json;
+      process.stdout.write(JSON.stringify(out, null, 2) + "\n");
       return;
     }
 
@@ -660,7 +636,9 @@ function runListSpecs(args: string[]): void {
         depends_on: spec.view.depends_on ?? [],
       };
       const claim = claimFor(spec);
-      const parsed = SpecListEntrySchema.parse(entry);
+      const schemaParsed = SpecListEntrySchema.parse(entry);
+      // Store mode (0.78.0): `path` is tracker-relative; `absPath` is the file.
+      const parsed = isStoreTree(trackerRoot) ? { ...schemaParsed, absPath: spec.absolutePath } : schemaParsed;
       if (claim.state === "unclaimed") return parsed;
       return {
         ...parsed,
@@ -773,7 +751,14 @@ function runNext(args: string[]): void {
         );
       }
       emit(
-        { status: "task", label: item.label, file: spec.file, spec: ref, milestone: milestone.slug },
+        {
+          status: "task",
+          label: item.label,
+          file: spec.file,
+          spec: ref,
+          milestone: milestone.slug,
+          ...(isStoreTree(trackerRoot) ? { absPath: spec.absolutePath } : {}),
+        },
         `[ ] ${item.label} (${spec.file})\n`,
       );
       return;
@@ -1046,7 +1031,7 @@ function runMark(args: string[]): void {
   }
 
   const trackerRoot = requireTrackerRoot();
-  const absSpecPath = resolve(specPath);
+  const absSpecPath = resolvePathArg(specPath);
 
   // Read the item's Command so a trivial one can be refused BEFORE the file is
   // written. Parsed straight from raw frontmatter + checklist rather than
@@ -1204,7 +1189,7 @@ function runSetStatus(args: string[]): void {
 
   try {
     setStatus({
-      target: resolve(target),
+      target: resolvePathArg(target),
       status: statusArg as SpecStatus | MilestoneOverrideStatus,
       trackerRoot,
     });
@@ -1314,7 +1299,7 @@ function parseTimeoutFlag(raw: string | undefined, command: string): number {
  * workspace a repo-scoped command must carry its own `cd <repo> && …`.
  */
 function verificationCwd(trackerRoot: string): string {
-  return dirname(resolve(trackerRoot));
+  return projectRootOf(trackerRoot);
 }
 
 type DryRunBucket =
@@ -1471,7 +1456,7 @@ function runVerify(args: string[]): void {
     process.exit(2);
   }
 
-  const absPath = resolve(specPath);
+  const absPath = resolvePathArg(specPath);
   if (!existsSync(absPath)) {
     process.stderr.write(`darius verify: spec not found: ${absPath}\n`);
     process.exit(1);
@@ -1709,7 +1694,7 @@ function runVerifyItem(args: string[]): void {
     process.exit(2);
   }
 
-  const absPath = resolve(specPath);
+  const absPath = resolvePathArg(specPath);
   if (!existsSync(absPath)) {
     process.stderr.write(`darius verify-item: spec not found: ${absPath}\n`);
     process.exit(1);
@@ -2708,7 +2693,7 @@ function runScanArtifacts(args: string[]): void {
     process.exit(2);
   }
 
-  const absPath = resolve(scanPath);
+  const absPath = resolvePathArg(scanPath);
   const matches = scanArtifacts({ path: absPath });
 
   if (matches.length === 0) {
@@ -2733,7 +2718,7 @@ function runScanStubs(args: string[]): void {
     process.exit(2);
   }
 
-  const absPath = resolve(scanPath);
+  const absPath = resolvePathArg(scanPath);
   const matches = scanStubs({ path: absPath });
 
   if (matches.length === 0) {
@@ -2861,7 +2846,7 @@ async function runCounselGate(args: string[]): Promise<void> {
     process.exit(2);
   }
 
-  const transcriptPath = resolve(transcriptArg);
+  const transcriptPath = resolvePathArg(transcriptArg);
   if (!existsSync(transcriptPath)) {
     process.stderr.write(`darius counsel-gate: transcript not found: ${transcriptPath}\n`);
     process.exit(1);
@@ -2944,7 +2929,7 @@ async function runCounselGate(args: string[]): Promise<void> {
   // acknowledged; it is not a fresh deliberation, so it does NOT consume a round.
   let decision = baseDecision;
   if (values.spec) {
-    const specPath = resolve(values.spec);
+    const specPath = resolvePathArg(values.spec);
     const isAck = values["ack-dissent"] === true;
     const maxRounds = resolveMaxCounselRounds(values["max-rounds"]);
     // The rounds spent come from the CLI's log (0.76.0), never fewer than the
@@ -3357,12 +3342,15 @@ function projectOwnsTrackerTree(projectRoot: string): boolean {
 /** Every worklog thread, reduced to the fields the store-mode gate reads. */
 function collectThreadsForGate(trackerRoot: string): ThreadForGate[] {
   const threads: ThreadForGate[] = [];
+  // A store tree shows spec paths tracker-relative, whatever form the thread holds (0.78.0).
+  const shown = (ref: string | undefined): string | undefined =>
+    ref === undefined || !isStoreTree(trackerRoot) ? ref : (canonicalSpecRef({ trackerRoot, ref, cwd: null }) ?? ref);
   for (const { file, doc } of scanWorklogDir(trackerRoot)) {
     for (const thread of doc.threads) {
       threads.push({
         threadId: thread.threadId,
         worklogFile: file,
-        specPath: thread.specPath,
+        specPath: shown(thread.specPath),
         stage: thread.stage,
         closed: Boolean(thread.closedAt),
         artifacts: threadArtifactPaths(thread, projectRootOf(trackerRoot)),
@@ -3379,8 +3367,8 @@ function runUncommittedVerified(args: string[]): void {
     process.stdout.write("List verified-but-uncommitted spec files (dirty in git AND carrying a\n");
     process.stdout.write("verification_passed: stamp). Exit 0 with an empty list when none.\n");
     process.stdout.write("\n");
-    process.stdout.write("When the .darius.toml marker lists milestone in kinds, .tracker is a\n");
-    process.stdout.write("git-ignored link and git sees no spec. Then each open worklog thread at\n");
+    process.stdout.write("When the .darius.toml marker lists milestone in kinds, the tracker tree is\n");
+    process.stdout.write("in the darius store and git sees no spec. Then each open worklog thread at\n");
     process.stdout.write("stage verified is listed instead. Its entry has source \"thread\", threadId,\n");
     process.stdout.write("gitStatus \"verified-uncommitted\", and dirtyArtifacts (its artifacts that\n");
     process.stdout.write("are dirty in git).\n");
@@ -3394,9 +3382,9 @@ function runUncommittedVerified(args: string[]): void {
   });
 
   const trackerRoot = findTrackerRoot(process.cwd());
-  const projectRoot = trackerRoot !== null ? resolve(join(trackerRoot, "..")) : process.cwd();
+  const projectRoot = trackerRoot !== null ? projectRootOf(trackerRoot) : process.cwd();
 
-  const storeMode = trackerRoot !== null && projectOwnsTrackerTree(projectRoot);
+  const storeMode = trackerRoot !== null && (isStoreTree(trackerRoot) || projectOwnsTrackerTree(projectRoot));
 
   let porcelain: string;
   try {
@@ -3416,7 +3404,12 @@ function runUncommittedVerified(args: string[]): void {
 
   const specs =
     storeMode && trackerRoot !== null
-      ? selectVerifiedThreads(collectThreadsForGate(trackerRoot), porcelain, gitPrefix(projectRoot))
+      ? selectVerifiedThreads(
+          collectThreadsForGate(trackerRoot),
+          porcelain,
+          gitPrefix(projectRoot),
+          isStoreTree(trackerRoot) ? "worklog/" : undefined,
+        )
       : selectVerifiedUncommitted(porcelain, (repoRelPath) => {
           const abs = resolve(projectRoot, repoRelPath);
           if (!existsSync(abs)) return false;
@@ -3650,7 +3643,7 @@ function runClaim(args: string[]): void {
     `${verb}: ${ref}\n  session ${session}, ttl ${formatTtl(ttlMs)}, expires ${claim.expiresAt}\n`,
   );
 
-  const projectRoot = resolve(join(trackerRoot, ".."));
+  const projectRoot = projectRootOf(trackerRoot);
   for (const line of formatClaimPreflight(projectRoot)) {
     say(`${line}\n`);
   }
@@ -4642,7 +4635,7 @@ function runArchiveCheck(args: string[]): void {
 function resolveAgentOptsFromTrackerRoot(): import("../lib/agent-discovery.ts").AgentDiscoveryOptions {
   const trackerRoot = findTrackerRoot(process.cwd());
   // project root = parent of .tracker/
-  const projectRoot = trackerRoot !== null ? join(trackerRoot, "..") : process.cwd();
+  const projectRoot = trackerRoot !== null ? projectRootOf(trackerRoot) : process.cwd();
   return {
     projectSettingsPath: join(projectRoot, ".claude", "settings.json"),
     projectAgentsDir: join(projectRoot, ".claude", "agents"),

@@ -7,6 +7,9 @@
  * a foreign subagent, any error, all exit 0 with no output. A broken gate must
  * never brick a turn.
  *
+ * Store mode (0.78.0): the tree is the one the router resolved from the
+ * marker (src/legacy/lib/tracker-root.ts); the checkout has no `.tracker`.
+ *
  * Write rule: `hook-drift` writes `.tracker/.pending-sync` and nothing else.
  * `hook-stop` writes no file of its own; the bounce budget it spends lives in
  * `.tracker/.loop-bounces.json`, which `runLoopCheck` keeps (the same file the
@@ -23,8 +26,9 @@
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { formatLoopCheckReport, formatOthersNotice, runLoopCheck } from "./loop-check.ts";
+import { storeTreeOverride } from "./tracker-root.ts";
 
 type Payload = Record<string, unknown>;
 
@@ -73,6 +77,32 @@ function findTrackerParent(start: string): string | null {
   }
 }
 
+/** Where a hook finds the tracker: the checkout and the tree. */
+interface HookTracker {
+  /** The checkout: edited paths are relative to it. */
+  root: string;
+  /** The tracker tree: `<root>/.tracker` in git mode, the store tree in store mode. */
+  tracker: string;
+}
+
+/**
+ * The tracker for a hook run in `start`. Store mode (0.78.0): the tree the
+ * router resolved from the marker (src/legacy/lib/tracker-root.ts), when
+ * `start` is inside its checkout; there is no `.tracker` link to walk to.
+ * Else the nearest `.tracker/` folder, as before. Null: no tracker, pass.
+ */
+function findHookTracker(start: string): HookTracker | null {
+  const override = storeTreeOverride();
+  if (override !== null) {
+    const at = resolve(start);
+    const checkout = override.checkoutRoot;
+    const within = checkout === null || at === checkout || at.startsWith(`${checkout}/`);
+    if (within) return isDir(override.trackerRoot) ? { root: checkout ?? at, tracker: override.trackerRoot } : null;
+  }
+  const root = findTrackerParent(start);
+  return root === null ? null : { root, tracker: join(root, ".tracker") };
+}
+
 // ---------------------------------------------------------------------------
 // hook-stop
 // ---------------------------------------------------------------------------
@@ -108,13 +138,13 @@ export function decideStop(payload: Payload, cwd: string): string | null {
     return null;
   }
 
-  const root = findTrackerParent(hookCwd !== "" ? hookCwd : cwd);
-  if (root === null) {
+  const found = findHookTracker(hookCwd !== "" ? hookCwd : cwd);
+  if (found === null) {
     stopDebug("no tracker, pass");
     return null;
   }
 
-  const trackerRoot = join(root, ".tracker");
+  const trackerRoot = found.tracker;
   if (sessionId === "") {
     // No owner to match: report every open thread, block on none.
     const query = runLoopCheck({ trackerRoot });
@@ -168,9 +198,8 @@ function relativeTo(root: string, file: string): string {
   return file.startsWith(prefix) ? file.slice(prefix.length) : file;
 }
 
-/** True when any spec file of any milestone mentions `rel`. */
-function mentionedInSpec(root: string, rel: string): boolean {
-  const tracker = join(root, ".tracker");
+/** True when any spec file of any milestone in the tree `tracker` mentions `rel`. */
+function mentionedInSpec(tracker: string, rel: string): boolean {
   for (const milestone of readdirSync(tracker)) {
     if (!/^M.*-/u.test(milestone) || !isDir(join(tracker, milestone))) continue;
     for (const name of readdirSync(join(tracker, milestone))) {
@@ -185,9 +214,9 @@ function mentionedInSpec(root: string, rel: string): boolean {
   return false;
 }
 
-/** Appends `rel` to `<root>/.tracker/.pending-sync` unless a line already holds it. Returns true when it wrote. */
-function logPending(root: string, rel: string): boolean {
-  const pending = join(root, ".tracker", ".pending-sync");
+/** Appends `rel` to `<tracker>/.pending-sync` unless a line already holds it. Returns true when it wrote. */
+function logPending(tracker: string, rel: string): boolean {
+  const pending = join(tracker, ".pending-sync");
   if (!existsSync(pending)) writeFileSync(pending, "");
   const lines = readFileSync(pending, "utf8").split("\n");
   if (lines.includes(rel)) return false;
@@ -209,16 +238,18 @@ export function recordDrift(payload: Payload, cwd: string): string | null {
     return null;
   }
 
-  const root = findTrackerParent(cwd);
-  if (root === null) {
+  const found = findHookTracker(cwd);
+  if (found === null) {
     driftDebug("no tracker");
     return null;
   }
 
-  const rel = relativeTo(root, file);
+  // An edit inside the tree itself is tracker work, not drift.
+  if (file === found.tracker || file.startsWith(`${found.tracker}/`)) return null;
+  const rel = relativeTo(found.root, file);
   if (rel.startsWith(".tracker/") || rel.includes("/.tracker/")) return null;
-  if (!mentionedInSpec(root, rel)) return null;
-  if (!logPending(root, rel)) return null;
+  if (!mentionedInSpec(found.tracker, rel)) return null;
+  if (!logPending(found.tracker, rel)) return null;
   driftDebug(`logged ${rel}`);
   return rel;
 }

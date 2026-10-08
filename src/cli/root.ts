@@ -14,8 +14,10 @@
  *                copy in store mode, the real `.tracker` folder in git mode,
  *                null in none mode. The same tree from every worktree.
  *   project      the marker's project name, or null without a marker.
- *   linked       a `.tracker` symlink exists in this checkout (the old
- *                access path, deprecated). It is information only.
+ *   linked       a `.tracker` symlink exists in this checkout (the access
+ *                path before 0.78.0). darius never makes one now, and the
+ *                next tracker verb removes one that points into this
+ *                project's store tree. It is information only.
  *
  * A skill calls it to detect the mode. The JSON form exits 0 for all three
  * modes: "none" is an answer, not a failure.
@@ -24,9 +26,7 @@
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
-import { findMarker } from "../core/marker.ts";
-import { findTrackerDir, projectDir } from "../core/paths.ts";
-import { TRACKER_LINK, treeDir } from "../core/tree.ts";
+import { resolveTrackerRoot, TRACKER_FOLDER } from "../core/tracker-root.ts";
 import type { Command, ParsedArgs } from "./registry.ts";
 
 interface RootReport {
@@ -42,14 +42,12 @@ function isSymlink(path: string): boolean {
 
 /** The report for `cwd`. Reads only. */
 export function rootReport(cwd: string): RootReport {
-  const marker = findMarker(cwd);
-  const project = marker === null ? null : marker.project;
-  if (marker !== null && marker.kinds.includes("milestone")) {
-    return { mode: "store", trackerRoot: treeDir({ root: projectDir(marker.project) }), project, linked: isSymlink(join(marker.dir, TRACKER_LINK)) };
+  const where = resolveTrackerRoot(cwd);
+  if (where.mode === "store") {
+    return { mode: "store", trackerRoot: where.trackerRoot, project: where.project, linked: isSymlink(join(where.checkout, TRACKER_FOLDER)) };
   }
-  const folder = findTrackerDir(cwd);
-  if (folder === null) return { mode: "none", trackerRoot: null, project, linked: false };
-  return { mode: "git", trackerRoot: folder, project, linked: isSymlink(folder) };
+  if (where.mode === "none") return { mode: "none", trackerRoot: null, project: where.project, linked: false };
+  return { mode: "git", trackerRoot: where.trackerRoot, project: where.project, linked: isSymlink(where.trackerRoot) };
 }
 
 async function run(args: ParsedArgs): Promise<number> {

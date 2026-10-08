@@ -388,7 +388,7 @@ test("two hosts: a spec text change on one side keeps last-writer-wins and recor
   assert.equal(conflict.loserSha, sha256Hex(lostText));
   assert.equal(conflict.winnerSha, sha256Hex(spec(" x")));
   assert.deepEqual([conflict.winnerHost, conflict.loserHost], ["host-b", "host-a"]);
-  assert.equal(conflictAdvice(conflict)[1], `  get it back (replaces the current file): darius tree restore .tracker/${specPath} --at ${sha256Hex(lostText)} --force`);
+  assert.equal(conflictAdvice(conflict)[1], `  get it back (replaces the current file): darius tree restore ${specPath} --at ${sha256Hex(lostText)} --force`);
 });
 
 test("tree conflicts close on a restore of the lost blob, a removal, or tree.resolved; each pair counts once", () => {

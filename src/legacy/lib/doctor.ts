@@ -70,6 +70,7 @@ import { rebuildIndex } from "./tracker-writer.ts";
 import { CURRENT_SCHEMA_VERSION } from "./version.ts";
 import { discoverAgents } from "./agent-discovery.ts";
 import { hasUnhashedStamp } from "./counsel-stamp.ts";
+import { repoStylePath, resolveTreeRef } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -129,10 +130,11 @@ export function runDoctor(opts: {
     const specs = getSpecFiles(folder);
     for (const spec of specs) {
       allSpecPaths.add(spec);
-      // Register relative paths from repo root (parent of .tracker)
-      const repoRoot = join(trackerRoot, "..");
-      const rel = spec.replace(repoRoot + "/", "").replace(repoRoot + "\\", "");
+      // Register `.tracker/M1-x/01-y.md` (repo style, in both modes) and the
+      // tracker-relative `M1-x/01-y.md` (store mode shows that form, 0.78.0).
+      const rel = repoStylePath(trackerRoot, spec);
       allSpecRelPaths.add(rel);
+      allSpecRelPaths.add(rel.replace(/^\.tracker\//, ""));
       allSpecRelPaths.add(basename(spec));
     }
   }
@@ -269,7 +271,7 @@ export function runDoctor(opts: {
         const isResolvable =
           allSpecRelPaths.has(depNorm) ||
           allSpecRelPaths.has(basename(depNorm)) ||
-          existsSync(join(trackerRoot, "..", depNorm));
+          existsSync(resolveTreeRef(trackerRoot, depNorm));
 
         if (!isResolvable) {
           findings.push({

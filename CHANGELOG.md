@@ -2,6 +2,30 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.78.0] - 2026-10-08
+
+### Changed
+
+- Store mode has no `.tracker` link (operator ruling 2026-10-08). darius never creates or reads a `.tracker` path in a checkout whose marker lists `milestone`. The tree lives only in the store; `darius root` prints it.
+- One resolver: the router finds the tree from the marker (`src/core/tracker-root.ts`) and hands it to the vendored engine in `DARIUS_TRACKER_ROOT`, with the checkout in `DARIUS_CHECKOUT_ROOT`. The engine checks them before it walks up for `.tracker/` (`src/legacy/lib/tracker-root.ts`).
+- The engine uses the checkout where it took "the parent of `.tracker`": verification commands run in the checkout, as before; git status, stage evidence, claims preflight and agent discovery read the checkout.
+- `hook-stop` and `hook-drift` find the store tree the same way. An edit inside the tree is not drift.
+- `darius init` scaffolds the tree in the store and writes nothing else in the checkout: no link, no `/.tracker` line in `.gitignore`. It prints `git add .darius.toml` only.
+- `darius onboard` removes `.tracker/` from git and the checkout and makes no link. It leaves `.gitignore` alone. Step 5 keeps its `--json` name `link`.
+- In store mode, JSON paths are tracker-relative (`M1-x/01-y.md`): `list specs` `path`, `show --json` `path`, `uncommitted-verified` thread paths, `milestone archive` `files` and `removed`, the `tree` verbs' `path`, and `worklog distill` `rawPath`. Stored keys keep the `.tracker/...` form, so old verification ledger lines and distill stamps still match.
+- The `tree` verbs, `doctor` and `due` print tracker-relative paths in their restore and resolve commands.
+
+### Added
+
+- Spec path arguments in store mode take three forms: tracker-relative (`M1-x/01-y.md`), the old `.tracker/M1-x/01-y.md` (also behind `./` or `../`), and the absolute store path. `show`, `mark`, `set-status`, `verify`, `verify-item`, `counsel-gate --spec`, `claim`, `release`, `worklog open --spec`, `archive-check`, `spec check` and `depends_on` all resolve them.
+- `absPath` in store mode: `list specs --json`, `show --json` and `next --json` add the absolute file path.
+- Migration: when a store-mode checkout still has a `.tracker` symlink into this project's own store tree, the next verb removes it and prints one line on stderr (never on stdout). A real folder or a link that points elsewhere stays. `root` and `help` never remove it.
+- `darius doctor` adds a "Tracker location" note: a stale `/.tracker` line in `.gitignore`, or a `.tracker` path left in a store-mode checkout; in git mode, that git mode is deprecated and `darius onboard` moves it. With `--json` the notes go to stderr.
+
+### Fixed
+
+- evals: the seed no longer stages a `.gitignore` that init does not write, and reads the `darius add spec: created` line.
+
 ## [0.77.0] - 2026-10-08
 
 ### Added

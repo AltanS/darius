@@ -62,7 +62,7 @@ This skill runs in a fork: it does not see the conversation and cannot ask the u
 
    If the file already exists and there is no `--overwrite`, return `STATUS: needs_decision` with the choices overwrite / skip / cancel.
 
-7. **Commit the archive** before cleanup, when the tracker is in git: invoke `/darius-commit`. When `.tracker` is a link to the darius store, the archive document is a store file, not a git file, so there is nothing to commit. The next step records it, and every file version stays in the store.
+7. **Commit the archive** before cleanup, when the tracker is in git: invoke `/darius-commit`. When the darius store owns the tracker (`darius root --json` says `mode: "store"`), the archive document is a store file, not a git file, so there is nothing to commit. The next step records it, and every file version stays in the store.
 
 8. **Clean up** (skipped by `--keep`). Never `rm` the folder. Check first, then remove:
    `!darius milestone archive {milestone-slug} --dry-run`

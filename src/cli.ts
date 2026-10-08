@@ -22,11 +22,11 @@ import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds
 import { rebuildTrackerIndex, runLegacy } from "./core/legacy-entry.ts";
 import { withJsonErrors, wantsJson } from "./core/json-errors.ts";
 import { readLedger } from "./core/ledger.ts";
-import { findMarker } from "./core/marker.ts";
 import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } from "./core/paths.ts";
 import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
-import { captureTree, ensureTreeLink, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
+import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
+import { applyEngineEnv, doctorNotes, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
 import { errorMessage, isBun } from "./runtime.ts";
@@ -55,7 +55,7 @@ function printHelpText(): void {
     console.log(`  darius ${entry.name.padEnd(12)} ${entry.summary}`);
   }
   console.log("\nTracker verbs (milestones, specs, worklogs, vigils). They act on the tracker tree: in the darius");
-  console.log("store when the marker's kinds list milestone (.tracker is then a link to it), else in .tracker/:");
+  console.log("store when the marker's kinds list milestone (darius root prints where), else in .tracker/:");
   console.log(`  ${[...LEGACY_VERBS].join(", ")}`);
   console.log("\nThe full command surface is planned in docs/concept.md.");
 }
@@ -142,6 +142,8 @@ async function dispatch(argv: string[]): Promise<number> {
       return 0;
     }
   }
+  // `root` and `help` read only (`root` reports `linked`), so they never migrate.
+  if (route !== "unknown" && name !== "root" && name !== "help") migrateTreeLink();
   if (route === "legacy") return runLegacyVerb(argv, owned);
   if (route === "unknown" || command === undefined) {
     console.error(unknownCommandMessage(name));
@@ -166,6 +168,9 @@ async function dispatch(argv: string[]): Promise<number> {
   if (args.flags.stdin === true) {
     args.stdin = readStdin();
   }
+  // A native verb may call into the vendored engine (the index, worklogs):
+  // it gets the same store tree a legacy verb gets.
+  applyEngineEnv(storeWhere(process.cwd()));
 
   try {
     return await command.run(args);
@@ -180,44 +185,67 @@ async function dispatch(argv: string[]): Promise<number> {
 }
 
 /**
+ * Migration (0.78.0): a checkout from before 0.78.0 has a `.tracker` link
+ * into the store. The next verb removes it (only a link into this project's
+ * own store tree) and says so in one stderr line, never on stdout.
+ */
+function migrateTreeLink(): void {
+  const notice = removeOwnTreeLink(process.cwd());
+  if (notice !== null) console.error(notice);
+}
+
+/**
  * Legacy verbs that run as before when the store owns the tracker tree. The
- * hooks must stay fast and fail open; they read the tree through the link.
- * The others read no tree, or only read it.
+ * hooks must stay fast and fail open; they read the tree the router hands
+ * over (`DARIUS_TRACKER_ROOT`). The others read no tree, or only read it.
  */
 const TREE_PLAIN_VERBS: ReadonlySet<string> = new Set(["hook-stop", "hook-drift", "delegation", "agents", "scan", "counsel-gate"]);
 const TREE_HOOKS: ReadonlySet<string> = new Set(["hook-stop", "hook-drift"]);
 
-/** How a legacy verb meets the tracker tree. */
-type TreeRoute = { mode: "plain" } | { mode: "refuse"; message: string } | { mode: "tree"; project: Project; checkout: string };
+/**
+ * How a legacy verb meets the tracker tree. `where` is the store tree the
+ * engine gets in its env (null: the engine walks up for a `.tracker/` folder).
+ */
+type TreeRoute =
+  | { mode: "plain"; where: TrackerWhere | null }
+  | { mode: "refuse"; message: string }
+  | { mode: "tree"; project: Project; checkout: string; where: TrackerWhere };
 
 /**
  * The tracker tree a legacy verb acts on. The marker found from the cwd
- * decides, because the legacy CLI finds `.tracker` from the cwd too. With
- * `milestone` in its kinds the tree is in the store; a broken marker stops
- * every verb that may write, so nothing writes a `.tracker/` the store may own.
+ * decides (src/core/tracker-root.ts). With `milestone` in its kinds the tree
+ * is in the store, and the engine gets it through `DARIUS_TRACKER_ROOT`; the
+ * checkout has no `.tracker` path. A broken marker stops every verb that may
+ * write, so nothing writes a `.tracker/` the store may own.
  */
 function treeRoute(verb: string, owned: OwnedKinds, cwd: string): TreeRoute {
   const plain = TREE_PLAIN_VERBS.has(verb);
-  if (!owned.ok) return plain ? { mode: "plain" } : { mode: "refuse", message: owned.error };
+  if (!owned.ok) return plain ? { mode: "plain", where: null } : { mode: "refuse", message: owned.error };
   try {
-    const marker = findMarker(cwd);
-    if (marker === null || !marker.kinds.includes("milestone")) return { mode: "plain" };
+    const where = resolveTrackerRoot(cwd);
+    if (where.mode !== "store") return { mode: "plain", where: null };
     if (TREE_HOOKS.has(verb)) {
-      try {
-        ensureTreeLink(marker.dir, openProject(marker.project, { create: true }));
-      } catch {
-        // A hook fails open: a missing link only means it sees no tracker.
-      }
-      return { mode: "plain" };
+      // A hook is fast and fails open: no sync, no store writes, only the tree's path.
+      return { mode: "plain", where };
     }
-    if (plain) return { mode: "plain" };
-    return { mode: "tree", project: openProject(marker.project, { create: true }), checkout: marker.dir };
+    if (plain) return { mode: "plain", where };
+    return { mode: "tree", project: openProject(where.project, { create: true }), checkout: where.checkout, where };
   } catch (cause) {
-    return plain ? { mode: "plain" } : { mode: "refuse", message: errorMessage(cause) };
+    return plain ? { mode: "plain", where: null } : { mode: "refuse", message: errorMessage(cause) };
   }
 }
 
 function noop(): void {}
+
+/** The store-mode tree for `cwd`, or null (git mode, none, or a marker that does not parse). */
+function storeWhere(cwd: string): TrackerWhere | null {
+  try {
+    const where = resolveTrackerRoot(cwd);
+    return where.mode === "store" ? where : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Rebuilds a missing `00-INDEX.md` of the tree, quietly: a failure is one stderr line, never a stop. */
 async function rebuildMissingIndex(project: Project): Promise<void> {
@@ -234,15 +262,15 @@ function printProblems(problems: readonly string[]): void {
 }
 
 /**
- * Prepares the tree for a legacy verb: the link, a capture and an apply, the
- * vigil files, and a missing `00-INDEX.md` (a host that got the tree by sync
- * has none). Returns the capture to run after the verb (once), or an error
- * message when the verb must not run.
+ * Prepares the tree for a legacy verb: the tree dir, a capture and an apply,
+ * the vigil files, and a missing `00-INDEX.md` (a host that got the tree by
+ * sync has none). Returns the capture to run after the verb (once), or an
+ * error message when the verb must not run.
  */
-async function openTree(route: { project: Project; checkout: string }): Promise<{ finish: () => void } | { error: string }> {
-  const { project, checkout } = route;
+async function openTree(route: { project: Project }): Promise<{ finish: () => void } | { error: string }> {
+  const { project } = route;
   try {
-    ensureTreeLink(checkout, project);
+    ensureTreeDir(project);
     const synced = syncTree(project);
     printProblems([...synced.capture.problems, ...synced.apply.problems]);
     projectVigils(project, treeDir(project));
@@ -287,6 +315,16 @@ function isFullDoctor(argv: readonly string[]): boolean {
   return argv[0] === "doctor" && !argv.includes("--quick") && !argv.includes("--help") && !argv.includes("-h");
 }
 
+function printDoctorNotes(argv: readonly string[]): void {
+  const notes = doctorNotes(process.cwd());
+  if (notes.length === 0) return;
+  if (argv.includes("--json")) {
+    for (const note of notes) console.error(`darius: ${note}`);
+    return;
+  }
+  process.stdout.write(`\n## Tracker location\n\n${notes.map((note) => `  ${note}`).join("\n")}\n`);
+}
+
 /**
  * A verb darius does not own: the legacy CLI gets the argv as given, and its
  * exit code passes through. When it fails and there is no `.tracker/` here
@@ -295,9 +333,10 @@ function isFullDoctor(argv: readonly string[]): boolean {
  * needs no `.tracker/`, so it never gets the line.
  *
  * When the store owns the tracker tree (`treeRoute`), the verb runs on the
- * tree through the `.tracker` link: first the tree is captured and applied,
- * then the verb runs, then the change is captured, also when the verb ends
- * the process itself.
+ * store tree, which the engine gets in `DARIUS_TRACKER_ROOT` (the checkout
+ * in `DARIUS_CHECKOUT_ROOT`): first the tree is captured and applied, then
+ * the verb runs, then the change is captured, also when the verb ends the
+ * process itself.
  */
 async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number> {
   const route = treeRoute(argv[0] ?? "", owned, process.cwd());
@@ -305,8 +344,10 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
     console.error(`darius: ${route.message}`);
     return 1;
   }
+  applyEngineEnv(route.where);
   let finish = noop;
   let doctorDone = false;
+  const fullDoctor = isFullDoctor(argv);
   if (route.mode === "tree") {
     const opened = await openTree(route);
     if ("error" in opened) {
@@ -314,18 +355,26 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
       return 1;
     }
     const project = route.project;
-    finish = isFullDoctor(argv)
+    finish = fullDoctor
       ? (): void => {
           opened.finish();
           if (doctorDone) return;
           doctorDone = true;
           printTreeConflicts(project);
+          printDoctorNotes(argv);
         }
       : opened.finish;
+  } else if (fullDoctor) {
+    finish = (): void => {
+      if (doctorDone) return;
+      doctorDone = true;
+      printDoctorNotes(argv);
+    };
   }
+  const storeTree = route.where !== null;
   process.once("exit", (code) => {
     finish();
-    if (code === 1 && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
+    if (code === 1 && !storeTree && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
       console.error("darius: no .tracker/ here or above. Run darius init in the repo root to create one.");
     }
   });

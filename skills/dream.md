@@ -123,7 +123,7 @@ Once, after the last file, not per file:
 
 `darius worklog index`
 
-Distilled files then read `distilled` in the `State` column of `.tracker/worklog/00-INDEX.md`. In a store-owned project (`.tracker` is a link to the darius store) darius records the stubs and the raw copies at the next darius verb or sync; `worklog index` is that verb, so end with it.
+Distilled files then read `distilled` in the `State` column of `.tracker/worklog/00-INDEX.md`. In a store-owned project (`darius root --json` says `mode: "store"`) darius records the stubs and the raw copies at the next darius verb or sync; `worklog index` is that verb, so end with it.
 
 ## 7. Report
 

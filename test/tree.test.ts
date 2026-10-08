@@ -19,11 +19,9 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
-  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -32,7 +30,7 @@ import { dirname, join } from "node:path";
 
 import { closeOpenChunk, readLedger } from "../src/core/ledger.ts";
 import { getBlob, openProject, sha256Hex, type Project } from "../src/core/store.ts";
-import { applyTree, captureTree, ensureTreeLink, hasTree, isLocalTreePath, isMergeablePath, mergeLines, syncTree, treeDir } from "../src/core/tree.ts";
+import { applyTree, captureTree, ensureTreeDir, hasTree, isLocalTreePath, isMergeablePath, mergeLines, syncTree, treeDir } from "../src/core/tree.ts";
 import { sleepSync } from "../src/runtime.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-tree-"));
@@ -334,48 +332,12 @@ test("hasTree: the working copy or a tree line", () => {
   assert.equal(hasTree(projectOn(hostB, name)), true, "a tree line is enough");
 });
 
-test("ensureTreeLink: missing, a link to the tree, a link elsewhere, a folder of local files, any other folder", () => {
+test("ensureTreeDir makes the working copy and nothing else (0.78.0: no .tracker link)", () => {
   const name = newProject();
   const project = projectOn(hostA, name);
-  const checkout = join(SANDBOX, "checkout");
-  mkdirSync(checkout);
-  const link = join(checkout, ".tracker");
-
-  ensureTreeLink(checkout, project);
-  assert.equal(readlinkSync(link), treeDir(project));
+  assert.equal(ensureTreeDir(project), treeDir(project));
   assert.ok(statSync(treeDir(project)).isDirectory());
-
-  ensureTreeLink(checkout, project);
-  assert.equal(readlinkSync(link), treeDir(project), "a link to the tree is fine");
-
-  unlinkSync(link);
-  const elsewhere = join(SANDBOX, "elsewhere");
-  mkdirSync(elsewhere);
-  symlinkSync(elsewhere, link);
-  assert.throws(() => {
-    ensureTreeLink(checkout, project);
-  }, new RegExp(`links to ${elsewhere}, but the darius store keeps the tracker of ${name} in ${treeDir(project)}`, "u"));
-  unlinkSync(link);
-
-  // What git pull of the cutover commit leaves: ignored, host-local files.
-  put(hostA, name, "00-INDEX.md", "the store's index\n");
-  mkdirSync(join(link, "worklog"), { recursive: true });
-  writeFileSync(join(link, "00-INDEX.md"), "checkout index\n");
-  writeFileSync(join(link, ".pending-sync"), "x\n");
-  writeFileSync(join(link, "worklog", "00-INDEX.md"), "wl index\n");
-  ensureTreeLink(checkout, project);
-  assert.equal(lstatSync(link).isSymbolicLink(), true);
-  assert.equal(read(hostA, name, "00-INDEX.md").toString(), "the store's index\n", "a file the tree has stays");
-  assert.equal(read(hostA, name, ".pending-sync").toString(), "x\n", "a file the tree lacks moves in");
-  assert.equal(read(hostA, name, "worklog/00-INDEX.md").toString(), "wl index\n");
-
-  unlinkSync(link);
-  mkdirSync(join(link, "M1-alpha"), { recursive: true });
-  writeFileSync(join(link, "M1-alpha", "01-spec.md"), "real data\n");
-  assert.throws(() => {
-    ensureTreeLink(checkout, project);
-  }, new RegExp(`the darius store owns the tracker of ${name}, but a \\.tracker/ folder is in this checkout\\. Remove it from git \\(git rm -r \\.tracker\\) or merge the commit that did\\.`, "u"));
-  assert.equal(readFileSync(join(link, "M1-alpha", "01-spec.md"), "utf8"), "real data\n", "a refusal moves nothing");
+  assert.equal(ensureTreeDir(project), treeDir(project), "a second call is fine");
 });
 
 /** What one simulated sync applied. */

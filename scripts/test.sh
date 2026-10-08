@@ -53,6 +53,10 @@ unset DARIUS_PUSH_ORIGINS
 # --session that differs from it, so a suite run inside a session must not
 # inherit it. Tests that need one set it themselves.
 unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
+# The store tree the router hands the vendored engine (0.78.0). A suite run
+# from a darius verb (a verification command) inherits it; a test that loads
+# the engine directly would then act on that real tree. Tests set their own.
+unset DARIUS_TRACKER_ROOT DARIUS_CHECKOUT_ROOT
 
 NODE="${DARIUS_NODE:-node}"
 "$NODE" --no-warnings --test "test/*.test.ts"

@@ -173,12 +173,18 @@ function legacyRepo(at: Host, name: string, options: { vigils?: boolean } = {}):
   return dir;
 }
 
-/** What the read verbs print, to compare before and after the move. */
+/**
+ * What the read verbs print, to compare before and after the move. Since
+ * 0.78.0 store mode prints paths tracker-relative and adds `absPath`, so
+ * both are folded to one form: no `absPath`, no `.tracker/` prefix.
+ */
 function readViews(at: Host, dir: string): string[] {
   return [["status"], ["status", "--json"], ["list", "specs", "--json"], ["show", SPEC], ["show", SPEC, "--json"], ["next"]].map((argv) => {
     const result = darius(at, argv, dir);
     assert.equal(result.code, 0, `${argv.join(" ")}: ${result.stderr}`);
-    return `${argv.join(" ")}\n${result.stdout}`;
+    // `absPath` is the last field where a verb adds it.
+    const text = result.stdout.replaceAll(/,\n\s*"absPath": "[^"]*"/gu, "");
+    return `${argv.join(" ")}\n${text.replaceAll(`${dir}/.tracker/`, "").replaceAll('".tracker/', '"')}`;
   });
 }
 
@@ -201,19 +207,19 @@ test("onboard moves the tracker into the store; every read verb answers the same
   assert.equal(moved.code, 0, moved.stdout + moved.stderr);
   assert.match(moved.stdout, /^✓ 1 vigils: none in \.tracker\/vigils$/mu);
   assert.match(moved.stdout, /^✓ 2 copy: 8 files, \d+ bytes into .*, every sha256 checked$/mu);
-  assert.match(moved.stdout, /^ {2}git add \.darius\.toml \.gitignore$/mu);
+  assert.match(moved.stdout, /^ {2}git add \.darius\.toml$/mu);
   assert.match(moved.stdout, /update darius first, pull, and run darius sync/u);
 
-  // The store tree is byte for byte the old folder, and the checkout holds a link to it.
+  // The store tree is byte for byte the old folder; the checkout holds no .tracker path (0.78.0).
   const tree = join(at.state, name, "tracker");
-  assert.equal(readlinkSync(join(dir, ".tracker")), tree);
+  assert.equal(lstatSync(join(dir, ".tracker"), { throwIfNoEntry: false }), undefined);
   assert.equal(treeHash(tree), sourceHash);
   // The removal is staged; the marker kept every comment and got one line.
   const staged = git(at, dir, ["diff", "--cached", "--name-status"]).trim().split("\n");
   assert.equal(staged.length, 8);
   assert.ok(staged.every((line) => line.startsWith("D\t.tracker/")), staged.join("\n"));
   assert.equal(readFileSync(join(dir, ".darius.toml"), "utf8"), MARKER.replace("PROJECT", name).replace('tz = "Europe/Berlin"\n', 'tz = "Europe/Berlin"\nkinds = ["ritual", "vigil", "milestone"]\n'));
-  assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), "/.tracker\n");
+  assert.equal(existsSync(join(dir, ".gitignore")), false, "onboard leaves .gitignore alone");
   const ledger = readdirSync(join(at.state, name, "ledger"), { recursive: true, encoding: "utf8" })
     .filter((file) => file.endsWith(".jsonl"))
     .flatMap((file) => readFileSync(join(at.state, name, "ledger", file), "utf8").trim().split("\n"))
@@ -225,7 +231,7 @@ test("onboard moves the tracker into the store; every read verb answers the same
 
   assert.deepEqual(readViews(at, dir), views);
 
-  git(at, dir, ["add", ".darius.toml", ".gitignore"]);
+  git(at, dir, ["add", ".darius.toml"]);
   git(at, dir, ["commit", "--quiet", "--message", "the store owns the tracker"]);
   assert.equal(git(at, dir, ["status", "--porcelain"]), "");
 
@@ -365,7 +371,7 @@ function storeVigil(at: Host, project: string, slug: string): string {
   return readFileSync(join(at.state, project, "items", "vigils", `${slug}.md`), "utf8");
 }
 
-test("onboard imports real vigils: open ones heavy, projected through the link, the same legacy list fields, and archive-check still refuses", { skip: NO_GIT }, () => {
+test("onboard imports real vigils: open ones heavy, projected into the store tree, the same legacy list fields, and archive-check still refuses", { skip: NO_GIT }, () => {
   const at = host();
   const name = "acme-vigils";
   const dir = legacyRepo(at, name, { vigils: true });
@@ -394,9 +400,10 @@ test("onboard imports real vigils: open ones heavy, projected through the link, 
   const staged = git(at, dir, ["diff", "--cached", "--name-status"]);
   for (const slug of Object.keys(VIGILS)) {
     assert.match(staged, new RegExp(`^D\\t\\.tracker/vigils/${slug}\\.md$`, "mu"));
-    assert.ok(existsSync(join(dir, ".tracker", "vigils", `${slug}.md`)), `${slug} is projected through the link`);
+    assert.ok(existsSync(join(at.state, name, "tracker", "vigils", `${slug}.md`)), `${slug} is projected into the store tree`);
   }
   assert.equal(git(at, dir, ["ls-files", ".tracker"]), "", "nothing under .tracker is in the git index");
+  assert.equal(existsSync(join(dir, ".tracker")), false, "the checkout holds no .tracker path (0.78.0)");
 
   const nativeList = darius(at, ["vigil", "list", "--all", "--json"], dir);
   assert.equal(nativeList.code, 0, nativeList.stderr);

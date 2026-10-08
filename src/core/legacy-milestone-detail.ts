@@ -26,6 +26,7 @@ import { join, sep } from "node:path";
 
 import { parseHeader } from "./legacy-header.ts";
 import { readLegacyMilestonesAt, type LegacyMilestone, type LegacySpec } from "./legacy-milestones.ts";
+import { trackerDirOfCheckout } from "./tracker-root.ts";
 
 /** A file larger than this is listed, not read. */
 export const MAX_TEXT_BYTES = 256 * 1024;
@@ -223,7 +224,7 @@ export function pickMilestone(milestones: readonly LegacyMilestone[], ref: strin
 
 /** One open milestone of a checkout with everything its directory holds and its worklogs; null when the checkout has no such milestone. */
 export function readLegacyMilestoneDetail(checkout: string, ref: string): LegacyMilestoneDetail | null {
-  return readLegacyMilestoneDetailAt(join(checkout, ".tracker"), ref);
+  return readLegacyMilestoneDetailAt(trackerDirOfCheckout(checkout), ref);
 }
 
 /** The same for a tracker directory: `<checkout>/.tracker`, or the store working copy of an onboarded project. */

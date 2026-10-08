@@ -52,9 +52,10 @@ const SHA_ARG = /^[0-9a-f]{7,64}$/u;
 const ULID_ARG = /^[0-9A-HJKMNP-TV-Z]{26}$/u;
 
 /**
- * Turns what the operator typed into a tree target: `.tracker/M1-x/`, an
- * absolute path through the link or into the working copy, or a bare tree
- * path. A trailing `/` (or the tree root) names a folder; otherwise the
+ * Turns what the operator typed into a tree target: a tracker-relative path
+ * (`M1-x/`), the old `.tracker/M1-x/` form, an absolute path into the working
+ * copy (or through a `.tracker` link of an older checkout), or `./` for the
+ * whole tree. A trailing `/` (or the tree root) names a folder; otherwise the
  * history decides: a path with lines of its own is a file.
  */
 export function treeTarget(project: Project, input: string, checkout: string, history: ReadonlyMap<string, TreeLine[]>): TreeTarget {
@@ -65,7 +66,7 @@ export function treeTarget(project: Project, input: string, checkout: string, hi
     else if (path.startsWith(`${root}/`)) path = path.slice(root.length + 1);
   }
   while (path.startsWith("./")) path = path.slice(2);
-  if (path === ".tracker") path = "";
+  if (path === "." || path === ".tracker") path = "";
   else if (path.startsWith(".tracker/")) path = path.slice(".tracker/".length);
   const trailing = path.endsWith("/");
   path = path.replace(/\/+$/u, "");

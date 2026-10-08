@@ -21,7 +21,6 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseFrontmatter } from "./markdown/frontmatter.ts";
 import { parseChecklist } from "./markdown/checklist.ts";
-import { dirname, isAbsolute, resolve } from "node:path";
 import { parsePorcelainLine } from "./uncommitted.ts";
 import { dirtyAmong } from "./artifact-paths.ts";
 import { NO_GIT_HEAD, git } from "./host-stamp.ts";
@@ -39,10 +38,9 @@ export class StageRefusal extends Error {
   }
 }
 
-/** The checkout that holds a tracker: the parent of `.tracker/`. */
-export function projectRootOf(trackerRoot: string): string {
-  return dirname(resolve(trackerRoot));
-}
+/** The checkout that holds a tracker (src/legacy/lib/tracker-root.ts). */
+export { projectRootOf } from "./tracker-root.ts";
+import { resolveTreeRef } from "./tracker-root.ts";
 
 /** True when `cwd` is inside a git work tree. */
 export function inGitRepo(cwd: string): boolean {
@@ -148,8 +146,7 @@ function specItems(absSpecPath: string): { index: number; state: string }[] | nu
  * that is now skipped, or that no longer exists, is ignored.
  */
 export function ledgerVerdict(trackerRoot: string, specPath: string, since: string): LedgerVerdict {
-  const repoRoot = projectRootOf(trackerRoot);
-  const absSpec = isAbsolute(specPath) ? specPath : resolve(repoRoot, specPath);
+  const absSpec = resolveTreeRef(trackerRoot, specPath);
   const spec = toLedgerSpecPath(trackerRoot, absSpec);
   const items = specItems(absSpec);
   if (items === null) {

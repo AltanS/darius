@@ -47,16 +47,9 @@ what stays on the machine.
 ```text
 ~/projects/acme-web/
 ├── .darius.toml                 # committed: project name, time zone, kinds, rituals, policies
-├── .gitignore                   # committed: lists /.tracker
 ├── .claude/skills/              # committed: one folder per ritual procedure
 │   ├── daily-report/SKILL.md    #   the steps of one ritual
 │   └── weekly-audit/SKILL.md
-├── .tracker -> ~/.local/share/darius/acme-web/tracker   # a link, NOT in git
-│   ├── 00-INDEX.md
-│   ├── M12-checkout-redesign/
-│   │   ├── 00-README.md         #   the milestone
-│   │   └── 01-cart-page.md      #   one spec
-│   └── worklog/
 └── src/ ...                     # your own code
 ```
 
@@ -65,9 +58,11 @@ skill file. Review both like code, in a pull request.
 
 Where the tracker lives depends on `kinds` in `.darius.toml`. The block above is a project with
 `kinds = ["ritual", "vigil", "milestone"]`: the milestones, specs, worklogs and archive are in the
-darius store, and `.tracker` is a link to them. Nothing under it is in git, so never `git add` it.
-Every path such as `.tracker/M12-checkout-redesign/01-cart-page.md` works as before. A repo without
-that `kinds` line keeps a real `.tracker/` folder in git, which the vendored code reads and writes.
+darius store, and the checkout has no `.tracker` path at all. `darius root` prints where the tree
+is. Verbs take a spec path as `M12-checkout-redesign/01-cart-page.md`, as the old
+`.tracker/M12-checkout-redesign/01-cart-page.md`, or as the absolute path in the store. Nothing of
+the tree is in git. A repo without that `kinds` line keeps a real `.tracker/` folder in git, which
+the vendored code reads and writes. That mode is deprecated.
 `darius onboard` moves such a repo (see [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)).
 The `/darius-*` skills and the `darius` command do the work that the old `tracker` plugin did.
 
@@ -132,7 +127,7 @@ everything below works without one.
 
 ```bash
 cd ~/projects/acme-web
-darius init                 # writes .darius.toml, links this checkout, makes the tracker link
+darius init                 # writes .darius.toml, links this checkout, makes the tracker tree in the store
 mkdir -p .claude/skills/daily-report   # then write the steps in SKILL.md inside it
 ```
 
@@ -299,17 +294,21 @@ app in place.
 Run `darius init` once in each repo, on each host. It prints what it did and what to run next.
 
 - In a new repo it writes `.darius.toml` with `kinds = ["ritual", "vigil", "milestone"]`, links the
-  checkout on this host, creates the tracker tree in the darius store, links `.tracker` to it and
-  adds `/.tracker` to `.gitignore`. Commit `.darius.toml` and `.gitignore`. No tracker folder lands
-  in git.
+  checkout on this host, and creates the tracker tree in the darius store. Commit `.darius.toml`.
+  Nothing else is written in the checkout: no `.tracker` path, no `.gitignore` line.
 - In a repo that still has a `.tracker/` folder it works as before: it imports the rituals, runs and
   verification log into the darius store, writes `.darius.toml` and links the checkout.
   `.tracker/` stays as it is, in git, and init prints a hint to run `darius onboard`. It refuses the
   import when the store already holds rituals for the project; `darius init --no-import` then links
   without it.
 - In a repo with a committed `.darius.toml` (a clone on another host) it links the checkout. When
-  `kinds` lists `milestone`, it also links `.tracker` and brings the tree from the store. A second
-  run says `already linked`.
+  `kinds` lists `milestone`, it also brings the tree up to date in the store. A second run says
+  `already linked`.
+
+A checkout from before 0.78.0 has a `.tracker` link into the store. The next darius verb removes it
+and prints one line on stderr. It removes only a link into this project's own store tree, never a
+real folder and never a link that points elsewhere. darius does not edit `.gitignore`; `darius
+doctor` notes a `/.tracker` line you can remove.
 
 `--project <name>` names the project; the default is the directory name.
 
@@ -386,9 +385,9 @@ darius onboard --only vigil     # move the vigils only, leave the rest in git
 `darius onboard` refuses a `.tracker/` with uncommitted changes. It imports `.tracker/vigils` into
 the store, copies the rest of `.tracker/` into the store and checks every file by sha256, writes a
 `project.cutover` ledger line, adds the `kinds` line to `.darius.toml`, runs `git rm -r .tracker`,
-links `.tracker` to the store, adds `/.tracker` to `.gitignore`, and writes the store vigils under
-`.tracker/vigils/`. It never commits. Review the change and commit `.darius.toml` and `.gitignore`
-yourself.
+removes the folder, and writes the store vigils under `vigils/` in the tree. It makes no link and
+does not touch `.gitignore`. It never commits. Review the change and commit `.darius.toml` and the
+staged removal yourself.
 
 An imported open vigil is heavy: the daily sweep skips it. `darius onboard` says how many there
 are. To let the sweep run one, use `darius vigil set <slug> --no-heavy`.
@@ -474,8 +473,8 @@ The tracker verbs plan work. They act on the tracker tree: in the store when `ki
 darius add milestone --name "Checkout" --slug checkout --owner dev@example.com
 darius add spec --milestone checkout --name "Cart totals" --template generic
 darius next                               # the first open task
-darius mark .tracker/M1-checkout/01-cart-totals.md 0 --verified --evidence "ran the suite"
-darius verify-item .tracker/M1-checkout/01-cart-totals.md 1
+darius mark M1-checkout/01-cart-totals.md 0 --verified --evidence "ran the suite"
+darius verify-item M1-checkout/01-cart-totals.md 1
 ```
 
 A spec is a markdown file with a `## Verification Checklist`. Each item is a `- [ ]` line. It can
@@ -572,7 +571,7 @@ the full reference.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
 - `darius root [--json]`: print the tracker tree path; `--json` reports the mode (`store`, `git`, `none`).
-- `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and the tracker link, or an import of its rituals when a `.tracker/` folder exists.
+- `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and the tracker tree in the store, or an import of its rituals when a `.tracker/` folder exists.
 - `darius onboard [scan] [--dry-run] [--only vigil]`: move a repo's `.tracker/` into the store. Never commits.
 - `darius milestone archive <milestone> [--dry-run] [--keep] [--incomplete "<reason>"]`: remove an archived milestone's folder. It refuses without the archive document, while an item is neither done nor skipped (`--incomplete "<reason>"` archives anyway and records the reason), or while a worklog thread is open before stage `reviewed`. It closes the `reviewed` threads as done. In the store it removes the folder and prints the line that undoes it; in a git tracker it removes nothing and prints the `git rm` command to run.
 - `darius tree log|restore <path> [--at <sha|ledger-id>] [--dry-run] [--force]`: list the versions of a tracker file or folder in the store, and bring a past version back. Only when `kinds` lists `milestone`; git has the history otherwise.

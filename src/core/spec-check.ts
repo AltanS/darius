@@ -32,6 +32,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { UsageError } from "./model.ts";
+import { resolveTrackerRoot, resolveTreeArg, TRACKER_ROOT_ENV } from "./tracker-root.ts";
 
 /** The classes of risk the patterns fall in. `opaque`: the text runs code the spec does not show. */
 export type RiskClass = "destructive" | "data" | "external-write" | "auth" | "opaque" | "frontmatter";
@@ -213,13 +214,34 @@ export function parseReviewGate(configText: string | null): ReviewGateSetting {
   return { gate: "auto", warning: `review_gate: ${value} is not auto or off; using auto` };
 }
 
-/** The `.tracker` directory a spec belongs to: the `.tracker` segment of its path, else the nearest one above it. */
+/**
+ * The tracker tree a spec belongs to. Store mode (0.78.0): the store tree of
+ * the marker at `cwd` (or the one the router handed the engine) when the spec
+ * is inside it. Else the `.tracker` segment of its path, else the nearest
+ * `.tracker` above it.
+ */
 export function trackerRootOf(specPath: string, cwd: string): string | null {
   const absolute = resolve(cwd, specPath);
+  const store = storeTreeFor(absolute, cwd);
+  if (store !== null) return store;
   const parts = absolute.split(sep);
   const at = parts.lastIndexOf(".tracker");
   if (at > 0) return parts.slice(0, at + 1).join(sep);
   return findTrackerAbove(dirname(absolute)) ?? findTrackerAbove(cwd);
+}
+
+/** The store tree that holds `absolute`: the engine's (`DARIUS_TRACKER_ROOT`), else the one of the marker at `cwd`. */
+function storeTreeFor(absolute: string, cwd: string): string | null {
+  const candidates: string[] = [];
+  const handed = process.env[TRACKER_ROOT_ENV];
+  if (handed !== undefined && handed !== "") candidates.push(resolve(handed));
+  try {
+    const where = resolveTrackerRoot(cwd);
+    if (where.mode === "store") candidates.push(where.trackerRoot);
+  } catch {
+    // A marker that does not parse: no store tree.
+  }
+  return candidates.find((tree) => absolute === tree || absolute.startsWith(`${tree}${sep}`)) ?? null;
 }
 
 function findTrackerAbove(start: string): string | null {
@@ -238,7 +260,8 @@ function findTrackerAbove(start: string): string | null {
 export function dependencyExists(dep: string, specPath: string, trackerRoot: string | null): boolean {
   const normalized = dep.replace(/^\.\//u, "");
   const candidates = [resolve(dirname(specPath), normalized)];
-  if (trackerRoot !== null) candidates.push(resolve(trackerRoot, normalized), resolve(dirname(trackerRoot), normalized));
+  // `.tracker/M1-x/...` also names a file of a store tree, which has no `.tracker` parent (0.78.0).
+  if (trackerRoot !== null) candidates.push(resolve(trackerRoot, normalized), resolve(dirname(trackerRoot), normalized), resolve(trackerRoot, normalized.replace(/^\.tracker\//u, "")));
   if (candidates.some((candidate) => existsSync(candidate))) return true;
   if (trackerRoot === null || !existsSync(trackerRoot)) return false;
   // The legacy reader also matches a bare file name in any milestone.
@@ -621,7 +644,8 @@ export function checkSpecText(text: string, specPath: string, trackerRoot: strin
 
 /** Reads and checks a spec file. Throws a UsageError (exit 2) when the file does not exist. */
 export async function checkSpecFile(specPath: string, cwd: string): Promise<{ result: SpecCheckResult; warning?: string }> {
-  const absolute = resolve(cwd, specPath);
+  // Store mode takes `M1-x/01-y.md`, `.tracker/M1-x/01-y.md` and a store path (0.78.0).
+  const absolute = resolveTreeArg(specPath, cwd);
   if (!existsSync(absolute)) throw new UsageError(`spec check: no spec at ${specPath}`);
   const trackerRoot = trackerRootOf(absolute, cwd);
   const configPath = trackerRoot === null ? null : join(trackerRoot, "config.yml");

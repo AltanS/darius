@@ -31,10 +31,11 @@
  */
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
 import { hostName } from "./host-stamp.ts";
 import { withLock } from "./worklog.ts";
+import { isStoreTree, projectRootOf, resolveTreeRef } from "./tracker-root.ts";
 
 export const CLAIMS_FILENAME = ".session-claims.json";
 
@@ -437,13 +438,16 @@ export function normalizeClaimRef(opts: {
 export function canonicalSpecRef(opts: { trackerRoot: string; ref: string; cwd?: string | null }): string | null {
   const { trackerRoot, ref } = opts;
   const cwd = opts.cwd === undefined ? process.cwd() : opts.cwd;
-  const repoRoot = dirname(resolve(trackerRoot));
+  const repoRoot = projectRootOf(trackerRoot);
   const trimmed = ref.trim().replace(/^\.\//, "");
   if (trimmed === "") return null;
 
+  // Store mode (0.78.0): the checkout has no `.tracker` path, so the old
+  // `.tracker/...` form and a checkout path through it map into the tree first.
+  const store = isStoreTree(trackerRoot) ? [resolveTreeRef(trackerRoot, trimmed)] : [];
   const candidates = isAbsolute(trimmed)
-    ? [trimmed]
-    : [...(cwd === null ? [] : [resolve(cwd, trimmed)]), resolve(repoRoot, trimmed), resolve(trackerRoot, trimmed)];
+    ? [...store, trimmed]
+    : [...store, ...(cwd === null ? [] : [resolve(cwd, trimmed)]), resolve(repoRoot, trimmed), resolve(trackerRoot, trimmed)];
 
   for (const candidate of candidates) {
     if (!existsSync(candidate) || !isFileSafe(candidate)) continue;
