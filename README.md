@@ -483,6 +483,7 @@ the full reference.
 - `darius onboard [scan] [--dry-run] [--only vigil]`: move a repo's `.tracker/` into the store. Never commits.
 - `darius milestone archive <milestone> [--dry-run] [--keep]`: remove an archived milestone's folder. It refuses without the archive document or while a worklog thread is open. In the store it removes the folder and prints the line that undoes it; in a git tracker it removes nothing and prints the `git rm` command to run.
 - `darius tree log|restore <path> [--at <sha|ledger-id>] [--dry-run] [--force]`: list the versions of a tracker file or folder in the store, and bring a past version back. Only when `kinds` lists `milestone`; git has the history otherwise.
+- `darius tree resolve <path>`: keep the current version of a file with an open tree conflict, so `doctor` and `due` stop showing it. The lost version stays a blob.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.
 - `darius marker check [dir] [--resolved <slug>]`: parse a repo's `.darius.toml` as the runner does. A missing skill file is an error; other findings are warnings. `--resolved` prints the effective policy of one ritual.
 - `darius marker factor [dir] [--write]`: move the `may` and `hold` rules that inline rituals share into new `[policies.*]` tables. Prints a diff; `--write` writes the file and never runs git.

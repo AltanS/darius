@@ -207,3 +207,73 @@ test("darius sync merges a .jsonl file both hosts appended to; each host syncs t
     assert.deepEqual([quiet.projects[0].tree.captured, quiet.projects[0].tree.merged], [0, 0], "no ping-pong");
   }
 });
+
+test("two hosts work in one milestone: threads, ticks and claims merge; a text clash shows in doctor and due until resolved", { skip: NO_GIT }, async () => {
+  const endpoint = bucket?.endpoint ?? "";
+  const hostA = makeHost("host-f", endpoint);
+  const hostB = makeHost("host-g", endpoint);
+  const project = "acme-multi";
+  const first = join(SANDBOX, "multi-a");
+  mkdirSync(first);
+  git(first, ["init", "--quiet", "--initial-branch=main"]);
+  await ok(hostA, ["init", "--project", project], first);
+  git(first, ["add", "--all"]);
+  git(first, ["commit", "--quiet", "--message", "darius init"]);
+  await ok(hostA, ["add", "milestone", "--name", "Alpha", "--slug", "alpha", "--owner", "dev@example.com"], first);
+  await ok(hostA, ["add", "spec", "--milestone", "alpha", "--name", "Spec one", "--template", "generic"], first);
+  await ok(hostA, ["add", "spec", "--milestone", "alpha", "--name", "Spec two", "--template", "generic"], first);
+  await ok(hostA, ["sync", "--project", project], first);
+  const second = join(SANDBOX, "multi-b");
+  git(SANDBOX, ["clone", "--quiet", first, second]);
+  await ok(hostB, ["init"], second);
+  await ok(hostB, ["sync", "--project", project], second);
+  const specTwo = ".tracker/M1-alpha/02-spec-two.md";
+
+  // Both hosts work before either syncs: a thread each, a different tick each, a claim each.
+  const threadA = (await ok(hostA, ["worklog", "open", "alpha", "--spec", SPEC, "--message", "note from A", "--session", "sess-a"], first)).trim();
+  const threadB = (await ok(hostB, ["worklog", "open", "alpha", "--spec", specTwo, "--message", "note from B", "--session", "sess-b"], second)).trim();
+  await ok(hostA, ["mark", SPEC, "0", "--in-progress"], first);
+  await ok(hostB, ["mark", SPEC, "1", "--in-progress"], second);
+  await ok(hostA, ["claim", SPEC, "--session", "sess-a"], first);
+  await ok(hostB, ["claim", specTwo, "--session", "sess-b"], second);
+  for (const [at, dir] of [[hostA, first], [hostB, second], [hostA, first], [hostB, second]] as const) await ok(at, ["sync", "--project", project], dir);
+
+  for (const dir of [first, second]) {
+    const log = readFileSync(join(dir, ".tracker", "worklog", "alpha.md"), "utf8");
+    assert.match(log, new RegExp(`## ${threadA}`, "u"));
+    assert.match(log, new RegExp(`## ${threadB}`, "u"));
+    assert.match(log, /note from A/u);
+    assert.match(log, /note from B/u);
+    assert.equal((readFileSync(join(dir, SPEC), "utf8").match(/- \[~\]/gu) ?? []).length, 2, "both ticks");
+  }
+  assert.equal(readFileSync(join(first, ".tracker", "worklog", "alpha.md"), "utf8"), readFileSync(join(second, ".tracker", "worklog", "alpha.md"), "utf8"));
+  const refused = await darius(hostA, ["claim", specTwo, "--session", "sess-a"], first);
+  assert.equal(refused.code, 1, "a claim from the other host blocks");
+  assert.match(refused.stderr, /claimed by session sess-b/u);
+  const listed = (await ok(hostA, ["worklog", "list", "--json"], first)).trim();
+  assert.match(listed, new RegExp(threadB, "u"), "the legacy reader reads the merged file");
+  const clean = JSON.parse(await ok(hostA, ["due", "--project", project, "--json"], first));
+  assert.deepEqual(clean.treeConflicts, [], "merges record no conflict");
+
+  // A text change on both sides: last writer wins, the conflict is recorded and shown.
+  writeFileSync(join(first, specTwo), `${readFileSync(join(first, specTwo), "utf8")}\nA's paragraph\n`);
+  await ok(hostA, ["sync", "--project", project], first);
+  writeFileSync(join(second, specTwo), `${readFileSync(join(second, specTwo), "utf8")}\nB's paragraph\n`);
+  // A sees the clash on its apply and records it; its next sync pushes the line.
+  for (const [at, dir] of [[hostB, second], [hostA, first], [hostA, first], [hostB, second]] as const) await ok(at, ["sync", "--project", project], dir);
+  assert.match(readFileSync(join(first, specTwo), "utf8"), /B's paragraph/u);
+  const due = JSON.parse(await ok(hostB, ["due", "--project", project, "--json"], second));
+  assert.equal(due.treeConflicts.length, 1);
+  assert.equal(due.treeConflicts[0].path, "M1-alpha/02-spec-two.md");
+  assert.equal(due.treeConflicts[0].loserHost, "host-f");
+  assert.match(await ok(hostB, ["due", "--project", project], second), /^tree: acme-multi has 1 open conflict\(s\) in the tracker tree; darius doctor shows how to get the lost version back$/mu);
+  const doctor = await darius(hostB, ["doctor"], second);
+  assert.match(doctor.stdout, /## Tree conflicts/u);
+  const restoreLine = `darius tree restore .tracker/M1-alpha/02-spec-two.md --at ${String(due.treeConflicts[0].loserSha)} --force`;
+  assert.ok(doctor.stdout.includes(restoreLine), doctor.stdout);
+  await ok(hostB, ["tree", "resolve", ".tracker/M1-alpha/02-spec-two.md"], second);
+  assert.doesNotMatch((await darius(hostB, ["doctor"], second)).stdout, /Tree conflicts/u);
+  await ok(hostB, ["sync", "--project", project], second);
+  await ok(hostA, ["sync", "--project", project], first);
+  assert.deepEqual(JSON.parse(await ok(hostA, ["due", "--project", project, "--json"], first)).treeConflicts, [], "the resolve line syncs");
+});

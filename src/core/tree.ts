@@ -31,14 +31,22 @@
  * Apply never deletes or overwrites a local file the index does not vouch
  * for: such a path is skipped with a problem until capture records it.
  *
- * A concurrent edit (the winning line was not written on top of the line
- * before it, and that line came from another host) is last-writer-wins,
- * with one exception: a `.jsonl` file is append-only, so apply writes the
- * union of both versions (`mergeLines`) when both blobs are here. The index
+ * A concurrent edit (the winning line, or the run of its host's lines that
+ * ends in it, was not written on top of the line before, and that line came
+ * from another host; `concurrentWith`) is last-writer-wins,
+ * except for the files `mergeFor` names: a `.jsonl` file (append-only, the
+ * union of the lines), a worklog (by thread), a spec whose versions differ
+ * only in checklist ticks, and the claims file (per spec). For those apply
+ * writes the merge of both versions when both blobs are here. The index
  * keeps the winner's sha for it, so the next capture records the merged file
- * as a normal `tree.put`; `syncTree` runs that capture at once. The merge is
+ * as a normal `tree.put`; `syncTree` runs that capture at once. Each merge is
  * deterministic, so every host that merges the same two versions writes the
  * same bytes, and the line after the merge is no concurrent edit.
+ *
+ * When no merge applies, the other version is lost from the working copy but
+ * stays a blob, and apply records a `tree.conflict` line once
+ * (src/core/tree-conflicts.ts), which `darius doctor` and `darius due` show
+ * until the operator restores or resolves it.
  *
  * The index (`tracker-index.json`, `{v: 1, files: {path: {sha, size,
  * mtimeMs, exec}}}`) lets capture skip hashing a file whose size, mtime and
@@ -72,9 +80,13 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { isClaimsPath, mergeClaims } from "./claims-merge.ts";
 import { appendLines, defaultWho, readLedger, type LedgerLineInput } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
+import { isSpecPath, mergeSpecTicks } from "./spec-merge.ts";
 import { getBlob, putBlob, sha256Hex, type Project } from "./store.ts";
+import { conflictKey, readTreeConflicts, TREE_CONFLICT } from "./tree-conflicts.ts";
+import { isWorklogPath, mergeWorklog } from "./worklog-merge.ts";
 import { errorMessage } from "../runtime.ts";
 
 /** The ledger line types of the tree. */
@@ -100,7 +112,6 @@ export const LOCAL_TREE_PATHS = {
   files: [
     "00-INDEX.md",
     "worklog/00-INDEX.md",
-    ".session-claims.json",
     ".pending-sync",
     ".loop-bounces.json",
     ".fc-vigil-sweep-latest.json",
@@ -138,7 +149,7 @@ export interface TreeCapture {
 export interface TreeApply {
   /** Files written from a blob, merged files included. */
   written: number;
-  /** `.jsonl` files written as the union of two concurrent versions; a capture must record them. */
+  /** Files written as the merge of two concurrent versions (`mergeFor`); a capture must record them. */
   merged: number;
   /** Files deleted. */
   removed: number;
@@ -373,8 +384,12 @@ function decodeTreeLine(line: LedgerLine, problems: string[]): TreeLine | null {
 
 /** Every `tree.*` line by path, each list in ledger id order. Malformed lines go to `problems`. */
 export function foldTree(project: Project, problems: string[]): Map<string, TreeLine[]> {
+  return foldLines(readLedger(project), problems);
+}
+
+function foldLines(lines: readonly LedgerLine[], problems: string[]): Map<string, TreeLine[]> {
   const byPath = new Map<string, TreeLine[]>();
-  for (const line of readLedger(project)) {
+  for (const line of lines) {
     const tree = decodeTreeLine(line, problems);
     if (tree === null) continue;
     const list = byPath.get(tree.path);
@@ -514,12 +529,27 @@ function isVouched(full: string, entry: IndexEntry | undefined): boolean {
   return entry.exec === isExec(stats) && sha256Hex(readFileSync(full)) === entry.sha;
 }
 
-/** The line the winner competed with, or null: a concurrent edit is a winner not written on top of the line before it, from another host. */
+/**
+ * The line the winner competed with, or null. The winner's run is the
+ * winner and the lines of its host right before it, each written on top of
+ * the one before (a host that captured twice before it synced). A concurrent
+ * edit is a run whose first line was not written on top of the line before
+ * the run, and that line came from another host.
+ */
 function concurrentWith(lines: readonly TreeLine[]): TreeLine | null {
   const winner = lines.at(-1);
-  const before = lines.at(-2);
-  if (winner === undefined || before === undefined) return null;
-  if (before.host === winner.host || winner.prev === before.after) return null;
+  if (winner === undefined) return null;
+  let first = lines.length - 1;
+  while (first > 0) {
+    const line = lines[first];
+    const prior = lines[first - 1];
+    if (line === undefined || prior === undefined || prior.host !== winner.host || line.prev !== prior.after) break;
+    first -= 1;
+  }
+  const start = lines[first];
+  const before = lines[first - 1];
+  if (start === undefined || before === undefined) return null;
+  if (before.host === winner.host || start.prev === before.after) return null;
   return before;
 }
 
@@ -528,9 +558,27 @@ function concurrentProblem(winner: TreeLine, before: TreeLine): string {
   return `concurrent edit of ${winner.path}: kept the version of ${winner.host}, ${other}`;
 }
 
-/** True for a file whose concurrent versions are merged line by line: append-only `.jsonl`. */
+/**
+ * How the concurrent versions of `path` are merged, or null for
+ * last-writer-wins. A merge returns the winner's own bytes when the other
+ * version adds nothing, and null when the two cannot be joined safely.
+ *
+ *   `.jsonl`                append-only lines: `mergeLines`
+ *   `worklog/<name>.md`     by thread (src/core/worklog-merge.ts, 0.75.0)
+ *   `M<n>-*\/<NN>-*.md`     checklist ticks only (src/core/spec-merge.ts, 0.75.0)
+ *   `.session-claims.json`  per spec, newest wins (src/core/claims-merge.ts, 0.75.0)
+ */
+function mergeFor(path: string): ((winner: Uint8Array, other: Uint8Array) => Uint8Array | null) | null {
+  if (path.endsWith(".jsonl")) return mergeLines;
+  if (isWorklogPath(path)) return mergeWorklog;
+  if (isSpecPath(path)) return mergeSpecTicks;
+  if (isClaimsPath(path)) return mergeClaims;
+  return null;
+}
+
+/** True for a file whose concurrent versions are merged instead of last-writer-wins (see `mergeFor`). */
 export function isMergeablePath(path: string): boolean {
-  return path.endsWith(".jsonl");
+  return mergeFor(path) !== null;
 }
 
 function linesOf(bytes: Uint8Array): string[] {
@@ -552,13 +600,37 @@ export function mergeLines(winner: Uint8Array, other: Uint8Array): Uint8Array {
   return Buffer.from(all.length === 0 ? "" : `${all.join("\n")}\n`, "latin1");
 }
 
-/** The merged bytes for a concurrent `.jsonl` edit, or null when the path is not mergeable, a blob is missing, or the other version adds nothing. */
-function mergedContent(ctx: ApplyContext, winner: TreeLine, before: TreeLine | null, blob: Uint8Array): Uint8Array | null {
-  if (before === null || before.after === null || !isMergeablePath(winner.path)) return null;
+/**
+ * What a concurrent edit comes to:
+ *
+ *   none      not concurrent, or the other version is the same file
+ *   merged    both versions joined into `bytes`
+ *   subsumed  the winner already holds everything the other version has
+ *   lost      last-writer-wins: the other version is lost from the working copy
+ */
+type Outcome = { kind: "none" } | { kind: "merged"; bytes: Uint8Array } | { kind: "subsumed" } | { kind: "lost" };
+
+function concurrentOutcome(ctx: ApplyContext, winner: TreeLine, before: TreeLine | null, blob: Uint8Array | null): Outcome {
+  if (before === null || before.after === winner.after) return { kind: "none" };
+  if (before.after === null || blob === null) return { kind: "lost" };
+  const merge = mergeFor(winner.path);
   const other = getBlob(ctx.project, before.after);
-  if (other === null) return null;
-  const merged = mergeLines(blob, other);
-  return sha256Hex(merged) === sha256Hex(blob) ? null : merged;
+  if (merge === null || other === null) return { kind: "lost" };
+  const merged = merge(blob, other);
+  if (merged === null) return { kind: "lost" };
+  return sha256Hex(merged) === sha256Hex(blob) ? { kind: "subsumed" } : { kind: "merged", bytes: merged };
+}
+
+/** Records a lost version as a `tree.conflict` line, once per (path, winner, loser). Needs the loser's blob here. */
+function recordConflict(ctx: ApplyContext, winner: TreeLine, before: TreeLine): void {
+  const loser = before.after;
+  if (loser === null || getBlob(ctx.project, loser) === null) return;
+  const key = conflictKey(winner.path, winner.after, loser);
+  if (ctx.conflicts.has(key)) return;
+  ctx.conflicts.add(key);
+  appendLines(ctx.project, [
+    { who: defaultWho(), type: TREE_CONFLICT, path: winner.path, winner_sha: winner.after, loser_sha: loser, winner_host: winner.host, loser_host: before.host },
+  ]);
 }
 
 /** Removes empty dirs from `dir` up to, never including, `root`. */
@@ -585,6 +657,8 @@ interface ApplyContext {
   result: TreeApply;
   /** The index changed and must be written. */
   dirty: boolean;
+  /** Every conflict the ledger records (`conflictKey`), so each is written once. */
+  conflicts: Set<string>;
 }
 
 /** Brings one path to its winning line. Returns without a change when the index already matches. */
@@ -610,6 +684,7 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
   }
   const before = concurrentWith(lines);
   let problem = before === null ? null : concurrentProblem(winner, before);
+  let lost = false;
   if (winner.after === null) {
     if (existsSync(full)) {
       unlinkSync(full);
@@ -617,6 +692,7 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
     }
     ctx.index.files.delete(path);
     ctx.result.removed += 1;
+    lost = concurrentOutcome(ctx, winner, before, null).kind === "lost";
   } else {
     const blob = getBlob(ctx.project, winner.after);
     if (blob === null) {
@@ -624,7 +700,8 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
       return;
     }
     mkdirSync(dirname(full), { recursive: true });
-    const merged = mergedContent(ctx, winner, before, blob);
+    const outcome = concurrentOutcome(ctx, winner, before, blob);
+    const merged = outcome.kind === "merged" ? outcome.bytes : null;
     writeFileAtomic(full, merged ?? blob, modeFor(full, winner.exec));
     if (merged === null) {
       ctx.index.files.set(path, entryFor(winner.after, lstatSync(full)));
@@ -635,8 +712,11 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
       ctx.result.merged += 1;
       problem = `concurrent edit of ${path}: merged the lines of both versions (${winner.host} and ${before?.host ?? "?"}) into one file`;
     }
+    if (outcome.kind === "subsumed" || outcome.kind === "none") problem = null;
+    lost = outcome.kind === "lost";
     ctx.result.written += 1;
   }
+  if (lost && before !== null) recordConflict(ctx, winner, before);
   ctx.dirty = true;
   ctx.result.changed.push(path);
   if (problem !== null) ctx.result.problems.push(problem);
@@ -651,11 +731,13 @@ function applyPath(ctx: ApplyContext, lines: readonly TreeLine[]): void {
 export function applyTree(project: Project): TreeApply {
   return project.withLock(() => {
     const result: TreeApply = { written: 0, merged: 0, removed: 0, changed: [], problems: [] };
-    const byPath = foldTree(project, result.problems);
+    const ledger = readLedger(project);
+    const byPath = foldLines(ledger, result.problems);
     if (byPath.size === 0) return result;
     const root = treeDir(project);
     mkdirSync(root, { recursive: true });
-    const ctx: ApplyContext = { project, root, index: readIndex(project), result, dirty: false };
+    const conflicts = new Set(readTreeConflicts(ledger).all);
+    const ctx: ApplyContext = { project, root, index: readIndex(project), result, dirty: false, conflicts };
     for (const lines of byPath.values()) {
       try {
         applyPath(ctx, lines);
@@ -672,7 +754,7 @@ export function applyTree(project: Project): TreeApply {
 
 /**
  * Capture, then apply: a local edit becomes a line before another host's
- * version is considered. When apply merged a `.jsonl` file, a second capture
+ * version is considered. When apply merged a file, a second capture
  * records the merged file at once; its counts join the first capture's.
  */
 export function syncTree(project: Project, options: { who?: string } = {}): { capture: TreeCapture; apply: TreeApply } {
@@ -742,7 +824,8 @@ function realOrResolved(path: string): string {
  *   missing                 create the tree dir and the link
  *   a link to the tree      fine
  *   a link elsewhere        refuse, naming both paths
- *   a folder of local files move them into the tree where it lacks them,
+ *   a folder of local files move them into the tree where it lacks them
+ *                           (host-local files and the claims file),
  *                           remove the folder, create the link (what
  *                           `git pull` of the cutover commit leaves behind)
  *   any other folder        refuse
@@ -769,7 +852,9 @@ export function ensureTreeLink(checkout: string, project: Project): void {
   const refusal = `the darius store owns the tracker of ${project.name}, but a .tracker/ folder is in this checkout. Remove it from git (git rm -r .tracker) or merge the commit that did.`;
   if (!stats.isDirectory()) throw new Error(refusal);
   const { files, odd } = listFiles(link);
-  if (odd.length > 0 || files.some((path) => !isLocalTreePath(path))) throw new Error(refusal);
+  // The claims file is git-ignored in a git tracker, so `git pull` of the
+  // cutover leaves it behind; since 0.75.0 it syncs, so it moves in like the rest.
+  if (odd.length > 0 || files.some((path) => !isLocalTreePath(path) && !isClaimsPath(path))) throw new Error(refusal);
   mkdirSync(target, { recursive: true });
   for (const path of files) {
     const to = join(target, path);

@@ -159,6 +159,8 @@ import {
   inspectClaim,
   listClaims,
   formatClaimLine,
+  claimHolder,
+  releaseClaim,
   normalizeClaimRef,
   resolveSessionId,
   parseTtl,
@@ -174,6 +176,7 @@ import {
 } from "../lib/session-claims.ts";
 import { atomicWriteFileSync } from "../lib/atomic.ts";
 import { StageRefusal } from "../lib/stage-evidence.ts";
+import { hostName } from "../lib/host-stamp.ts";
 import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runDelegation } from "../lib/delegation.ts";
@@ -621,6 +624,7 @@ function runListSpecs(args: string[]): void {
           session: claim.claim?.session ?? null,
           at: claim.claim?.at ?? null,
           expiresAt: claim.claim?.expiresAt ?? null,
+          host: claim.claim?.host ?? null,
         },
       };
     });
@@ -634,10 +638,10 @@ function runListSpecs(args: string[]): void {
     const marker =
       claim.state === "unclaimed" ? ""
       : claim.state === "stale"
-        ? `  [CLAIM STALE: session ${claim.claim?.session}, ${claim.expiryLabel}]`
+        ? `  [CLAIM STALE: ${claimHolder(claim.claim)}, ${claim.expiryLabel}]`
         : claim.state === "own"
           ? `  [CLAIMED by this session, ${claim.expiryLabel}]`
-          : `  [CLAIMED: session ${claim.claim?.session}, ${claim.ageLabel} ago]`;
+          : `  [CLAIMED: ${claimHolder(claim.claim)}, ${claim.ageLabel} ago]`;
     process.stdout.write(
       `${milestone.slug}/${spec.file}  ${spec.view.verifiedCount}/${spec.view.totalCount}  ${spec.effectiveStatus}${marker}\n`,
     );
@@ -3281,6 +3285,7 @@ function runClaim(args: string[]): void {
     session,
     at: now.toISOString(),
     expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+    host: hostName(),
   };
 
   const decision = mutateClaims<{
@@ -3300,15 +3305,16 @@ function runClaim(args: string[]): void {
       : "claimed";
 
     doc.claims[ref] = claim;
+    if (doc.released !== undefined) delete doc.released[ref];
     return { doc, write: true, result: { action, previous } };
   });
 
   const { action, previous } = decision;
-  const other = previous.claim?.session ?? "unknown";
+  const other = claimHolder(previous.claim);
 
   if (action === "refused") {
     process.stderr.write(
-      `tracker claim: REFUSED — ${ref} is claimed by session ${other} ` +
+      `tracker claim: REFUSED — ${ref} is claimed by ${other} ` +
         `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}).\n`,
     );
     process.stderr.write(
@@ -3318,7 +3324,7 @@ function runClaim(args: string[]): void {
     if (values.json) {
       process.stdout.write(
         JSON.stringify(
-          { action, ref, session, heldBy: other, ageMs: previous.ageMs },
+          { action, ref, session, heldBy: previous.claim?.session ?? "unknown", heldOn: previous.claim?.host ?? null, ageMs: previous.ageMs },
           null,
           2,
         ) + "\n",
@@ -3329,14 +3335,14 @@ function runClaim(args: string[]): void {
 
   if (action === "takeover-stale") {
     process.stdout.write(
-      `STALE CLAIM TAKEN OVER: ${ref} was claimed by session ${other} ` +
+      `STALE CLAIM TAKEN OVER: ${ref} was claimed by ${other} ` +
         `${previous.ageLabel} ago and ${previous.expiryLabel} — that session is presumed dead.\n`,
     );
   }
 
   if (action === "takeover-live") {
     process.stdout.write(
-      `⚠ TAKEOVER: ${ref} was claimed by session ${other} ${previous.ageLabel} ago and ` +
+      `⚠ TAKEOVER: ${ref} was claimed by ${other} ${previous.ageLabel} ago and ` +
         `is still LIVE (${previous.expiryLabel}). That session may be working this spec right now.\n`,
     );
   }
@@ -3360,7 +3366,9 @@ function runClaim(args: string[]): void {
           session,
           at: claim.at,
           expiresAt: claim.expiresAt,
+          host: claim.host,
           previousSession: previous.claim?.session ?? null,
+          previousHost: previous.claim?.host ?? null,
         },
         null,
         2,
@@ -3383,6 +3391,7 @@ function runClaimList(sessionFlag: string | undefined, json: boolean): void {
           session: s.claim?.session ?? null,
           at: s.claim?.at ?? null,
           expiresAt: s.claim?.expiresAt ?? null,
+          host: s.claim?.host ?? null,
           ageMs: s.ageMs,
         })),
         null,
@@ -3454,16 +3463,16 @@ function runRelease(args: string[]): void {
       : previous.state === "stale" ? ("released-stale" as const)
       : ("released-forced" as const);
 
-    delete doc.claims[ref];
+    releaseClaim(doc, ref, session, now);
     return { doc, write: true, result: { action, previous } };
   });
 
   const { action, previous } = decision;
-  const other = previous.claim?.session ?? "unknown";
+  const other = claimHolder(previous.claim);
 
   if (action === "refused") {
     process.stderr.write(
-      `tracker release: REFUSED — ${ref} is claimed by another live session ${other} ` +
+      `tracker release: REFUSED — ${ref} is claimed by another live ${other} ` +
         `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}). Use --force to release it anyway.\n`,
     );
     process.exit(1);
@@ -3473,11 +3482,11 @@ function runRelease(args: string[]): void {
     process.stdout.write(`NO CLAIM: ${ref} was not claimed — nothing to release.\n`);
   } else if (action === "released-stale") {
     process.stdout.write(
-      `RELEASED: ${ref} — STALE claim by session ${other} (${previous.expiryLabel}).\n`,
+      `RELEASED: ${ref} — STALE claim by ${other} (${previous.expiryLabel}).\n`,
     );
   } else if (action === "released-forced") {
     process.stdout.write(
-      `⚠ RELEASED: ${ref} — FORCE-released a LIVE claim held by session ${other} ` +
+      `⚠ RELEASED: ${ref} — FORCE-released a LIVE claim held by ${other} ` +
         `(claimed ${previous.ageLabel} ago).\n`,
     );
   } else {
@@ -3512,8 +3521,8 @@ function claimGate(opts: {
 
   if (status.state === "stale") {
     process.stderr.write(
-      `tracker ${command}: NOTE — ${status.ref} carries a STALE claim by session ` +
-        `${status.claim?.session} (claimed ${status.ageLabel} ago, ${status.expiryLabel}). ` +
+      `tracker ${command}: NOTE — ${status.ref} carries a STALE claim by ` +
+        `${claimHolder(status.claim)} (claimed ${status.ageLabel} ago, ${status.expiryLabel}). ` +
         `Proceeding; run \`tracker claim ${status.ref}\` to take it over cleanly.\n`,
     );
     return false;
@@ -3524,13 +3533,13 @@ function claimGate(opts: {
   if (force) {
     process.stderr.write(
       `tracker ${command}: ⚠ --force — proceeding despite a LIVE claim on ${status.ref} ` +
-        `by session ${status.claim?.session} (claimed ${status.ageLabel} ago).\n`,
+        `by ${claimHolder(status.claim)} (claimed ${status.ageLabel} ago).\n`,
     );
     return false;
   }
 
   process.stderr.write(
-    `tracker ${command}: REFUSED — ${status.ref} is claimed by session ${status.claim?.session} ` +
+    `tracker ${command}: REFUSED — ${status.ref} is claimed by ${claimHolder(status.claim)} ` +
       `(claimed ${status.ageLabel} ago, ${status.expiryLabel}).\n`,
   );
   process.stderr.write(

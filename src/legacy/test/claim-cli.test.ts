@@ -493,7 +493,60 @@ describe("claim / release CLI", () => {
     expect(Object.keys((raw["claims"] as Record<string, Record<string, unknown>>)[SPEC_REF]!).sort()).toEqual([
       "at",
       "expiresAt",
+      "host",
       "session",
     ]);
+  });
+
+  it("release leaves a tombstone in released, and a new claim clears it (0.75.0)", () => {
+    runTracker(["claim", SPEC_REF], "sessA");
+    expect(runTracker(["release", SPEC_REF], "sessA").exitCode).toBe(0);
+    const doc = readClaims(trackerRoot);
+    expect(doc.claims[SPEC_REF]).toBeUndefined();
+    expect(doc.released?.[SPEC_REF]?.session).toBe("sessA");
+    runTracker(["claim", SPEC_REF], "sessB");
+    const again = readClaims(trackerRoot);
+    expect(again.claims[SPEC_REF]?.session).toBe("sessB");
+    expect(again.released).toBeUndefined();
+  });
+
+  it("a claim taken on another host names that host and blocks the same session id here (0.75.0)", () => {
+    const now = Date.now();
+    writeClaims(trackerRoot, {
+      version: 1,
+      claims: {
+        [SPEC_REF]: {
+          session: "sessA",
+          at: new Date(now - 60_000).toISOString(),
+          expiresAt: new Date(now + 3_600_000).toISOString(),
+          host: "other-host",
+        },
+      },
+    });
+    const refused = runTracker(["claim", SPEC_REF], "sessA");
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("claimed by session sessA on other-host");
+    const list = JSON.parse(runTracker(["claim", "--list", "--json"], "sessA").stdout) as Array<Record<string, unknown>>;
+    expect(list[0]?.["host"]).toBe("other-host");
+    expect(list[0]?.["state"]).toBe("held");
+  });
+
+  it("an old claim entry without host still reads, lists and gates as before", () => {
+    const now = Date.now();
+    writeFileSync(
+      join(trackerRoot, ".session-claims.json"),
+      JSON.stringify({
+        version: 1,
+        claims: {
+          [SPEC_REF]: { session: "oldSess", at: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString() },
+        },
+      }),
+      "utf-8",
+    );
+    expect(runTracker(["claim", SPEC_REF], "oldSess").exitCode).toBe(0);
+    const refused = runTracker(["claim", SPEC_REF], "otherSess");
+    expect(refused.stderr).toContain("claimed by session oldSess (");
+    const list = JSON.parse(runTracker(["claim", "--list", "--json"], "x").stdout) as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(1);
   });
 });

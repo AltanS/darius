@@ -18,10 +18,13 @@
  *   silently honoured (that is a deadlock), never silently ignored (that is the
  *   collision this module exists to surface).
  *
- * State lives in `<trackerRoot>/.session-claims.json`. Unlike the verification
- * ledger next door, this file is EPHEMERAL MACHINE-LOCAL state and is gitignored:
- * session ids are meaningless on another machine, and a committed claim would
- * arrive at a teammate's checkout already stale and always wrong.
+ * State lives in `<trackerRoot>/.session-claims.json`. In a git tracker this
+ * file is gitignored: a committed claim would arrive at a teammate's checkout
+ * already stale and always wrong. When the darius store owns the tree
+ * (0.75.0) the file syncs between hosts with the tree, merged per spec, newest
+ * claim wins (src/core/claims-merge.ts). So each claim names its `host`, and a
+ * release leaves a tombstone in `released`, so the merge does not bring back
+ * a claim the other host still had. Old entries without `host` still read.
  *
  * Everything below the I/O helpers is pure so the interesting rules (staleness,
  * ownership, TTL parsing, ref normalization) are unit-testable without a repo.
@@ -30,6 +33,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
+import { hostName } from "./host-stamp.ts";
 import { withLock } from "./worklog.ts";
 
 export const CLAIMS_FILENAME = ".session-claims.json";
@@ -50,12 +54,20 @@ export type SessionClaim = {
   at: string;
   /** ISO-8601 instant after which the claim is STALE. */
   expiresAt: string;
+  /** The host the claim was taken on (0.75.0). Absent in older entries. */
+  host?: string;
 };
 
 export type ClaimsDoc = {
   version: 1;
   /** Keyed by normalized spec ref (repo-relative path where resolvable). */
   claims: Record<string, SessionClaim>;
+  /**
+   * Tombstones of released claims (0.75.0), keyed like `claims`: `at` is the
+   * release time, `expiresAt` the end of the claim it released. Only the tree
+   * merge reads them; they drop out once expired.
+   */
+  released?: Record<string, SessionClaim>;
 };
 
 export function emptyClaimsDoc(): ClaimsDoc {
@@ -94,14 +106,50 @@ export function readClaims(trackerRoot: string): ClaimsDoc {
   if (typeof rawClaims !== "object" || rawClaims === null) return emptyClaimsDoc();
 
   const doc = emptyClaimsDoc();
-  for (const [ref, value] of Object.entries(rawClaims as Record<string, unknown>)) {
-    if (typeof value !== "object" || value === null) continue;
-    const { session, at, expiresAt } = value as Partial<SessionClaim>;
-    if (typeof session !== "string" || session.trim() === "") continue;
-    if (typeof at !== "string" || typeof expiresAt !== "string") continue;
-    doc.claims[ref] = { session, at, expiresAt };
+  readEntries(rawClaims, doc.claims);
+  const rawReleased = (parsed as { released?: unknown }).released;
+  if (typeof rawReleased === "object" && rawReleased !== null) {
+    const released: Record<string, SessionClaim> = {};
+    readEntries(rawReleased, released);
+    if (Object.keys(released).length > 0) doc.released = released;
   }
   return doc;
+}
+
+function readEntries(raw: object, into: Record<string, SessionClaim>): void {
+  for (const [ref, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) continue;
+    const { session, at, expiresAt, host } = value as Partial<SessionClaim>;
+    if (typeof session !== "string" || session.trim() === "") continue;
+    if (typeof at !== "string" || typeof expiresAt !== "string") continue;
+    const claim: SessionClaim = { session, at, expiresAt };
+    if (typeof host === "string" && host !== "") claim.host = host;
+    into[ref] = claim;
+  }
+}
+
+/**
+ * Record a release: drop the claim and leave a tombstone that outlives it, so
+ * a tree merge with an older copy of the file does not bring the claim back.
+ */
+export function releaseClaim(doc: ClaimsDoc, ref: string, session: string, now: Date = new Date()): void {
+  const previous = doc.claims[ref];
+  delete doc.claims[ref];
+  const at = now.toISOString();
+  const end = previous === undefined ? null : parseInstant(previous.expiresAt);
+  const expiresAt = end !== null && end > now.getTime() ? previous!.expiresAt : at;
+  if (expiresAt === at) return;
+  doc.released = { ...doc.released, [ref]: { session, at, expiresAt, host: hostName() } };
+}
+
+/** Drop expired tombstones, and the tombstone of a ref that holds a claim again. */
+export function pruneReleased(doc: ClaimsDoc, now: Date = new Date()): void {
+  if (doc.released === undefined) return;
+  for (const [ref, tomb] of Object.entries(doc.released)) {
+    const end = parseInstant(tomb.expiresAt);
+    if (doc.claims[ref] !== undefined || end === null || end <= now.getTime()) delete doc.released[ref];
+  }
+  if (Object.keys(doc.released).length === 0) delete doc.released;
 }
 
 export function writeClaims(trackerRoot: string, doc: ClaimsDoc): void {
@@ -127,7 +175,10 @@ export function mutateClaims<T>(
   withLock(claimsPath(trackerRoot), () => {
     const current = readClaims(trackerRoot);
     const { doc, write, result } = mutate(current);
-    if (write) writeClaims(trackerRoot, doc);
+    if (write) {
+      pruneReleased(doc);
+      writeClaims(trackerRoot, doc);
+    }
     out = result;
   });
   return out;
@@ -279,6 +330,7 @@ export function inspectClaim(
   ref: string,
   session: string | null,
   now: Date = new Date(),
+  host: string = hostName(),
 ): ClaimStatus {
   const claim = doc.claims[ref];
   if (claim === undefined) {
@@ -300,8 +352,11 @@ export function inspectClaim(
   const expiresInMs = expMs === null ? -1 : expMs - nowMs;
   const expired = expiresInMs <= 0;
 
+  // A claim taken on another host is never this session's, whatever its id:
+  // it is a live peer claim until its TTL. An old entry has no host.
+  const sameHost = claim.host === undefined || claim.host === host;
   const state: ClaimState =
-    session !== null && claim.session === session ? "own" : expired ? "stale" : "held";
+    session !== null && claim.session === session && sameHost ? "own" : expired ? "stale" : "held";
 
   return {
     ref,
@@ -321,19 +376,30 @@ export function listClaims(
   doc: ClaimsDoc,
   session: string | null = null,
   now: Date = new Date(),
+  host: string = hostName(),
 ): ClaimStatus[] {
   return Object.keys(doc.claims)
-    .map((ref) => inspectClaim(doc, ref, session, now))
+    .map((ref) => inspectClaim(doc, ref, session, now, host))
     .sort((a, b) => b.ageMs - a.ageMs || a.ref.localeCompare(b.ref));
 }
 
+/**
+ * Who holds a claim, for messages: `session <id>`, and ` on <host>` when the
+ * claim names a host other than this one (0.75.0).
+ */
+export function claimHolder(claim: SessionClaim | null, host: string = hostName()): string {
+  if (claim === null) return "session unknown";
+  const where = claim.host !== undefined && claim.host !== host ? ` on ${claim.host}` : "";
+  return `session ${claim.session}${where}`;
+}
+
 /** One line per claim, for doctor / `claim --list`. */
-export function formatClaimLine(status: ClaimStatus): string {
+export function formatClaimLine(status: ClaimStatus, host: string = hostName()): string {
   const claim = status.claim;
   if (claim === null) return `${status.ref} — unclaimed`;
   const stale = status.state === "stale" ? "STALE " : "";
   const mine = status.state === "own" ? " (this session)" : "";
-  return `${status.ref} — ${stale}session ${claim.session}, claimed ${status.ageLabel} ago, ${status.expiryLabel}${mine}`;
+  return `${status.ref} — ${stale}${claimHolder(claim, host)}, claimed ${status.ageLabel} ago, ${status.expiryLabel}${mine}`;
 }
 
 // ---------------------------------------------------------------------------

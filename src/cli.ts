@@ -20,10 +20,12 @@ import { getCommand, listCommands, register, UsageError, type Command, type Pars
 import { isInteractive } from "./cli/tui.ts";
 import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { rebuildTrackerIndex, runLegacy } from "./core/legacy-entry.ts";
+import { readLedger } from "./core/ledger.ts";
 import { findMarker } from "./core/marker.ts";
 import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } from "./core/paths.ts";
 import { openProject, type Project } from "./core/store.ts";
 import { captureTree, ensureTreeLink, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
+import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
 import { errorMessage, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
@@ -220,6 +222,30 @@ async function openTree(route: { project: Project; checkout: string }): Promise<
 }
 
 /**
+ * After the legacy `doctor` (not `--quick`) on a tree in the store: the open
+ * tree conflicts as warnings, each with the commands that end it
+ * (src/core/tree-conflicts.ts). A warning never changes the exit code.
+ */
+function printTreeConflicts(project: Project): void {
+  try {
+    const open = readTreeConflicts(readLedger(project)).open;
+    if (open.length === 0) return;
+    const lines = ["", "## Tree conflicts", ""];
+    for (const conflict of open) {
+      const [first = "", ...rest] = conflictAdvice(conflict);
+      lines.push(`  WARN: ${first}`, ...rest.map((line) => `    ${line}`));
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+  } catch (cause) {
+    console.error(`darius: cannot read the tree conflicts: ${errorMessage(cause)}`);
+  }
+}
+
+function isFullDoctor(argv: readonly string[]): boolean {
+  return argv[0] === "doctor" && !argv.includes("--quick") && !argv.includes("--help") && !argv.includes("-h");
+}
+
+/**
  * A verb darius does not own: the legacy CLI gets the argv as given, and its
  * exit code passes through. When it fails and there is no `.tracker/` here
  * or above, one more stderr line names the fix. It hooks `exit` because a
@@ -238,13 +264,22 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
     return 1;
   }
   let finish = noop;
+  let doctorDone = false;
   if (route.mode === "tree") {
     const opened = await openTree(route);
     if ("error" in opened) {
       console.error(`darius: ${opened.error}`);
       return 1;
     }
-    finish = opened.finish;
+    const project = route.project;
+    finish = isFullDoctor(argv)
+      ? (): void => {
+          opened.finish();
+          if (doctorDone) return;
+          doctorDone = true;
+          printTreeConflicts(project);
+        }
+      : opened.finish;
   }
   process.once("exit", (code) => {
     finish();

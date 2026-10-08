@@ -99,7 +99,7 @@ function ship(from: Host, to: Host, name: string, options: { blobs?: boolean } =
 
 function treeLines(host: Host, name: string): string[] {
   return readLedger(projectOn(host, name))
-    .filter((line) => line.type.startsWith("tree."))
+    .filter((line) => line.type === "tree.put" || line.type === "tree.removed")
     .map((line) => `${line.type} ${String(line.path)}`);
 }
 
@@ -177,7 +177,6 @@ test("host-local and derived files are never captured, and apply never touches t
   const local = [
     "00-INDEX.md",
     "worklog/00-INDEX.md",
-    ".session-claims.json",
     ".pending-sync",
     ".loop-bounces.json",
     ".fc-vigil-sweep-latest.json",
@@ -191,7 +190,7 @@ test("host-local and derived files are never captured, and apply never touches t
     assert.equal(isLocalTreePath(path), true, path);
     put(hostA, name, path, `local ${path}\n`);
   }
-  for (const path of ["M1-alpha/01-spec.md", "worklog/M1-alpha.md", "vigil.md", "M1-alpha/00-INDEX.md", ".verification-log.jsonl"]) {
+  for (const path of ["M1-alpha/01-spec.md", "worklog/M1-alpha.md", "vigil.md", "M1-alpha/00-INDEX.md", ".verification-log.jsonl", ".session-claims.json"]) {
     assert.equal(isLocalTreePath(path), false, path);
   }
   put(hostA, name, "M1-alpha/01-spec.md", "spec\n");

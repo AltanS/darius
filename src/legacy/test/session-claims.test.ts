@@ -22,6 +22,9 @@ import {
   inspectClaim,
   listClaims,
   mutateClaims,
+  claimHolder,
+  pruneReleased,
+  releaseClaim,
   normalizeClaimRef,
   parseTtl,
   readClaims,
@@ -278,5 +281,64 @@ describe("normalizeClaimRef", () => {
     expect(normalizeClaimRef({ trackerRoot, ref: "scratch/does-not-exist.md", cwd: tmpDir })).toBe(
       "scratch/does-not-exist.md",
     );
+  });
+});
+
+describe("hosts and tombstones (0.75.0)", () => {
+  it("a claim of the same session on another host is held, not own; an entry without host stays own", () => {
+    const doc = docWith({ "spec.md": { session: "me", agoMs: 60_000, ttlMs: DEFAULT_TTL_MS } });
+    expect(inspectClaim(doc, "spec.md", "me", NOW, "here").state).toBe("own");
+    doc.claims["spec.md"]!.host = "there";
+    expect(inspectClaim(doc, "spec.md", "me", NOW, "here").state).toBe("held");
+    doc.claims["spec.md"]!.host = "here";
+    expect(inspectClaim(doc, "spec.md", "me", NOW, "here").state).toBe("own");
+  });
+
+  it("claimHolder and formatClaimLine name another host, never this one", () => {
+    const doc = docWith({ "a.md": { session: "s1", agoMs: 60_000, ttlMs: DEFAULT_TTL_MS } });
+    expect(claimHolder(doc.claims["a.md"]!, "here")).toBe("session s1");
+    doc.claims["a.md"]!.host = "here";
+    expect(claimHolder(doc.claims["a.md"]!, "here")).toBe("session s1");
+    doc.claims["a.md"]!.host = "there";
+    expect(claimHolder(doc.claims["a.md"]!, "here")).toBe("session s1 on there");
+    expect(formatClaimLine(inspectClaim(doc, "a.md", null, NOW, "here"), "here")).toBe(
+      "a.md — session s1 on there, claimed 1m ago, expires in 7h59m",
+    );
+  });
+
+  it("releaseClaim leaves a tombstone until the released claim would have expired; pruneReleased drops it after", () => {
+    const doc = docWith({ "a.md": { session: "s1", agoMs: 60_000, ttlMs: DEFAULT_TTL_MS } });
+    const end = doc.claims["a.md"]!.expiresAt;
+    releaseClaim(doc, "a.md", "s1", NOW);
+    expect(doc.claims["a.md"]).toBeUndefined();
+    expect(doc.released?.["a.md"]?.at).toBe(NOW.toISOString());
+    expect(doc.released?.["a.md"]?.expiresAt).toBe(end);
+    pruneReleased(doc, NOW);
+    expect(doc.released?.["a.md"]).toBeDefined();
+    pruneReleased(doc, new Date(Date.parse(end) + 1));
+    expect(doc.released).toBeUndefined();
+  });
+
+  it("readClaims keeps host and released, and reads an old file without either", () => {
+    const dir = mkdtempSync(join(tmpdir(), "claims-host-"));
+    try {
+      writeFileSync(
+        claimsPath(dir),
+        JSON.stringify({
+          version: 1,
+          claims: { "a.md": { session: "s", at: "2026-08-03T11:00:00.000Z", expiresAt: "2026-08-03T19:00:00.000Z", host: "h1" } },
+          released: { "b.md": { session: "s", at: "2026-08-03T11:30:00.000Z", expiresAt: "2026-08-03T19:00:00.000Z", host: "h2" } },
+        }),
+      );
+      const doc = readClaims(dir);
+      expect(doc.claims["a.md"]?.host).toBe("h1");
+      expect(doc.released?.["b.md"]?.host).toBe("h2");
+      writeFileSync(claimsPath(dir), JSON.stringify({ version: 1, claims: { "a.md": { session: "s", at: "x", expiresAt: "y" } } }));
+      const old = readClaims(dir);
+      expect(old.claims["a.md"]).toEqual({ session: "s", at: "x", expiresAt: "y" });
+      expect(old.released).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

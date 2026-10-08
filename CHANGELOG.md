@@ -2,6 +2,25 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.75.0] - 2026-10-08
+
+### Added
+
+- A worklog file merges by thread when two hosts change it before they sync. Threads, notes and stage stamps of both hosts stay. The stage is the furthest one, and closed beats open. A distilled stub or a changed preamble still falls back to last-writer-wins.
+- A spec merges when two hosts only ticked items. Each item takes the further state, and `verified`, `status`, `updated` and `verification_passed` follow. Any other change keeps last-writer-wins.
+- `.session-claims.json` syncs with the tree and merges per spec, newest claim wins. A claim records its `host`, and a claim from another host blocks like another session's claim until its TTL ends. `claim --list --json`, `list specs --json` and a refused `claim --json` show the host. A release leaves a tombstone in `released`.
+- A concurrent edit that no merge can join writes a `tree.conflict` ledger line once. `darius doctor` lists open conflicts with the restore line, and `darius due` shows one line per project (`treeConflicts` in `--json`).
+- `darius tree resolve <path>` keeps the current version and closes the conflict.
+
+### Changed
+
+- `.session-claims.json` is no longer host-local. A leftover claims file in a git `.tracker/` folder moves into the store with the link.
+- A concurrent edit whose other version adds nothing is no longer reported.
+
+### Fixed
+
+- A host that changed a tree file twice before it synced no longer hides the other host's concurrent version of it. Apply now looks past the winner's own run of lines, so the edit is merged or recorded as a conflict.
+
 ## [0.74.0] - 2026-10-08
 
 ### Added

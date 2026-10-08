@@ -1,6 +1,7 @@
 /**
  * `darius tree log <path> [--json]`
  * `darius tree restore <path> [--at <sha|ledger-id>] [--dry-run] [--force] [--json]`
+ * `darius tree resolve <path> [--json]`
  *
  * The history of the tracker tree in the store (0.73.0, src/core/tree-history.ts).
  * Only in a project whose marker lists `milestone` in `kinds`: there the tree
@@ -12,16 +13,24 @@
  * working copy holds another version of a file, unless `--force`.
  * `--dry-run` prints the plan and writes nothing.
  *
+ * `resolve` (0.75.0) keeps the current version of a file (or of every file
+ * under a folder) that has an open tree conflict: one `tree.resolved` line
+ * per path, so `darius doctor` and `darius due` stop showing it
+ * (src/core/tree-conflicts.ts). The lost version stays a blob.
+ *
  * Exit codes: 0 done (or nothing to do), 1 refused, 2 usage.
  */
 
 import { findMarker } from "../core/marker.ts";
 import { openProject, type Project } from "../core/store.ts";
 import { planRestore, restoreRefusal, restoreTree, treeLog, treeTarget, type RestorePlan, type TreeTarget } from "../core/tree-history.ts";
+import { appendLines, defaultWho, readLedger } from "../core/ledger.ts";
+import { readTreeConflicts, TREE_RESOLVED } from "../core/tree-conflicts.ts";
 import { ensureTreeLink, foldTree } from "../core/tree.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const USAGE = "usage: darius tree log <path> [--json] | darius tree restore <path> [--at <sha|ledger-id>] [--dry-run] [--force] [--json]";
+const USAGE =
+  "usage: darius tree log <path> [--json] | darius tree restore <path> [--at <sha|ledger-id>] [--dry-run] [--force] [--json] | darius tree resolve <path> [--json]";
 
 /** The store project whose tree this checkout links, or the refusal. */
 export function storeTree(cwd: string): { project: Project; checkout: string } | { error: string } {
@@ -119,14 +128,41 @@ function runRestore(args: ParsedArgs): number {
   return result.restored.length === result.plan.steps.filter((step) => step.state !== "same").length ? 0 : 1;
 }
 
+function runResolve(args: ParsedArgs): number {
+  const tree = storeTree(process.cwd());
+  if ("error" in tree) {
+    console.error(`darius: ${tree.error}`);
+    return 1;
+  }
+  const problems: string[] = [];
+  const target = treeTarget(tree.project, pathArg(args), tree.checkout, foldTree(tree.project, problems));
+  const inside = (path: string): boolean => target.prefix === "" || (target.folder ? path.startsWith(`${target.prefix}/`) : path === target.prefix);
+  const open = readTreeConflicts(readLedger(tree.project)).open.filter((conflict) => inside(conflict.path));
+  const paths = [...new Set(open.map((conflict) => conflict.path))].toSorted();
+  const who = defaultWho();
+  appendLines(tree.project, paths.map((path) => ({ who, type: TREE_RESOLVED, path })));
+  if (args.json) {
+    console.log(JSON.stringify({ project: tree.project.name, path: label(target), resolved: paths, conflicts: open, problems }));
+    return 0;
+  }
+  for (const problem of problems) console.error(`darius: ${problem}`);
+  if (paths.length === 0) {
+    console.log(`no open conflict under ${label(target)}`);
+    return 0;
+  }
+  for (const path of paths) console.log(`resolved .tracker/${path}: the current version stays, the lost version stays a blob`);
+  return 0;
+}
+
 export const treeCommand: Command = {
   name: "tree",
-  summary: "read the tracker tree's history in the store and restore a past version",
-  usage: "tree log|restore <path>",
+  summary: "read the tracker tree's history in the store, restore a past version, resolve a conflict",
+  usage: "tree log|restore|resolve <path>",
   async run(args) {
     const sub = args.positional[0];
     if (sub === "log") return runLog(args);
     if (sub === "restore") return runRestore(args);
+    if (sub === "resolve") return runResolve(args);
     throw new UsageError(USAGE);
   },
 };

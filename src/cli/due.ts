@@ -13,6 +13,10 @@
  * resolved, verdict) and `project`; a due row also holds `daysOverdue`.
  * The text prints the legacy sections after the ritual lines.
  *
+ * Open tree conflicts (0.75.0, src/core/tree-conflicts.ts): one text line
+ * per project that has any, and `treeConflicts: [...]` in the JSON, always
+ * present. Each row is a `TreeConflict` and its `project`.
+ *
  * `--json` shape: `{ project, rituals: [...] }` for one project, or
  * `{ projects: [...], rituals: [...] }` for `--all-projects` (every row then
  * also carries its own `project`, since the array is flattened across all of
@@ -31,6 +35,8 @@
  */
 
 import { readLedger } from "../core/ledger.ts";
+import type { LedgerLine } from "../core/model.ts";
+import { readTreeConflicts, type TreeConflict } from "../core/tree-conflicts.ts";
 import { ritualState, type RitualState } from "../core/due.ts";
 import { linkedDir } from "../core/links.ts";
 import { findMarker, readMarker } from "../core/marker.ts";
@@ -93,8 +99,7 @@ function toRow(project: Project, header: Ritual, state: RitualState): DueRow {
   };
 }
 
-function collectRows(project: Project): DueRow[] {
-  const ledger = readLedger(project);
+function collectRows(project: Project, ledger: LedgerLine[]): DueRow[] {
   const now = new Date();
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
@@ -128,6 +133,22 @@ function ownsVigil(name: string): boolean {
   }
 }
 
+/** An open tree conflict of the JSON (src/core/tree-conflicts.ts), with its project. */
+type ConflictRow = TreeConflict & { project: string };
+
+function collectConflicts(project: Project, ledger: readonly LedgerLine[]): ConflictRow[] {
+  return readTreeConflicts(ledger).open.map((conflict) => Object.assign(conflict, { project: project.name }));
+}
+
+/** One line per project with open tree conflicts. */
+function printConflicts(conflicts: readonly ConflictRow[]): void {
+  const byProject = new Map<string, number>();
+  for (const row of conflicts) byProject.set(row.project, (byProject.get(row.project) ?? 0) + 1);
+  for (const [project, count] of byProject) {
+    console.log(`tree: ${project} has ${String(count)} open conflict(s) in the tracker tree; darius doctor shows how to get the lost version back`);
+  }
+}
+
 /** A vigil row of the JSON: the legacy fields, and the project. */
 type VigilRow = (VigilView | DueVigil) & { project: string };
 
@@ -147,13 +168,14 @@ function collectVigils(project: Project): VigilRows {
   return { due: picked.due.map((view) => vigilRow(project, view)), armed: picked.armed.map((view) => vigilRow(project, view)) };
 }
 
-function printRows(rows: readonly DueRow[], vigils: VigilRows): void {
+function printRows(rows: readonly DueRow[], vigils: VigilRows, conflicts: readonly ConflictRow[]): void {
   if (rows.length === 0 && vigils.due.length === 0 && vigils.armed.length === 0) {
     console.log("no rituals due");
-    return;
+  } else {
+    for (const row of rows) console.log(rowLine(row));
+    printVigils(vigils);
   }
-  for (const row of rows) console.log(rowLine(row));
-  printVigils(vigils);
+  printConflicts(conflicts);
 }
 
 /** The legacy `due` sections, with the `project/slug` name this command gives rituals. */
@@ -227,19 +249,25 @@ export const dueCommand: Command = {
     if (args.flags.brief === true) return printBrief(args);
     if (args.flags["all-projects"] === true) {
       const projects = listProjects();
-      const opened = projects.map((name) => openProject(name));
-      const rituals = opened.flatMap((project) => collectRows(project));
-      const found = opened.map((project) => collectVigils(project));
+      const opened = projects.map((name) => {
+        const project = openProject(name);
+        return { project, ledger: readLedger(project) };
+      });
+      const rituals = opened.flatMap(({ project, ledger }) => collectRows(project, ledger));
+      const found = opened.map(({ project }) => collectVigils(project));
       const vigils = { due: found.flatMap((one) => one.due), armed: found.flatMap((one) => one.armed) };
-      if (args.json) printJson({ projects, rituals, vigils });
-      else printRows(rituals, vigils);
+      const treeConflicts = opened.flatMap(({ project, ledger }) => collectConflicts(project, ledger));
+      if (args.json) printJson({ projects, rituals, vigils, treeConflicts });
+      else printRows(rituals, vigils, treeConflicts);
       return 0;
     }
     const project = openProject(resolveProject(stringFlag(args, "project")));
-    const rituals = collectRows(project);
+    const ledger = readLedger(project);
+    const rituals = collectRows(project, ledger);
     const vigils = collectVigils(project);
-    if (args.json) printJson({ project: project.name, rituals, vigils });
-    else printRows(rituals, vigils);
+    const treeConflicts = collectConflicts(project, ledger);
+    if (args.json) printJson({ project: project.name, rituals, vigils, treeConflicts });
+    else printRows(rituals, vigils, treeConflicts);
     return 0;
   },
 };
