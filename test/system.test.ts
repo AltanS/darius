@@ -92,7 +92,7 @@ test("a second host shows up from a foreign chunk, and this host is first", () =
   assert.equal(hosts[0]?.self, true);
   assert.equal(hosts[0]?.chunks, 0);
   assert.ok(hosts[0]?.lastSeen !== null, "the open chunk of this host counts");
-  assert.deepEqual(hosts[1], { host: "host-other", self: false, lastSeen: "2026-09-20T08:30:00.000Z", chunks: 1, projects: ["project-one"] });
+  assert.deepEqual(hosts[1], { host: "host-other", self: false, lastSeen: "2026-09-20T08:30:00.000Z", chunks: 1, projects: ["project-one"], backup: null });
 });
 
 test("this host is listed with no chunks and no lastSeen in an empty store", () => {
@@ -101,7 +101,7 @@ test("this host is listed with no chunks and no lastSeen in an empty store", () 
   process.env.DARIUS_STATE_DIR = join(sandbox, "empty-state");
   try {
     const status = collectSystem({ backupDir: join(sandbox, "missing", "backups") });
-    assert.deepEqual(status.hosts, [{ host: "host-self", self: true, lastSeen: null, chunks: 0, projects: [] }]);
+    assert.deepEqual(status.hosts, [{ host: "host-self", self: true, lastSeen: null, chunks: 0, projects: [], backup: null }]);
     assert.equal(status.store.bytes, 0);
     assert.deepEqual(status.disks.map((disk) => disk.label), ["store", "backups"]);
   } finally {

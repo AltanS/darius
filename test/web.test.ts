@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -123,6 +123,49 @@ test("status.json, healthz, read-only", async () => {
   assert.equal(status.utcOffset, -new Date(status.generatedAt).getTimezoneOffset() || 0, "the host's UTC offset in minutes east");
   assert.equal(text((await get("/healthz")).body), "ok\n");
   assert.equal((await respond("POST", new URL("http://x/"), NO_HEADERS, "x", APP)).status, 405);
+});
+
+test("status.json lists this host and every host with a snapshot line, each with its backup", async () => {
+  const { hostId } = await import("../src/core/ledger.ts");
+  const { GLOBAL_PROJECT } = await import("../src/core/store.ts");
+  const { collectSystem } = await import("../src/web/system.ts");
+  const global = openProject(GLOBAL_PROJECT, { create: true });
+  const before = JSON.parse(text((await get("/api/status.json")).body));
+  assert.deepEqual(before.hosts, [{ host: hostId(), self: true, backup: null }], "no snapshot line yet: this host, no backup");
+
+  appendLine(global, { who: "snapshot", type: "snapshot.ok", at: new Date(Date.now() - 2 * 3_600_000).toISOString(), name: "darius-self-x.tar.gz", bytes: 1, files: 1, store_bytes: 1, darius: "1.0.0", remote: null, bucket: null });
+  const peer = join(process.env.DARIUS_STATE_DIR ?? "", GLOBAL_PROJECT, "ledger", "host-zz");
+  mkdirSync(peer, { recursive: true });
+  const old = Date.now() - 50 * 3_600_000;
+  writeFileSync(join(peer, "open.jsonl"), `${JSON.stringify({ v: 1, id: ulid(old), at: new Date(old).toISOString(), host: "host-zz", who: "snapshot", project: GLOBAL_PROJECT, type: "snapshot.failed", error: "disk full" })}\n`);
+
+  const status = JSON.parse(text((await get("/api/status.json")).body));
+  assert.deepEqual(
+    status.hosts.map((entry: { host: string; self: boolean; backup: { state: string } | null }) => [entry.host, entry.self, entry.backup?.state]),
+    [
+      [hostId(), true, "ok"],
+      ["host-zz", false, "stale"],
+    ],
+  );
+  const self = status.hosts[0].backup;
+  assert.equal(self.name, "darius-self-x.tar.gz");
+  assert.ok(self.ageMs >= 2 * 3_600_000 && self.ageMs < 3 * 3_600_000);
+  assert.equal(status.hosts[1].backup.error, "disk full");
+  assert.equal(status.hosts[1].backup.lastOkAt, null);
+
+  const system = collectSystem();
+  assert.deepEqual(
+    system.hosts.map((entry) => [entry.host, entry.backup?.state ?? null]),
+    [
+      [hostId(), "ok"],
+      ["host-zz", "stale"],
+    ],
+    "the hosts card lists a host that only wrote a snapshot line",
+  );
+  const zz = system.hosts.find((entry) => entry.host === "host-zz");
+  assert.equal(zz?.chunks, 0);
+  assert.ok(zz?.lastSeen !== null);
+  rmSync(peer, { recursive: true, force: true });
 });
 
 test("pages go to the app with a fresh nonce in the CSP; only a few request headers reach it", async () => {

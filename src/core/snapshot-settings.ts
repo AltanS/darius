@@ -13,9 +13,15 @@
  * its unit or `web.env` keeps it, and the dashboard shows the field as locked.
  * Every value remembers its layer, so the page can say where it came from.
  *
- * Keys: `enabled`, `dir`, `keep` (local snapshots), `keep_remote`, and the
- * remote copy: `endpoint`, `bucket`, `region`, `prefix`, `path_style`,
- * `allow_http`, `sse`. The copy is on when `endpoint` and `bucket` are both set.
+ * Keys: `enabled`, `dir`, `keep` (local snapshots), `keep_remote`,
+ * `keep_monthly` (0 to 120, default 0 = off), `remote_prune`, and the remote copy: `endpoint`, `bucket`, `region`,
+ * `prefix`, `path_style`, `allow_http`, `sse`. The copy is on when `endpoint`
+ * and `bucket` are both set. `ping_url` is the dead-man ping (a
+ * healthchecks-style address, see src/core/snapshot-ping.ts). It works as a
+ * capability: whoever holds it can fake a ping. Every place that shows it
+ * shows `maskPingUrl` only, and a push to other hosts never sends it. `remote_prune = false` is the no-delete mode:
+ * darius never deletes in the bucket, and the bucket's own lifecycle rule is
+ * the only retention there (`keep_remote` is then ignored).
  *
  * Secrets are not settings. The access key pair comes from
  * `DARIUS_SNAPSHOT_ACCESS_KEY_ID` and `DARIUS_SNAPSHOT_SECRET_ACCESS_KEY`, else
@@ -41,7 +47,7 @@ import { configDir, stateDir } from "./paths.ts";
 import type { RemoteConfig } from "./s3.ts";
 import type { TomlValue } from "./toml.ts";
 
-export const SNAPSHOT_KEYS = ["enabled", "dir", "keep", "keep_remote", "endpoint", "bucket", "region", "prefix", "path_style", "allow_http", "sse"] as const;
+export const SNAPSHOT_KEYS = ["enabled", "dir", "keep", "keep_remote", "keep_monthly", "remote_prune", "endpoint", "bucket", "region", "prefix", "path_style", "allow_http", "sse", "ping_url"] as const;
 
 export type SnapshotKey = (typeof SNAPSHOT_KEYS)[number];
 export type SnapshotValue = string | number | boolean;
@@ -54,15 +60,18 @@ export type SnapshotValues = Map<SnapshotKey, SnapshotValue>;
 
 export const DEFAULT_SNAPSHOT_DIR = "~/.local/share/darius-snapshots";
 export const MAX_KEEP = 3650;
+export const MAX_KEEP_MONTHLY = 120;
 
-const BOOLEAN_KEYS: ReadonlySet<SnapshotKey> = new Set(["enabled", "path_style", "allow_http", "sse"]);
-const INTEGER_KEYS: ReadonlySet<SnapshotKey> = new Set(["keep", "keep_remote"]);
+const BOOLEAN_KEYS: ReadonlySet<SnapshotKey> = new Set(["enabled", "remote_prune", "path_style", "allow_http", "sse"]);
+const INTEGER_KEYS: ReadonlySet<SnapshotKey> = new Set(["keep", "keep_remote", "keep_monthly"]);
 
 const DEFAULTS = new Map<SnapshotKey, SnapshotValue>([
   ["enabled", true],
   ["dir", DEFAULT_SNAPSHOT_DIR],
   ["keep", 7],
   ["keep_remote", 30],
+  ["keep_monthly", 0],
+  ["remote_prune", true],
   ["endpoint", ""],
   ["bucket", ""],
   ["region", "us-east-1"],
@@ -70,6 +79,7 @@ const DEFAULTS = new Map<SnapshotKey, SnapshotValue>([
   ["path_style", true],
   ["allow_http", false],
   ["sse", false],
+  ["ping_url", ""],
 ]);
 
 const FILE_NAME = "snapshot.json";
@@ -126,7 +136,9 @@ function coerceBoolean(key: SnapshotKey, raw: RawSetting | undefined): Coerced {
 
 function coerceInteger(key: SnapshotKey, raw: RawSetting | undefined): Coerced {
   const number = isNumber(raw) ? raw : isString(raw) && /^\d{1,5}$/u.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
-  if (!Number.isInteger(number) || number < 1 || number > MAX_KEEP) return { ok: false, error: `${key} must be a whole number from 1 to ${String(MAX_KEEP)}` };
+  // keep_monthly may be 0 (off); the other counts keep at least one.
+  const [min, max] = key === "keep_monthly" ? [0, MAX_KEEP_MONTHLY] : [1, MAX_KEEP];
+  if (!Number.isInteger(number) || number < min || number > max) return { ok: false, error: `${key} must be a whole number from ${String(min)} to ${String(max)}` };
   return { ok: true, value: number };
 }
 
@@ -142,6 +154,36 @@ function coerceEndpoint(text: string): Coerced {
   }
 }
 
+/** What every place shows of a ping URL: the scheme and the host, then `/...`. Empty stays empty. */
+export function maskPingUrl(url: string): string {
+  if (url === "") return "";
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}/...`;
+  } catch {
+    return "(not a valid address)";
+  }
+}
+
+/** The value of a key for output: a ping URL is masked, every other value stays as it is. */
+export function displaySnapshotValue(key: SnapshotKey, value: SnapshotValue | undefined): SnapshotValue | undefined {
+  return key === "ping_url" ? maskPingUrl(String(value ?? "")) : value;
+}
+
+/** The messages here never repeat the address: it is a capability. */
+function coercePingUrl(text: string): Coerced {
+  if (text === "") return { ok: true, value: text };
+  if (text.endsWith("/...")) return { ok: false, error: "ping_url ends in /..., the masked form that status shows; give the whole address" };
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return { ok: false, error: "ping_url must start with https:// (or http:// with allow_http)" };
+    if (url.search !== "" || url.hash !== "" || url.username !== "" || url.password !== "") return { ok: false, error: "ping_url must be a plain address: no query, fragment or user name" };
+    return { ok: true, value: text };
+  } catch {
+    return { ok: false, error: "ping_url is not a valid URL" };
+  }
+}
+
 function coerceText(key: SnapshotKey, text: string): Coerced {
   if (text.length > 300 || /[\0\r\n]/u.test(text)) return { ok: false, error: `${key} is too long or has a control character` };
   if (key === "prefix") {
@@ -152,6 +194,7 @@ function coerceText(key: SnapshotKey, text: string): Coerced {
   if (key === "bucket" && text !== "" && !BUCKET_PATTERN.test(text)) return { ok: false, error: "bucket is not a valid bucket name" };
   if (key === "region" && !REGION_PATTERN.test(text)) return { ok: false, error: "region is not a valid region name" };
   if (key === "endpoint") return coerceEndpoint(text);
+  if (key === "ping_url") return coercePingUrl(text);
   if (key === "dir" && text === "") return { ok: false, error: "dir is empty" };
   return { ok: true, value: text };
 }
@@ -282,10 +325,16 @@ export interface SnapshotSettings {
   dir: string;
   /** Local snapshots to keep. */
   keep: number;
-  /** Snapshots to keep in the bucket. */
+  /** Snapshots to keep in the bucket. Ignored when `remotePrune` is false. */
   keepRemote: number;
+  /** Monthly copies to keep under `<host>/monthly/` in the bucket; 0 is off. Pruned only when `remotePrune` is true. */
+  keepMonthly: number;
+  /** False: darius never deletes in the bucket (no prune, no `delete --remote`); the bucket's lifecycle rule keeps it tidy. */
+  remotePrune: boolean;
   /** Null when no endpoint and bucket are set, or when they are refused (see `problems`). */
   remote: SnapshotRemote | null;
+  /** The dead-man ping address; null when none is set or the `allow_http` rule refuses it (see `problems`). Never print it. */
+  pingUrl: string | null;
 }
 
 export interface ResolvedSnapshotSettings {
@@ -353,6 +402,19 @@ function remoteOf(values: ReadonlyMap<SnapshotKey, SnapshotValue>, problems: str
   };
 }
 
+/** The ping address if the `allow_http` rule lets it through, else null and a problem that does not repeat it. */
+function pingOf(values: ReadonlyMap<SnapshotKey, SnapshotValue>, problems: string[]): string | null {
+  const ping = textOf(values, "ping_url");
+  if (ping === "") return null;
+  try {
+    checkEndpointAllowed(ping, values.get("allow_http") === true, "snapshot settings");
+    return ping;
+  } catch {
+    problems.push("ping_url uses plain http: set allow_http to true and use a loopback or tailnet address, or use https");
+    return null;
+  }
+}
+
 /** The merged settings and where each value came from. Never throws. */
 export function resolveSnapshotSettings(input: ResolveInput = {}): ResolvedSnapshotSettings {
   const env = input.env ?? process.env;
@@ -391,9 +453,19 @@ export function resolveSnapshotSettings(input: ResolveInput = {}): ResolvedSnaps
     problems.push(`dir ${dir} overlaps the store or the config folder; a snapshot must live outside both`);
   }
   const remote = remoteOf(values, problems);
+  const pingUrl = pingOf(values, problems);
 
   return {
-    settings: { enabled: values.get("enabled") === true, dir, keep: Number(values.get("keep")), keepRemote: Number(values.get("keep_remote")), remote },
+    settings: {
+      enabled: values.get("enabled") === true,
+      dir,
+      keep: Number(values.get("keep")),
+      keepRemote: Number(values.get("keep_remote")),
+      keepMonthly: Number(values.get("keep_monthly")),
+      remotePrune: values.get("remote_prune") === true,
+      remote,
+      pingUrl,
+    },
     values,
     sources,
     problems,

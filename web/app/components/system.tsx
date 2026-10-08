@@ -10,8 +10,9 @@ import type { BackupsStatus, SystemDisk, SystemHost, SystemProject, SystemStatus
 import { useClock } from "../lib/clock.tsx";
 import { href } from "../lib/paths.ts";
 import { byteSize, momentText, relativeTime, uptimeText } from "../lib/format.ts";
+import { backupWord } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
-import { Section, Time } from "./ui.tsx";
+import { Section, Status, Time } from "./ui.tsx";
 
 const DAY_MS = 86_400_000;
 
@@ -167,6 +168,28 @@ interface HostRowProps {
   host: SystemHost;
 }
 
+/** The last backup of a host: its state, when the last good snapshot was made, and why the newest run failed. */
+function HostBackupLine({ host }: HostRowProps): React.ReactNode {
+  const { backup } = host;
+  if (backup === null) {
+    return (
+      <p className="sy-meta">
+        <span className="ink-idle">last backup: none</span>
+      </p>
+    );
+  }
+  const word = backupWord(backup.state);
+  return (
+    <p className="sy-meta">
+      <span>last backup</span>
+      <Status tone={word.tone} label={word.label} />
+      {backup.lastOkAt === null ? <span className="ink-idle">no good snapshot yet</span> : <Time iso={backup.lastOkAt} />}
+      {backup.reason === null ? null : <span className="ink-late">{backup.reason}</span>}
+      {backup.error === null ? null : <span className="ink-bad">{backup.error}</span>}
+    </p>
+  );
+}
+
 function HostRow({ host }: HostRowProps): React.ReactNode {
   return (
     <li className="sy-item">
@@ -183,6 +206,7 @@ function HostRow({ host }: HostRowProps): React.ReactNode {
         </span>
         <span>{host.projects.length === 0 ? "no projects" : host.projects.join(", ")}</span>
       </p>
+      <HostBackupLine host={host} />
     </li>
   );
 }

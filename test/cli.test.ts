@@ -69,3 +69,11 @@ test("an unregistered flag on help is simply ignored, not a crash", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Commands:/);
 });
+
+test("sync --reseed with --pull-only, or without a project selection, is a usage error, exit 2", () => {
+  for (const argv of [["sync", "--reseed", "--pull-only", "--project", "demo"], ["sync", "--reseed"], ["sync", "--reseed", "--json"]]) {
+    const result = spawnSync(BIN, argv, { encoding: "utf8" });
+    assert.equal(result.status, 2, `argv=${JSON.stringify(argv)}: ${result.stderr}`);
+    assert.match(result.stderr, /--reseed/);
+  }
+});

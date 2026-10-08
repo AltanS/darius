@@ -259,7 +259,13 @@ darius snapshot create    # make one now
 darius snapshot list      # the snapshots on this host
 ```
 
-The full guide covers the bucket, the settings, the key pair, restore and troubleshooting:
+To set up every host once, `darius snapshot config push --hosts host-b,host-c` copies the settings
+and the key pair over your ssh. `darius snapshot status --hosts` lists the last backup of every host
+and marks a host that stopped.
+
+If a host or the sync bucket is lost, `darius restore` brings a store back from a snapshot, and
+`darius sync --reseed` refills an empty sync bucket. The full guide covers the bucket, the settings,
+the key pair, a key that cannot delete, the recovery playbooks and troubleshooting:
 [`docs/backups.md`](docs/backups.md).
 
 ## Update
@@ -569,8 +575,9 @@ the full reference.
 - `darius vigil add|set-body|set|list|show|close|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
-- `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
+- `darius snapshot create|list|status|check|fetch|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair. `fetch <name>` copies one from the bucket.
 - `darius root [--json]`: print the tracker tree path; `--json` reports the mode (`store`, `git`, `none`).
+- `darius restore <name> [--runs-only] [--from-host <host>] [--dry-run] [--yes]`: bring this host's store back from a snapshot. It checks the SHA-256, refuses while a darius unit runs, and moves the old store aside. `--runs-only` adds only the missing run folders.
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and the tracker tree in the store, or an import of its rituals when a `.tracker/` folder exists.
 - `darius onboard [scan] [--dry-run] [--only vigil]`: move a repo's `.tracker/` into the store. Never commits.
 - `darius milestone archive <milestone> [--dry-run] [--keep] [--incomplete "<reason>"]`: remove an archived milestone's folder. It refuses without the archive document, while an item is neither done nor skipped (`--incomplete "<reason>"` archives anyway and records the reason), or while a worklog thread is open before stage `reviewed`. It closes the `reviewed` threads as done. In the store it removes the folder and prints the line that undoes it; in a git tracker it removes nothing and prints the `git rm` command to run.

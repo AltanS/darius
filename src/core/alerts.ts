@@ -15,6 +15,15 @@
  * body, url}`, and the next flush sends that notice again, at most
  * MAX_TRIES times in all.
  *
+ * The one alert no host wrote is a host that stopped backing up. A stale
+ * host leaves no line, so one host must watch: the host with the smallest
+ * host id among the hosts whose newest `_global` line is under 36 hours old
+ * (`watcherHost`). Every host computes that from the same synced ledger, so
+ * at most one sends, with no lease. It sends `snapshot-stale:<host>:<UTC
+ * date>`, once a day per stale host; `alert.sent` in `_global` dedupes it
+ * after a sync. When the watcher changes, the new one may repeat one notice
+ * that day, which is accepted. A host in state `silent` or `off` gets none.
+ *
  * WHEN. `flushAlerts` runs after every run-due batch, `run now` and `run
  * resume`, and after `darius sync` (the sync timer, every 15 minutes), which
  * catches the lines a session writes by hand. A host without push keys sends
@@ -25,6 +34,7 @@
 import { existsSync } from "node:fs";
 
 import { errorMessage } from "../runtime.ts";
+import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { projectDir } from "./paths.ts";
@@ -117,8 +127,55 @@ function checkAlert(line: LedgerLine): Alert | null {
   };
 }
 
-/** The alerts in a project's ledger that this host must send: its own lines since `since`. */
-export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], since: string, host: string): Alert[] {
+function failedBackupAlert(line: LedgerLine): Alert {
+  const key = `snapshot-failed:${line.host}:${line.id}`;
+  const error = isText(line.error) ? oneLine(line.error) : "no reason given";
+  return { key, tag: key, title: `Backup failed on ${line.host}`, body: error, url: "/status" };
+}
+
+/**
+ * The host that raises the stale-backup alert: the smallest host id among the
+ * hosts whose newest line in `lines` (the `_global` ledger, any type) is at
+ * most 36 hours old at `now`. Null when no host is that recent. Pure.
+ */
+export function watcherHost(lines: readonly LedgerLine[], now: number): string | null {
+  const active = new Set<string>();
+  for (const line of lines) {
+    if (now - Date.parse(line.at) <= STALE_AFTER_MS) active.add(line.host);
+  }
+  return [...active].toSorted()[0] ?? null;
+}
+
+function staleAlert(state: BackupState, now: number): Alert {
+  const key = `snapshot-stale:${state.host}:${new Date(now).toISOString().slice(0, 10)}`;
+  // The hours count from the line the host is judged on: its last upload when it has a bucket.
+  const since = (state.needs_upload ? state.last_upload_at : state.last_ok_at) ?? state.last_at;
+  const hours = Math.floor((now - Date.parse(since)) / 3_600_000);
+  const reason = state.reason === null ? "" : `${state.reason[0]?.toUpperCase() ?? ""}${state.reason.slice(1)}. `;
+  const last = state.last_ok_at === null ? "It never made a good backup." : `Last good backup: ${state.last_ok_at}.`;
+  return {
+    key,
+    tag: key,
+    title: `No backup from ${state.host} for ${String(hours)} hours`,
+    body: `${reason}${last} Look: darius snapshot status --hosts`,
+    url: "/status",
+  };
+}
+
+/** The stale-host alerts this host must send at `now`: none unless it is the watcher. */
+function staleAlerts(ledger: readonly LedgerLine[], host: string, now: number): Alert[] {
+  if (watcherHost(ledger, now) !== host) return [];
+  return classifyBackups(ledger, now)
+    .filter((state) => state.state === "stale")
+    .map((state) => staleAlert(state, now));
+}
+
+/**
+ * The alerts in a project's ledger that this host must send: its own lines
+ * since `since`, and in `_global` the stale-backup notices when this host is
+ * the watcher (`now` is the clock for those).
+ */
+export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], since: string, host: string, now: number = Date.now()): Alert[] {
   const alerts: Alert[] = [];
   for (const line of ledger) {
     if (line.host !== host || line.at < since) continue;
@@ -127,8 +184,10 @@ export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], si
     if (line.type === "run.held" && run !== undefined) alert = heldAlert(project.name, line, run);
     else if (line.type === "run.completed" && run !== undefined) alert = completedAlert(project, line, run);
     else if (line.type === "harness.checked" && project.name === GLOBAL_PROJECT) alert = checkAlert(line);
+    else if (line.type === SNAPSHOT_FAILED && project.name === GLOBAL_PROJECT) alert = failedBackupAlert(line);
     if (alert !== null) alerts.push(alert);
   }
+  if (project.name === GLOBAL_PROJECT) alerts.push(...staleAlerts(ledger, host, now));
   return alerts;
 }
 
@@ -231,7 +290,7 @@ function newsSince(from: Sender): string {
 }
 
 /** Sends what the ledgers of this host hold and nobody was told yet. Null when this host cannot send. */
-export async function flushAlerts(options: { isDryRun?: boolean; projects?: readonly string[] } = {}): Promise<Delivery | null> {
+export async function flushAlerts(options: { isDryRun?: boolean; projects?: readonly string[]; now?: number } = {}): Promise<Delivery | null> {
   const from = sender();
   if (from === null) return null;
   const since = newsSince(from);
@@ -241,7 +300,7 @@ export async function flushAlerts(options: { isDryRun?: boolean; projects?: read
   const names = options.projects ?? [...listProjects(), GLOBAL_PROJECT];
   for (const name of names) {
     const project = openProject(name);
-    const delivery = await sendAlerts(project, ledgerAlerts(project, readLedger(project), since, host), options);
+    const delivery = await sendAlerts(project, ledgerAlerts(project, readLedger(project), since, host, options.now), options);
     if (delivery === null) continue;
     total.sent += delivery.sent;
     total.failed.push(...delivery.failed);

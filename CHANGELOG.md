@@ -2,6 +2,48 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.79.0] - 2026-10-08
+
+### Added
+
+- `remote_prune` snapshot setting (default `true`). With `false`, darius never deletes in the bucket: a run skips the prune, `keep_remote` is ignored, and `snapshot delete --remote` exits 1. Use it with a key that cannot delete. It shows in `snapshot config`, `status` and `/settings/backups`.
+- `snapshot check` reports whether the key may delete (`deleted` or `refused`) and the bucket's versioning state (`enabled`, `suspended`, `off` or `unknown`). It warns when they do not fit `remote_prune`. A refused delete exits 0 and leaves the fixed probe object, which the next check overwrites. `--json` adds `delete`, `versioning` and `warnings`. `status` and the settings page show the last check.
+- A refused abort of a failed multipart upload now gives a warning that names `s3:AbortMultipartUpload` and the lifecycle rule.
+- docs/backups.md, "A key that cannot delete": the threat, a sample IAM policy without a Delete action, versioning, and two lifecycle rules, one per mode.
+- `darius snapshot config push --hosts a,b` copies the snapshot settings and the key pair to other hosts over the operator's ssh. The secret goes on ssh stdin only. `dir` and `enabled` stay on each host. A host with other values writes nothing until `--overwrite`. A key the host's environment sets to another value is refused. A push to the local host is refused.
+- `darius snapshot config receive` is the other half, for `push` only.
+- `darius sync --reseed` refills an empty or lost sync bucket from one host that holds a full local copy. It puts back every chunk of every host and every blob in the store, all with If-None-Match, then syncs as usual. A second run pushes nothing. It needs `--project` or `--all-projects` and cannot be combined with `--pull-only`.
+- `docs/backups.md` has a section "When the sync bucket is lost".
+- `darius restore <name>` brings the store back from a snapshot. It checks the SHA-256 against the manifest and refuses while a darius unit is active or a lock is held. It refuses an archive entry outside the store and any call from a ritual run, and it needs `--yes` or a typed `yes`. The old store is moved aside, never deleted. One cut last line in `open.jsonl` or `gate.jsonl` is trimmed and reported, and a `store.restored` line goes to `_global`.
+- `darius restore <name> --runs-only` adds only the run folders this host lacks, for a rebuilt host after a sync. `--dry-run` runs every check and writes nothing. `--from-host` restores another host's snapshot on purpose.
+- `darius snapshot fetch <name> [--host <host>]` copies a snapshot and its manifest from the bucket with GET only, and checks the size and SHA-256.
+- `keep_monthly` snapshot setting (0 to 120, default `0`, off). The first good snapshot of each UTC month is also kept as `<prefix>/<host>/monthly/<name>`, made inside the bucket with a server-side CopyObject (new `S3.copy`), with a plain upload as the fallback for an archive over 5 GB or a 400. With `remote_prune` on, darius keeps the newest `keep_monthly` there and touches only `monthly/`. With it off, darius deletes nothing and the bucket's lifecycle rule governs. `list --remote` tags monthly copies, `status` shows the newest, and `snapshot fetch monthly/<name>` fetches one. `docs/backups.md` gains "Monthly copies" and a per-host lifecycle sample.
+
+- Every `darius snapshot create` writes one line to the `_global` ledger: `snapshot.ok`, `snapshot.failed`, or `snapshot.off` when `enabled = false`. The line names the bucket by its host name only. A failed ledger write is a warning and never changes the exit code. A run refused by the lock writes no line. `--json` of `create` adds `storeBytes` and `busy`.
+- `darius snapshot status --hosts [--json]` lists the last snapshot line of every host from the synced `_global` ledger, with the state `ok`, `stale` (over 36 hours; for a host with a bucket, no upload that worked in 36 hours, with a `reason` such as `no upload for 40 h`), `failed`, `off` or `silent` (no line for 30 days). `classifyBackups` in `src/core/backup-state.ts` is the pure core.
+- `--hosts` may stand bare (last, or before another flag) so it works as a switch for `status`. `config push` and `update` still need the list.
+- `docs/backups.md`, "See every host".
+- The hosts list on `/status` shows each host's last backup (state word, age, or "none"). `/api/status.json` gets `hosts[]` with `backup` (`state`, `lastOkAt`, `ageMs`, `name`, `error`, `reason`). The list also shows a host that only wrote snapshot lines.
+- Two push alerts. The host whose run failed sends "Backup failed on <host>" from its own `snapshot.failed` line. The watcher, the smallest host id among the hosts that wrote a `_global` line in the last 36 hours, sends "No backup from <host> for <n> hours", once per stale host per UTC day, with the reason (for example "No upload for 60 h") in the text. A host whose uploads fail every day is stale, so a dead key or bucket raises the alarm. `watcherHost` is pure. No lease.
+- `ping_url` snapshot setting (env `DARIUS_SNAPSHOT_PING_URL`, default empty), a dead-man ping in the style of healthchecks. After a run, one GET goes to the address after a good run and to `<address>/fail` after any other result, with a 10 second timeout. A failed ping is a warning and never changes the exit code. The address is a secret: `snapshot config`, `snapshot status`, the settings page and every warning show only `https://host/...`, no ledger line holds it, and `config push` does not send it. Plain `http` follows the `allow_http` rule.
+- `docs/backups.md`, "Alarms".
+
+### Changed
+
+- The concept, `docs/backups.md` and the skill name `darius restore` instead of a hand `tar -xzf`. The hand recipe stays as the fallback, and the web page still has no restore button.
+- `docs/backups.md` is one guide in ten sections: what protects against what, setup on every host, a key that cannot delete, the hosts list and alarms, the recovery playbooks (one host lost, the whole mesh lost, the sync bucket lost) and the key threat model. `docs/concept.md` and the README record the same layers.
+
+### Fixed
+
+- `darius restore` also refuses while the service of a darius timer runs (`darius-sync`, `darius-run-due`, `darius-vigil-sweep`, `darius-snapshot`): a oneshot service keeps running after its timer stops. `--runs-only` waits for `darius-run-due.service` too. The stop line stops the services, the start line starts only the timers and `darius-web`.
+- `darius restore` with a state dir that ends in `/` unpacked into the store itself. It now builds its folders next to the store.
+- `darius restore` runs the unit and lock checks again after the confirmation, and refuses if one fails.
+- `darius restore` refuses a store folder that is a symlink or a mount point, and points to the hand recipe. A store that cannot be moved aside leaves no unpacked copy behind. A failed move back reports both errors and both folders.
+- A sync push checks that each local blob hashes to its name before the PUT, and stops with the blob's name when it does not.
+- A monthly copy counts as done only with its manifest in the bucket. Without one, the next run of that month makes the copy again.
+- `snapshot create --no-upload` on a host with a bucket sends no dead-man ping.
+- `snapshot config push`: an ssh call that hits the timeout is `timed-out` (exit 1, the host's state is unknown), not `unreachable` (exit 3).
+
 ## [0.78.1] - 2026-10-08
 
 ### Changed

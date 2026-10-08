@@ -16,14 +16,14 @@
  */
 
 import { execFile } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { createS3, S3Error, S3NetworkError, type Credentials, type RemoteConfig, type S3 } from "../../src/core/s3.ts";
+import { amzDateOf, authorizationHeader, canonicalQuery, createS3, S3Error, S3NetworkError, type Credentials, type RemoteConfig, type S3 } from "../../src/core/s3.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -41,13 +41,23 @@ export const TEST_CREDENTIALS: Credentials = {
   secretAccessKey: "darius-test-secret-throwaway",
 };
 
+/** A second throwaway identity, for a key that may not delete. Not a secret. */
+export const NO_DELETE_CREDENTIALS: Credentials = {
+  accessKeyId: "darius-test-no-delete",
+  secretAccessKey: "darius-test-no-delete-throwaway",
+};
+
 export interface SeaweedFs {
   containerName: string;
   endpoint: string;
   /** Ready for `createS3`. The bucket already exists. */
   remote: RemoteConfig;
   credentials: Credentials;
+  /** The no-delete identity, when `noDeletePrefix` was given; else null. */
+  noDeleteCredentials: Credentials | null;
   s3: S3;
+  /** PutBucketVersioning with the admin identity (the client has no such call: darius never changes a bucket's settings). */
+  setVersioning(status: "Enabled" | "Suspended"): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -55,6 +65,23 @@ export interface StartOptions {
   bucket?: string;
   /** Configure the SSE key-encryption key. Without it SeaweedFS answers 500 to any SSE put. Default true. */
   sseKek?: boolean;
+  /**
+   * Add an identity that may not delete, bound to the sample policy of docs/backups.md
+   * ("A key that cannot delete") for this prefix of the bucket. SeaweedFS reads AWS-style
+   * policies from the identity file.
+   */
+  noDeletePrefix?: string;
+}
+
+/** The sample IAM policy of docs/backups.md, for `bucket` and `prefix`. No Delete action. */
+export function noDeletePolicy(bucket: string, prefix: string) {
+  return {
+    Version: "2012-10-17",
+    Statement: [
+      { Effect: "Allow", Action: ["s3:ListBucket", "s3:GetBucketVersioning", "s3:ListBucketMultipartUploads"], Resource: `arn:aws:s3:::${bucket}` },
+      { Effect: "Allow", Action: ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload"], Resource: `arn:aws:s3:::${bucket}/${prefix}/*` },
+    ],
+  };
 }
 
 /**
@@ -97,20 +124,26 @@ async function freeLoopbackPort(): Promise<number> {
   throw new Error(`no free loopback port after ${PORT_ATTEMPTS} attempts`);
 }
 
-async function writeConfigDir(sseKek: boolean): Promise<string> {
+async function writeConfigDir(sseKek: boolean, bucket: string, noDeletePrefix: string | undefined): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "darius-seaweedfs-test-"));
   // Rootless podman does not remap ownership on a bind mount, so the
   // container's root (a subordinate host uid) cannot traverse a 0700 dir.
   await chmod(dir, 0o755);
-  const identity = {
-    identities: [
-      {
-        name: "darius-test",
-        credentials: [{ accessKey: TEST_CREDENTIALS.accessKeyId, secretKey: TEST_CREDENTIALS.secretAccessKey }],
-        actions: ["Admin", "Read", "Write", "List", "Tagging"],
-      },
-    ],
+  const admin = {
+    name: "darius-test",
+    credentials: [{ accessKey: TEST_CREDENTIALS.accessKeyId, secretKey: TEST_CREDENTIALS.secretAccessKey }],
+    actions: ["Admin", "Read", "Write", "List", "Tagging"],
   };
+  const identity =
+    noDeletePrefix === undefined
+      ? { identities: [admin] }
+      : {
+          identities: [
+            admin,
+            { name: "darius-no-delete", credentials: [{ accessKey: NO_DELETE_CREDENTIALS.accessKeyId, secretKey: NO_DELETE_CREDENTIALS.secretAccessKey }], policyNames: ["darius-no-delete"] },
+          ],
+          policies: [{ name: "darius-no-delete", content: JSON.stringify(noDeletePolicy(bucket, noDeletePrefix)) }],
+        };
   await writeFile(join(dir, "identity.json"), JSON.stringify(identity), { mode: 0o644 });
   if (sseKek) {
     const kek = randomBytes(32).toString("base64");
@@ -145,7 +178,7 @@ export async function startSeaweedFs(options: StartOptions = {}): Promise<Seawee
   const port = await freeLoopbackPort();
   const containerName = `darius-s3-test-${randomUUID()}`;
   const endpoint = `http://127.0.0.1:${port}`;
-  const configDir = await writeConfigDir(options.sseKek ?? true);
+  const configDir = await writeConfigDir(options.sseKek ?? true, bucket, options.noDeletePrefix);
 
   async function stop(): Promise<void> {
     await removeContainer(containerName);
@@ -188,9 +221,29 @@ export async function startSeaweedFs(options: StartOptions = {}): Promise<Seawee
     };
     const s3 = createS3(remote, TEST_CREDENTIALS);
     await createBucketWhenReady(s3, endpoint);
-    return { containerName, endpoint, remote, credentials: TEST_CREDENTIALS, s3, stop };
+    const setVersioning = (status: "Enabled" | "Suspended"): Promise<void> => putVersioning(endpoint, bucket, status);
+    const noDeleteCredentials = options.noDeletePrefix === undefined ? null : NO_DELETE_CREDENTIALS;
+    return { containerName, endpoint, remote, credentials: TEST_CREDENTIALS, noDeleteCredentials, s3, setVersioning, stop };
   } catch (error) {
     await stop();
     throw error;
   }
+}
+
+/** One signed `PUT /<bucket>?versioning` with the admin identity. */
+async function putVersioning(endpoint: string, bucket: string, status: "Enabled" | "Suspended"): Promise<void> {
+  const body = `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>${status}</Status></VersioningConfiguration>`;
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+  const amzDate = amzDateOf(new Date());
+  const path = `/${bucket}`;
+  const query = canonicalQuery([["versioning", ""]]);
+  const headers: Array<readonly [string, string]> = [
+    ["x-amz-content-sha256", payloadHash],
+    ["x-amz-date", amzDate],
+  ];
+  const host = new URL(endpoint).host;
+  const authorization = await authorizationHeader({ method: "PUT", path, query, headers: [["host", host], ...headers], payloadHash, amzDate, region: "us-east-1" }, TEST_CREDENTIALS);
+  const response = await fetch(`${endpoint}${path}?${query}`, { method: "PUT", headers: { ...Object.fromEntries(headers), authorization }, body });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`PUT ?versioning: HTTP ${String(response.status)} ${text.slice(0, 200)}`);
 }

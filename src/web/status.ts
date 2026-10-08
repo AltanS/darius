@@ -45,6 +45,7 @@ import type {
   RunRow,
   VigilRow,
 } from "./api.ts";
+import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
 import { workspaceIconOf } from "./workspace-icon.ts";
 
@@ -350,6 +351,7 @@ export function collectStatus(now: Date = new Date()): HostStatus {
     utcOffset: -now.getTimezoneOffset() || 0,
     profiles: profiles(),
     projects: listProjects().map((name) => projectStatus(name, now)),
+    hosts: hostBackupEntries(hostId(), now.getTime()),
   };
 }
 

@@ -5,7 +5,7 @@
  * colour. A date in the future is the date phrase, in the quiet tone.
  */
 
-import type { RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
+import type { HostBackupState, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { dayGap, dayName, shortDate } from "./format.ts";
 import type { Badge, Tone } from "./tone.ts";
 
@@ -80,6 +80,19 @@ export function ritualWord(ritual: RitualRow, today: string): Badge {
 export function vigilWord(vigil: VigilRow): Badge | null {
   if (vigil.state === "closed") return vigil.verdict === "failed" ? FAILED : { tone: "ok", label: vigil.verdict === null ? "Closed" : vigil.verdict.charAt(0).toUpperCase() + vigil.verdict.slice(1) };
   return vigil.flagged ? FLAGGED : null;
+}
+
+/**
+ * How a host's backups are doing, on the hosts card of the status page. Late
+ * is the orange of a missed date (stale), bad the red of a failed run; off and
+ * silent are on purpose or gone, so they stay quiet.
+ */
+export function backupWord(state: HostBackupState): Badge {
+  if (state === "ok") return { tone: "ok", label: "Backed up" };
+  if (state === "stale") return { tone: "late", label: "Backup stale" };
+  if (state === "failed") return { tone: "bad", label: "Backup failed" };
+  if (state === "off") return { tone: "idle", label: "Backups off" };
+  return { tone: "idle", label: "Silent" };
 }
 
 /** The tones a rail at a row's left edge can have; a plain row has none. */

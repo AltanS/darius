@@ -13,8 +13,9 @@ import { join } from "node:path";
 import { hostId } from "../core/ledger.ts";
 import { configDir, stateDir } from "../core/paths.ts";
 import { listLocalSnapshots, parseSnapshotName, readSnapshotState, runningSnapshot } from "../core/snapshot.ts";
-import { credentialsSource, resolveSnapshotSettings, type ResolvedSnapshotSettings, type SnapshotKey } from "../core/snapshot-settings.ts";
-import type { BackupField, BackupRow, BackupsStatus } from "./api.ts";
+import { classifyBackups, readGlobalLines, type BackupState } from "../core/backup-state.ts";
+import { credentialsSource, maskPingUrl, resolveSnapshotSettings, type ResolvedSnapshotSettings, type SnapshotKey } from "../core/snapshot-settings.ts";
+import type { BackupField, BackupRow, BackupsStatus, HostBackup, HostBackupEntry } from "./api.ts";
 
 function field(resolved: ResolvedSnapshotSettings, key: SnapshotKey): BackupField<string> {
   return { value: String(resolved.values.get(key) ?? ""), source: resolved.sources.get(key) ?? "default" };
@@ -22,6 +23,11 @@ function field(resolved: ResolvedSnapshotSettings, key: SnapshotKey): BackupFiel
 
 function flag(resolved: ResolvedSnapshotSettings, key: SnapshotKey): BackupField<boolean> {
   return { value: resolved.values.get(key) === true, source: resolved.sources.get(key) ?? "default" };
+}
+
+/** The ping address is a capability: the page gets only its scheme and host. */
+function maskedField(resolved: ResolvedSnapshotSettings, key: SnapshotKey): BackupField<string> {
+  return { value: maskPingUrl(String(resolved.values.get(key) ?? "")), source: resolved.sources.get(key) ?? "default" };
 }
 
 function whole(resolved: ResolvedSnapshotSettings, key: SnapshotKey): BackupField<number> {
@@ -54,6 +60,7 @@ export function collectBackups(): BackupsStatus {
       dir: { ...field(resolved, "dir"), value: shortPath(String(resolved.values.get("dir") ?? "")) },
       keep: whole(resolved, "keep"),
       keepRemote: whole(resolved, "keep_remote"),
+      remotePrune: flag(resolved, "remote_prune"),
       endpoint: field(resolved, "endpoint"),
       bucket: field(resolved, "bucket"),
       region: field(resolved, "region"),
@@ -61,6 +68,7 @@ export function collectBackups(): BackupsStatus {
       pathStyle: flag(resolved, "path_style"),
       allowHttp: flag(resolved, "allow_http"),
       sse: flag(resolved, "sse"),
+      pingUrl: maskedField(resolved, "ping_url"),
     },
     problems: resolved.problems,
     credentials: credentialsSource(),
@@ -68,9 +76,38 @@ export function collectBackups(): BackupsStatus {
     running: runningSnapshot(dir),
     last: state.last,
     remote: state.remote === null ? null : { at: state.remote.at, ok: state.remote.ok, error: state.remote.error, count: state.remote.objects.length },
+    check:
+      state.check === null
+        ? null
+        : { at: state.check.at, delete: state.check.delete, versioning: state.check.versioning, warnings: state.check.warnings, stale: state.check.remotePrune !== resolved.settings.remotePrune },
     snapshots: rows,
     localBytes: local.reduce((sum, row) => sum + row.bytes, 0),
     storePath: shortPath(stateDir()),
     envFile: shortPath(join(configDir(), "snapshot.env")),
   };
+}
+
+// --- every host's last backup ---------------------------------------------------------------------
+
+/** The backup state of every host that wrote a snapshot line. A broken `_global` ledger is no state, not an error: the page must still load. */
+export function readHostBackupStates(now: number = Date.now()): BackupState[] {
+  try {
+    return classifyBackups(readGlobalLines(), now);
+  } catch {
+    return [];
+  }
+}
+
+export function hostBackup(state: BackupState): HostBackup {
+  return { state: state.state, lastOkAt: state.last_ok_at, ageMs: state.age_ms, name: state.name, error: state.error, reason: state.reason };
+}
+
+/** This host first, then the others by name, each with its backup (null when it wrote no snapshot line). */
+export function hostBackupEntries(self: string, now: number = Date.now()): HostBackupEntry[] {
+  const states = new Map(readHostBackupStates(now).map((state) => [state.host, state]));
+  const others = [...states.keys()].filter((host) => host !== self).toSorted();
+  return [self, ...others].map((host) => {
+    const state = states.get(host);
+    return { host, self: host === self, backup: state === undefined ? null : hostBackup(state) };
+  });
 }

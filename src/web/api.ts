@@ -385,9 +385,40 @@ export interface HostStatus {
   utcOffset: number;
   profiles: ProfileRow[];
   projects: ProjectStatus[];
+  /** This host and every host that wrote a snapshot line, with its last backup. */
+  hosts: HostBackupEntry[];
 }
 
 // --- system status (0.44.0) ----------------------------------------------------------------
+
+/**
+ * How one host's backups are doing, from the snapshot lines every host writes
+ * into the `_global` ledger (src/core/backup-state.ts). `silent` is a host
+ * with no line of any kind for 30 days: gone, not late.
+ */
+export type HostBackupState = "ok" | "stale" | "failed" | "off" | "silent";
+
+export interface HostBackup {
+  state: HostBackupState;
+  /** When its newest good snapshot was made; null when it never made one. */
+  lastOkAt: string | null;
+  /** Milliseconds from `lastOkAt` to when this was read; null without one. */
+  ageMs: number | null;
+  /** The newest good snapshot's name, or null. */
+  name: string | null;
+  /** Why the newest run failed, when it did; else null. */
+  error: string | null;
+  /** Why the host is `stale` ("no upload for 40 h"); else null. */
+  reason: string | null;
+}
+
+/** One host and its backup, for `/api/status.json`. `backup` is null for a host that wrote no snapshot line. */
+export interface HostBackupEntry {
+  host: string;
+  /** True for the host that serves this page. */
+  self: boolean;
+  backup: HostBackup | null;
+}
 
 /** One host that wrote ledger chunks into a project this host holds, or this host itself. */
 export interface SystemHost {
@@ -400,6 +431,8 @@ export interface SystemHost {
   chunks: number;
   /** The projects this host wrote into. */
   projects: string[];
+  /** Its last backup; null when it wrote no snapshot line. */
+  backup: HostBackup | null;
 }
 
 /** What one project holds in the local store, and when this host last synced it. */
@@ -474,8 +507,10 @@ export interface BackupSettings {
   dir: BackupField<string>;
   /** Local snapshots to keep. */
   keep: BackupField<number>;
-  /** Snapshots to keep in the bucket. */
+  /** Snapshots to keep in the bucket. Ignored when `remotePrune` is false. */
   keepRemote: BackupField<number>;
+  /** False: darius never deletes in the bucket; its lifecycle rule keeps it tidy. */
+  remotePrune: BackupField<boolean>;
   endpoint: BackupField<string>;
   bucket: BackupField<string>;
   region: BackupField<string>;
@@ -483,6 +518,11 @@ export interface BackupSettings {
   pathStyle: BackupField<boolean>;
   allowHttp: BackupField<boolean>;
   sse: BackupField<boolean>;
+  /**
+   * The dead-man ping address, masked: the scheme and the host, then `/...`.
+   * The address itself is a capability and never reaches the page.
+   */
+  pingUrl: BackupField<string>;
 }
 
 export interface BackupRow {
@@ -515,6 +555,11 @@ export interface BackupsStatus {
   last: { at: string; ok: boolean; name: string | null; error: string | null } | null;
   /** The last contact with the bucket (a run's upload or a check); `count` is its listing then. */
   remote: { at: string; ok: boolean; error: string | null; count: number } | null;
+  /**
+   * The last bucket check: whether the key may delete, whether the bucket keeps
+   * versions, and its warnings. `stale` is true when `remote_prune` changed since.
+   */
+  check: { at: string; delete: "deleted" | "refused"; versioning: "enabled" | "suspended" | "off" | "unknown"; warnings: string[]; stale: boolean } | null;
   /** Local snapshots, plus the ones only the bucket holds, newest first. */
   snapshots: BackupRow[];
   /** Bytes the local snapshots take. */

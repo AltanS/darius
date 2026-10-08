@@ -8,7 +8,8 @@
  *   POST /api/snapshots/settings            body { values: { key: value | null } }; null clears a key
  *   POST /api/snapshots/credentials         body { accessKeyId, secretAccessKey }; write-only
  *   POST /api/snapshots/credentials/clear   remove the saved key pair
- *   POST /api/snapshots/check               list the bucket, write and delete a probe object
+ *   POST /api/snapshots/check               list the bucket, write a probe object, try to delete it,
+ *                                           and ask for the versioning state
  *   POST /api/snapshots/delete              body { name, where: "local" | "remote" }
  *
  * Every answer is `{ ok: true, ... }` or `{ ok: false, error }`. A request
@@ -139,5 +140,6 @@ export async function snapshotApi(request: SnapshotRequest, start: RunStarter = 
   if (route === "credentials/clear") return clearCredentials();
   if (route === "delete") return deleteOne(parsed);
   const checked = await checkRemote(resolveSnapshotSettings(), hostId());
-  return checked.ok ? done({ count: checked.objects.length }) : fail(400, checked.error ?? "the check failed");
+  if (!checked.ok) return fail(400, checked.error ?? "the check failed");
+  return done({ count: checked.objects.length, delete: checked.delete, versioning: checked.versioning, warnings: checked.warnings });
 }

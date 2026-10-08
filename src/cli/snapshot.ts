@@ -7,17 +7,26 @@
  *
  *   snapshot create [--no-upload]   make a snapshot, copy it to the bucket, apply retention
  *   snapshot list [--remote]        the local snapshots, newest first; --remote lists the bucket too
- *   snapshot status                 the settings summary, the timer, the last run, the bucket check
- *   snapshot check                  list the bucket and write and delete a small probe object
+ *   snapshot status [--hosts]       the settings summary, the timer, the last run, the bucket check;
+ *                                   --hosts lists every host's last snapshot line from `_global`
+ *   snapshot check                  list the bucket, write a probe object, try to delete it, and
+ *                                   report whether the key may delete and the bucket keeps versions
+ *   snapshot fetch <name> [--host <host>]
+ *                                   copy a snapshot and its manifest from the bucket (GET only)
  *   snapshot delete <name> [--remote]
  *                                   delete one snapshot, here or in the bucket
  *   snapshot config                 every setting with its value and source
  *   snapshot config set <key> <value> [<key> <value> ...] | unset <key> [<key> ...]
  *                                   save or clear settings in snapshot.json in one write, as the
  *                                   page does; endpoint and bucket go together
+ *   snapshot config push --hosts a,b [--overwrite]
+ *                                   copy the settings (not dir, enabled) and the key pair to
+ *                                   other hosts over ssh; the secret goes on ssh stdin only
+ *                                   (src/cli/snapshot-push.ts, with its other half `receive`);
+ *                                   exit 1 also for a host that timed out (state unknown)
  *   snapshot credentials [status]   which key pair wins and its key id; never the secret
  *   snapshot credentials set --key-id <id>
- *                                   save the key pair; the secret comes on stdin, never in argv
+ *                                   save the key pair; the secret comes on stdin, never on the command line
  *   snapshot credentials clear      remove the saved key pair
  *
  * The verbs act on this host only and are not host-bound: there is no right
@@ -33,33 +42,44 @@
  * `list --remote`); 2 usage (an unknown key, a secret on a terminal); 3 the
  * snapshot is local but the bucket could not be reached, or `list --remote`
  * could not reach it. The next run makes a new snapshot and uploads that one;
- * the missed one is not sent again. `create` with `enabled = false` does
- * nothing and exits 0, so the timer does not show as failed.
+ * the missed one is not sent again. `create` with `enabled = false` makes no
+ * snapshot and exits 0, so the timer does not show as failed.
+ *
+ * Every `create` run leaves one line in the `_global` ledger (snapshot.ok,
+ * snapshot.failed or snapshot.off; src/core/backup-state.ts), so every host
+ * can list every host's last backup. A ledger write that fails is a warning,
+ * not a change of the exit code.
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
+import { readBackupStates, recordSnapshotLine, snapshotLineFor, snapshotOffLine, STALE_AFTER_MS, type BackupState } from "../core/backup-state.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { hostId } from "../core/ledger.ts";
 import { stateDir } from "../core/paths.ts";
 import {
   checkRemote,
+  checkVerdict,
   deleteLocalSnapshot,
   deleteRemoteSnapshot,
   describeSnapshotRun,
+  fetchRemoteSnapshot,
   listLocalSnapshots,
   listRemoteSnapshots,
   parseSnapshotName,
   readSnapshotState,
   runningSnapshot,
   runSnapshot,
+  type CheckRecord,
 } from "../core/snapshot.ts";
 import {
   applySnapshotSettings,
   credentialsEnvLock,
   credentialsSource,
+  displaySnapshotValue,
   isSnapshotKey,
+  maskPingUrl,
   readSnapshotEnvFile,
   removeSnapshotCredentials,
   resolveSnapshotSettings,
@@ -75,9 +95,10 @@ import {
 } from "../core/snapshot-settings.ts";
 import { VERSION } from "../version.ts";
 import { readStdin } from "./args.ts";
+import { pushConfig, receiveConfig } from "./snapshot-push.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "create | list | status | check | delete | config | credentials";
+const VERBS = "create | list | status | check | fetch | delete | config | credentials";
 const TIMER = "darius-snapshot.timer";
 const PIPE_HINT = 'printf %s "$SECRET" | darius snapshot credentials set --key-id ID';
 
@@ -116,14 +137,14 @@ function mib(bytes: number): string {
 
 /** Every key with its value and source: the `settings` object of `status --json` and `config --json`. */
 function settingsView(resolved: ResolvedSnapshotSettings): Record<string, { value: string | number | boolean | undefined; source: string | undefined }> {
-  return Object.fromEntries(SNAPSHOT_KEYS.map((key) => [key, { value: resolved.values.get(key), source: resolved.sources.get(key) }]));
+  return Object.fromEntries(SNAPSHOT_KEYS.map((key) => [key, { value: displaySnapshotValue(key, resolved.values.get(key)), source: resolved.sources.get(key) }]));
 }
 
 /** One setting for a person: `keep        = 7  (default)`; an env value names its variable. */
 function settingLine(resolved: ResolvedSnapshotSettings, key: SnapshotKey): string {
-  const value = resolved.values.get(key);
+  const value = displaySnapshotValue(key, resolved.values.get(key));
   const source = resolved.sources.get(key) ?? "default";
-  return `${key.padEnd(11)} = ${JSON.stringify(value ?? null)}  (${source === "env" ? `env ${snapshotEnvName(key)}` : source})`;
+  return `${key.padEnd(12)} = ${JSON.stringify(value ?? null)}  (${source === "env" ? `env ${snapshotEnvName(key)}` : source})`;
 }
 
 // --- the timer ------------------------------------------------------------------------------
@@ -195,8 +216,12 @@ async function create(args: ParsedArgs): Promise<number> {
   const resolved = resolveSnapshotSettings();
   // Off on purpose is not a failure: the timer must not show as failed every night.
   if (resolved.problems.length === 0 && !resolved.settings.enabled) {
-    if (args.json) console.log(JSON.stringify({ code: 0, ok: true, name: null, skipped: "off" }));
+    // The line keeps the other hosts from calling this host stale.
+    const warning = recordSnapshotLine(snapshotOffLine());
+    const warnings = warning === null ? [] : [warning];
+    if (args.json) console.log(JSON.stringify({ code: 0, ok: true, name: null, skipped: "off", warnings }));
     else console.log("· snapshots are off (enabled = false), nothing done");
+    if (warning !== null) console.error(`darius snapshot: ${warning}`);
     return 0;
   }
   const result = await runSnapshot({
@@ -206,6 +231,11 @@ async function create(args: ParsedArgs): Promise<number> {
     stateDir: stateDir(),
     upload: args.flags["no-upload"] !== true,
   });
+  // One line per run, after the archive and the upload. A refused run (another run holds the lock) made nothing and writes none.
+  if (!result.busy) {
+    const warning = recordSnapshotLine(snapshotLineFor(result, resolved, VERSION));
+    if (warning !== null) result.warnings.push(warning);
+  }
   if (args.json) console.log(JSON.stringify(result));
   else console.log(describeSnapshotRun(result));
   for (const warning of result.warnings) console.error(`darius snapshot: ${warning}`);
@@ -242,17 +272,68 @@ async function listRemote(args: ParsedArgs, resolved: ResolvedSnapshotSettings):
   // Read after the listing: it refreshed the "in the bucket" marks of the local rows.
   const local = listLocalSnapshots(dir);
   const here = new Set(local.map((row) => row.name));
-  const remote = listed.objects.map((object) => ({ name: object.name, at: parseSnapshotName(object.name)?.at ?? "", bytes: object.bytes, local: here.has(object.name) }));
+  const row = (object: { name: string; bytes: number }, monthly: boolean) => ({
+    name: monthly ? `monthly/${object.name}` : object.name,
+    at: parseSnapshotName(object.name)?.at ?? "",
+    bytes: object.bytes,
+    local: here.has(object.name),
+    monthly,
+  });
+  const remote = [...listed.objects.map((object) => row(object, false)), ...listed.monthly.map((object) => row(object, true))];
   if (args.json) {
     console.log(JSON.stringify({ ok: true, local, remote }));
     return 0;
   }
   if (remote.length === 0) console.log("· no snapshots of this host in the bucket");
-  for (const row of remote) console.log(`${row.name}  ${mib(row.bytes)}  ${row.local ? "also here" : "bucket only"}`);
+  for (const found of remote) console.log(`${found.name}  ${mib(found.bytes)}  ${found.local ? "also here" : "bucket only"}${found.monthly ? "  monthly" : ""}`);
+  return 0;
+}
+
+// --- status --hosts ---------------------------------------------------------------------------------
+
+/** `5h`, `2d 3h`, `12m`: a span for a person. */
+function spanWords(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${String(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${String(hours)}h`;
+  return `${String(Math.floor(hours / 24))}d ${String(hours % 24)}h`;
+}
+
+function bucketWords(state: BackupState): string {
+  if (state.remote === null) return "no bucket copy";
+  return state.remote.ok ? "bucket ok" : `bucket failed: ${state.remote.error ?? "unknown"}`;
+}
+
+/** One row: host, state, age of the last good snapshot, what it was, and what the bucket did. */
+function hostRow(state: BackupState): string {
+  const age = state.age_ms === null ? "no good snapshot" : `${spanWords(state.age_ms)} ago`;
+  const what = state.name === null ? "" : `  ${state.name}  ${mib(state.bytes ?? 0)}  ${bucketWords(state)}`;
+  const failure = state.error === null ? "" : `  last run failed: ${state.error}`;
+  const stale = state.reason === null ? "" : `  ${state.reason}`;
+  const note = state.state === "off" ? "  snapshots are off on purpose" : `${stale}${failure}`;
+  return `${state.host.padEnd(16)} ${state.state.padEnd(7)} ${age}${what}${note}`;
+}
+
+/** `status --hosts`: the newest snapshot line of every host that wrote one, from the synced `_global` ledger. Always 0. */
+function statusHosts(args: ParsedArgs): number {
+  const states = readBackupStates();
+  if (args.json) {
+    console.log(JSON.stringify({ hosts: states, stale_after_ms: STALE_AFTER_MS }));
+    return 0;
+  }
+  if (states.length === 0) {
+    console.log("· no host has written a snapshot line yet");
+    return 0;
+  }
+  const silent = states.filter((state) => state.state === "silent");
+  for (const state of states) if (state.state !== "silent") console.log(hostRow(state));
+  if (silent.length > 0) console.log(`· silent for over 30 days, not counted as stale: ${silent.map((state) => state.host).join(", ")}`);
   return 0;
 }
 
 function status(args: ParsedArgs, deps: SnapshotDeps): number {
+  if (args.flags.hosts === true) return statusHosts(args);
   const resolved = resolveSnapshotSettings();
   const state = readSnapshotState(resolved.settings.dir);
   const running = runningSnapshot(resolved.settings.dir);
@@ -267,6 +348,7 @@ function status(args: ParsedArgs, deps: SnapshotDeps): number {
         running,
         last: state.last,
         remote: state.remote,
+        check: state.check,
         timer,
       }),
     );
@@ -274,21 +356,59 @@ function status(args: ParsedArgs, deps: SnapshotDeps): number {
   }
   console.log(`snapshots ${resolved.settings.enabled ? "on" : "off"}, folder ${resolved.settings.dir}, keep ${String(resolved.settings.keep)}`);
   const remote = resolved.settings.remote;
-  console.log(remote === null ? "· no remote copy" : `· remote copy: ${remote.endpoint} bucket ${remote.bucket}, keep ${String(resolved.settings.keepRemote)}, key pair from ${credentialsSource()}`);
+  const keepRemote = resolved.settings.remotePrune ? `keep ${String(resolved.settings.keepRemote)}` : "remote: kept by the bucket (remote_prune off)";
+  console.log(remote === null ? "· no remote copy" : `· remote copy: ${remote.endpoint} bucket ${remote.bucket}, ${keepRemote}, key pair from ${credentialsSource()}`);
+  if (remote !== null && !resolved.settings.remotePrune) console.log(`· keep_remote (${String(resolved.settings.keepRemote)}) is ignored: darius never deletes in the bucket`);
+  if (resolved.settings.pingUrl !== null) console.log(`· dead-man ping: ${maskPingUrl(resolved.settings.pingUrl)}`);
   console.log(timerLine(timer));
   if (running !== null) console.log(`· running now (pid ${String(running.pid)})`);
   if (state.last !== null) console.log(`· last run ${state.last.at}: ${state.last.ok ? "ok" : `failed, ${state.last.error ?? ""}`}`);
   // A run can make its local snapshot (ok) and still fail to reach the bucket, so the bucket gets its own line.
   if (state.remote !== null) console.log(`· bucket, last contact ${state.remote.at}: ${state.remote.ok ? `ok, ${String(state.remote.objects.length)} snapshots` : `failed, ${state.remote.error ?? ""}`}`);
+  const newestMonthly = state.remote?.monthly?.[0];
+  if (remote !== null && resolved.settings.keepMonthly > 0) console.log(`· monthly copies: ${resolved.settings.remotePrune ? `keep ${String(resolved.settings.keepMonthly)}` : "kept by the bucket (remote_prune off)"}, newest ${newestMonthly === undefined ? "none yet" : `monthly/${newestMonthly.name}`}`);
+  if (remote !== null && state.check !== null) for (const line of checkLines(state.check, resolved.settings.remotePrune)) console.log(line);
   for (const problem of resolved.problems) console.log(`! ${problem}`);
   return resolved.problems.length === 0 ? 0 : 1;
 }
 
+/** The stored check in `status`: its facts, its warnings, and a note when remote_prune changed since. */
+function checkLines(record: CheckRecord, remotePrune: boolean): string[] {
+  const lines = [`· bucket check ${record.at}: delete ${record.delete}, versioning ${record.versioning}`, ...record.warnings.map((warning) => `! ${warning}`)];
+  if (record.remotePrune !== remotePrune) lines.push("! remote_prune changed since the last check: run darius snapshot check again");
+  return lines;
+}
+
 async function check(args: ParsedArgs): Promise<number> {
   const result = await checkRemote(resolveSnapshotSettings(), hostId());
-  if (args.json) console.log(JSON.stringify(result));
-  else console.log(result.ok ? `✓ the bucket answers, ${String(result.objects.length)} snapshots of this host` : `! ${result.error ?? "the check failed"}`);
-  return result.ok ? 0 : 1;
+  if (args.json) {
+    console.log(JSON.stringify(result));
+    return result.ok ? 0 : 1;
+  }
+  if (!result.ok) {
+    console.log(`! ${result.error ?? "the check failed"}`);
+    return 1;
+  }
+  const probe = result.probe ?? "";
+  console.log(`✓ the bucket answers, ${String(result.objects.length)} snapshots of this host`);
+  console.log(`· write: ok (probe ${probe})`);
+  console.log(result.delete === "refused" ? `· delete: refused (HTTP 403). The probe ${probe} stays; the next check overwrites it` : "· delete: allowed, the probe is gone");
+  console.log(`· versioning: ${result.versioning ?? "unknown"}`);
+  console.log(`· remote_prune: ${result.remotePrune ? "on, darius deletes old snapshots in the bucket" : "off, darius never deletes in the bucket"}`);
+  for (const warning of result.warnings) console.log(`! ${warning}`);
+  console.log(checkVerdict(result));
+  return 0;
+}
+
+/** `fetch <name> [--host <host>]`: the archive and its manifest from the bucket, for `darius restore`. */
+async function fetchOne(args: ParsedArgs): Promise<number> {
+  const name = args.positional[1];
+  if (name === undefined || args.positional.length > 2) throw new UsageError("snapshot fetch needs one snapshot name; darius snapshot list --remote shows them");
+  const done = await fetchRemoteSnapshot(resolveSnapshotSettings(), name, stringFlag(args, "host"));
+  if (args.json) console.log(JSON.stringify(done));
+  else if (!done.ok) console.log(`! ${done.error}`);
+  else console.log(done.already ? `· ${done.path} is already here` : `✓ fetched ${done.path} (${mib(done.bytes)}); restore it: darius restore ${done.name}`);
+  return done.code;
 }
 
 async function remove(args: ParsedArgs): Promise<number> {
@@ -358,19 +478,21 @@ function changeConfig(args: ParsedArgs, patch: ReadonlyMap<SnapshotKey, string |
     else console.log(`! ${error}`);
     return 1;
   }
-  const changed = keys.map((key) => ({ key, value: applied.resolved.values.get(key), source: applied.resolved.sources.get(key) ?? "default" }));
+  const changed = keys.map((key) => ({ key, value: displaySnapshotValue(key, applied.resolved.values.get(key)), source: applied.resolved.sources.get(key) ?? "default" }));
   if (args.json) console.log(JSON.stringify(changed.length === 1 ? { ok: true, ...changed[0] } : { ok: true, changed }));
   else for (const key of keys) console.log(`✓ ${settingLine(applied.resolved, key)}`);
   return 0;
 }
 
-function config(args: ParsedArgs): number {
+function config(args: ParsedArgs, deps: SnapshotDeps): number {
   const verb = args.positional[1];
   const words = args.positional.slice(2);
   if (verb === undefined) return showConfig(args);
   if (verb === "set") return changeConfig(args, setPairs(words));
   if (verb === "unset") return changeConfig(args, unsetKeys(words));
-  throw new UsageError("snapshot config takes no verb, set <key> <value> [<key> <value> ...], or unset <key> [<key> ...]");
+  if (verb === "push") return pushConfig(args, words);
+  if (verb === "receive") return receiveConfig(deps.stdinIsTTY, deps.readStdin);
+  throw new UsageError("snapshot config takes no verb, set <key> <value> [<key> <value> ...], unset <key> [<key> ...], or push --hosts <host>[,<host>...]");
 }
 
 // --- credentials ---------------------------------------------------------------------------------------
@@ -393,7 +515,7 @@ function credentialsStatus(args: ParsedArgs): number {
 }
 
 function credentialsSet(args: ParsedArgs, deps: SnapshotDeps): number {
-  // The secret is refused anywhere it would be seen: in argv, in a flag. Neither is echoed.
+  // The secret is refused anywhere it would be seen: on the command line, in a flag. Neither is echoed.
   if (args.positional.length > 2) throw new UsageError(`the secret never goes on the command line; pipe it on stdin: ${PIPE_HINT}`);
   if (Object.keys(args.flags).some((name) => name.includes("secret"))) throw new UsageError(`the secret never goes in a flag; pipe it on stdin: ${PIPE_HINT}`);
   const keyId = stringFlag(args, "key-id");
@@ -445,15 +567,16 @@ export async function runSnapshotCommand(args: ParsedArgs, deps: SnapshotDeps): 
   if (verb === "list") return list(args);
   if (verb === "status") return status(args, deps);
   if (verb === "check") return check(args);
+  if (verb === "fetch") return fetchOne(args);
   if (verb === "delete") return remove(args);
-  if (verb === "config") return config(args);
+  if (verb === "config") return config(args, deps);
   if (verb === "credentials") return credentials(args, deps);
   throw new UsageError(`snapshot needs a verb: ${VERBS}`);
 }
 
 export const snapshotCommand: Command = {
   name: "snapshot",
-  summary: "archive this host's store into a local folder and an optional S3 bucket (create, list, status, check, delete, config, credentials)",
+  summary: "archive this host's store into a local folder and an optional S3 bucket (create, list, status, check, fetch, delete, config, credentials)",
   usage: `snapshot ${VERBS}`,
   run: (args: ParsedArgs): Promise<number> => runSnapshotCommand(args, realSnapshotDeps),
 };

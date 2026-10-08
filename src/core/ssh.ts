@@ -61,12 +61,15 @@ export interface Ran {
   stdout: string;
   stderr: string;
   error: string | undefined;
+  /** True when the call hit its timeout and was killed. */
+  timedOut?: boolean;
 }
 
 /** Runs `words` on `host`, feeds `input` on stdin, and captures the output. */
 export function ssh(program: string, host: string, words: readonly string[], input: string, timeoutMs: number): Ran {
   const ran = spawnSync(program, sshArgv(host, words), { encoding: "utf8", input, timeout: timeoutMs });
-  return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr, error: ran.error === undefined ? undefined : errorMessage(ran.error) };
+  const timedOut = ran.error !== undefined && "code" in ran.error && ran.error.code === "ETIMEDOUT";
+  return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr, error: ran.error === undefined ? undefined : errorMessage(ran.error), timedOut };
 }
 
 /**

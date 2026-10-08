@@ -11,7 +11,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { HostStatus, WebContext, WebHandler } from "../src/web/api.ts";
+import type { BackupsStatus, HostStatus, WebContext, WebHandler } from "../src/web/api.ts";
 import { DEFAULT_SETTINGS, SETTINGS_COOKIE, settingsValue, type Settings } from "../web/app/lib/settings.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-settings-"));
@@ -28,6 +28,7 @@ const STATUS: HostStatus = {
   utcOffset: 120,
   profiles: [],
   projects: [],
+  hosts: [],
 };
 
 const context: WebContext = {
@@ -89,4 +90,48 @@ test("the settings tabs show their own sections and the host facts", async () =>
 test("a cookie that is not valid changes nothing", async () => {
   const response = await built.default(new Request("http://darius.test/settings", { headers: { cookie: `${SETTINGS_COOKIE}=%E0%A4%A` } }), context);
   assert.ok(htmlTag(await response.text()).includes('data-theme="dark"'));
+});
+
+/** A host in the no-delete mode whose last bucket check found versioning off. */
+const NO_DELETE_BACKUPS: BackupsStatus = {
+  generatedAt: "2026-09-28T09:00:00.000Z",
+  host: "testhost",
+  settings: {
+    enabled: { value: true, source: "default" },
+    dir: { value: "~/backups", source: "default" },
+    keep: { value: 7, source: "default" },
+    keepRemote: { value: 30, source: "default" },
+    remotePrune: { value: false, source: "env" },
+    endpoint: { value: "https://s3.example.com", source: "file" },
+    bucket: { value: "example-darius-snapshots", source: "file" },
+    region: { value: "us-east-1", source: "default" },
+    prefix: { value: "darius", source: "default" },
+    pathStyle: { value: true, source: "default" },
+    allowHttp: { value: false, source: "default" },
+    sse: { value: false, source: "default" },
+    pingUrl: { value: "", source: "default" },
+  },
+  problems: [],
+  credentials: "file",
+  remoteConfigured: true,
+  running: null,
+  last: null,
+  remote: { at: "2026-09-28T07:00:10.000Z", ok: true, error: null, count: 1 },
+  check: { at: "2026-09-28T07:00:10.000Z", delete: "refused", versioning: "off", warnings: ["versioning is off: an overwrite loses the old copy. Turn versioning on"], stale: false },
+  snapshots: [{ name: "darius-testhost-20260928T070000Z.tar.gz", at: "2026-09-28T07:00:00.000Z", bytes: 1024, files: 3, sha256: null, local: true, remote: true }],
+  localBytes: 1024,
+  storePath: "/home/test/.local/share/darius",
+  envFile: "/home/test/.config/darius/snapshot.env",
+};
+
+test("the backups tab shows remote_prune like sse, locked by the environment, the bucket check, and no bucket delete in the no-delete mode", async () => {
+  const response = await built.default(new Request("http://darius.test/settings/backups"), { ...context, backups: () => NO_DELETE_BACKUPS });
+  assert.equal(response.status, 200);
+  const body = (await response.text()).replaceAll("<!-- -->", "");
+  for (const text of ["Delete old snapshots in the bucket", "DARIUS_SNAPSHOT_REMOTE_PRUNE", "Bucket check", "the key cannot delete, versioning off", "versioning is off: an overwrite loses the old copy. Turn versioning on"]) {
+    assert.ok(body.includes(text), text);
+  }
+  assert.ok(body.includes("Set by the environment"), "remote_prune is locked by its variable, as sse would be");
+  assert.ok(body.includes("Delete here"), "the local delete stays");
+  assert.ok(!body.includes("Delete in bucket"), "no bucket delete while remote_prune is off");
 });

@@ -17,6 +17,7 @@ import { listProjects, openProject } from "../core/store.ts";
 import { ulidTime } from "../core/ulid.ts";
 import { VERSION } from "../version.ts";
 import type { SystemDisk, SystemHost, SystemProject, SystemStatus } from "./api.ts";
+import { hostBackup, readHostBackupStates } from "./backups.ts";
 import { lastSync, trackerDirOf } from "./status.ts";
 
 const WALK_TTL_MS = 60_000;
@@ -153,6 +154,9 @@ function collectHosts(projects: readonly string[], self: string): SystemHost[] {
     return found;
   };
   entry(self);
+  // A host that only wrote snapshot lines (no project chunk yet) is still a host.
+  const backups = new Map(readHostBackupStates().map((state) => [state.host, state]));
+  for (const [host, state] of backups) entry(host).newest = newer(entry(host).newest, Date.parse(state.seen_at));
   for (const name of projects) {
     try {
       for (const chunk of listChunks(openProject(name))) {
@@ -171,13 +175,17 @@ function collectHosts(projects: readonly string[], self: string): SystemHost[] {
       continue;
     }
   }
-  const hosts = [...seen.entries()].map(([host, data]): SystemHost => ({
-    host,
-    self: host === self,
-    lastSeen: data.newest === null ? null : new Date(data.newest).toISOString(),
-    chunks: data.chunks,
-    projects: [...data.projects].toSorted(),
-  }));
+  const hosts = [...seen.entries()].map(([host, data]): SystemHost => {
+    const state = backups.get(host);
+    return {
+      host,
+      self: host === self,
+      lastSeen: data.newest === null ? null : new Date(data.newest).toISOString(),
+      chunks: data.chunks,
+      projects: [...data.projects].toSorted(),
+      backup: state === undefined ? null : hostBackup(state),
+    };
+  });
   return hosts.toSorted((left, right) => {
     if (left.self !== right.self) return left.self ? -1 : 1;
     return (right.lastSeen ?? "").localeCompare(left.lastSeen ?? "");

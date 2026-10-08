@@ -9923,6 +9923,33 @@ function vigilWord(vigil) {
 	};
 	return vigil.flagged ? FLAGGED : null;
 }
+/**
+* How a host's backups are doing, on the hosts card of the status page. Late
+* is the orange of a missed date (stale), bad the red of a failed run; off and
+* silent are on purpose or gone, so they stay quiet.
+*/
+function backupWord(state) {
+	if (state === "ok") return {
+		tone: "ok",
+		label: "Backed up"
+	};
+	if (state === "stale") return {
+		tone: "late",
+		label: "Backup stale"
+	};
+	if (state === "failed") return {
+		tone: "bad",
+		label: "Backup failed"
+	};
+	if (state === "off") return {
+		tone: "idle",
+		label: "Backups off"
+	};
+	return {
+		tone: "idle",
+		label: "Silent"
+	};
+}
 /** The rail of a state: only a state that needs attention draws one (late, running, waiting, asks, failed, flagged). */
 function railOf(state) {
 	return state === null || state.tone === "idle" || state.tone === "ok" || state.tone === "gold" ? null : state.tone;
@@ -17003,11 +17030,32 @@ var REMOTE_FIELDS = [
 		wire: "keep_remote",
 		kind: "number",
 		label: "Keep in the bucket",
-		hint: "How many of the newest snapshots stay in the bucket.",
+		hint: "How many of the newest snapshots stay in the bucket. Ignored when darius may not delete there.",
+		width: "short"
+	},
+	{
+		key: "remotePrune",
+		wire: "remote_prune",
+		kind: "toggle",
+		label: "Delete old snapshots in the bucket",
+		hint: "Off: darius never deletes in the bucket. Use it with a key that cannot delete, and let the bucket's versioning and lifecycle rule keep it tidy.",
 		width: "short"
 	}
 ];
-var ALL_FIELDS = [...LOCAL_FIELDS, ...REMOTE_FIELDS];
+/** The dead-man ping. The page only ever holds its masked form (scheme and host), so a save sends a new address or nothing. */
+var PING_FIELDS = [{
+	key: "pingUrl",
+	wire: "ping_url",
+	kind: "text",
+	label: "Ping address",
+	hint: "Optional. A healthchecks-style address. darius calls it after a good backup, and calls it with /fail after a bad one. The address is a secret, so this page shows only its host. Type a new one to replace it, or clear the field to remove it.",
+	width: "long"
+}];
+var ALL_FIELDS = [
+	...LOCAL_FIELDS,
+	...REMOTE_FIELDS,
+	...PING_FIELDS
+];
 /** The variable that sets a field: `DARIUS_SNAPSHOT_KEEP_REMOTE`. */
 function envName(wire) {
 	return `DARIUS_SNAPSHOT_${wire.toUpperCase()}`;
@@ -17070,7 +17118,31 @@ function Problems({ problems }) {
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: problems.map((problem) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: problem }, problem)) })]
 	});
 }
-/** Three lines: the last run, whether one runs now, and the remote copy. */
+/** The last bucket check: may the key delete, does the bucket keep versions, and what to fix. */
+function CheckLine({ backups }) {
+	const { check } = backups;
+	if (check === null) return "Not run yet. Press Test the bucket below.";
+	const facts = `the key ${check.delete === "refused" ? "cannot delete" : "may delete"}, versioning ${check.versioning}`;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+			tone: check.warnings.length === 0 ? "ok" : "late",
+			label: check.warnings.length === 0 ? "ok" : "warning"
+		}),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: check.at }),
+		", ",
+		facts,
+		check.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "bk-err ink-bad",
+			children: warning
+		}, warning)),
+		check.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "bk-err ink-bad",
+			children: "The setting for deletes in the bucket changed since. Test the bucket again."
+		}) : null
+	] });
+}
+/** Up to four lines: the last run, whether one runs now, the remote copy, and the last bucket check. */
 function StateLines({ backups }) {
 	const { today, offset } = useClock();
 	const { last, running, remote, remoteConfigured } = backups;
@@ -17116,7 +17188,8 @@ function StateLines({ backups }) {
 					className: "bk-err ink-bad",
 					children: remote.error
 				})
-			] }) })] })
+			] }) })] }),
+			remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Bucket check" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckLine, { backups }) })] }) : null
 		]
 	});
 }
@@ -17189,7 +17262,7 @@ function Mark({ on, yes, no }) {
 		children: on ? yes : no
 	});
 }
-function SnapshotRow({ row, remoteConfigured }) {
+function SnapshotRow({ row, remoteConfigured, remotePrune }) {
 	const { today, offset } = useClock();
 	const { revalidate } = useRevalidator();
 	const [showSha, setShowSha] = (0, import_react.useState)(false);
@@ -17274,7 +17347,7 @@ function SnapshotRow({ row, remoteConfigured }) {
 					disabled: busy,
 					onClick: () => setAsk("local"),
 					children: "Delete here"
-				}) : null, row.remote && remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				}) : null, row.remote && remoteConfigured && remotePrune ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "st-btn st-btn-small",
 					disabled: busy,
@@ -17311,7 +17384,7 @@ function SnapshotRow({ row, remoteConfigured }) {
 	});
 }
 function SnapshotList({ backups }) {
-	const { snapshots, remoteConfigured, storePath, localBytes } = backups;
+	const { snapshots, remoteConfigured, storePath, localBytes, settings } = backups;
 	const intro = snapshots.length === 0 ? void 0 : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds ${byteSize(localBytes)}.`;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SettingsCard, {
 		title: "Snapshots",
@@ -17340,7 +17413,8 @@ function SnapshotList({ backups }) {
 				className: "bk-list",
 				children: snapshots.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnapshotRow, {
 					row,
-					remoteConfigured
+					remoteConfigured,
+					remotePrune: settings.remotePrune.value
 				}, row.name))
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -17606,6 +17680,11 @@ function SettingsForm({ backups }) {
 					children: rows(REMOTE_FIELDS)
 				}), backups.remoteConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BucketTest, {}) : null]
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCard, {
+				title: "Dead-man ping",
+				intro: "A service outside your network can tell you when the pings stop, also when every host is down.",
+				children: rows(PING_FIELDS)
+			}),
 			unsaved.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "bk-savebar",
 				role: "region",
@@ -17784,14 +17863,15 @@ function BucketTest() {
 			return;
 		}
 		revalidate();
+		const works = result.count === null ? "The bucket works." : `The bucket works. It lists ${result.count} ${result.count === 1 ? "object" : "objects"}.`;
 		setNote({
 			tone: "ok",
-			text: result.count === null ? "The bucket works." : `The bucket works. It lists ${result.count} ${result.count === 1 ? "object" : "objects"}.`
+			text: `${works} The Bucket check line above shows whether the key may delete.`
 		});
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
 		label: "Bucket test",
-		help: "Lists the bucket, then writes and deletes one small test object. It uses the saved settings.",
+		help: "Lists the bucket, writes one small test object and tries to delete it, then asks whether the bucket keeps old versions. A key that cannot delete leaves the test object, and the next test overwrites it. It uses the saved settings.",
 		marker: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Notice, { note }),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
@@ -18105,30 +18185,68 @@ function Machine({ system }) {
 		})]
 	});
 }
+/** The last backup of a host: its state, when the last good snapshot was made, and why the newest run failed. */
+function HostBackupLine({ host }) {
+	const { backup } = host;
+	if (backup === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "sy-meta",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ink-idle",
+			children: "last backup: none"
+		})
+	});
+	const word = backupWord(backup.state);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "sy-meta",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "last backup" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Status, {
+				tone: word.tone,
+				label: word.label
+			}),
+			backup.lastOkAt === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ink-idle",
+				children: "no good snapshot yet"
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: backup.lastOkAt }),
+			backup.reason === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ink-late",
+				children: backup.reason
+			}),
+			backup.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ink-bad",
+				children: backup.error
+			})
+		]
+	});
+}
 function HostRow({ host }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "sy-item",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "sy-item-head",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sy-name",
-				children: host.host
-			}), host.self ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "bk-mark tone-ok",
-				children: "this host"
-			}) : null]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "sy-meta",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["last seen ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: host.lastSeen })] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-					host.chunks,
-					" ",
-					host.chunks === 1 ? "chunk" : "chunks"
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: host.projects.length === 0 ? "no projects" : host.projects.join(", ") })
-			]
-		})]
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sy-item-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sy-name",
+					children: host.host
+				}), host.self ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bk-mark tone-ok",
+					children: "this host"
+				}) : null]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sy-meta",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["last seen ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: host.lastSeen })] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						host.chunks,
+						" ",
+						host.chunks === 1 ? "chunk" : "chunks"
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: host.projects.length === 0 ? "no projects" : host.projects.join(", ") })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostBackupLine, { host })
+		]
 	});
 }
 function Hosts({ hosts }) {
@@ -18433,7 +18551,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-j0l7UHMT.js",
+			"module": "/assets/root-CjcP25BT.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18442,8 +18560,9 @@ var server_manifest_default = {
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/agenda-DgpBtP1m.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/agenda-BBF6nd8U.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
 			"css": ["/assets/root-BwwG550e.css"],
@@ -18486,7 +18605,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-Z4dfYYkD.js",
+			"module": "/assets/overview-CSFL1xrD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18495,13 +18614,14 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
@@ -18523,7 +18643,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-Z4dfYYkD.js",
+			"module": "/assets/overview-CSFL1xrD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18532,13 +18652,14 @@ var server_manifest_default = {
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/post-BhJlIIHe.js"
 			],
 			"css": [],
@@ -18560,20 +18681,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-p95LzxA5.js",
+			"module": "/assets/vigils-DeZ1_smv.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
+				"/assets/state-words-4kMYoR_6.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-whavXC1O.js",
+				"/assets/section-Bt4kJZSk.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
-				"/assets/agenda-DgpBtP1m.js"
+				"/assets/agenda-BBF6nd8U.js",
+				"/assets/view-BmG461Gt.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18594,20 +18716,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-p95LzxA5.js",
+			"module": "/assets/vigils-DeZ1_smv.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
+				"/assets/state-words-4kMYoR_6.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-whavXC1O.js",
+				"/assets/section-Bt4kJZSk.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-D-5lOmZM.js",
-				"/assets/agenda-DgpBtP1m.js"
+				"/assets/agenda-BBF6nd8U.js",
+				"/assets/view-BmG461Gt.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18628,24 +18751,25 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-D59ooB1o.js",
+			"module": "/assets/rituals-Cg9e5FOY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-whavXC1O.js",
+				"/assets/section-Bt4kJZSk.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BhJlIIHe.js",
-				"/assets/agenda-DgpBtP1m.js"
+				"/assets/agenda-BBF6nd8U.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18666,24 +18790,25 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-D59ooB1o.js",
+			"module": "/assets/rituals-Cg9e5FOY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/pulse-C1C41WFP.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
-				"/assets/section-whavXC1O.js",
+				"/assets/section-Bt4kJZSk.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BhJlIIHe.js",
-				"/assets/agenda-DgpBtP1m.js"
+				"/assets/agenda-BBF6nd8U.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18704,7 +18829,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-B3Hl_GpJ.js",
+			"module": "/assets/findings-D9zw8Ayc.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18713,12 +18838,13 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-CIvKJVtw.js"
+				"/assets/view-BmG461Gt.js",
+				"/assets/state-words-4kMYoR_6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18739,7 +18865,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-B3Hl_GpJ.js",
+			"module": "/assets/findings-D9zw8Ayc.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -18748,12 +18874,13 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-CIvKJVtw.js"
+				"/assets/view-BmG461Gt.js",
+				"/assets/state-words-4kMYoR_6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -18836,21 +18963,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-Cg7pCu82.js",
+			"module": "/assets/runs-Bb4pKChB.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BhJlIIHe.js"
@@ -18874,19 +19002,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-_OXDrI_k.js",
+			"module": "/assets/ritual-CZMwHMq2.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js",
@@ -18911,23 +19040,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BwVHww9K.js",
+			"module": "/assets/run-AHllNbkH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
+				"/assets/view-BmG461Gt.js",
 				"/assets/post-BhJlIIHe.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
-				"/assets/kind-CbYiwFqF.js"
+				"/assets/kind-CbYiwFqF.js",
+				"/assets/state-words-4kMYoR_6.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19062,7 +19192,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-DQM-8309.js",
+			"module": "/assets/settings-backups-P-QeYQEN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19120,12 +19250,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/status-wVSMn9bi.js",
+			"module": "/assets/status-f5y10SY5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/paths-BupYQEYF.js",
+				"/assets/state-words-4kMYoR_6.js",
 				"/assets/ui-BgN6qkA5.js",
 				"/assets/route-error-ClXTN74F.js"
 			],
@@ -19148,21 +19279,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-Cg7pCu82.js",
+			"module": "/assets/runs-Bb4pKChB.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-BgN6qkA5.js",
-				"/assets/runs-DRqR3g4R.js",
+				"/assets/runs-B4j0SZuu.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/clock-D-5lOmZM.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-CIvKJVtw.js",
-				"/assets/result-B1yYSs48.js",
+				"/assets/state-words-4kMYoR_6.js",
+				"/assets/view-BmG461Gt.js",
+				"/assets/result-CSUio7nc.js",
 				"/assets/pulse-C1C41WFP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/post-BhJlIIHe.js"
@@ -19312,8 +19444,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-ae77b569.js",
-	"version": "ae77b569",
+	"url": "/assets/manifest-058ed4d7.js",
+	"version": "058ed4d7",
 	"sri": void 0
 };
 //#endregion

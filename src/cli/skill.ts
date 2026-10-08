@@ -136,7 +136,7 @@ A snapshot is a dated tar.gz of this host's store, in a local folder and optiona
 - Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
 - Exit 1: refused. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
-- Restore is by hand with \`tar -xzf\`, and only when the operator asks.
+- \`darius restore\` only when the operator asks. Other hosts: \`snapshot config push\`.
 
 ## Example
 

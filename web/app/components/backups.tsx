@@ -19,7 +19,7 @@ import { useRevalidator } from "react-router";
 
 import type { BackupRow, BackupsStatus, SettingSource } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
-import { ALL_FIELDS, credentialsWord, ENV_KEY_ID, ENV_SECRET, envName, LOCAL_FIELDS, REMOTE_FIELDS, shortSha, sourceWord, type FieldSpec } from "../lib/backup.ts";
+import { ALL_FIELDS, credentialsWord, ENV_KEY_ID, ENV_SECRET, envName, LOCAL_FIELDS, PING_FIELDS, REMOTE_FIELDS, shortSha, sourceWord, type FieldSpec } from "../lib/backup.ts";
 import { byteSize, hostDate, momentText } from "../lib/format.ts";
 import { postJson, type PostBody } from "../lib/post.ts";
 import { NavIcon } from "./nav-icons.tsx";
@@ -72,7 +72,25 @@ function Problems({ problems }: ProblemsProps): React.ReactNode {
   );
 }
 
-/** Three lines: the last run, whether one runs now, and the remote copy. */
+/** The last bucket check: may the key delete, does the bucket keep versions, and what to fix. */
+function CheckLine({ backups }: StateProps): React.ReactNode {
+  const { check } = backups;
+  if (check === null) return "Not run yet. Press Test the bucket below.";
+  const facts = `the key ${check.delete === "refused" ? "cannot delete" : "may delete"}, versioning ${check.versioning}`;
+  return (
+    <>
+      <Status tone={check.warnings.length === 0 ? "ok" : "late"} label={check.warnings.length === 0 ? "ok" : "warning"} /> <Time iso={check.at} />, {facts}
+      {check.warnings.map((warning) => (
+        <span key={warning} className="bk-err ink-bad">
+          {warning}
+        </span>
+      ))}
+      {check.stale ? <span className="bk-err ink-bad">The setting for deletes in the bucket changed since. Test the bucket again.</span> : null}
+    </>
+  );
+}
+
+/** Up to four lines: the last run, whether one runs now, the remote copy, and the last bucket check. */
 function StateLines({ backups }: StateProps): React.ReactNode {
   const { today, offset } = useClock();
   const { last, running, remote, remoteConfigured } = backups;
@@ -119,6 +137,14 @@ function StateLines({ backups }: StateProps): React.ReactNode {
           )}
         </dd>
       </div>
+      {remoteConfigured ? (
+        <div>
+          <dt>Bucket check</dt>
+          <dd>
+            <CheckLine backups={backups} />
+          </dd>
+        </div>
+      ) : null}
     </dl>
   );
 }
@@ -198,9 +224,11 @@ function Mark({ on, yes, no }: MarkProps): React.ReactNode {
 interface SnapshotRowProps {
   row: BackupRow;
   remoteConfigured: boolean;
+  /** False when darius may not delete in the bucket (remote_prune off): no delete button for the bucket copy. */
+  remotePrune: boolean;
 }
 
-function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNode {
+function SnapshotRow({ row, remoteConfigured, remotePrune }: SnapshotRowProps): React.ReactNode {
   const { today, offset } = useClock();
   const { revalidate } = useRevalidator();
   const [showSha, setShowSha] = useState(false);
@@ -250,7 +278,7 @@ function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNo
                 Delete here
               </button>
             ) : null}
-            {row.remote && remoteConfigured ? (
+            {row.remote && remoteConfigured && remotePrune ? (
               <button type="button" className="st-btn st-btn-small" disabled={busy} onClick={() => setAsk("remote")}>
                 Delete in bucket
               </button>
@@ -274,7 +302,7 @@ function SnapshotRow({ row, remoteConfigured }: SnapshotRowProps): React.ReactNo
 }
 
 function SnapshotList({ backups }: StateProps): React.ReactNode {
-  const { snapshots, remoteConfigured, storePath, localBytes } = backups;
+  const { snapshots, remoteConfigured, storePath, localBytes, settings } = backups;
   const intro = snapshots.length === 0 ? undefined : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds ${byteSize(localBytes)}.`;
   return (
     <SettingsCard title="Snapshots" intro={intro}>
@@ -290,7 +318,7 @@ function SnapshotList({ backups }: StateProps): React.ReactNode {
           </p>
           <ul className="bk-list">
             {snapshots.map((row) => (
-              <SnapshotRow key={row.name} row={row} remoteConfigured={remoteConfigured} />
+              <SnapshotRow key={row.name} row={row} remoteConfigured={remoteConfigured} remotePrune={settings.remotePrune.value} />
             ))}
           </ul>
         </div>
@@ -502,6 +530,9 @@ function SettingsForm({ backups }: StateProps): React.ReactNode {
         </div>
         {backups.remoteConfigured ? <BucketTest /> : null}
       </SettingsCard>
+      <SettingsCard title="Dead-man ping" intro="A service outside your network can tell you when the pings stop, also when every host is down.">
+        {rows(PING_FIELDS)}
+      </SettingsCard>
       {unsaved.length === 0 ? (
         <Notice note={note} />
       ) : (
@@ -628,11 +659,12 @@ function BucketTest(): React.ReactNode {
       return;
     }
     void revalidate();
-    setNote({ tone: "ok", text: result.count === null ? "The bucket works." : `The bucket works. It lists ${result.count} ${result.count === 1 ? "object" : "objects"}.` });
+    const works = result.count === null ? "The bucket works." : `The bucket works. It lists ${result.count} ${result.count === 1 ? "object" : "objects"}.`;
+    setNote({ tone: "ok", text: `${works} The Bucket check line above shows whether the key may delete.` });
   };
 
   return (
-    <SettingRow label="Bucket test" help="Lists the bucket, then writes and deletes one small test object. It uses the saved settings." marker={<Notice note={note} />}>
+    <SettingRow label="Bucket test" help="Lists the bucket, writes one small test object and tries to delete it, then asks whether the bucket keeps old versions. A key that cannot delete leaves the test object, and the next test overwrites it. It uses the saved settings." marker={<Notice note={note} />}>
       <button type="button" className="st-btn" disabled={busy} onClick={() => void test()}>
         {busy ? "Testing…" : "Test the bucket"}
       </button>

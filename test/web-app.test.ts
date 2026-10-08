@@ -116,6 +116,10 @@ const STATUS: HostStatus = {
       error: null,
     },
   ],
+  hosts: [
+    { host: "testhost", self: true, backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null } },
+    { host: "other-host", self: false, backup: null },
+  ],
 };
 
 function finding(key: string, extra: Partial<FindingRow>): FindingRow {
@@ -254,8 +258,9 @@ const SYSTEM: SystemStatus = {
   disks: [{ label: "store", path: "/home/test/.local/share/darius", freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3 }],
   store: { path: "/home/test/.local/share/darius", bytes: 5 * 1024 ** 2, files: 90, projects: 1, rituals: 1, vigils: 1, profiles: 1, runs: 3, milestones: 1, specs: 2 },
   hosts: [
-    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 4, projects: ["demo"] },
-    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [] },
+    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 4, projects: ["demo"], backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-testhost-20260928T060000Z.tar.gz", error: null, reason: null } },
+    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: { state: "stale", lastOkAt: "2026-09-25T06:00:00.000Z", ageMs: 75 * 3600_000, name: null, error: null, reason: "no upload for 75 h" } },
+    { host: "third-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: null },
   ],
   projects: [{ project: "demo", lastSync: "2026-09-28T08:55:00.000Z", rituals: 1, vigils: 1, profiles: 1, runs: 3, bytes: 1024 ** 2 }],
   syncRemote: { endpoint: "https://sync.example.com", bucket: "sync-bucket" },
@@ -269,6 +274,7 @@ const BACKUPS: BackupsStatus = {
     dir: { value: "~/backups", source: "default" },
     keep: { value: 7, source: "default" },
     keepRemote: { value: 14, source: "default" },
+    remotePrune: { value: true, source: "default" },
     endpoint: { value: "https://s3.example.com", source: "env" },
     bucket: { value: "darius-backups", source: "file" },
     region: { value: "us-east-1", source: "default" },
@@ -276,6 +282,7 @@ const BACKUPS: BackupsStatus = {
     pathStyle: { value: true, source: "default" },
     allowHttp: { value: false, source: "default" },
     sse: { value: false, source: "default" },
+    pingUrl: { value: "https://hc.example.com/...", source: "file" },
   },
   problems: [`the folder is not writable ${EVIL}`],
   credentials: "file",
@@ -283,6 +290,7 @@ const BACKUPS: BackupsStatus = {
   running: null,
   last: { at: "2026-09-28T07:00:00.000Z", ok: true, name: "darius-testhost-20260928T070000Z.tar.gz", error: null },
   remote: { at: "2026-09-28T07:00:10.000Z", ok: true, error: null, count: 2 },
+  check: null,
   snapshots: [
     { name: "darius-testhost-20260928T070000Z.tar.gz", at: "2026-09-28T07:00:00.000Z", bytes: 52_428_800, files: 90, sha256: "ab".repeat(32), local: true, remote: true },
     { name: "darius-testhost-20260927T070000Z.tar.gz", at: "2026-09-27T07:00:00.000Z", bytes: 1024, files: null, sha256: null, local: false, remote: true },
@@ -1428,7 +1436,7 @@ test("the status page: strip, machine, hosts, a link to the backups, and no back
   const page = await get("/status");
   assert.equal(page.status, 200);
   const body = page.body;
-  for (const text of ["Status", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs", "since backup"]) {
+  for (const text of ["Status", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs", "since backup", "Backed up", "Backup stale", "no upload for 75 h", "last backup: none"]) {
     assert.ok(body.includes(text), `the status page shows: ${text}`);
   }
   for (const text of ["Back up now", "Snapshots", "Test the bucket", "Delete in bucket", "bk-secret", "DARIUS_SNAPSHOT_ENDPOINT"]) {
@@ -1479,6 +1487,9 @@ test("the backups tab: an env-locked field, no secret, the controls", async () =
     assert.ok(body.includes(text), `the backups tab shows: ${text}`);
   }
   const input = (id: string): string => [...body.matchAll(/<input\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(`id="${id}"`)) ?? "";
+  for (const text of ["Dead-man ping", "Ping address"]) assert.ok(body.includes(text), `the backups tab shows: ${text}`);
+  assert.match(input("bk-set-ping_url"), /value="https:\/\/hc\.example\.com\/\.\.\."/u, "the ping address shows in its masked form");
+  assert.doesNotMatch(input("bk-set-ping_url"), /\bdisabled\b/u, "a saved ping address stays editable");
   assert.match(input("bk-set-endpoint"), /\bdisabled\b/u, "the endpoint is set by the environment, so its field is disabled");
   assert.doesNotMatch(input("bk-set-bucket"), /\bdisabled\b/u, "a saved field stays editable");
   assert.match(input("bk-secret"), /type="password"/u, "the secret field is a password field");

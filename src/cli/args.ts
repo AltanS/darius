@@ -52,6 +52,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "systemd",
   "keep-stopped",
   "pull-only",
+  "reseed",
   "preflight",
   "check",
   "major",
@@ -64,10 +65,21 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "headless",
   "banner",
   "keep",
+  "overwrite",
+  "yes",
+  "runs-only",
 ]);
 
 /** Flags every command accepts: `src/cli.ts` reads them before the command runs. */
 export const GLOBAL_FLAGS: ReadonlySet<string> = new Set(["json", "help", "stdin", "project"]);
+
+/**
+ * Flags that take a value but may stand bare: `snapshot status --hosts` is a
+ * switch, `snapshot config push --hosts a,b` and `update --hosts a,b` carry a
+ * list. Bare means last, or followed by another flag; the commands that need
+ * the list refuse `true` themselves.
+ */
+const VALUE_OR_BARE_FLAGS: ReadonlySet<string> = new Set(["hosts"]);
 
 function looksLikeFlag(token: string): boolean {
   return token.startsWith("--") && token.length > 2;
@@ -125,6 +137,11 @@ export function parseArgs(argv: string[], known?: readonly string[]): ParsedArgs
     }
 
     const next = argv[index + 1];
+    if (VALUE_OR_BARE_FLAGS.has(body) && (next === undefined || looksLikeFlag(next))) {
+      flags[body] = true;
+      index += 1;
+      continue;
+    }
     if (next === undefined) throw new UsageError(`--${body} needs a value`);
     setValue(body, next);
     index += 2;

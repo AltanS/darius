@@ -16,10 +16,12 @@ import {
   canonicalQuery,
   createS3,
   parseListPage,
+  parseVersioning,
   S3Error,
   S3NetworkError,
   type RemoteConfig,
 } from "../src/core/s3.ts";
+import { startFakeS3 } from "./helpers/fake-s3.ts";
 import { isAddressInfo, seaweedfsUnavailable, startSeaweedFs, type SeaweedFs } from "./helpers/seaweedfs.ts";
 
 // AWS's documented example identity (Signature V4 examples for S3). Not a secret.
@@ -175,6 +177,39 @@ describe("ListObjectsV2 tag scanner", () => {
 
   test("truncated without a token is an error, not an endless loop", () => {
     assert.throws(() => parseListPage("<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>"), /NextContinuationToken/);
+  });
+});
+
+describe("GetBucketVersioning", () => {
+  const NS = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"';
+
+  test("the three answers: Enabled, Suspended, and no Status (never turned on)", () => {
+    assert.equal(parseVersioning(`<VersioningConfiguration ${NS}><Status>Enabled</Status></VersioningConfiguration>`), "enabled");
+    assert.equal(parseVersioning(`<VersioningConfiguration ${NS}><Status>Suspended</Status><MfaDelete>Disabled</MfaDelete></VersioningConfiguration>`), "suspended");
+    assert.equal(parseVersioning(`<VersioningConfiguration ${NS}></VersioningConfiguration>`), "off");
+    assert.equal(parseVersioning(`<VersioningConfiguration ${NS}/>`), "off");
+    assert.equal(parseVersioning(`<VersioningConfiguration ${NS}><Status>Sideways</Status></VersioningConfiguration>`), "unknown");
+  });
+
+  test("a backend without the feature (400, 405, 501) is unknown; any other error status throws", async () => {
+    const fake = await startFakeS3();
+    try {
+      const s3 = createS3({ ...remoteFor(fake.endpoint), bucket: fake.bucket, sse: false }, AWS_EXAMPLE);
+      for (const status of [400, 405, 501]) {
+        fake.versioningStatus = status;
+        assert.equal(await s3.getBucketVersioning(), "unknown", String(status));
+      }
+      fake.versioningStatus = 0;
+      fake.versioning = "Enabled";
+      assert.equal(await s3.getBucketVersioning(), "enabled");
+      fake.versioning = "";
+      assert.equal(await s3.getBucketVersioning(), "off");
+      fake.versioningStatus = 403;
+      await assert.rejects(s3.getBucketVersioning(), { name: "S3Error", status: 403 });
+      assert.ok(fake.log.every((line) => !line.startsWith("GET") || line.includes("versioning")), fake.log.join("\n"));
+    } finally {
+      await fake.stop();
+    }
   });
 });
 

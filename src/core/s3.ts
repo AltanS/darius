@@ -24,6 +24,10 @@
  * The caller hands over a `UploadSource` (a size and a read function), so this
  * file still touches no filesystem.
  *
+ * GetBucketVersioning (`GET ?versioning`) lets `darius snapshot check` say
+ * whether the bucket keeps old versions. A backend without the feature answers
+ * 501, 400 or 405; that is `unknown`, never an error.
+ *
  * Errors: a 412 on a conditional put is `{ conflict: true }`. A 404 on get or
  * head is `null`. Every other non-2xx throws `S3Error` with the status and the
  * first 300 bytes of the body. A request that got no response at all (refused,
@@ -83,6 +87,11 @@ export interface UploadOptions {
   /** Bytes per part of a multipart upload. At least 5 MiB; raised when the source would need more than 10 000 parts. */
   partSize?: number;
   contentType?: string;
+  /**
+   * Called when a failed multipart upload could not be aborted (the key may lack
+   * `s3:AbortMultipartUpload`). The upload still throws its own error; this only explains the leftover parts.
+   */
+  onAbortFailed?: (message: string) => void;
 }
 
 /**
@@ -93,6 +102,23 @@ export interface UploadOptions {
 export interface S3Upload {
   upload(key: string, source: UploadSource, options?: UploadOptions): Promise<{ etag: string; size: number; parts: number }>;
 }
+
+/** Kept apart from `S3`, like `S3Upload`. A server-side copy: the bytes never leave the bucket. */
+export interface S3Copy {
+  /** CopyObject from one key to another in this bucket. AWS allows a source of up to 5 GB; a larger one fails with 400. */
+  copy(from: string, to: string): Promise<void>;
+}
+
+/** Whether the bucket keeps old versions. `off` means it never had versioning; `unknown` means the backend does not say. */
+export type BucketVersioning = "enabled" | "suspended" | "off" | "unknown";
+
+/** Kept apart from `S3`, like `S3Upload`, so the sync code and its fakes need no change. */
+export interface S3Versioning {
+  getBucketVersioning(): Promise<BucketVersioning>;
+}
+
+/** Statuses of a backend that has no versioning API: the state is `unknown`, not an error. */
+const NO_VERSIONING_API: ReadonlySet<number> = new Set([400, 405, 501]);
 
 /** The server answered with a status the caller did not expect. */
 export class S3Error extends Error {
@@ -302,6 +328,14 @@ export function parseListPage(xml: string): ListPage {
   return { objects, nextToken };
 }
 
+/** One GetBucketVersioning answer. No `<Status>` means versioning was never turned on. */
+export function parseVersioning(xml: string): BucketVersioning {
+  const status = firstText(xml, "Status");
+  if (status === undefined || status === "") return "off";
+  if (status === "Enabled") return "enabled";
+  return status === "Suspended" ? "suspended" : "unknown";
+}
+
 // ---------------------------------------------------------------------------
 // The client.
 // ---------------------------------------------------------------------------
@@ -347,7 +381,7 @@ function requireKey(key: string): void {
   if (key === "") throw new Error("S3: object key is empty");
 }
 
-export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload {
+export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload & S3Versioning & S3Copy {
   if (!cfg.path_style) throw new Error("S3: only path-style addressing is supported; set path_style = true");
   if (cfg.bucket === "") throw new Error("S3: bucket is empty");
   if (creds.accessKeyId === "" || creds.secretAccessKey === "") throw new Error("S3: credentials are empty");
@@ -485,13 +519,20 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload {
     return unquote(firstText(text, "ETag") ?? "");
   }
 
-  async function abortMultipart(key: string, uploadId: string): Promise<void> {
+  /** Never throws: the upload is already failing. A refusal is reported through `onFailed`; a part left behind is the lifecycle rule's to clean up. */
+  async function abortMultipart(key: string, uploadId: string, onFailed: ((message: string) => void) | undefined): Promise<void> {
+    let problem: string | null = null;
     try {
       const response = await send({ method: "DELETE", key, query: [["uploadId", uploadId]] });
       await response.body?.cancel();
-    } catch {
-      // The upload is already failing; a part left behind is the bucket's lifecycle rule to clean up.
+      if (!response.ok) problem = `HTTP ${String(response.status)}`;
+    } catch (error) {
+      problem = error instanceof Error ? error.message : String(error);
     }
+    if (problem === null || onFailed === undefined) return;
+    onFailed(
+      `the failed upload of ${key} could not be aborted (${problem}): its parts stay in the bucket. Give the key s3:AbortMultipartUpload, or let a lifecycle rule with AbortIncompleteMultipartUpload remove them`,
+    );
   }
 
   return {
@@ -530,9 +571,22 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload {
         }
         return { etag: await completeMultipart(key, uploadId, etags), size, parts: etags.length };
       } catch (error) {
-        await abortMultipart(key, uploadId);
+        await abortMultipart(key, uploadId, options.onAbortFailed);
         throw error;
       }
+    },
+
+    async copy(from, to) {
+      requireKey(from);
+      requireKey(to);
+      const headers: HeaderPair[] = [["x-amz-copy-source", canonicalPath(cfg.bucket, from)]];
+      if (cfg.sse) headers.push(["x-amz-server-side-encryption", SSE_ALGORITHM]);
+      const spec: RequestSpec = { method: "PUT", key: to, headers, timeoutMs: PART_TIMEOUT_MS };
+      const response = await send(spec);
+      if (!response.ok) throw await failure(response, spec);
+      // S3 may answer 200 and then put an <Error> in the body.
+      const text = await response.text();
+      if (text.includes("<Error>")) throw new S3Error(`S3 PUT ${to}: copy failed ${redact(text.slice(0, ERROR_BODY_BYTES))}`, 500);
     },
 
     async get(key) {
@@ -577,6 +631,17 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload {
         token = result.nextToken;
       }
       throw new Error(`S3 list ${prefix}: more than ${MAX_LIST_PAGES} pages`);
+    },
+
+    async getBucketVersioning() {
+      const spec: RequestSpec = { method: "GET", query: [["versioning", ""]] };
+      const response = await send(spec);
+      if (NO_VERSIONING_API.has(response.status)) {
+        await response.body?.cancel();
+        return "unknown";
+      }
+      if (!response.ok) throw await failure(response, spec);
+      return parseVersioning(await response.text());
     },
 
     async ensureBucket() {

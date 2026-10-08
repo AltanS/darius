@@ -1,5 +1,5 @@
 /**
- * What the backup controls know about the snapshot settings: the eleven
+ * What the backup controls know about the snapshot settings: the thirteen
  * fields, their names on the wire (snake case), the environment variable
  * that sets each one, and the words for where a value came from. Pure, so the
  * server render and the browser agree.
@@ -39,10 +39,30 @@ export const REMOTE_FIELDS: readonly FieldSpec[] = [
   { key: "pathStyle", wire: "path_style", kind: "toggle", label: "Path style", hint: "Put the bucket in the path, not in the host name.", width: "short" },
   { key: "allowHttp", wire: "allow_http", kind: "toggle", label: "Allow plain http", hint: "Only for a service on a trusted network.", width: "short" },
   { key: "sse", wire: "sse", kind: "toggle", label: "Server side encryption", hint: "Ask the service to encrypt each object.", width: "short" },
-  { key: "keepRemote", wire: "keep_remote", kind: "number", label: "Keep in the bucket", hint: "How many of the newest snapshots stay in the bucket.", width: "short" },
+  { key: "keepRemote", wire: "keep_remote", kind: "number", label: "Keep in the bucket", hint: "How many of the newest snapshots stay in the bucket. Ignored when darius may not delete there.", width: "short" },
+  {
+    key: "remotePrune",
+    wire: "remote_prune",
+    kind: "toggle",
+    label: "Delete old snapshots in the bucket",
+    hint: "Off: darius never deletes in the bucket. Use it with a key that cannot delete, and let the bucket's versioning and lifecycle rule keep it tidy.",
+    width: "short",
+  },
 ];
 
-export const ALL_FIELDS: readonly FieldSpec[] = [...LOCAL_FIELDS, ...REMOTE_FIELDS];
+/** The dead-man ping. The page only ever holds its masked form (scheme and host), so a save sends a new address or nothing. */
+export const PING_FIELDS: readonly FieldSpec[] = [
+  {
+    key: "pingUrl",
+    wire: "ping_url",
+    kind: "text",
+    label: "Ping address",
+    hint: "Optional. A healthchecks-style address. darius calls it after a good backup, and calls it with /fail after a bad one. The address is a secret, so this page shows only its host. Type a new one to replace it, or clear the field to remove it.",
+    width: "long",
+  },
+];
+
+export const ALL_FIELDS: readonly FieldSpec[] = [...LOCAL_FIELDS, ...REMOTE_FIELDS, ...PING_FIELDS];
 
 /** The variable that sets a field: `DARIUS_SNAPSHOT_KEEP_REMOTE`. */
 export function envName(wire: string): string {

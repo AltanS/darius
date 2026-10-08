@@ -1,5 +1,5 @@
 /**
- * `darius sync [--project P | --all-projects] [--pull-only] [--json]`
+ * `darius sync [--project P | --all-projects] [--pull-only | --reseed] [--json]`
  *
  * Syncs one project, or every project in the local state dir, with the
  * bucket in config.toml `[remote]` (src/core/sync.ts does the work).
@@ -8,6 +8,11 @@
  * skipped because the bucket was unreachable or another process held the
  * lease; 1 a real error in any project (the others still run) or no
  * `[remote]` configured; 2 usage.
+ *
+ * `--reseed` refills a bucket that lost its objects, from the one host that
+ * holds a full local copy (docs/backups.md, "When the sync bucket is lost").
+ * It needs `--project` or `--all-projects`, and it is a usage error (exit 2)
+ * with `--pull-only` or without a project selection.
  *
  * `--project P` creates the local store when it does not exist yet: that is
  * how a second host gets a project for the first time. `--all-projects`
@@ -83,6 +88,10 @@ interface ProjectSelection {
 function projectNames(args: ParsedArgs): ProjectSelection {
   const flag = args.flags.project;
   const isAll = args.flags["all-projects"] === true;
+  if (args.flags.reseed === true) {
+    if (args.flags["pull-only"] === true) throw new UsageError("--reseed pushes to the bucket, so it cannot be used with --pull-only");
+    if (flag === undefined && !isAll) throw new UsageError("--reseed needs --project P or --all-projects");
+  }
   if (flag === true || flag === false) throw new UsageError("--project needs a project name");
   if (isAll && flag !== undefined) throw new UsageError("use --project or --all-projects, not both");
   if (isAll) return { names: [GLOBAL_PROJECT, ...listProjects()], isCreate: (name) => name === GLOBAL_PROJECT };
@@ -123,10 +132,10 @@ async function refreshDerived(project: Project): Promise<void> {
 }
 
 /** One project: capture the tree, sync, apply the tree; a merged `.jsonl` file is captured and pushed at once. */
-async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean): Promise<ProjectSyncReport> {
+async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean, reseed = false): Promise<ProjectSyncReport> {
   // Before the push: a tree change on this host becomes ledger lines and blobs that go out.
   const captured = hasTree(project) ? captureTree(project) : null;
-  const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly });
+  const report: ProjectSyncReport = await syncProject(project, s3, cfg, { pullOnly, reseed });
   // Checked again: on a new host the first pull brings the first tree lines.
   if (captured === null && !hasTree(project)) return report;
   // After the pull: lines from other hosts reach the working copy.
@@ -156,7 +165,7 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   for (const name of names) {
     try {
       const project = openProject(name, { create: isCreate(name) });
-      run.reports.push(await syncOne(project, s3, cfg, args.flags["pull-only"] === true));
+      run.reports.push(await syncOne(project, s3, cfg, args.flags["pull-only"] === true, args.flags.reseed === true));
     } catch (cause) {
       if (cause instanceof UsageError) throw cause;
       run.errors.push({ project: name, error: errorMessage(cause) });
@@ -178,7 +187,7 @@ function describe(report: SyncReport): string {
   }
   const conflicts = report.conflicts.length === 0 ? "" : `, conflicts: ${report.conflicts.join(" ")}`;
   return (
-    `✓ ${report.project}: chunks ${report.pulledChunks} in / ${report.pushedChunks} out, ` +
+    `✓ ${report.project}${report.reseed === true ? " (reseed)" : ""}: chunks ${report.pulledChunks} in / ${report.pushedChunks} out, ` +
     `items ${report.itemsPulled} in / ${report.itemsPushed} out, ` +
     `blobs ${report.blobsPulled} in / ${report.blobsPushed} out${conflicts}`
   );
@@ -212,8 +221,8 @@ async function alertAfterSync(): Promise<void> {
 
 export const syncCommand: Command = {
   name: "sync",
-  flags: ["all-projects", "pull-only"],
-  summary: "pull from and push to the bucket: --project P | --all-projects, --pull-only",
+  flags: ["all-projects", "pull-only", "reseed"],
+  summary: "pull from and push to the bucket: --project P | --all-projects, --pull-only | --reseed",
   async run(args: ParsedArgs): Promise<number> {
     const run = await syncAll(args);
     const code = exitCode(run);

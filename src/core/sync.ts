@@ -65,6 +65,17 @@
  * Offline. An `S3NetworkError` anywhere ends the sync with `skipped:
  * "offline"`. Whatever was already done stays done and is recorded.
  *
+ * Reseed (`opts.reseed`) refills a bucket that lost its objects, from the one
+ * host that holds a full local copy. It is a full sync whose push step is
+ * complete instead of incremental: after step 1, every local blob and every
+ * closed chunk of every host dir is PUT with If-None-Match, with no `seen`
+ * filter and no host filter. A 412 means present and is not counted, so a
+ * second reseed reports zero pushes and a bucket that is not empty loses
+ * nothing. Steps 2 to 7 then run as usual, so items and the manifest follow the
+ * normal three-way rule. A reseed does not recreate another host's
+ * `open.jsonl` lines (they were never in the bucket) and does not touch the
+ * lease except for the normal take and release.
+ *
  * Pull-only (`opts.pullOnly`) runs step 1 and the "only remote changed" part
  * of step 4, without the lease and without writing to the bucket. Items
  * changed on both sides wait for a full sync.
@@ -82,7 +93,7 @@ import { appendLine, closeOpenChunk, hostId, listChunks, parseLedgerText, writeR
 import type { JsonValue, Kind } from "./model.ts";
 import { S3NetworkError } from "./s3.ts";
 import type { S3 } from "./s3.ts";
-import { decodeItem, getBlob, itemRef, putBlob, readItemText, sha256Hex, writeItemText } from "./store.ts";
+import { decodeItem, getBlob, itemRef, listBlobs, putBlob, readItemText, sha256Hex, writeItemText } from "./store.ts";
 import type { Project } from "./store.ts";
 
 export interface SyncReport {
@@ -99,11 +110,15 @@ export interface SyncReport {
   blobsPushed: number;
   /** Who holds the lease, when `skipped` is "lease-held". */
   leaseHolder?: string;
+  /** True when this run was a reseed (see the file header). */
+  reseed?: boolean;
 }
 
 export interface SyncOptions {
   /** Pull chunks, blobs and remote-only item changes; write nothing to the bucket. */
   pullOnly?: boolean;
+  /** Push every local chunk of every host and every local blob, If-None-Match, then sync as usual. Not with `pullOnly`. */
+  reseed?: boolean;
 }
 
 /** The `who` of every line sync appends (pulled item versions, conflicts). */
@@ -339,6 +354,7 @@ async function pushBlobs(ctx: SyncContext, shas: Iterable<string>, source: strin
   await forEachLimited([...shas], BLOB_CONCURRENCY, async (sha) => {
     const blob = getBlob(ctx.project, sha);
     if (blob === null) throw new Error(`${source}: names blob ${sha}, which is not in the local store`);
+    if (sha256Hex(blob) !== sha) throw new Error(`blob ${sha} in the local store does not hash to its name; nothing of it was pushed`);
     const result = await ctx.s3.put(blobKey(ctx, sha), blob, { ifNoneMatch: true });
     if (!("conflict" in result)) ctx.report.blobsPushed += 1;
   });
@@ -379,6 +395,35 @@ async function pushChunks(ctx: SyncContext): Promise<void> {
     ctx.state.seen.add(`${chunk.host}/${chunk.name}`);
     saveSyncState(ctx.project, ctx.state);
   }
+}
+
+/**
+ * The complete push of a reseed (see the file header). Every local blob goes
+ * first, then every closed chunk of every host. Each PUT is If-None-Match, so
+ * an object the bucket still holds is never rewritten and never counted.
+ * `seen` gains every chunk name; it is saved once at the end, because a crash
+ * only means the next reseed gets a 412 for the same objects.
+ */
+async function pushEverything(ctx: SyncContext): Promise<void> {
+  closeOpenChunk(ctx.project);
+  const blobs = listBlobs(ctx.project);
+  const stored = new Set(blobs);
+  const chunks = listChunks(ctx.project);
+  const texts = new Map(chunks.map((chunk) => [chunk, readFileSync(chunk.path, "utf8")]));
+  for (const [chunk, text] of texts) {
+    for (const sha of blobRefsOf(text, chunk.path)) {
+      if (!stored.has(sha)) throw new Error(`${chunk.path}: names blob ${sha}, which is not in the local store`);
+    }
+  }
+  await pushBlobs(ctx, blobs, "reseed");
+  await forEachLimited(chunks, BLOB_CONCURRENCY, async (chunk) => {
+    const text = texts.get(chunk) ?? "";
+    const key = `${ledgerPrefix(ctx)}${chunk.host}/${chunk.name}`;
+    const result = await ctx.s3.put(key, text, { ifNoneMatch: true, contentType: JSONL_CONTENT });
+    if (!("conflict" in result)) ctx.report.pushedChunks += 1;
+    ctx.state.seen.add(`${chunk.host}/${chunk.name}`);
+  });
+  saveSyncState(ctx.project, ctx.state);
 }
 
 // --- lease -------------------------------------------------------------------
@@ -652,12 +697,20 @@ async function runFull(ctx: SyncContext): Promise<void> {
   await releaseLease(ctx, lease.taken);
 }
 
+/** A full sync preceded by the complete push: pull what the bucket still has, put back everything else, then sync as usual. */
+async function runReseed(ctx: SyncContext): Promise<void> {
+  await pullChunks(ctx);
+  await pushEverything(ctx);
+  await runFull(ctx);
+}
+
 /**
  * Syncs `project` with the bucket behind `s3`. Returns a report; `skipped`
  * is set when the network is down or another process holds the lease. Any
  * other failure throws.
  */
 export async function syncProject(project: Project, s3: S3, cfg: Config, opts: SyncOptions = {}): Promise<SyncReport> {
+  if (opts.reseed === true && opts.pullOnly === true) throw new Error("reseed pushes to the bucket, so it cannot be pull-only");
   const host = hostId();
   if (cfg.host !== host) throw new Error(`config host '${cfg.host}' differs from the ledger host id '${host}'`);
   const report: SyncReport = {
@@ -670,9 +723,12 @@ export async function syncProject(project: Project, s3: S3, cfg: Config, opts: S
     blobsPulled: 0,
     blobsPushed: 0,
   };
+  if (opts.reseed === true) report.reseed = true;
   const ctx: SyncContext = { project, s3, host, prefix: `${project.name}/`, state: readSyncState(project), report };
   try {
-    await (opts.pullOnly === true ? runPullOnly(ctx) : runFull(ctx));
+    if (opts.pullOnly === true) await runPullOnly(ctx);
+    else if (opts.reseed === true) await runReseed(ctx);
+    else await runFull(ctx);
   } catch (cause) {
     if (!(cause instanceof S3NetworkError)) throw cause;
     report.skipped = "offline";

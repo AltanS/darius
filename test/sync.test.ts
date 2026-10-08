@@ -22,10 +22,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { syncCommand } from "../src/cli/sync.ts";
 import { loadConfig } from "../src/core/config.ts";
-import { appendLine, parseLedgerText, readLedger } from "../src/core/ledger.ts";
+import { appendLine, closeOpenChunk, listChunks, parseLedgerText, readLedger } from "../src/core/ledger.ts";
 import type { Document, Profile, Ritual } from "../src/core/model.ts";
 import { createS3 } from "../src/core/s3.ts";
-import { decodeItem, encodeItem, getBlobText, GLOBAL_PROJECT, openProject, putBlob, readItemText, sha256Hex } from "../src/core/store.ts";
+import type { ListedObject, S3 } from "../src/core/s3.ts";
+import { decodeItem, encodeItem, getBlobText, GLOBAL_PROJECT, listBlobs, openProject, putBlob, readItemText, sha256Hex } from "../src/core/store.ts";
 import type { Project } from "../src/core/store.ts";
 import { decideItem, isLocalNewer, syncProject } from "../src/core/sync.ts";
 import type { SyncOptions, SyncReport } from "../src/core/sync.ts";
@@ -127,6 +128,42 @@ async function runSyncCli(host: Host, flags: Record<string, string | boolean>): 
   }
 }
 
+/** An in-memory S3 that honours If-None-Match, for the push selection. It counts the PUTs that stored something. */
+function memoryS3(): S3 & { objects: Map<string, Uint8Array>; stored: string[] } {
+  const objects = new Map<string, Uint8Array>();
+  const stored: string[] = [];
+  return {
+    objects,
+    stored,
+    put(key, body, o) {
+      if (o?.ifNoneMatch === true && objects.has(key)) return Promise.resolve({ conflict: true });
+      const content = Buffer.from(body);
+      objects.set(key, content);
+      stored.push(key);
+      return Promise.resolve({ etag: sha256Hex(content) });
+    },
+    get(key) {
+      const body = objects.get(key);
+      return Promise.resolve(body === undefined ? null : { body, etag: sha256Hex(body) });
+    },
+    head(key) {
+      const body = objects.get(key);
+      return Promise.resolve(body === undefined ? null : { etag: sha256Hex(body), size: body.length });
+    },
+    del(key) {
+      objects.delete(key);
+      return Promise.resolve();
+    },
+    list(prefix) {
+      const listed: ListedObject[] = [...objects]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, body]) => ({ key, etag: sha256Hex(body), size: body.length }));
+      return Promise.resolve(listed);
+    },
+    ensureBucket: () => Promise.resolve("exists"),
+  };
+}
+
 after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
@@ -172,6 +209,86 @@ test("an unreachable bucket skips as offline and keeps the local line for later"
   const cli = await runSyncCli(host, { project: "offline-project" });
   assert.equal(cli.code, 3);
   assert.equal(JSON.parse(cli.output).projects[0].skipped, "offline");
+});
+
+describe("reseed push selection (in-memory S3)", () => {
+  const hostA = makeHost("hosta", "http://127.0.0.1:1");
+  const hostB = makeHost("hostb", "http://127.0.0.1:1");
+
+  /** Host B writes a line that names a blob; its chunk and blob are put where a sync of B would have put them. */
+  async function seedFromB(s3: S3, name: string): Promise<{ chunkKey: string; blobSha: string }> {
+    const b = projectOf(hostB, name);
+    const blobSha = putBlob(b, "output of host b\n");
+    appendLine(b, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "rb", outcome: "complete", output_sha: blobSha });
+    closeOpenChunk(b);
+    const chunk = listChunks(b).find((one) => one.host === "hostb");
+    assert.ok(chunk !== undefined);
+    await s3.put(`${name}/ledger/hostb/${chunk.name}`, readFileSync(chunk.path, "utf8"), { ifNoneMatch: true });
+    await s3.put(`${name}/blobs/${blobSha}`, "output of host b\n", { ifNoneMatch: true });
+    return { chunkKey: `${name}/ledger/hostb/${chunk.name}`, blobSha };
+  }
+
+  test("pushes the chunks of every host and every blob, ignores seen, and does not count a 412", async () => {
+    const name = uniqueProject("reseedsel");
+    const s3 = memoryS3();
+    const { chunkKey, blobSha } = await seedFromB(s3, name);
+    const a = projectOf(hostA, name);
+    const ownSha = putBlob(a, "output of host a\n");
+    appendLine(a, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "ra", outcome: "complete", output_sha: ownSha });
+    const strayBlob = putBlob(a, "a tree file version no line names\n");
+    const first = await syncProject(a, s3, loadConfig());
+    assert.equal(first.pulledChunks, 1);
+    assert.equal(first.pushedChunks, 1);
+    const keysBefore = [...s3.objects.keys()].filter((key) => key.includes("/ledger/") || key.includes("/blobs/")).toSorted();
+    assert.ok(keysBefore.includes(chunkKey) && keysBefore.includes(`${name}/blobs/${ownSha}`) && keysBefore.includes(`${name}/blobs/${blobSha}`));
+    assert.ok(!keysBefore.includes(`${name}/blobs/${strayBlob}`), "a blob no line names is not pushed by a plain sync");
+
+    const lost = [...s3.objects.keys()];
+    for (const key of lost) s3.objects.delete(key);
+    const plain = await syncProject(a, s3, loadConfig());
+    assert.equal(plain.pushedChunks, 0, "a plain sync trusts seen and pushes no chunk");
+
+    // One chunk survives with other content: If-None-Match must leave it alone.
+    s3.objects.set(chunkKey, new TextEncoder().encode("kept\n"));
+    s3.stored.length = 0;
+    const reseed = await syncProject(a, s3, loadConfig(), { reseed: true });
+    assert.equal(reseed.reseed, true);
+    assert.equal(reseed.skipped, undefined);
+    assert.equal(reseed.pulledChunks, 0, "the bucket's surviving chunk is already seen");
+    assert.equal(reseed.pushedChunks, listChunks(a).length - 1, "every chunk of every host but the one present");
+    assert.equal(reseed.blobsPushed, listBlobs(a).length, "every blob of the store, named or not");
+    assert.deepEqual([...s3.objects.keys()].filter((key) => key.includes("/ledger/") || key.includes("/blobs/")).toSorted(), keysBefore.toSorted().concat(`${name}/blobs/${strayBlob}`).toSorted());
+    assert.equal(new TextDecoder().decode(s3.objects.get(chunkKey)), "kept\n", "an existing object is never overwritten");
+    assert.equal(new TextDecoder().decode(s3.objects.get(`${name}/blobs/${blobSha}`)), "output of host b\n");
+
+    s3.stored.length = 0;
+    const again = await syncProject(a, s3, loadConfig(), { reseed: true });
+    assert.equal(again.pushedChunks, 0);
+    assert.equal(again.blobsPushed, 0);
+    assert.ok(!s3.stored.some((key) => key.includes("/ledger/") || key.includes("/blobs/")), "no chunk or blob PUT stored anything");
+  });
+
+  test("a chunk that names a blob the store lacks stops the reseed", async () => {
+    const name = uniqueProject("reseedmiss");
+    const a = projectOf(hostA, name);
+    appendLine(a, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "rx", outcome: "complete", output_sha: "b".repeat(64) });
+    await assert.rejects(syncProject(a, memoryS3(), loadConfig(), { reseed: true }), /not in the local store/);
+  });
+
+  test("a local blob whose content does not hash to its name stops the push and is never PUT", async () => {
+    const name = uniqueProject("reseedbad");
+    const a = projectOf(hostA, name);
+    const sha = putBlob(a, "a tree file version\n");
+    writeFileSync(join(a.root, "blobs", sha), "bit rot\n");
+    const s3 = memoryS3();
+    await assert.rejects(syncProject(a, s3, loadConfig(), { reseed: true }), new RegExp(`blob ${sha} .*does not hash to its name`, "u"));
+    assert.equal(s3.objects.has(`${name}/blobs/${sha}`), false);
+  });
+
+  test("reseed and pullOnly together are refused", async () => {
+    const a = projectOf(hostA, uniqueProject("reseedpull"));
+    await assert.rejects(syncProject(a, memoryS3(), loadConfig(), { reseed: true, pullOnly: true }), /cannot be pull-only/);
+  });
 });
 
 const unavailable = await seaweedfsUnavailable();
@@ -404,5 +521,54 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     assert.ok(report.pulledChunks >= 1);
     assert.equal(report.pushedChunks, 0);
     assert.equal((await server.s3.list(`${name}/`)).length, objectCount);
+  });
+
+  test("reseed refills a wiped project from one full host; B syncs clean, a fresh C pulls everything, a second reseed is a no-op", async () => {
+    const name = uniqueProject("reseed");
+    const hostC = makeHost("hostc", server.endpoint);
+    const a = projectOf(hostA, name);
+    a.writeItem(ritual({}), { who: "test" });
+    const sha = putBlob(a, "all green\n");
+    appendLine(a, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "ra", outcome: "complete", findings_sha: sha });
+    assert.equal((await syncAs(hostA, name, server)).skipped, undefined);
+    await syncAs(hostB, name, server);
+    const b = projectOf(hostB, name);
+    const shaB = putBlob(b, "output of b\n");
+    appendLine(b, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: "rb", outcome: "complete", output_sha: shaB });
+    await syncAs(hostB, name, server);
+    await syncAs(hostA, name, server);
+
+    const keysBefore = (await server.s3.list(`${name}/`)).map((object) => object.key).toSorted();
+    assert.ok(keysBefore.some((key) => key.includes("/ledger/hostb/")) && keysBefore.includes(`${name}/blobs/${shaB}`));
+    for (const key of keysBefore) await server.s3.del(key);
+    assert.deepEqual(await server.s3.list(`${name}/`), []);
+
+    useHost(hostA);
+    const localChunks = listChunks(openProject(name)).length;
+    const reseed = await runSyncCli(hostA, { project: name, reseed: true });
+    assert.equal(reseed.code, 0, reseed.output);
+    const report: SyncReport = JSON.parse(reseed.output).projects[0];
+    assert.equal(report.reseed, true);
+    assert.ok(report.pushedChunks >= localChunks, "every chunk of both hosts went back");
+    assert.equal(report.blobsPushed, 2);
+    assert.deepEqual((await server.s3.list(`${name}/`)).map((object) => object.key).toSorted(), keysBefore);
+
+    const plainB = await syncAs(hostB, name, server);
+    assert.equal(plainB.skipped, undefined);
+    assert.equal(plainB.pushedChunks + plainB.pulledChunks + plainB.blobsPushed + plainB.blobsPulled, 0, "B has all of it and pushes nothing");
+
+    const onC = await syncAs(hostC, name, server);
+    assert.equal(onC.pulledChunks, localChunks);
+    assert.equal(onC.blobsPulled, 2);
+    assert.equal(onC.itemsPulled, 1);
+    const c = projectOf(hostC, name);
+    assert.equal(getBlobText(c, sha), "all green\n");
+    assert.equal(getBlobText(c, shaB), "output of b\n");
+    assert.equal(readItemText(c, "ritual", "heartbeat"), readItemText(projectOf(hostA, name), "ritual", "heartbeat"));
+
+    const again = await syncAs(hostA, name, server, { reseed: true });
+    assert.equal(again.pushedChunks, 0);
+    assert.equal(again.blobsPushed, 0);
+    assert.equal(again.itemsPushed, 0);
   });
 });

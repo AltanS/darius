@@ -306,6 +306,7 @@ export function demoStatus(now: number = Date.now()): HostStatus {
     utcOffset: -new Date(now).getTimezoneOffset(),
     profiles: [],
     projects: [project(now), atlas(now), fieldNotes(now)],
+    hosts: [{ host: "demo", self: true, backup: null }],
   };
 }
 
@@ -431,8 +432,8 @@ function demoSystem(now: number): SystemStatus {
     ],
     store: { path: "/home/user/.local/share/darius", bytes: 48 * 1024 * 1024, files: 1520, projects: 3, rituals: 7, vigils: 2, profiles: 3, runs: 214, milestones: 4, specs: 19 },
     hosts: [
-      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"] },
-      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"] },
+      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"], backup: { state: "ok", lastOkAt: back(3 * 3600_000), ageMs: 3 * 3600_000, name: "darius-host-a-x.tar.gz", error: null, reason: null } },
+      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"], backup: { state: "stale", lastOkAt: back(50 * 3600_000), ageMs: 50 * 3600_000, name: "darius-host-b-x.tar.gz", error: null, reason: "no upload for 50 h" } },
     ],
     projects: [
       { project: "project-one", lastSync: back(5 * 60_000), rituals: 4, vigils: 1, profiles: 2, runs: 150, bytes: 30 * 1024 * 1024 },
@@ -465,6 +466,7 @@ function demoBackups(clock: number): BackupsStatus {
       dir: { value: "~/.local/share/darius-backup", source: "default" },
       keep: { value: 7, source: "config" },
       keepRemote: { value: 14, source: "default" },
+      remotePrune: { value: false, source: "file" },
       endpoint: { value: "https://s3.example.com", source: "env" },
       bucket: { value: "darius-backups", source: "file" },
       region: { value: "us-east-1", source: "default" },
@@ -472,6 +474,7 @@ function demoBackups(clock: number): BackupsStatus {
       pathStyle: { value: true, source: "default" },
       allowHttp: { value: false, source: "default" },
       sse: { value: false, source: "default" },
+      pingUrl: { value: "https://hc-ping.example.com/...", source: "file" },
     },
     problems: [],
     credentials: "file",
@@ -479,6 +482,7 @@ function demoBackups(clock: number): BackupsStatus {
     running: null,
     last: { at: back(3 * 3600_000), ok: true, name: snapshots[0]?.name ?? null, error: null },
     remote: { at: back(3 * 3600_000), ok: true, error: null, count: 4 },
+    check: { at: back(2 * 24 * 3600_000), delete: "refused", versioning: "enabled", warnings: [], stale: false },
     snapshots,
     localBytes: (412 + 398 + 371 + 120) * MIB,
     storePath: "/home/user/.local/share/darius",
