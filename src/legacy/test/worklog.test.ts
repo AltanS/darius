@@ -125,11 +125,11 @@ describe("worklog", () => {
       worklogPath,
       threadId,
       section: "artifact",
-      message: "/some/file.ts",
+      message: "some/file.ts",
     });
 
     const content = readFileSync(worklogPath, "utf-8");
-    expect(content).toContain("/some/file.ts");
+    expect(content).toContain("some/file.ts");
     expect(content).toContain("[artifact]");
   });
 

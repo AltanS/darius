@@ -30,8 +30,8 @@
  * ownership, TTL parsing, ref normalization) are unit-testable without a repo.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
 import { hostName } from "./host-stamp.ts";
 import { withLock } from "./worklog.ts";
@@ -106,12 +106,14 @@ export function readClaims(trackerRoot: string): ClaimsDoc {
   if (typeof rawClaims !== "object" || rawClaims === null) return emptyClaimsDoc();
 
   const doc = emptyClaimsDoc();
-  readEntries(rawClaims, doc.claims);
+  const claims: Record<string, SessionClaim> = {};
+  readEntries(rawClaims, claims);
+  doc.claims = canonicalKeys(trackerRoot, claims);
   const rawReleased = (parsed as { released?: unknown }).released;
   if (typeof rawReleased === "object" && rawReleased !== null) {
     const released: Record<string, SessionClaim> = {};
     readEntries(rawReleased, released);
-    if (Object.keys(released).length > 0) doc.released = released;
+    if (Object.keys(released).length > 0) doc.released = canonicalKeys(trackerRoot, released);
   }
   return doc;
 }
@@ -409,40 +411,80 @@ export function formatClaimLine(status: ClaimStatus, host: string = hostName()):
 /**
  * Normalize a spec reference to the key used in the claims file.
  *
- * Resolution order — first form that exists on disk wins, as a repo-relative
- * path (the same shape the ledger stores, so a claim and its evidence name the
- * same spec):
- *   1. relative to `cwd` (what a human types)
- *   2. relative to the repo root (what a worklog thread's `specPath:` stores)
- *   3. relative to `.tracker/` (`M247-foo/03-bar.md`)
+ * Since 0.76.0 the key is the TRACKER-relative path (`M1-x/02-y.md`), the
+ * same whatever form was passed, so two sessions can never hold one spec
+ * under two keys. Resolution order, first form that exists on disk wins:
+ *   1. relative to `cwd` (what a human types), unless `cwd` is null
+ *   2. relative to the repo root (`.tracker/M1-x/02-y.md`, a thread's `spec:`)
+ *   3. relative to `.tracker/` (`M1-x/02-y.md`)
  *
- * A ref that resolves to nothing is kept verbatim (minus `./`). That is
- * deliberate: claims are advisory coordination, and refusing to coordinate on a
- * spec that has not been written yet — the "I am about to author this" case, and
- * every scratch ref in a test — would be a gratuitous restriction.
+ * A ref that resolves to nothing, or to a file outside `.tracker/`, is kept
+ * verbatim (minus `./`). `claim` and `release` refuse such a ref; readers
+ * keep old entries as they are.
  */
 export function normalizeClaimRef(opts: {
   trackerRoot: string;
   ref: string;
-  cwd?: string;
+  cwd?: string | null;
 }): string {
+  return canonicalSpecRef(opts) ?? opts.ref.trim().replace(/^\.\//, "");
+}
+
+/**
+ * The tracker-relative path of an existing spec file inside `.tracker/`, or
+ * null (0.76.0). See {@link normalizeClaimRef} for the resolution order.
+ */
+export function canonicalSpecRef(opts: { trackerRoot: string; ref: string; cwd?: string | null }): string | null {
   const { trackerRoot, ref } = opts;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd === undefined ? process.cwd() : opts.cwd;
   const repoRoot = dirname(resolve(trackerRoot));
   const trimmed = ref.trim().replace(/^\.\//, "");
+  if (trimmed === "") return null;
 
   const candidates = isAbsolute(trimmed)
     ? [trimmed]
-    : [resolve(cwd, trimmed), resolve(repoRoot, trimmed), resolve(trackerRoot, trimmed)];
+    : [...(cwd === null ? [] : [resolve(cwd, trimmed)]), resolve(repoRoot, trimmed), resolve(trackerRoot, trimmed)];
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      const rel = relative(repoRoot, candidate);
-      // Outside the repo entirely — keep the absolute path rather than emitting
-      // a `../../..` key nobody can read.
-      return rel.startsWith("..") ? candidate : rel;
-    }
+    if (!existsSync(candidate) || !isFileSafe(candidate)) continue;
+    const inside = insideTracker(trackerRoot, candidate);
+    if (inside !== null) return inside;
   }
+  return null;
+}
 
-  return trimmed;
+function isFileSafe(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** `candidate` relative to `.tracker/` when it lies inside it (through the link or its target). */
+function insideTracker(trackerRoot: string, candidate: string): string | null {
+  const direct = relative(resolve(trackerRoot), resolve(candidate));
+  if (direct !== "" && !direct.startsWith("..") && !isAbsolute(direct)) return direct.split(sep).join("/");
+  try {
+    const real = relative(realpathSync(trackerRoot), realpathSync(candidate));
+    if (real !== "" && !real.startsWith("..") && !isAbsolute(real)) return real.split(sep).join("/");
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Re-key a claims map through {@link normalizeClaimRef} without the cwd, so
+ * entries written under an older key form (repo-relative, absolute) read as
+ * the canonical key. On a collision the newer claim (`at`) wins.
+ */
+function canonicalKeys(trackerRoot: string, entries: Record<string, SessionClaim>): Record<string, SessionClaim> {
+  const out: Record<string, SessionClaim> = {};
+  for (const [ref, claim] of Object.entries(entries)) {
+    const key = normalizeClaimRef({ trackerRoot, ref, cwd: null });
+    const prev = out[key];
+    if (prev === undefined || (parseInstant(claim.at) ?? 0) > (parseInstant(prev.at) ?? 0)) out[key] = claim;
+  }
+  return out;
 }

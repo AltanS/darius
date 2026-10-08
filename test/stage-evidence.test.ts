@@ -68,11 +68,16 @@ test("set-stage refuses with exit 1 and needs a reason for --force, under both r
     const forced = cli(["worklog", "set-stage", id, "verified", "--force", "--reason", "smoke"], root, runtime);
     assert.equal(forced.code, 0, forced.stderr);
     assert.match(forced.stdout, /verified \(forced\)/u);
-    const committed = cli(["worklog", "set-stage", id, "committed"], root, runtime);
+    // Since 0.76.0 committed needs artifacts touched by the commits, or --no-code.
+    const noArtifacts = cli(["worklog", "set-stage", id, "committed"], root, runtime);
+    assert.equal(noArtifacts.code, 1);
+    assert.match(noArtifacts.stderr, /records no artifacts/u);
+    const committed = cli(["worklog", "set-stage", id, "committed", "--no-code", "smoke test, no code"], root, runtime);
     assert.equal(committed.code, 0, committed.stderr);
 
     const list = JSON.parse(cli(["worklog", "list", "--json"], root, runtime).stdout);
     const thread = list.threads[0];
+    assert.equal(thread.stageStamp.noCode, "smoke test, no code");
     assert.equal(thread.stage, "committed");
     assert.equal(thread.session, "s1");
     assert.match(thread.stageStamp.head, /^[0-9a-f]{40}$/u);

@@ -32,7 +32,7 @@ agent: test
   - Command: \`awk 'BEGIN{print "hello"}'\`
   - Expected: \`stdout contains "hello"\`
 - [ ] Exit zero
-  - Command: \`exit 0\`
+  - Command: \`test -d .\`
   - Expected: \`exit 0\`
 - [ ] Will fail
   - Command: \`exit 1\`

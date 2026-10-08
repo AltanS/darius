@@ -34,7 +34,10 @@ import {
   ledgerVerdict,
   projectRootOf,
   resolveCommit,
+  changedPaths,
+  gitPrefix,
 } from "./stage-evidence.ts";
+import { artifactPathsOf, checkArtifactText, gitPathMatches } from "./artifact-paths.ts";
 
 // ---------------------------------------------------------------------------
 // Lock constants
@@ -111,6 +114,10 @@ export type StageStamp = {
   reason?: string;
   /** The acting session, when one was resolved. */
   session?: string;
+  /** `committed` with `--no-code` (0.76.0): why the spec changed no code. */
+  noCode?: string;
+  /** `dispatched` with `--as-other-session` (0.76.0): the env session that acted for `session`. */
+  actingSession?: string;
 };
 
 export type WorklogThread = {
@@ -181,6 +188,8 @@ export type OpenThreadOpts = {
 export function openThread(opts: OpenThreadOpts): string {
   const { worklogPath, slug, specPath, message, stage } = opts;
   const session = opts.session ?? undefined;
+  assertMarkerValue("spec", specPath);
+  assertMarkerValue("session", session);
   const threadId = generateThreadId(slug);
 
   withLock(worklogPath, () => {
@@ -241,7 +250,7 @@ export function appendThread(opts: AppendThreadOpts): void {
     };
 
     if (kind === "artifact") {
-      entry.path = message;
+      entry.path = normaliseArtifactMessage(message, projectRootOf(dirname(dirname(worklogPath))));
     } else {
       entry.text = message;
     }
@@ -291,6 +300,10 @@ export type SetStageOpts = {
   reason?: string;
   /** Acting session id, recorded on the stamp when set. */
   session?: string | null;
+  /** `committed` for a spec that changes no code (0.76.0): the reason, recorded on the stamp. */
+  noCode?: string;
+  /** The env session, when `--as-other-session` let `session` differ from it (0.76.0). */
+  actingSession?: string | null;
 };
 
 /**
@@ -300,10 +313,14 @@ export type SetStageOpts = {
  *
  * Since 0.72.0 every change writes a {@link StageStamp}, and a forward move may
  * not skip `verified` or `committed`. Evidence rules:
- * - `verified`: a passing ledger line for the spec since dispatch, no failing item.
- * - `committed`: the commit is an ancestor of HEAD, no artifact is dirty.
+ * - `verified`: every open checklist item of the spec has a latest ledger line
+ *   that passes, written after the dispatch stamp (0.76.0).
+ * - `committed`: the commit is an ancestor of HEAD, no artifact is dirty, the
+ *   thread has artifacts, and the commit range since dispatch touches one of
+ *   them (0.76.0). `noCode` replaces the last two for a spec with no code.
  *   Outside git it refuses with exit 3 unless `noGit` is set.
- * - `reviewed`: a `Review:` note written after the committed stamp.
+ * - `reviewed`: a `Review:` note with at least three words, written after the
+ *   committed stamp.
  * `force` with a reason skips all of these and marks the stamp `forced`.
  *
  * Throws on backward transitions and on closed threads; evidence refusals
@@ -316,6 +333,11 @@ export function setStage(opts: SetStageOpts): void {
   if (force && reason === "") {
     throw new StageRefusal("--force needs a non-empty --reason");
   }
+  const noCode = opts.noCode?.trim();
+  if (noCode !== undefined && (noCode === "" || stage !== "committed")) {
+    throw new StageRefusal('--no-code needs a non-empty reason and applies to committed only: --no-code "<why no code changed>"');
+  }
+  assertMarkerValue("session", opts.session ?? undefined);
   const trackerRoot = opts.trackerRoot ?? dirname(dirname(worklogPath));
   const repoRoot = projectRootOf(trackerRoot);
 
@@ -359,11 +381,15 @@ export function setStage(opts: SetStageOpts): void {
         );
       }
       if (stage === "verified") checkVerified(thread, trackerRoot);
-      if (stage === "committed") extra.commit = checkCommitted(thread, repoRoot, opts);
+      if (stage === "committed") {
+        extra.commit = checkCommitted(thread, repoRoot, opts);
+        if (noCode !== undefined) extra.noCode = noCode;
+      }
       if (stage === "reviewed") checkReviewed(thread);
     }
 
     thread.stage = stage;
+    if (opts.actingSession) extra.actingSession = opts.actingSession;
     const stamp = makeStamp(worklogPath, stage, { trackerRoot, session: opts.session ?? undefined, ...extra });
     thread.stamps = [...(thread.stamps ?? []), stamp];
     if (force) {
@@ -416,10 +442,9 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
   if (!isAncestorOfHead(repoRoot, sha)) {
     throw new StageRefusal(`cannot move to committed: ${sha} is not an ancestor of HEAD`);
   }
-  // One artifact entry may list several paths, comma or space separated.
-  const artifacts = thread.entries.flatMap((e) =>
-    e.kind === "artifact" && e.path ? e.path.split(/[\s,]+/).filter((p) => p !== "") : [],
-  );
+  // One artifact entry may list several paths, split on commas and newlines
+  // only, normalised against the project root (0.76.0).
+  const artifacts = threadArtifactPaths(thread, repoRoot);
   const dirty = dirtyArtifacts(repoRoot, artifacts);
   if (dirty === null) {
     throw new StageRefusal("cannot move to committed: git status failed", 3);
@@ -430,8 +455,127 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
         "Commit them first",
     );
   }
+  const noCode = opts.noCode?.trim();
+  if (noCode !== undefined) {
+    if (artifacts.length > 0) {
+      throw new StageRefusal(
+        `cannot move to committed with --no-code: thread ${thread.threadId} records artifacts (${artifacts.join(", ")}), so code changed`,
+      );
+    }
+    return sha;
+  }
+  if (artifacts.length === 0) {
+    throw new StageRefusal(
+      `cannot move to committed: thread ${thread.threadId} records no artifacts. ` +
+        `Add them with \`darius worklog append ${thread.threadId} --section artifact --message "<path>"\`, ` +
+        'or pass --no-code "<reason>" for a spec that changes no code',
+    );
+  }
+  // The range from the dispatch (else the opening) to the commit must touch an artifact.
+  const from = (latestStamp(thread, "dispatched") ?? thread.stamps?.[0])?.head;
+  if (from === undefined || from === NO_GIT_HEAD) return sha;
+  const fromSha = resolveCommit(repoRoot, from);
+  if (fromSha === null) {
+    throw new StageRefusal(
+      `cannot move to committed: the dispatch commit ${from} is not in this checkout, so the commit range cannot be checked`,
+      3,
+    );
+  }
+  if (fromSha === sha) {
+    throw new StageRefusal(
+      `cannot move to committed: no commit since dispatch (${sha.slice(0, 12)}). ` +
+        'Commit the work first, or pass --no-code "<reason>" for a spec that changes no code',
+    );
+  }
+  const touched = changedPaths(repoRoot, fromSha, sha);
+  if (touched === null) {
+    throw new StageRefusal(`cannot move to committed: git diff ${fromSha.slice(0, 12)}..${sha.slice(0, 12)} failed`, 3);
+  }
+  const prefix = gitPrefix(repoRoot);
+  if (!artifacts.some((a) => touched.some((p) => gitPathMatches(p, a, prefix)))) {
+    throw new StageRefusal(
+      `cannot move to committed: the commits ${fromSha.slice(0, 12)}..${sha.slice(0, 12)} touch none of the artifacts ` +
+        `(${artifacts.join(", ")})`,
+    );
+  }
   return sha;
 }
+
+/** The normalised artifact paths of a thread (0.76.0); invalid old entries are skipped. */
+export function threadArtifactPaths(thread: { entries: WorklogEntry[] }, repoRoot: string): string[] {
+  return artifactPathsOf(
+    thread.entries.flatMap((e) => (e.kind === "artifact" && e.path ? [e.path] : [])),
+    repoRoot,
+  );
+}
+
+/**
+ * The text an artifact entry stores (0.76.0): every path of the message,
+ * normalised, joined with ", ". Throws, naming each bad path, when one is
+ * empty, `.`, a glob, or outside the project.
+ */
+export function normaliseArtifactMessage(message: string, projectRoot: string): string {
+  const checks = checkArtifactText(message, projectRoot);
+  const bad = checks.flatMap((c) => (c.ok ? [] : [`${JSON.stringify(c.raw)}: ${c.reason}`]));
+  if (checks.length === 0) bad.push("the message names no path");
+  if (bad.length > 0) {
+    throw new StageRefusal(`artifact refused: ${bad.join("; ")}. Name project-relative files, separated by commas`);
+  }
+  const paths: string[] = [];
+  for (const c of checks) if (c.ok && !paths.includes(c.path)) paths.push(c.path);
+  return paths.join(", ");
+}
+
+/**
+ * Stage markers the CLI did not write (0.76.0, `darius doctor`). Only threads
+ * with stamps are checked: every thread since 0.72.0 has one from its first
+ * stage change, and older threads carry none. A thread is flagged when its
+ * stage has no stamp, when the latest stamp is for another stage, when a
+ * stamp skips an evidence stage without `forced`, or when a `committed`
+ * stamp has no commit.
+ */
+export function stageIntegrityProblems(thread: WorklogThread): string[] {
+  const stamps = thread.stamps ?? [];
+  if (stamps.length === 0) return [];
+  const problems: string[] = [];
+  if (thread.stage !== undefined && latestStamp(thread, thread.stage) === undefined) {
+    problems.push(`stage ${thread.stage} has no stamp`);
+  }
+  const last = stamps[stamps.length - 1]!;
+  if (thread.stage !== undefined && last.stage !== thread.stage) {
+    problems.push(`stage ${thread.stage} differs from the latest stamp (${last.stage})`);
+  }
+  let reached = -1;
+  for (const stamp of stamps) {
+    const at = WORKLOG_STAGES.indexOf(stamp.stage);
+    const skipped = WORKLOG_STAGES.slice(reached + 1, at).filter((st) => EVIDENCE_STAGES.includes(st));
+    if (skipped.length > 0 && !stamp.forced && reached >= 0) {
+      problems.push(`the ${stamp.stage} stamp of ${stamp.at} skips ${skipped.join(", ")}`);
+    }
+    if (stamp.stage === "committed" && stamp.commit === undefined && !stamp.forced) {
+      problems.push(`the committed stamp of ${stamp.at} names no commit`);
+    }
+    reached = Math.max(reached, at);
+  }
+  return problems;
+}
+
+/** Refuse a value that would break out of a one-line `<!-- key: value -->` marker. */
+function assertMarkerValue(name: string, value: string | undefined): void {
+  if (value === undefined) return;
+  if (/[\r\n]/.test(value) || value.includes("-->")) {
+    throw new StageRefusal(`${name} must be one line without "-->"`);
+  }
+}
+
+/** Words of a review note after the `Review:` prefix. */
+export function reviewWordCount(text: string): number {
+  const body = text.trimStart().slice(REVIEW_NOTE_PREFIX.length).trim();
+  return body === "" ? 0 : body.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+}
+
+/** A review note needs this many words of text after `Review:` (0.76.0). */
+export const REVIEW_MIN_WORDS = 3;
 
 function checkReviewed(thread: WorklogThread): void {
   const since = latestStamp(thread, "committed")?.at;
@@ -440,12 +584,13 @@ function checkReviewed(thread: WorklogThread): void {
     (e) =>
       e.kind === "note" &&
       (e.text ?? "").trimStart().startsWith(REVIEW_NOTE_PREFIX) &&
+      reviewWordCount(e.text ?? "") >= REVIEW_MIN_WORDS &&
       !(Date.parse(e.timestamp) < sinceMs),
   );
   if (!found) {
     throw new StageRefusal(
       `cannot move to reviewed: thread ${thread.threadId} has no note starting with "${REVIEW_NOTE_PREFIX}" ` +
-        `written after it was committed. Add one with ` +
+        `with at least ${REVIEW_MIN_WORDS} words of text, written after it was committed. Add one with ` +
         `\`darius worklog append ${thread.threadId} --section note --message "Review: ..."\``,
     );
   }
@@ -469,6 +614,8 @@ function makeStamp(
   if (rest.forced) stamp.forced = true;
   if (rest.reason !== undefined) stamp.reason = rest.reason;
   if (rest.session) stamp.session = rest.session;
+  if (rest.noCode !== undefined) stamp.noCode = rest.noCode;
+  if (rest.actingSession) stamp.actingSession = rest.actingSession;
   return stamp;
 }
 
@@ -479,6 +626,8 @@ export type DispatchThreadOpts = {
   reason?: string;
   /** Acting session id; becomes the thread owner when set. */
   session?: string | null;
+  /** The env session, when `--as-other-session` let `session` differ from it (0.76.0). */
+  actingSession?: string | null;
 };
 
 /**
@@ -490,6 +639,7 @@ export type DispatchThreadOpts = {
 export function dispatchThread(opts: DispatchThreadOpts): void {
   const { worklogPath, threadId, agent, reason } = opts;
   const session = opts.session ?? undefined;
+  assertMarkerValue("session", session);
 
   withLock(worklogPath, () => {
     const doc = readDocForMutation(worklogPath);
@@ -508,7 +658,7 @@ export function dispatchThread(opts: DispatchThreadOpts): void {
 
     thread.stage = "dispatched";
     if (session) thread.session = session;
-    thread.stamps = [...(thread.stamps ?? []), makeStamp(worklogPath, "dispatched", { session })];
+    thread.stamps = [...(thread.stamps ?? []), makeStamp(worklogPath, "dispatched", { session, ...(opts.actingSession ? { actingSession: opts.actingSession } : {}) })];
     thread.entries.push({
       kind: "note",
       text: `Agent selected: ${agent}${reason ? ` — ${reason}` : ""}`,
@@ -1023,6 +1173,50 @@ const CLOSED_RE = /^<!-- closed: (.+) status: (.+) -->$/;
 const SESSION_RE = /^<!-- session: (.+) -->$/;
 const STAMP_RE = /^<!-- stamp: (\{.*\}) -->$/;
 
+/**
+ * The verbatim body a parsed entry came from (0.76.0). An entry read from disk
+ * and left unchanged is written back byte for byte, so the escape rule below
+ * never rewrites an entry that an older version wrote.
+ */
+const ENTRY_RAW = new WeakMap<WorklogEntry, string>();
+
+/**
+ * A line of entry text that the parser could read as structure: it starts,
+ * after optional whitespace, with `<!--` (a marker such as `<!-- stage: -->`
+ * or `<!-- stamp: -->`) or `#` (a thread `## ` or entry `### ` header).
+ * Backslashes already in front are part of the match, so the escape is
+ * reversible: write adds one backslash, read removes one.
+ */
+const STRUCTURE_LINE_RE = /^(\s*)(\\*)(<!--|#)/;
+const ESCAPED_LINE_RE = /^(\s*)\\(\\*)(<!--|#)/;
+
+/**
+ * Make user text inert before it is written into a worklog (0.76.0). Each line
+ * that could read as structure gets one backslash in front: `\## x`,
+ * `\<!-- stage: committed -->`. In Markdown the backslash also renders the
+ * `#` as text. {@link unescapeEntryText} reverses it on read.
+ */
+export function escapeEntryText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(STRUCTURE_LINE_RE, "$1\\$2$3"))
+    .join("\n");
+}
+
+/** Reverse {@link escapeEntryText}: what the user wrote, for display and checks. */
+export function unescapeEntryText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(ESCAPED_LINE_RE, "$1$2$3"))
+    .join("\n");
+}
+
+function entryBodyLine(entry: WorklogEntry, body: string): string {
+  const raw = ENTRY_RAW.get(entry);
+  if (raw !== undefined && unescapeEntryText(raw) === body) return raw;
+  return escapeEntryText(body);
+}
+
 /** The verbatim line a parsed stamp came from, so a rewrite never reformats it. */
 const STAMP_RAW = new WeakMap<StageStamp, string>();
 
@@ -1052,6 +1246,8 @@ function parseStamp(line: string): StageStamp | null {
     if (obj.forced === true) stamp.forced = true;
     if (typeof obj.reason === "string") stamp.reason = obj.reason;
     if (typeof obj.session === "string") stamp.session = obj.session;
+    if (typeof obj.noCode === "string") stamp.noCode = obj.noCode;
+    if (typeof obj.actingSession === "string") stamp.actingSession = obj.actingSession;
     STAMP_RAW.set(stamp, line);
     return stamp;
   } catch {
@@ -1123,11 +1319,13 @@ export function parseWorklogMarkdown(raw: string): WorklogDoc {
       kind: currentEntryKind,
       timestamp: currentEntryTimestamp,
     };
+    const plain = unescapeEntryText(text);
     if (currentEntryKind === "artifact") {
-      entry.path = text;
+      entry.path = plain;
     } else {
-      entry.text = text;
+      entry.text = plain;
     }
+    ENTRY_RAW.set(entry, text);
     currentThread.entries.push(entry);
     currentEntryKind = null;
     currentEntryTimestamp = "";
@@ -1300,11 +1498,8 @@ export function serializeWorklogMarkdown(doc: WorklogDoc): string {
 
     for (const entry of thread.entries) {
       parts.push(`### ${entry.timestamp} [${entry.kind}]`);
-      if (entry.kind === "artifact" && entry.path) {
-        parts.push(entry.path);
-      } else if (entry.text) {
-        parts.push(entry.text);
-      }
+      const body = entry.kind === "artifact" ? entry.path : entry.text;
+      if (body) parts.push(entryBodyLine(entry, body));
     }
 
     parts.push("");

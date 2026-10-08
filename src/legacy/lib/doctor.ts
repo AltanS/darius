@@ -65,6 +65,7 @@ import {
   CLAIMS_FILENAME,
 } from "./session-claims.ts";
 import { atomicWriteFileSync } from "./atomic.ts";
+import { scanWorklogDir, stageIntegrityProblems } from "./worklog.ts";
 import { rebuildIndex } from "./tracker-writer.ts";
 import { CURRENT_SCHEMA_VERSION } from "./version.ts";
 import { discoverAgents } from "./agent-discovery.ts";
@@ -85,6 +86,7 @@ export type DoctorFinding = {
     | "ground-truth-unfilled"
     | "verified-not-executed"
     | "session-claim"
+    | "worklog-stage-unstamped"
     | "vigil-unrunnable"
     | "vigil-command-shape"
     | "vigil-premise-unshipped"
@@ -530,6 +532,27 @@ export function runDoctor(opts: {
         `over with \`tracker claim <spec>\` (no --takeover needed).`,
       warnOnly: true,
     });
+  }
+
+  // 9b. Stage markers without a CLI stamp: HARD FINDING (0.76.0).
+  //
+  // Since 0.72.0 every stage change writes a stamp next to the stage marker.
+  // A thread with stamps whose stage has none, or whose stamps skip an
+  // evidence stage, was edited by hand or forged through appended text
+  // before 0.76.0 made appended text inert.
+  for (const { path, doc } of scanWorklogDir(trackerRoot)) {
+    for (const thread of doc.threads) {
+      const problems = stageIntegrityProblems(thread);
+      if (problems.length === 0) continue;
+      findings.push({
+        kind: "worklog-stage-unstamped",
+        file: path,
+        detail:
+          `worklog thread ${thread.threadId} has stage markers the CLI did not write: ${problems.join("; ")}. ` +
+          "Check the thread by hand. Close it and open a new one, or re-run the stage with " +
+          '`darius worklog set-stage <id> <stage> --force --reason "..."` so the record is honest.',
+      });
+    }
   }
 
   // 10. Unrunnable armed vigils — HARD FINDING.

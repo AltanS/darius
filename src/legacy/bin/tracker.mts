@@ -102,6 +102,7 @@ import {
   parkThread,
   isWorklogIndexFile,
   scanWorklogDir,
+  threadArtifactPaths,
   WORKLOG_STAGES,
   type WorklogStage,
 } from "../lib/worklog.ts";
@@ -142,6 +143,7 @@ import {
   applyReviewGate,
   ReviewFormatError,
   REVIEW_ITEMS,
+  reviewFenceProblem,
   type GateDecision,
   type ReviewParseResult,
   type SingleDissentMode,
@@ -162,6 +164,7 @@ import {
   claimHolder,
   releaseClaim,
   normalizeClaimRef,
+  canonicalSpecRef,
   resolveSessionId,
   parseTtl,
   formatTtl,
@@ -175,8 +178,14 @@ import {
   type SessionClaim,
 } from "../lib/session-claims.ts";
 import { atomicWriteFileSync } from "../lib/atomic.ts";
-import { StageRefusal } from "../lib/stage-evidence.ts";
+import { StageRefusal, gitPrefix, projectRootOf } from "../lib/stage-evidence.ts";
 import { hostName } from "../lib/host-stamp.ts";
+import {
+  appendCounselLog,
+  checkCounselStamp,
+  sha256OfFile,
+  spentRounds,
+} from "../lib/counsel-stamp.ts";
 import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runDelegation } from "../lib/delegation.ts";
@@ -248,7 +257,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (subcommand === "worklog") {
-    runWorklog(rawArgs.slice(1));
+    await runWorklog(rawArgs.slice(1));
     return 0;
   }
 
@@ -268,7 +277,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (subcommand === "counsel-gate") {
-    runCounselGate(rawArgs.slice(1));
+    await runCounselGate(rawArgs.slice(1));
     return 0;
   }
 
@@ -658,6 +667,7 @@ function runNext(args: string[]): void {
     options: {
       session: { type: "string" },
       force: { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
     },
     allowPositionals: false,
   });
@@ -669,6 +679,15 @@ function runNext(args: string[]): void {
   }
 
   const state = readTrackerState(trackerRoot);
+  const session = resolveSessionId(values.session);
+  const claims = readClaims(trackerRoot);
+  // Specs with open work that another live session holds (0.76.0): skipped,
+  // so the next free spec is handed out instead.
+  const skippedClaimed: { spec: string; session: string | null; host: string | null }[] = [];
+  const emit = (out: Record<string, unknown>, human: string): void => {
+    if (values.json) process.stdout.write(JSON.stringify({ ...out, skippedClaimed }, null, 2) + "\n");
+    else process.stdout.write(human);
+  };
 
   // Walk milestones in order, then specs in order, then tasks in order.
   // Skip terminal milestones, Waiting specs, and items that are not actionable.
@@ -679,7 +698,8 @@ function runNext(args: string[]): void {
 
     if (milestone.brokenSpecs.length > 0) {
       const b = milestone.brokenSpecs[0]!;
-      process.stdout.write(
+      emit(
+        { status: "broken", file: b.file, milestone: milestone.slug, error: b.error },
         `[!] Fix unparseable spec: ${b.file} (${milestone.slug}) — ${b.error}\n`,
       );
       return;
@@ -690,30 +710,53 @@ function runNext(args: string[]): void {
       if (spec.view.computedStatus === "Complete") continue;
       if (spec.view.computedStatus === "Skipped") continue;
 
-      for (const item of spec.view.checklistItems) {
-        if (item.state === "pending" || item.state === "in_progress") {
-          // Gate at the point of HANDING OUT the work, not while scanning:
-          // a spec claimed by someone else but already complete would
-          // otherwise refuse a task it was never going to offer.
-          const blocked = claimGate({
-            trackerRoot,
-            specRef: spec.absolutePath,
-            sessionFlag: values.session,
-            force: values.force,
-            command: "next",
-          });
-          if (blocked) process.exit(1);
+      const item = spec.view.checklistItems.find((i) => i.state === "pending" || i.state === "in_progress");
+      if (item === undefined) continue;
 
-          process.stdout.write(
-            `[ ] ${item.label} (${spec.file})\n`,
-          );
-          return;
-        }
+      // Gate at the point of HANDING OUT the work, not while scanning: a spec
+      // claimed by someone else but already complete is never offered anyway.
+      const ref = normalizeClaimRef({ trackerRoot, ref: spec.absolutePath });
+      const claim = inspectClaim(claims, ref, session);
+      if (claim.state === "held" && !values.force) {
+        skippedClaimed.push({ spec: ref, session: claim.claim?.session ?? null, host: claim.claim?.host ?? null });
+        continue;
       }
+      if (claim.state === "held") {
+        process.stderr.write(
+          `tracker next: ⚠ --force: offering ${ref} despite a LIVE claim by ${claimHolder(claim.claim)}.\n`,
+        );
+      } else if (claim.state === "stale") {
+        process.stderr.write(
+          `tracker next: NOTE: ${ref} carries a STALE claim by ${claimHolder(claim.claim)} (${claim.expiryLabel}).\n`,
+        );
+      }
+      if (skippedClaimed.length > 0 && !values.json) {
+        process.stderr.write(
+          `tracker next: skipped ${skippedClaimed.length} spec(s) claimed by another live session: ` +
+            `${skippedClaimed.map((c) => c.spec).join(", ")}\n`,
+        );
+      }
+      emit(
+        { status: "task", label: item.label, file: spec.file, spec: ref, milestone: milestone.slug },
+        `[ ] ${item.label} (${spec.file})\n`,
+      );
+      return;
     }
   }
 
-  process.stdout.write("All tasks complete\n");
+  if (skippedClaimed.length > 0) {
+    if (values.json) {
+      process.stdout.write(JSON.stringify({ status: "claimed", skippedClaimed }, null, 2) + "\n");
+    }
+    process.stderr.write(
+      `tracker next: REFUSED: every ready spec is claimed by another live session: ` +
+        `${skippedClaimed.map((c) => `${c.spec} (${c.session ?? "unknown"})`).join(", ")}. ` +
+        "Wait, or re-run with --force.\n",
+    );
+    process.exit(1);
+  }
+
+  emit({ status: "complete" }, "All tasks complete\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -914,6 +957,7 @@ function runMark(args: string[]): void {
       skipped: { type: "boolean", default: false },
       pending: { type: "boolean", default: false },
       evidence: { type: "string" },
+      override: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -957,6 +1001,14 @@ function runMark(args: string[]): void {
     process.exit(1);
   }
 
+  const override = values.override?.trim();
+  if (override !== undefined && (override === "" || state !== "verified")) {
+    process.stderr.write(
+      'tracker mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n',
+    );
+    process.exit(1);
+  }
+
   const trackerRoot = requireTrackerRoot();
   const absSpecPath = resolve(specPath);
 
@@ -969,6 +1021,37 @@ function runMark(args: string[]): void {
     targetItem?.command !== null &&
     targetItem?.command !== undefined &&
     isTrivialCommand(targetItem.command);
+
+  // A runnable check (0.76.0): its Command is real, so verify-item must run
+  // it. A hand mark needs --override "<reason>" and evidence, and the ledger
+  // line says manual-override.
+  const classified =
+    targetItem === null
+      ? null
+      : classifyItem({ index: targetItem.index, label: targetItem.label, command: targetItem.command, expected: targetItem.expected });
+  const runnable = classified !== null && (classified.kind === "would-execute" || classified.kind === "file-check");
+  if (state === "verified" && runnable && override === undefined) {
+    process.stderr.write(
+      `tracker mark: REFUSED: task ${taskIndex} has a runnable check (${JSON.stringify(targetItem?.command ?? "")}). ` +
+        "Run it instead:\n" +
+        `  darius verify-item ${specPath} ${taskIndex}\n` +
+        "  If it truly cannot run here, mark it with a reason and evidence:\n" +
+        `  darius mark ${specPath} ${taskIndex} --verified --override "<why it cannot run>" --evidence "<what was checked>"\n`,
+    );
+    process.exit(1);
+  }
+  if (override !== undefined && !runnable) {
+    process.stderr.write(
+      `tracker mark: --override is for a runnable check; task ${taskIndex} is manual. Use --evidence "..." alone\n`,
+    );
+    process.exit(1);
+  }
+  if (override !== undefined && (evidence === undefined || evidence === "")) {
+    process.stderr.write(
+      `tracker mark: --override needs --evidence "<what was checked, how, by whom>" too\n`,
+    );
+    process.exit(1);
+  }
 
   if (state === "verified" && commandIsTrivial && (evidence === undefined || evidence === "")) {
     process.stderr.write(
@@ -999,8 +1082,9 @@ function runMark(args: string[]): void {
         command: targetItem?.command ?? null,
         expected: targetItem?.expected ?? null,
         exitCode: null,
-        outcome: "manual",
+        outcome: override !== undefined ? "manual-override" : "manual",
         evidence,
+        ...(override !== undefined ? { override } : {}),
       });
       if (!logged) {
         process.stderr.write(
@@ -1751,7 +1835,7 @@ function runVerifyItem(args: string[]): void {
 // tracker worklog open|append|close|list
 // ---------------------------------------------------------------------------
 
-function runWorklog(args: string[]): void {
+async function runWorklog(args: string[]): Promise<void> {
   const subcommand = args[0];
 
   if (subcommand === "open") {
@@ -1775,12 +1859,12 @@ function runWorklog(args: string[]): void {
   }
 
   if (subcommand === "set-stage") {
-    runWorklogSetStage(args.slice(1));
+    await runWorklogSetStage(args.slice(1));
     return;
   }
 
   if (subcommand === "dispatch") {
-    runWorklogDispatch(args.slice(1));
+    await runWorklogDispatch(args.slice(1));
     return;
   }
 
@@ -1813,6 +1897,8 @@ function runWorklogOpen(args: string[]): void {
       message: { type: "string" },
       stage: { type: "string" },
       session: { type: "string" },
+      takeover: { type: "boolean", default: false },
+      "as-other-session": { type: "boolean", default: false },
     },
     allowPositionals: true,
   });
@@ -1864,6 +1950,21 @@ function runWorklogOpen(args: string[]): void {
   }
 
   const worklogPath = join(worklogDir, fileName);
+  const acting = sessionForWrite("worklog open", values.session, values["as-other-session"] === true);
+
+  // Opening a thread on a spec is taking the work (0.76.0): a live claim by
+  // another session refuses it, as `claim` does. --takeover overrides.
+  if (values.spec) {
+    const blocked = claimGate({
+      trackerRoot,
+      specRef: values.spec,
+      sessionFlag: acting.session ?? undefined,
+      force: values.takeover === true,
+      command: "worklog open",
+      overrideFlag: "--takeover",
+    });
+    if (blocked) process.exit(1);
+  }
 
   try {
     const threadId = openThread({
@@ -1872,8 +1973,16 @@ function runWorklogOpen(args: string[]): void {
       specPath: values.spec,
       message: values.message,
       stage: values.stage as WorklogStage | undefined,
-      session: resolveSessionId(values.session),
+      session: acting.session,
     });
+    if (acting.acting !== null) {
+      appendThread({
+        worklogPath,
+        threadId,
+        section: "note",
+        message: `Opened for session ${acting.session ?? ""} by session ${acting.acting} (--as-other-session)`,
+      });
+    }
     process.stdout.write(`${threadId}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1975,11 +2084,11 @@ function runWorklogClose(args: string[]): void {
   }
 }
 
-function runWorklogSetStage(args: string[]): void {
+async function runWorklogSetStage(args: string[]): Promise<void> {
   const usage =
     `Usage: tracker worklog set-stage <thread-id> <${WORKLOG_STAGES.join("|")}> ` +
-    `[--commit <sha>] [--no-git] [--force --reason "<why>"] [--session <id>]\n`;
-  let values: { commit?: string; "no-git"?: boolean; force?: boolean; reason?: string; session?: string };
+    `[--commit <sha>] [--no-git] [--no-code "<why>"] [--force --reason "<why>"] [--session <id>]\n`;
+  let values: { commit?: string; "no-git"?: boolean; "no-code"?: string; force?: boolean; reason?: string; session?: string };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
@@ -1987,6 +2096,7 @@ function runWorklogSetStage(args: string[]): void {
       options: {
         commit: { type: "string" },
         "no-git": { type: "boolean", default: false },
+        "no-code": { type: "string" },
         force: { type: "boolean", default: false },
         reason: { type: "string" },
         session: { type: "string" },
@@ -2027,6 +2137,15 @@ function runWorklogSetStage(args: string[]): void {
     process.exit(1);
   }
 
+  // `dispatched` hands out the work, as `worklog dispatch` does: a spec that
+  // needs a review needs a stamp counsel-gate wrote (0.76.0). --force skips it.
+  if (stage === "dispatched" && !values.force) {
+    const thread = listThreads({ trackerRoot }).find((t) => t.threadId === threadId);
+    if (thread?.specPath && (await reviewGateBlocks(trackerRoot, thread.specPath, "worklog set-stage"))) {
+      process.exit(1);
+    }
+  }
+
   try {
     setStage({
       worklogPath,
@@ -2035,6 +2154,7 @@ function runWorklogSetStage(args: string[]): void {
       trackerRoot,
       commit: values.commit,
       noGit: values["no-git"],
+      ...(values["no-code"] !== undefined ? { noCode: values["no-code"] } : {}),
       force: values.force,
       reason: values.reason,
       session: resolveSessionId(values.session),
@@ -2048,7 +2168,7 @@ function runWorklogSetStage(args: string[]): void {
   }
 }
 
-function runWorklogDispatch(args: string[]): void {
+async function runWorklogDispatch(args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     options: {
@@ -2056,6 +2176,7 @@ function runWorklogDispatch(args: string[]): void {
       reason: { type: "string" },
       session: { type: "string" },
       force: { type: "boolean", default: false },
+      "as-other-session": { type: "boolean", default: false },
     },
     allowPositionals: true,
   });
@@ -2075,6 +2196,8 @@ function runWorklogDispatch(args: string[]): void {
     process.exit(1);
   }
 
+  const acting = sessionForWrite("worklog dispatch", values.session, values["as-other-session"] === true);
+
   // Dispatch is the other place work is handed out. A thread with no `spec:`
   // has nothing to collide on and passes straight through.
   const thread = listThreads({ trackerRoot }).find((t) => t.threadId === threadId);
@@ -2082,11 +2205,13 @@ function runWorklogDispatch(args: string[]): void {
     const blocked = claimGate({
       trackerRoot,
       specRef: thread.specPath,
-      sessionFlag: values.session,
+      sessionFlag: acting.session ?? undefined,
       force: values.force,
       command: "worklog dispatch",
     });
     if (blocked) process.exit(1);
+    // The review gate (0.76.0) is not a claim: --force does not skip it.
+    if (await reviewGateBlocks(trackerRoot, thread.specPath, "worklog dispatch")) process.exit(1);
   }
 
   try {
@@ -2095,7 +2220,8 @@ function runWorklogDispatch(args: string[]): void {
       threadId,
       agent: values.agent,
       reason: values.reason,
-      session: resolveSessionId(values.session),
+      session: acting.session,
+      actingSession: acting.acting,
     });
     process.stdout.write(
       `tracker worklog dispatch: ${threadId} → dispatched (agent: ${values.agent})\n`,
@@ -2649,7 +2775,7 @@ function runMigrateCommand(args: string[]): void {
 // tracker counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--json]
 // ---------------------------------------------------------------------------
 
-function runCounselGate(args: string[]): void {
+async function runCounselGate(args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     options: {
@@ -2658,10 +2784,18 @@ function runCounselGate(args: string[]): void {
       "max-rounds": { type: "string" },
       "single-dissent": { type: "string" },
       "ack-dissent": { type: "boolean", default: false },
+      override: { type: "string" },
       json: { type: "boolean", default: false },
     },
     allowPositionals: true,
   });
+
+  // `--spec <s> --override "<reason>"` (0.76.0): skip the review for a
+  // blocked or exhausted spec, on the record. It needs no transcript.
+  if (values.override !== undefined) {
+    runCounselOverride(values.spec, values.override, values.json === true);
+    return;
+  }
 
   const transcriptArg = positionals[0];
   if (!transcriptArg) {
@@ -2679,6 +2813,13 @@ function runCounselGate(args: string[]): void {
 
   const raw = readFileSync(transcriptPath, "utf-8");
 
+  // Exactly one ```darius-review block, and no near miss (0.76.0).
+  const fenceProblem = reviewFenceProblem(raw);
+  if (fenceProblem !== null) {
+    process.stderr.write(`tracker counsel-gate: bad review transcript: ${fenceProblem}\n`);
+    process.exit(2);
+  }
+
   // The one-reviewer format (0.74.0): a fenced ```darius-review block. A
   // transcript without one is the older four-advisor format, read as before.
   let review: ReviewParseResult | null = null;
@@ -2690,6 +2831,22 @@ function runCounselGate(args: string[]): void {
       const prefix = err instanceof ReviewFormatError ? "bad review transcript" : "parse error";
       process.stderr.write(`tracker counsel-gate: ${prefix}: ${message}\n`);
       process.exit(2);
+    }
+  }
+
+  // A high-risk spec takes the review format only (0.76.0).
+  let specKey: string | null = null;
+  let trackerRoot: string | null = null;
+  if (values.spec) {
+    trackerRoot = findTrackerRoot(process.cwd());
+    specKey = trackerRoot === null ? null : canonicalSpecRef({ trackerRoot, ref: values.spec });
+    if (review === null && trackerRoot !== null && specKey !== null) {
+      if (await specIsHighRisk(join(trackerRoot, specKey))) {
+        process.stderr.write(
+          "tracker counsel-gate: bad review transcript: the spec is high risk, so only a ```darius-review block is accepted\n",
+        );
+        process.exit(2);
+      }
     }
   }
 
@@ -2734,10 +2891,29 @@ function runCounselGate(args: string[]): void {
     const specPath = resolve(values.spec);
     const isAck = values["ack-dissent"] === true;
     const maxRounds = resolveMaxCounselRounds(values["max-rounds"]);
-    const priorRounds = readCounselRounds(specPath);
+    // The rounds spent come from the CLI's log (0.76.0), never fewer than the
+    // frontmatter counter: lowering `counsel_rounds:` does not reset the budget.
+    const frontmatterRounds = readCounselRounds(specPath);
+    const priorRounds =
+      trackerRoot !== null && specKey !== null ? spentRounds(trackerRoot, specKey, frontmatterRounds) : frontmatterRounds;
     const roundsUsed = isAck ? priorRounds : priorRounds + 1;
     decision = applyRoundBudget(baseDecision, roundsUsed, maxRounds);
-    writeCounselFrontmatter(specPath, decision, roundsUsed);
+    const sha256 = sha256OfFile(transcriptPath);
+    const transcriptKey =
+      trackerRoot !== null ? (canonicalSpecRef({ trackerRoot, ref: transcriptPath }) ?? transcriptPath) : transcriptPath;
+    writeCounselFrontmatter(specPath, decision, roundsUsed, { transcript: transcriptKey, sha256 });
+    if (trackerRoot !== null && specKey !== null) {
+      appendCounselLog(trackerRoot, {
+        spec: specKey,
+        kind: isAck ? "ack" : "round",
+        status: decision.status,
+        at: new Date().toISOString(),
+        transcript: transcriptKey,
+        sha256,
+        format: review === null ? "counsel" : "review",
+        rounds: roundsUsed,
+      });
+    }
   }
 
   if (values.json) {
@@ -2746,6 +2922,43 @@ function runCounselGate(args: string[]): void {
   }
 
   process.stdout.write(formatCounselGate(decision, parse, review));
+}
+
+/** `darius spec check` says high risk (whatever the review gate setting). */
+async function specIsHighRisk(absSpec: string): Promise<boolean> {
+  // SAFETY: darius's own spec check module; the export is checked before use.
+  const mod = (await import(SPEC_CHECK_MODULE.href)) as Partial<{
+    checkSpecFile(specPath: string, cwd: string): Promise<{ result: { risk: string } }>;
+  }>;
+  if (typeof mod.checkSpecFile !== "function") throw new Error("spec check is missing checkSpecFile");
+  return (await mod.checkSpecFile(absSpec, process.cwd())).result.risk === "high";
+}
+
+/** `counsel-gate --spec <s> --override "<reason>"`: stamp `counsel: overridden` and log the reason. */
+function runCounselOverride(specArg: string | undefined, reasonArg: string, json: boolean): void {
+  const reason = reasonArg.trim();
+  if (!specArg || reason === "") {
+    process.stderr.write('Usage: tracker counsel-gate --spec <spec-path> --override "<reason>"\n');
+    process.exit(2);
+  }
+  const trackerRoot = requireTrackerRoot();
+  const spec = canonicalSpecRef({ trackerRoot, ref: specArg });
+  if (spec === null) {
+    process.stderr.write(`tracker counsel-gate: --spec not found in .tracker/: ${specArg}\n`);
+    process.exit(1);
+  }
+  const absSpec = join(trackerRoot, spec);
+  const { data, content } = parseFrontmatter(readFileSync(absSpec, "utf-8"));
+  data["counsel"] = "overridden";
+  data["counsel_override"] = reason;
+  atomicWriteFileSync(absSpec, serializeFrontmatter(data, content));
+  const at = new Date().toISOString();
+  appendCounselLog(trackerRoot, { spec, kind: "override", status: "overridden", at, reason });
+  if (json) {
+    process.stdout.write(JSON.stringify({ status: "overridden", spec, reason, at }, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(`STATUS: overridden\nSPEC: ${spec}\nREASON: ${reason}\n`);
 }
 
 function resolveCounselThreshold(flagValue: string | undefined): number {
@@ -2788,7 +3001,18 @@ function readCounselThresholdFromConfig(): number | null {
   }
 }
 
+/**
+ * The round budget: `max_counsel_rounds:` in config, else 2. Since 0.76.0
+ * `--max-rounds` may only lower it; a higher value is capped, with a note.
+ */
 function resolveMaxCounselRounds(flagValue: string | undefined): number {
+  let budget = 2;
+  const fromConfig = readScalarFromConfig(/^\s*max_counsel_rounds\s*:\s*(\d+)\s*$/m);
+  if (fromConfig !== null) {
+    const n = Number.parseInt(fromConfig, 10);
+    if (Number.isInteger(n) && n >= 1) budget = n;
+  }
+
   if (typeof flagValue === "string") {
     const parsed = Number.parseInt(flagValue, 10);
     if (!Number.isInteger(parsed) || parsed < 1) {
@@ -2797,16 +3021,16 @@ function resolveMaxCounselRounds(flagValue: string | undefined): number {
       );
       process.exit(1);
     }
+    if (parsed > budget) {
+      process.stderr.write(
+        `tracker counsel-gate: NOTE: --max-rounds ${parsed} cannot raise the budget; using ${budget} (max_counsel_rounds)\n`,
+      );
+      return budget;
+    }
     return parsed;
   }
 
-  const fromConfig = readScalarFromConfig(/^\s*max_counsel_rounds\s*:\s*(\d+)\s*$/m);
-  if (fromConfig !== null) {
-    const n = Number.parseInt(fromConfig, 10);
-    if (Number.isInteger(n) && n >= 1) return n;
-  }
-
-  return 2;
+  return budget;
 }
 
 /**
@@ -2882,6 +3106,7 @@ function writeCounselFrontmatter(
   specPath: string,
   decision: GateDecision,
   roundsUsed: number,
+  transcript: { transcript: string; sha256: string },
 ): void {
   if (!existsSync(specPath)) {
     process.stderr.write(`tracker counsel-gate: --spec not found: ${specPath}\n`);
@@ -2910,6 +3135,9 @@ function writeCounselFrontmatter(
     data["counsel"] = "rejected";
   } else {
     data["counsel"] = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    // The stamp names the transcript and its hash (0.76.0); dispatch checks both.
+    data["counsel_transcript"] = transcript.transcript;
+    data["counsel_sha256"] = transcript.sha256;
   }
 
   const updated = serializeFrontmatter(data, content);
@@ -3075,7 +3303,7 @@ function collectThreadsForGate(trackerRoot: string): ThreadForGate[] {
         specPath: thread.specPath,
         stage: thread.stage,
         closed: Boolean(thread.closedAt),
-        artifacts: thread.entries.flatMap((e) => (e.kind === "artifact" && e.path ? [e.path] : [])),
+        artifacts: threadArtifactPaths(thread, projectRootOf(trackerRoot)),
       });
     }
   }
@@ -3126,7 +3354,7 @@ function runUncommittedVerified(args: string[]): void {
 
   const specs =
     storeMode && trackerRoot !== null
-      ? selectVerifiedThreads(collectThreadsForGate(trackerRoot), porcelain)
+      ? selectVerifiedThreads(collectThreadsForGate(trackerRoot), porcelain, gitPrefix(projectRoot))
       : selectVerifiedUncommitted(porcelain, (repoRelPath) => {
           const abs = resolve(projectRoot, repoRelPath);
           if (!existsSync(abs)) return false;
@@ -3278,7 +3506,15 @@ function runClaim(args: string[]): void {
   }
 
   const { trackerRoot, session } = requireClaimContext(values.session, "claim");
-  const ref = normalizeClaimRef({ trackerRoot, ref: refArg });
+  const ref = canonicalSpecRef({ trackerRoot, ref: refArg });
+  if (ref === null) {
+    process.stderr.write(`tracker claim: no spec at ${refArg} in .tracker/. A claim names an existing spec.\n`);
+    process.exit(1);
+  }
+  // With --json stdout carries the JSON only; the human lines go to stderr.
+  const say = (text: string): void => {
+    (values.json ? process.stderr : process.stdout).write(text);
+  };
 
   const now = new Date();
   const claim: SessionClaim = {
@@ -3334,27 +3570,27 @@ function runClaim(args: string[]): void {
   }
 
   if (action === "takeover-stale") {
-    process.stdout.write(
+    say(
       `STALE CLAIM TAKEN OVER: ${ref} was claimed by ${other} ` +
         `${previous.ageLabel} ago and ${previous.expiryLabel} — that session is presumed dead.\n`,
     );
   }
 
   if (action === "takeover-live") {
-    process.stdout.write(
+    say(
       `⚠ TAKEOVER: ${ref} was claimed by ${other} ${previous.ageLabel} ago and ` +
         `is still LIVE (${previous.expiryLabel}). That session may be working this spec right now.\n`,
     );
   }
 
   const verb = action === "refreshed" ? "CLAIMED (refreshed — already yours)" : "CLAIMED";
-  process.stdout.write(
+  say(
     `${verb}: ${ref}\n  session ${session}, ttl ${formatTtl(ttlMs)}, expires ${claim.expiresAt}\n`,
   );
 
   const projectRoot = resolve(join(trackerRoot, ".."));
   for (const line of formatClaimPreflight(projectRoot)) {
-    process.stdout.write(`${line}\n`);
+    say(`${line}\n`);
   }
 
   if (values.json) {
@@ -3443,7 +3679,15 @@ function runRelease(args: string[]): void {
 
   const { trackerRoot, session } = requireClaimContext(values.session, "release");
   const ref = normalizeClaimRef({ trackerRoot, ref: refArg });
+  if (canonicalSpecRef({ trackerRoot, ref: refArg }) === null && readClaims(trackerRoot).claims[ref] === undefined) {
+    process.stderr.write(`tracker release: no spec at ${refArg} in .tracker/, and no claim under that name.\n`);
+    process.exit(1);
+  }
   const now = new Date();
+  // With --json stdout carries the JSON only; the human lines go to stderr.
+  const say = (text: string): void => {
+    (values.json ? process.stderr : process.stdout).write(text);
+  };
 
   const decision = mutateClaims<{
     action: "released" | "released-stale" | "released-forced" | "absent" | "refused";
@@ -3479,18 +3723,18 @@ function runRelease(args: string[]): void {
   }
 
   if (action === "absent") {
-    process.stdout.write(`NO CLAIM: ${ref} was not claimed — nothing to release.\n`);
+    say(`NO CLAIM: ${ref} was not claimed — nothing to release.\n`);
   } else if (action === "released-stale") {
-    process.stdout.write(
+    say(
       `RELEASED: ${ref} — STALE claim by ${other} (${previous.expiryLabel}).\n`,
     );
   } else if (action === "released-forced") {
-    process.stdout.write(
+    say(
       `⚠ RELEASED: ${ref} — FORCE-released a LIVE claim held by ${other} ` +
         `(claimed ${previous.ageLabel} ago).\n`,
     );
   } else {
-    process.stdout.write(`RELEASED: ${ref} (held ${previous.ageLabel}).\n`);
+    say(`RELEASED: ${ref} (held ${previous.ageLabel}).\n`);
   }
 
   if (values.json) {
@@ -3514,8 +3758,11 @@ function claimGate(opts: {
   sessionFlag: string | undefined;
   force: boolean;
   command: string;
+  /** The flag that overrides a live claim, named in the refusal (default `--force`). */
+  overrideFlag?: string;
 }): boolean {
   const { trackerRoot, specRef, sessionFlag, force, command } = opts;
+  const overrideFlag = opts.overrideFlag ?? "--force";
   const session = resolveSessionId(sessionFlag);
   const status = inspectClaim(readClaims(trackerRoot), normalizeClaimRef({ trackerRoot, ref: specRef }), session);
 
@@ -3532,7 +3779,7 @@ function claimGate(opts: {
 
   if (force) {
     process.stderr.write(
-      `tracker ${command}: ⚠ --force — proceeding despite a LIVE claim on ${status.ref} ` +
+      `tracker ${command}: ⚠ ${overrideFlag} — proceeding despite a LIVE claim on ${status.ref} ` +
         `by ${claimHolder(status.claim)} (claimed ${status.ageLabel} ago).\n`,
     );
     return false;
@@ -3544,8 +3791,68 @@ function claimGate(opts: {
   );
   process.stderr.write(
     `  Another session is working this spec on the same checkout. Pick different work, ` +
-      `or re-run with --force.\n`,
+      `or re-run with ${overrideFlag}.\n`,
   );
+  return true;
+}
+
+/**
+ * The acting session of `worklog open` and `dispatch` (0.76.0). A `--session`
+ * that differs from the env session id is refused (exit 1) unless
+ * `--as-other-session` is given; then `acting` is the env session and the
+ * caller records it. Without an env id, `--session` works as before.
+ */
+function sessionForWrite(
+  command: string,
+  flag: string | undefined,
+  asOther: boolean,
+): { session: string | null; acting: string | null } {
+  const env = resolveSessionId(undefined);
+  const fromFlag = flag?.trim() ?? "";
+  if (fromFlag !== "" && env !== null && fromFlag !== env) {
+    if (!asOther) {
+      process.stderr.write(
+        `tracker ${command}: REFUSED: --session ${fromFlag} is not this session (${env}). ` +
+          "Pass --as-other-session to act for it; that is recorded.\n",
+      );
+      process.exit(1);
+    }
+    return { session: fromFlag, acting: env };
+  }
+  return { session: resolveSessionId(flag), acting: null };
+}
+
+const SPEC_CHECK_MODULE = new URL("../../core/spec-check.ts", import.meta.url);
+
+type SpecCheckModule = {
+  checkSpecFile(specPath: string, cwd: string): Promise<{ result: { reviewRequired: boolean } }>;
+};
+
+/**
+ * The review gate at dispatch (0.76.0). Returns true, after a refusal on
+ * stderr, when `darius spec check` says the spec needs a review and the spec
+ * has no stamp that counsel-gate wrote (see lib/counsel-stamp.ts). A spec that
+ * does not resolve to a file is left to the other gates.
+ */
+async function reviewGateBlocks(trackerRoot: string, specRef: string, command: string): Promise<boolean> {
+  const spec = canonicalSpecRef({ trackerRoot, ref: specRef });
+  if (spec === null) return false;
+  const absSpec = join(trackerRoot, spec);
+  let reviewRequired: boolean;
+  try {
+    // SAFETY: darius's own spec check module; the export is checked before use.
+    const mod = (await import(SPEC_CHECK_MODULE.href)) as Partial<SpecCheckModule>;
+    if (typeof mod.checkSpecFile !== "function") throw new Error("spec check is missing checkSpecFile");
+    reviewRequired = (await mod.checkSpecFile(absSpec, process.cwd())).result.reviewRequired;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`tracker ${command}: REFUSED: spec check failed on ${spec}: ${message}\n`);
+    return true;
+  }
+  if (!reviewRequired) return false;
+  const check = checkCounselStamp(trackerRoot, spec, absSpec);
+  if (check.ok) return false;
+  process.stderr.write(`tracker ${command}: REFUSED: ${check.reason}\n`);
   return true;
 }
 

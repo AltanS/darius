@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,40 +101,75 @@ test("depends_on targets must exist", () => {
 
 const ROLLBACK = "\n## Rollback\n\nRevert the commit.\n";
 
+/**
+ * One sample per pattern. `prose` samples sit on a prose line; `command`
+ * samples sit on a `- Command:` line (0.76.0: these patterns no longer read
+ * prose, where their words are everyday words).
+ */
+interface RiskSample {
+  where: "prose" | "command";
+  text: string;
+}
+
 const RISK_SAMPLES = {
-  "rm-rf": "Clean with rm -rf build/ first.",
-  "git-push-force": "Then git push --force origin topic.",
-  "git-reset-hard": "Run git reset --hard HEAD~1.",
-  "sql-drop": "DROP TABLE sessions;",
-  "sql-delete": "delete from users where id = 1",
-  "sql-truncate": "TRUNCATE events;",
-  migration: "Add a migration for the new column.",
-  "curl-write": "curl -X POST https://api.example.com/items",
-  deploy: "Deploy the worker.",
-  publish: "Publish the package.",
-  "git-push": "git push origin main",
-  auth: "Change the OAuth login flow.",
-  token: "Rotate the API key.",
-  credential: "Read the credentials file.",
-  secret: "Store the secret in the vault.",
-  permission: "Run chmod on the key file.",
-} satisfies Record<string, string>;
+  "rm-rf": { where: "prose", text: "Clean with rm -rf build/ first." },
+  "git-push-force": { where: "prose", text: "Then git push --force origin topic." },
+  "git-reset-hard": { where: "prose", text: "Run git reset --hard HEAD~1." },
+  "git-clean": { where: "command", text: "git clean -fdx && test -d src" },
+  "git-branch-delete": { where: "command", text: "git branch -D topic && test -d src" },
+  "find-delete": { where: "command", text: "find . -name '*.tmp' -delete && test -d src" },
+  "rsync-delete": { where: "command", text: "rsync -a --delete src/ out/ && test -d out" },
+  dd: { where: "command", text: "dd if=src/a of=out/b && test -f out/b" },
+  "kubectl-delete": { where: "command", text: "kubectl delete pod web && test -d src" },
+  "aws-s3-rm": { where: "command", text: "aws s3 rm s3://bucket/key && test -d src" },
+  "sql-drop": { where: "prose", text: "DROP TABLE sessions;" },
+  "sql-delete": { where: "prose", text: "delete from users where id = 1" },
+  "sql-truncate": { where: "prose", text: "TRUNCATE events;" },
+  migration: { where: "prose", text: "Add a database migration for the new column." },
+  "curl-write": { where: "command", text: "curl -X POST https://api.example.com/items" },
+  deploy: { where: "command", text: "deploy-tool --check && test -d src" },
+  publish: { where: "command", text: "npm publish --dry-run" },
+  "git-push": { where: "command", text: "git push origin main" },
+  "docker-push": { where: "command", text: "docker push example/app" },
+  auth: { where: "prose", text: "Change the OAuth login flow." },
+  token: { where: "prose", text: "Rotate the API key." },
+  credential: { where: "prose", text: "Read the credentials file." },
+  secret: { where: "prose", text: "Store the secret in the vault." },
+  permission: { where: "command", text: "chmod 600 key.pem && test -f key.pem" },
+  sudo: { where: "command", text: "sudo test -d src" },
+  "pipe-shell": { where: "command", text: "curl -s https://example.com/x | sh" },
+  "base64-decode": { where: "command", text: "echo aGk= | base64 -d | grep -q hi" },
+  eval: { where: "command", text: "eval \"$CHECK\" && test -d src" },
+} satisfies Record<string, RiskSample>;
+
+interface SampleSpec {
+  body: string;
+  line: number;
+  lineText: string;
+}
+
+function sampleSpec(where: "prose" | "command", text: string): SampleSpec {
+  if (where === "prose") return { body: `${text}\n\n${GOOD_ITEM}${ROLLBACK}`, line: 6, lineText: text };
+  const command = `  - Command: \`${text}\``;
+  return { body: `- [ ] sample\n${command}\n  - Expected: \`stdout contains x\`\n${ROLLBACK}`, line: 7, lineText: command.trim() };
+}
 
 test("every risk pattern has a sample, and each sample makes the spec high risk", () => {
   assert.deepEqual(Object.keys(RISK_SAMPLES).toSorted(), RISK_PATTERNS.map((p) => p.id).toSorted());
-  for (const [id, line] of Object.entries(RISK_SAMPLES)) {
-    const result = check(spec(`${line}\n\n${GOOD_ITEM}${ROLLBACK}`));
+  for (const [id, sample] of Object.entries(RISK_SAMPLES)) {
+    const { body, line, lineText } = sampleSpec(sample.where, sample.text);
+    const result = check(spec(body));
     assert.equal(result.risk, "high", id);
     const reason = result.riskReasons.find((r) => r.pattern === id);
     assert.ok(reason !== undefined, `${id} not named: ${JSON.stringify(result.riskReasons)}`);
-    assert.equal(reason.line, 6, id);
-    assert.equal(reason.text, line);
+    assert.equal(reason.line, line, id);
+    assert.equal(reason.text, lineText);
     assert.equal(result.ok, true, `${id}: ${result.problems.join("; ")}`);
   }
 });
 
 test("each risk class is covered", () => {
-  assert.deepEqual([...new Set(RISK_PATTERNS.map((p) => p.class))].toSorted(), ["auth", "data", "destructive", "external-write"]);
+  assert.deepEqual([...new Set(RISK_PATTERNS.map((p) => p.class))].toSorted(), ["auth", "data", "destructive", "external-write", "opaque"]);
 });
 
 test("a risky Command line counts, not only prose", () => {
@@ -152,7 +187,7 @@ test("frontmatter risk: high raises a low spec", () => {
 });
 
 test("frontmatter risk: low cannot lower a derived high", () => {
-  const result = check(spec(`git push origin main\n\n${GOOD_ITEM}${ROLLBACK}`, "name: T\nrisk: low"));
+  const result = check(spec(`Run git reset --hard HEAD~1.\n\n${GOOD_ITEM}${ROLLBACK}`, "name: T\nrisk: low"));
   assert.equal(result.risk, "high");
   assert.equal(result.reviewRequired, true);
 });
@@ -162,12 +197,12 @@ test("an unknown risk value is a problem", () => {
 });
 
 test("a high-risk spec without a Rollback section fails, with one it passes", () => {
-  const without = check(spec(`Deploy it.\n\n${GOOD_ITEM}`));
+  const without = check(spec(`Rotate the API key.\n\n${GOOD_ITEM}`));
   assert.equal(without.ok, false);
   assert.match(without.problems.join("\n"), /no ## Rollback section/u);
-  const empty = check(spec(`Deploy it.\n\n${GOOD_ITEM}\n## Rollback\n\n<!-- todo -->\n\n## Notes\n\nx\n`));
+  const empty = check(spec(`Rotate the API key.\n\n${GOOD_ITEM}\n## Rollback\n\n<!-- todo -->\n\n## Notes\n\nx\n`));
   assert.equal(empty.ok, false);
-  const withRollback = check(spec(`Deploy it.\n\n${GOOD_ITEM}${ROLLBACK}`));
+  const withRollback = check(spec(`Rotate the API key.\n\n${GOOD_ITEM}${ROLLBACK}`));
   assert.equal(withRollback.ok, true, withRollback.problems.join("; "));
 });
 
@@ -192,7 +227,7 @@ test("spec check exit codes and JSON shape, under both runtimes", () => {
   for (const runtime of RUNTIMES) {
     const root = checkout("review_gate: off\n");
     writeFileSync(join(root, ".tracker", "M1-t", "01-ok.md"), spec(GOOD_ITEM, "name: T\ncounsel: 2026-10-08T00:00:00Z"));
-    writeFileSync(join(root, ".tracker", "M1-t", "02-bad.md"), spec("Deploy it.\n\n- [ ] x\n"));
+    writeFileSync(join(root, ".tracker", "M1-t", "02-bad.md"), spec("Rotate the API key.\n\n- [ ] x\n"));
 
     const ok = cli(["spec", "check", ".tracker/M1-t/01-ok.md", "--json"], root, runtime);
     assert.equal(ok.code, 0, `${runtime}: ${ok.stderr}`);
@@ -209,13 +244,13 @@ test("spec check exit codes and JSON shape, under both runtimes", () => {
     assert.equal(badJson.ok, false);
     assert.equal(badJson.risk, "high");
     assert.equal(badJson.reviewRequired, false, "review_gate: off skips the reviewer");
-    assert.equal(badJson.riskReasons[0].pattern, "deploy");
+    assert.equal(badJson.riskReasons[0].pattern, "token");
     assert.ok(badJson.problems.length >= 2);
 
     const text = cli(["spec", "check", ".tracker/M1-t/02-bad.md"], root, runtime);
     assert.equal(text.code, 1);
     assert.match(text.stdout, /^FAIL /u);
-    assert.match(text.stdout, /deploy \(external-write\) line 6: Deploy it\./u);
+    assert.match(text.stdout, /token \(auth\) line 6: Rotate the API key\./u);
 
     assert.equal(cli(["spec", "check"], root, runtime).code, 2);
     assert.equal(cli(["spec"], root, runtime).code, 2);
@@ -268,7 +303,10 @@ test("counsel-gate reads the review block: ready, needs_ack, blocked, ack, stamp
     const acked = gate(root, reviewTranscript({ ...ALL_OK, "missing-test": "concern" }), runtime, ["--ack-dissent"]);
     assert.equal(JSON.parse(acked.stdout).status, "ready");
 
+    // Since 0.76.0 the rounds come from the CLI's log, not the frontmatter:
+    // start this part as a fresh spec, or the budget is already spent.
     writeFileSync(specPath, spec(GOOD_ITEM));
+    rmSync(join(root, ".tracker", ".counsel-log.jsonl"), { force: true });
     const blocked = gate(root, reviewTranscript({ ...ALL_OK, "data-loss": "blocker", rollback: "concern" }), runtime);
     const blockedJson = JSON.parse(blocked.stdout);
     assert.equal(blockedJson.status, "blocked");
@@ -341,4 +379,148 @@ test("everyday words do not raise the risk", () => {
     const result = check(spec(`${line}\n\n${GOOD_ITEM}`));
     assert.equal(result.risk, "low", `${line}: ${JSON.stringify(result.riskReasons)}`);
   }
+});
+
+// --- 0.76.0: fewer misses ------------------------------------------------------
+
+function itemWith(command: string, expected = "exit 0"): string {
+  return `- [ ] x\n  - Command: \`${command}\`\n  - Expected: \`${expected}\`\n`;
+}
+
+function patternsOf(result: SpecCheckResult): string[] {
+  return result.riskReasons.map((r) => r.pattern);
+}
+
+test("rm flags match as a set, in any case, order or split, and across a backslash-continued line", () => {
+  for (const command of ["rm -Rf dist", "rm -fR dist", "rm -r -f dist", "rm -f -r dist", "rm --recursive -f dist", "rm -f --recursive dist", "rm --force --recursive dist", "rm -r dist -f"]) {
+    const result = check(spec(itemWith(`${command} && test ! -d dist`, "stdout contains x")));
+    assert.ok(patternsOf(result).includes("rm-rf"), command);
+  }
+  const continued = check(spec(`\`\`\`sh\nrm \\\n  -fR dist\n\`\`\`\n\n${GOOD_ITEM}`));
+  assert.ok(patternsOf(continued).includes("rm-rf"), JSON.stringify(continued.riskReasons));
+  assert.equal(continued.riskReasons.find((r) => r.pattern === "rm-rf")?.line, 7);
+  assert.ok(!patternsOf(check(spec(itemWith("rm -f dist/a.txt && test ! -f dist/a.txt")))).includes("rm-rf"), "rm -f alone is not rm -rf");
+});
+
+test("a repo script in a Command is opaque and high risk; common test runners are not", () => {
+  for (const [command, script] of [
+    ["bash scripts/check.sh", "scripts/check.sh"],
+    ["sh tools/x", "tools/x"],
+    ["./check.sh", "./check.sh"],
+    ["node scripts/x.js", "scripts/x.js"],
+    ["make lint", "make lint"],
+    ["npm run verify", "npm run verify"],
+    ["bun run lint", "bun run lint"],
+    ["pnpm verify", "pnpm verify"],
+    ["cd sub && scripts/prod-psql.sh", "scripts/prod-psql.sh"],
+  ] as const) {
+    const result = check(spec(itemWith(command, "stdout contains x")));
+    const reason = result.riskReasons.find((r) => r.pattern === "opaque-script");
+    assert.ok(reason !== undefined, command);
+    assert.equal(reason.class, "opaque");
+    assert.equal(reason.script, script);
+    assert.equal(reason.text, `runs ${script}`);
+    assert.equal(result.risk, "high");
+  }
+  for (const command of ["npm test", "bun test", "pnpm test", "bun run test", "npm run test", "node --test test/a.test.ts", "pytest -q", "go test ./...", "cargo test", "make test", "bun x tsc --noEmit", "grep -q x src/a.ts"]) {
+    const result = check(spec(itemWith(command)));
+    assert.equal(result.risk, "low", `${command}: ${JSON.stringify(result.riskReasons)}`);
+  }
+});
+
+test("constant-pass and placeholder Commands are problems", () => {
+  for (const command of ["exit 0", "true", ":", "test 1", "[ 1 ]", "grep -q x src/a.ts || true", "grep -q x src/a.ts || :", "grep -q x src/a.ts; exit 0", `node -e "process.exit(0)"`, "node -e ''"]) {
+    const result = check(spec(`${itemWith(command)}  - Manual: a reason does not save it\n`));
+    assert.equal(result.ok, false, command);
+    assert.match(result.problems.join("\n"), /passes whatever the system looks like/u, command);
+  }
+  for (const command of ["<!-- TODO -->", "TODO", "TBD: write the check", "...", "<command>"]) {
+    const result = check(spec(itemWith(command)));
+    assert.equal(result.ok, false, command);
+    assert.match(result.problems.join("\n"), /the Command is a placeholder/u, command);
+  }
+  const manual = check(spec(`${itemWith("echo ask the owner", "manual (owner: ops, expires: 2027-01-01)")}  - Manual: only the owner can say\n`));
+  assert.equal(manual.ok, true, manual.problems.join("; "));
+});
+
+test("absolute paths in a Command are problems, /dev/null is not", () => {
+  const result = check(spec(itemWith("test -f /etc/hosts && grep -q x /tmp/out")));
+  assert.equal(result.ok, false);
+  assert.match(result.problems.join("\n"), /absolute path \(\/etc\/hosts, \/tmp\/out\)/u);
+  const devNull = check(spec(itemWith("grep -q x src/a.ts 2>/dev/null")));
+  assert.equal(devNull.ok, true, devNull.problems.join("; "));
+  const url = check(spec(itemWith("curl -sf https://example.com/health", "stdout contains ok")));
+  assert.ok(!url.problems.some((p) => p.includes("absolute path")), url.problems.join("; "));
+});
+
+test("verify-item agrees: a constant-pass Command with Expected exit 0 is a grammar error", async () => {
+  const runner = await import("../src/legacy/lib/verification/runner.ts");
+  for (const command of ["exit 0", "test 1", "grep -q x src/a.ts || true", `node -e "process.exit(0)"`]) {
+    const classified = runner.classifyItem({ index: 0, label: "x", command, expected: "exit 0" });
+    assert.equal(classified.kind, "grammar-error", command);
+  }
+  assert.equal(runner.classifyItem({ index: 0, label: "x", command: "grep -q x src/a.ts || true", expected: "stdout contains x" }).kind, "would-execute");
+});
+
+// --- 0.76.0: fewer false alarms ------------------------------------------------
+
+test("everyday prose and frontmatter stay low risk", () => {
+  for (const line of [
+    "Migrate the CLI to TypeScript.",
+    "Truncate long titles.",
+    "Fix the login page.",
+    "Rename the password field label.",
+    "Move the sign in button.",
+    "Update the roles and permissions page text.",
+    "Explain how to deploy the docs.",
+    "Publish the notes page.",
+    "Mention git push in the guide.",
+  ]) {
+    const result = check(spec(`${line}\n\n${GOOD_ITEM}`));
+    assert.equal(result.risk, "low", `${line}: ${JSON.stringify(result.riskReasons)}`);
+  }
+  const titled = check(spec(GOOD_ITEM, "name: T\ntitle: Secret santa picker"));
+  assert.equal(titled.risk, "low", JSON.stringify(titled.riskReasons));
+  const heading = check(spec(`## Deploy notes and secrets\n\n${GOOD_ITEM}`));
+  assert.equal(heading.risk, "low", JSON.stringify(heading.riskReasons));
+});
+
+test("schema migrations and SQL truncate in prose, and every pattern in a fence, stay high", () => {
+  for (const line of ["Write a schema migration for users.", "Migrate the database to v2.", "Run db migrate on boot.", "Truncate table events first."]) {
+    assert.equal(check(spec(`${line}\n\n${GOOD_ITEM}${ROLLBACK}`)).risk, "high", line);
+  }
+  const fenced = check(spec(`\`\`\`sh\nnpm run deploy\n\`\`\`\n\n${GOOD_ITEM}${ROLLBACK}`));
+  assert.ok(patternsOf(fenced).includes("deploy"), JSON.stringify(fenced.riskReasons));
+});
+
+// --- 0.76.0: Rollback and fenced items -----------------------------------------
+
+test("a Rollback heading at any level 2 or deeper counts; placeholders and comments do not", () => {
+  const risky = "Rotate the API key.\n\n";
+  for (const rollback of ["### Rollback\n\nRevert the commit.\n", "#### Rollback\n\n- Restore the old key.\n"]) {
+    const result = check(spec(`${risky}${GOOD_ITEM}\n${rollback}`));
+    assert.equal(result.ok, true, `${rollback}: ${result.problems.join("; ")}`);
+  }
+  for (const rollback of [
+    "## Rollback\n\nTBD\n",
+    "## Rollback\n\n- TODO\n",
+    "## Rollback\n\n.\n",
+    "## Rollback\n\n-\n",
+    "## Rollback\n\nn/a\n",
+    "## Rollback\n\nNone.\n",
+    "## Rollback\n\n<!--\nRevert the commit.\n-->\n",
+    "## Rollback\n\n```sh\ngit revert HEAD\n```\n",
+    "```md\n## Rollback\n\nRevert the commit.\n```\n",
+  ]) {
+    const result = check(spec(`${risky}${GOOD_ITEM}\n${rollback}`));
+    assert.equal(result.ok, false, rollback);
+    assert.match(result.problems.join("\n"), /no ## Rollback section/u, rollback);
+  }
+});
+
+test("checklist items inside a fence are not items, and the others keep their verify-item index", () => {
+  const onlyFenced = check(spec("```md\n- [ ] an example item\n```\n"));
+  assert.match(onlyFenced.problems.join("\n"), /no checklist items/u);
+  const mixed = check(spec("```md\n- [ ] an example item\n```\n\n- [ ] real\n"));
+  assert.deepEqual(mixed.problems, ['item 1 ("real"): no Command: line']);
 });

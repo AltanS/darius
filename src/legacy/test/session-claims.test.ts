@@ -257,14 +257,14 @@ describe("normalizeClaimRef", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  const rel = ".tracker/M1-probe/01-p.md";
+  const rel = "M1-probe/01-p.md";
 
-  it("normalizes every spelling of the same spec to one repo-relative key", () => {
+  it("normalizes every spelling of the same spec to one tracker-relative key (0.76.0)", () => {
     const forms = [
       rel,
       `./${rel}`,
-      join(tmpDir, rel), // absolute
-      "M1-probe/01-p.md", // tracker-relative
+      ".tracker/M1-probe/01-p.md", // repo-relative, the key before 0.76.0
+      join(tmpDir, ".tracker", rel), // absolute
     ];
     for (const ref of forms) {
       expect(normalizeClaimRef({ trackerRoot, ref, cwd: tmpDir })).toBe(rel);

@@ -2,6 +2,43 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.76.0] - 2026-10-08
+
+### Added
+
+- `darius counsel-gate --spec <spec> --override "<reason>"` skips the review on the record. It stamps `counsel: overridden` and `counsel_override`, and logs the reason.
+- `darius doctor` flags a worklog thread whose stage markers the CLI did not write (kind `worklog-stage-unstamped`): a stage without a stamp, a stamp that skips an evidence stage, or a `committed` stamp with no commit.
+- `darius next --json` prints the task, and `skippedClaimed` lists the specs it skipped.
+
+### Changed
+
+- `worklog dispatch` and `set-stage dispatched` refuse a spec that needs a review unless counsel-gate stamped it. The transcript must exist, its sha256 must match, and `.counsel-log.jsonl` must hold the run. A hand-written `counsel:` line or `counsel: addressed` fails. `counsel: overridden` passes only with a logged override. `review_gate: off` skips the check.
+- A ready counsel-gate stamp now records `counsel_transcript` and `counsel_sha256`. Every gate run appends a line to `.tracker/.counsel-log.jsonl`.
+- The round budget counts the rounds in `.counsel-log.jsonl`, never fewer than `counsel_rounds:`. `--max-rounds` can only lower the configured budget.
+- `mark --verified` refuses an item with a runnable check. `--override "<reason>"` with `--evidence` marks it anyway, and the ledger line has outcome `manual-override` and an `override` field.
+- `verified` needs a passing latest ledger line, written after dispatch, for every checklist item that is not skipped. A failure on an item that is now skipped or gone is ignored.
+- `set-stage committed` refuses a thread with no artifacts unless `--no-code "<reason>"` is given. `--no-code` is refused when the thread has artifacts, and its reason goes on the stamp.
+- `set-stage committed` refuses when the commits since dispatch touch none of the artifacts, or when there is no commit since dispatch.
+- A `Review:` note needs at least three words after the prefix before `reviewed` accepts it.
+- Claims are keyed by the tracker-relative spec path (`M1-x/02-y.md`), whatever form is passed. Old keys read through the same rule. `claim` refuses a spec that does not exist.
+- `worklog open --spec` refuses a spec another live session claimed. `--takeover` overrides.
+- `next` skips specs another live session claimed and offers the next free one. It exits 1 only when every ready spec is claimed.
+- `worklog open` and `dispatch` refuse a `--session` that differs from the env session id, unless `--as-other-session` is given. The acting session is recorded.
+- A Command that runs a repo script makes a spec high risk (`opaque-script`). Common test runners are exempt.
+
+### Fixed
+
+- Text written into a worklog can no longer forge structure. A line of a message, reason or note that starts with `<!--` or `#` gets a backslash in front. Readers remove it again, so the text reads back as written.
+- A `spec:` or `session:` value with a line break or `-->` is refused.
+- Artifact paths are normalised when recorded and when checked. Lists split on commas and newlines only. An empty path, `.`, a glob or a path outside the project is refused (exit 1).
+- `uncommitted-verified --json` lists dirty artifacts again when an entry holds a comma-separated list or the project sits below the git top level.
+- counsel-gate exits 2 on two or more `darius-review` blocks, and on a near miss: a `~~~` fence, another case, or another fenced block that holds review items.
+- counsel-gate exits 2 on an old advisor transcript for a high-risk spec.
+- `claim --json` and `release --json` print only JSON on stdout. The human lines go to stderr.
+- `spec check` reads rm flags in any order and case, joins backslash-continued lines, and knows more destructive commands.
+- Constant-pass, placeholder and absolute-path Commands are spec check problems, and verify refuses constant-pass Commands.
+- Prose words such as "login page" or "deploy the docs" no longer make a spec high risk. Rollback accepts any heading level from 2, and checklist items in a fenced block are not spec check items.
+
 ## [0.75.0] - 2026-10-08
 
 ### Added

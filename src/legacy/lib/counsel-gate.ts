@@ -412,6 +412,49 @@ export class ReviewFormatError extends Error {
 
 const REVIEW_FENCE_RE = /^[ \t]*```darius-review[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```[ \t]*$/m;
 
+const EXACT_FENCE_RE = /^[ \t]*```darius-review[ \t]*$/;
+const NEAR_FENCE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*darius[-_ ]?review\b/i;
+const ANY_FENCE_RE = /^[ \t]*(`{3,}|~{3,})(.*)$/;
+
+/**
+ * A defect in the shape of the review block, or null (0.76.0). The CLI exits
+ * 2 on one. Exactly one ```darius-review block is allowed. A near miss is
+ * refused, not read as the old format: a `~~~darius-review` fence, another
+ * case such as `Darius-Review`, a longer fence, or any other fenced block
+ * that holds an `"items"` object with a review item key.
+ */
+export function reviewFenceProblem(raw: string): string | null {
+  const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""));
+  const exact = lines.filter((l) => EXACT_FENCE_RE.test(l)).length;
+  if (exact > 1) {
+    return `the transcript has ${String(exact)} darius-review blocks; it must have exactly one`;
+  }
+  const near = lines.find((l) => NEAR_FENCE_RE.test(l) && !EXACT_FENCE_RE.test(l));
+  if (near !== undefined) {
+    return `${JSON.stringify(near.trim())} is not the review fence; write the block as \`\`\`darius-review`;
+  }
+  // Any other fenced block that looks like a review answer.
+  let open: { fence: string; info: string; body: string[] } | null = null;
+  for (const line of lines) {
+    const m = ANY_FENCE_RE.exec(line);
+    if (open === null) {
+      if (m !== null) open = { fence: m[1]!, info: m[2]!.trim(), body: [] };
+      continue;
+    }
+    if (m !== null && m[1]!.startsWith(open.fence[0]!) && m[1]!.length >= open.fence.length && m[2]!.trim() === "") {
+      const body = open.body.join("\n");
+      const isReview = open.fence === "```" && open.info === "darius-review";
+      if (!isReview && /"items"\s*:\s*\{/.test(body) && REVIEW_ITEMS.some((k) => body.includes(`"${k}"`))) {
+        return `a ${open.fence}${open.info} block holds review items; write the block as \`\`\`darius-review`;
+      }
+      open = null;
+      continue;
+    }
+    open.body.push(line);
+  }
+  return null;
+}
+
 /** True when the transcript carries a ```darius-review block (the new format). */
 export function isReviewTranscript(raw: string): boolean {
   return /^[ \t]*```darius-review\b/m.test(raw);

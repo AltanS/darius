@@ -32,6 +32,8 @@ agent: test
 `;
 
 const SPEC_REF = ".tracker/M1-probe/01-p.md";
+/** The claims key since 0.76.0: tracker-relative, whatever form was passed. */
+const KEY = "M1-probe/01-p.md";
 
 describe("claim / release CLI", () => {
   let tmpDir: string;
@@ -79,7 +81,7 @@ describe("claim / release CLI", () => {
   }
 
   /** Backdate an existing claim so it is past its expiry. */
-  function expireClaim(ref = SPEC_REF): void {
+  function expireClaim(ref = KEY): void {
     const doc = readClaims(trackerRoot);
     const claim = doc.claims[ref]!;
     const past = new Date(Date.now() - 9 * 60 * 60 * 1000);
@@ -101,7 +103,7 @@ describe("claim / release CLI", () => {
     expect(stdout).toContain("CLAIMED");
 
     const doc = readClaims(trackerRoot);
-    const claim = doc.claims[SPEC_REF];
+    const claim = doc.claims[KEY];
     expect(claim).toBeDefined();
     expect(claim!.session).toBe("sessA");
     expect(Date.parse(claim!.expiresAt) - Date.parse(claim!.at)).toBe(8 * 60 * 60 * 1000);
@@ -109,7 +111,7 @@ describe("claim / release CLI", () => {
 
   it("--ttl overrides the default 8h window", () => {
     runTracker(["claim", SPEC_REF, "--ttl", "30m"], "sessA");
-    const claim = readClaims(trackerRoot).claims[SPEC_REF]!;
+    const claim = readClaims(trackerRoot).claims[KEY]!;
     expect(Date.parse(claim.expiresAt) - Date.parse(claim.at)).toBe(30 * 60 * 1000);
   });
 
@@ -132,13 +134,13 @@ describe("claim / release CLI", () => {
   it("claims with only CLAUDE_CODE_SESSION_ID set", () => {
     const { exitCode } = runTracker(["claim", SPEC_REF], undefined, { CLAUDE_CODE_SESSION_ID: "codeSess" });
     expect(exitCode).toBe(0);
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("codeSess");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("codeSess");
   });
 
   it("still claims with only the older CLAUDE_SESSION_ID set", () => {
     const { exitCode } = runTracker(["claim", SPEC_REF], undefined, { CLAUDE_SESSION_ID: "oldSess" });
     expect(exitCode).toBe(0);
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("oldSess");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("oldSess");
   });
 
   it("--session wins over both env vars", () => {
@@ -147,13 +149,13 @@ describe("claim / release CLI", () => {
       CLAUDE_SESSION_ID: "oldSess",
     });
     expect(exitCode).toBe(0);
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("flagged");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("flagged");
   });
 
   it("accepts --session as an alternative to the env var", () => {
     const { exitCode } = runTracker(["claim", SPEC_REF, "--session", "flagged"]);
     expect(exitCode).toBe(0);
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("flagged");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("flagged");
   });
 
   it("refuses a spec freshly claimed by another session, naming it and its age", () => {
@@ -168,7 +170,7 @@ describe("claim / release CLI", () => {
     expect(stderr).toMatch(/claimed \d+s ago/);
     expect(stderr).toContain("--takeover");
     // The refusal must not have stolen the claim.
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("sessA");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("sessA");
   });
 
   it("--takeover overrides a live claim with a loud notice", () => {
@@ -179,18 +181,18 @@ describe("claim / release CLI", () => {
     expect(stdout).toContain("TAKEOVER");
     expect(stdout).toContain("still LIVE");
     expect(stdout).toContain("sessA");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("sessB");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("sessB");
   });
 
   it("re-claiming your own spec refreshes the window instead of refusing", () => {
     runTracker(["claim", SPEC_REF, "--ttl", "1h"], "sessA");
-    const first = readClaims(trackerRoot).claims[SPEC_REF]!;
+    const first = readClaims(trackerRoot).claims[KEY]!;
 
     const { exitCode, stdout } = runTracker(["claim", SPEC_REF, "--ttl", "8h"], "sessA");
     expect(exitCode).toBe(0);
     expect(stdout).toContain("refreshed");
 
-    const second = readClaims(trackerRoot).claims[SPEC_REF]!;
+    const second = readClaims(trackerRoot).claims[KEY]!;
     expect(Date.parse(second.expiresAt)).toBeGreaterThan(Date.parse(first.expiresAt));
   });
 
@@ -203,7 +205,7 @@ describe("claim / release CLI", () => {
     expect(stdout).toContain("STALE CLAIM TAKEN OVER");
     expect(stdout).toContain("sessA");
     expect(stdout).toContain("presumed dead");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("sessB");
+    expect(readClaims(trackerRoot).claims[KEY]!.session).toBe("sessB");
   });
 
   it("prints an uncommitted-changes preflight after claiming", () => {
@@ -237,15 +239,46 @@ describe("claim / release CLI", () => {
     expect(Object.keys(readClaims(trackerRoot).claims)).toHaveLength(1);
   });
 
-  it("claims a scratch ref that is not a real file", () => {
-    const { exitCode } = runTracker(["claim", "scratch/not-a-spec.md"], "sessA");
-    expect(exitCode).toBe(0);
-    expect(readClaims(trackerRoot).claims["scratch/not-a-spec.md"]).toBeDefined();
+  it("refuses a ref that names no spec (0.76.0)", () => {
+    const { exitCode, stderr } = runTracker(["claim", "scratch/not-a-spec.md"], "sessA");
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("no spec at scratch/not-a-spec.md");
+    expect(existsSync(join(trackerRoot, ".session-claims.json"))).toBe(false);
+  });
+
+  it("keys every spelling by the tracker-relative path (0.76.0)", () => {
+    for (const form of [SPEC_REF, `./${SPEC_REF}`, specPath, KEY]) {
+      runTracker(["claim", form], "sessA");
+    }
+    expect(Object.keys(readClaims(trackerRoot).claims)).toEqual([KEY]);
+    expect(Object.keys(JSON.parse(readFileSync(join(trackerRoot, ".session-claims.json"), "utf-8")).claims)).toEqual([KEY]);
+  });
+
+  it("reads an old repo-relative key as the canonical key (0.76.0)", () => {
+    const doc = emptyClaimsDoc();
+    const now = Date.now();
+    doc.claims[SPEC_REF] = { session: "sessA", at: new Date(now).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString() };
+    writeClaims(trackerRoot, doc);
+    expect(Object.keys(readClaims(trackerRoot).claims)).toEqual([KEY]);
+    const { exitCode, stderr } = runTracker(["claim", KEY], "sessB");
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("sessA");
+  });
+
+  it("claim and release --json print JSON only on stdout (0.76.0)", () => {
+    const claimed = runTracker(["claim", SPEC_REF, "--json"], "sessA");
+    expect(claimed.exitCode).toBe(0);
+    expect(JSON.parse(claimed.stdout).action).toBe("claimed");
+    expect(claimed.stderr).toContain("CLAIMED");
+    const released = runTracker(["release", SPEC_REF, "--json"], "sessA");
+    expect(released.exitCode).toBe(0);
+    expect(JSON.parse(released.stdout).action).toBe("released");
   });
 
   it("--list reports outstanding claims, fresh and stale", () => {
+    writeFileSync(join(trackerRoot, "M1-probe", "02-other.md"), SPEC, "utf-8");
     runTracker(["claim", SPEC_REF], "sessA");
-    runTracker(["claim", "scratch/other.md"], "sessB");
+    runTracker(["claim", "M1-probe/02-other.md"], "sessB");
     expireClaim();
 
     const { exitCode, stdout } = runTracker(["claim", "--list"], "sessC");
@@ -265,7 +298,7 @@ describe("claim / release CLI", () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain("RELEASED");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]).toBeUndefined();
+    expect(readClaims(trackerRoot).claims[KEY]).toBeUndefined();
   });
 
   it("is idempotent — releasing an unclaimed spec is not an error", () => {
@@ -281,7 +314,7 @@ describe("claim / release CLI", () => {
     expect(exitCode).toBe(1);
     expect(stderr).toContain("REFUSED");
     expect(stderr).toContain("sessA");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]).toBeDefined();
+    expect(readClaims(trackerRoot).claims[KEY]).toBeDefined();
   });
 
   it("--force releases another session's live claim, loudly", () => {
@@ -290,7 +323,7 @@ describe("claim / release CLI", () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain("FORCE-released");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]).toBeUndefined();
+    expect(readClaims(trackerRoot).claims[KEY]).toBeUndefined();
   });
 
   it("releases a stale claim held by another session, with a notice", () => {
@@ -300,7 +333,7 @@ describe("claim / release CLI", () => {
     const { exitCode, stdout } = runTracker(["release", SPEC_REF], "sessB");
     expect(exitCode).toBe(0);
     expect(stdout).toContain("STALE");
-    expect(readClaims(trackerRoot).claims[SPEC_REF]).toBeUndefined();
+    expect(readClaims(trackerRoot).claims[KEY]).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------
@@ -448,8 +481,9 @@ describe("claim / release CLI", () => {
   });
 
   it("doctor lists outstanding claims with ages, marks stale ones, and stays healthy", () => {
+    writeFileSync(join(trackerRoot, "M1-probe", "02-other.md"), SPEC, "utf-8");
     runTracker(["claim", SPEC_REF], "sessA");
-    runTracker(["claim", "scratch/other.md"], "sessB");
+    runTracker(["claim", "M1-probe/02-other.md"], "sessB");
     expireClaim();
 
     const { exitCode, stdout } = runTracker(["doctor"]);
@@ -476,12 +510,13 @@ describe("claim / release CLI", () => {
 
   it("claims for different specs written by different sessions do not clobber each other", () => {
     writeClaims(trackerRoot, emptyClaimsDoc());
-    runTracker(["claim", "scratch/a.md"], "sessA");
-    runTracker(["claim", "scratch/b.md"], "sessB");
-    runTracker(["claim", "scratch/c.md"], "sessC");
+    for (const name of ["a", "b", "c"]) writeFileSync(join(trackerRoot, "M1-probe", `0${name === "a" ? 2 : name === "b" ? 3 : 4}-${name}.md`), SPEC, "utf-8");
+    runTracker(["claim", "M1-probe/02-a.md"], "sessA");
+    runTracker(["claim", "M1-probe/03-b.md"], "sessB");
+    runTracker(["claim", "M1-probe/04-c.md"], "sessC");
 
     const claims = readClaims(trackerRoot).claims;
-    expect(Object.keys(claims).sort()).toEqual(["scratch/a.md", "scratch/b.md", "scratch/c.md"]);
+    expect(Object.keys(claims).sort()).toEqual(["M1-probe/02-a.md", "M1-probe/03-b.md", "M1-probe/04-c.md"]);
   });
 
   it("the claims file is valid JSON with the documented shape", () => {
@@ -490,7 +525,7 @@ describe("claim / release CLI", () => {
       readFileSync(join(trackerRoot, ".session-claims.json"), "utf-8"),
     ) as Record<string, unknown>;
     expect(raw["version"]).toBe(1);
-    expect(Object.keys((raw["claims"] as Record<string, Record<string, unknown>>)[SPEC_REF]!).sort()).toEqual([
+    expect(Object.keys((raw["claims"] as Record<string, Record<string, unknown>>)[KEY]!).sort()).toEqual([
       "at",
       "expiresAt",
       "host",
@@ -502,11 +537,11 @@ describe("claim / release CLI", () => {
     runTracker(["claim", SPEC_REF], "sessA");
     expect(runTracker(["release", SPEC_REF], "sessA").exitCode).toBe(0);
     const doc = readClaims(trackerRoot);
-    expect(doc.claims[SPEC_REF]).toBeUndefined();
-    expect(doc.released?.[SPEC_REF]?.session).toBe("sessA");
+    expect(doc.claims[KEY]).toBeUndefined();
+    expect(doc.released?.[KEY]?.session).toBe("sessA");
     runTracker(["claim", SPEC_REF], "sessB");
     const again = readClaims(trackerRoot);
-    expect(again.claims[SPEC_REF]?.session).toBe("sessB");
+    expect(again.claims[KEY]?.session).toBe("sessB");
     expect(again.released).toBeUndefined();
   });
 

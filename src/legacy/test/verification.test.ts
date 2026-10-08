@@ -16,7 +16,7 @@ import {
   isVerificationStep,
   type VerificationStep,
 } from "../lib/verification/grammar.js";
-import { runVerification, isTrivialCommand } from "../lib/verification/runner.ts";
+import { runVerification, isTrivialCommand, constantPassReason, isPlaceholderCommand, absolutePathsIn } from "../lib/verification/runner.ts";
 
 describe("verification grammar — discriminated union correctness", () => {
   it("exit form produces kind: exit", () => {
@@ -233,5 +233,35 @@ describe("runVerification — trivial commands never pass", () => {
     });
     expect(result.outcome).toBe("pass");
     expect(result.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Constant-pass, placeholder and absolute-path Commands (darius 0.76.0)
+// ---------------------------------------------------------------------------
+
+describe("constantPassReason", () => {
+  it("names Commands that exit 0 whatever happened", () => {
+    for (const cmd of ["exit 0", "exit", "true", ":", "test 1", "[ 1 ]", "grep -q x a || true", "grep -q x a || :", "grep -q x a || exit 0", "grep -q x a; exit 0", `node -e "process.exit(0)"`, "cd sub && exit 0"]) {
+      expect(constantPassReason(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  it("leaves real checks alone", () => {
+    for (const cmd of ["test -f package.json", "grep -q x a && true", "exit 1", "test -n \"$X\"", "pnpm test", `node -e "process.exit(require('fs').existsSync('a') ? 0 : 1)"`]) {
+      expect(constantPassReason(cmd), cmd).toBeNull();
+    }
+  });
+});
+
+describe("isPlaceholderCommand and absolutePathsIn", () => {
+  it("spots placeholders", () => {
+    for (const cmd of ["<!-- TODO -->", "TODO", "tbd: later", "...", "<command>"]) expect(isPlaceholderCommand(cmd), cmd).toBe(true);
+    for (const cmd of ["test -f TODO.md", "grep -q todo notes.md"]) expect(isPlaceholderCommand(cmd), cmd).toBe(false);
+  });
+
+  it("lists absolute paths, but not /dev/null or a URL", () => {
+    expect(absolutePathsIn("test -f /etc/hosts 2>/dev/null && curl https://example.com/x > out/a")).toEqual(["/etc/hosts"]);
+    expect(absolutePathsIn('grep -q x "/tmp/a"')).toEqual(["/tmp/a"]);
   });
 });

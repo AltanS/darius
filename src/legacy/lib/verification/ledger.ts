@@ -43,7 +43,7 @@ export type VerificationMethod = "executed" | "manual";
  * `fail`: a fail is "this never passed", a regression is "this passed once and
  * stopped", and only the second one means something broke after the tick.
  */
-export type LedgerOutcome = RunOutcome | "regression";
+export type LedgerOutcome = RunOutcome | "regression" | "manual-override";
 
 export type LedgerEntry = {
   /** Spec path relative to the repo root (the parent of `.tracker/`). */
@@ -65,6 +65,11 @@ export type LedgerEntry = {
   head?: string;
   /** Host that wrote the line (0.72.0; absent on older lines). */
   host?: string;
+  /**
+   * `mark --verified --override "<reason>"` on a runnable check (0.76.0): why
+   * it was not run. Its outcome is `manual-override`.
+   */
+  override?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -173,6 +178,8 @@ export type AppendLedgerOpts = {
   exitCode: number | null;
   outcome: LedgerOutcome;
   evidence?: string;
+  /** Why a runnable check was marked by hand (0.76.0). */
+  override?: string;
   /** Injectable for tests; defaults to now. */
   at?: string;
   /** Injectable for tests; defaults to the checkout's git HEAD. */
@@ -208,6 +215,9 @@ export function appendLedgerEntry(opts: AppendLedgerOpts): boolean {
 
   if (opts.evidence !== undefined && opts.evidence.trim() !== "") {
     entry.evidence = clamp(opts.evidence.trim(), MAX_EVIDENCE_CHARS);
+  }
+  if (opts.override !== undefined && opts.override.trim() !== "") {
+    entry.override = clamp(opts.override.trim(), MAX_FIELD_CHARS);
   }
 
   try {

@@ -49,6 +49,10 @@ export CLAUDE_CONFIG_DIR="$SANDBOX/claude"
 # Push: no test reaches a real push service; a test that needs one adds its own
 # fake's origin, and nothing else may add one.
 unset DARIUS_PUSH_ORIGINS
+# The acting Claude Code session: since 0.76.0 `worklog open|dispatch` refuse a
+# --session that differs from it, so a suite run inside a session must not
+# inherit it. Tests that need one set it themselves.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
 
 NODE="${DARIUS_NODE:-node}"
 "$NODE" --no-warnings --test "test/*.test.ts"

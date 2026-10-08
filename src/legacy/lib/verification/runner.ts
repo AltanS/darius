@@ -278,6 +278,98 @@ export function isTrivialCommand(command: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Constant-pass and placeholder Commands (darius 0.76.0)
+// ---------------------------------------------------------------------------
+
+/** `node -e "process.exit(0)"`, `bun -e '...'`, `python -c "..."`: an inline script that only exits. */
+const INLINE_EXIT_ONLY_RE =
+  /^(?:node|bun|deno|python3?|ruby|perl)\s+(?:-e|-c|--eval)\s+(["'])\s*(?:process\.exit\(\s*0?\s*\)|exit\(?\s*0?\s*\)?|sys\.exit\(\s*0?\s*\)|import sys;\s*sys\.exit\(\s*0?\s*\))?\s*;?\s*\1$/;
+
+/** One stage that exits 0 whatever the system under test looks like. */
+function isConstantPassStage(stage: string): boolean {
+  const text = stage.replace(LEADING_ASSIGNMENT_RE, "").trim();
+  if (/^(?:true|:)(?:\s|$)/.test(text)) return true;
+  if (/^exit(?:\s+0)?\s*$/.test(text)) return true;
+  // `test 1`, `test x`, `[ 1 ]`: a test of one non-empty literal word is always true.
+  if (/^test\s+(?:[A-Za-z0-9_]+|"[^"$`]+"|'[^']+')\s*$/.test(text)) return true;
+  if (/^\[\s+(?:[A-Za-z0-9_]+|"[^"$`]+"|'[^']+')\s+\]\s*$/.test(text)) return true;
+  return INLINE_EXIT_ONLY_RE.test(text);
+}
+
+/**
+ * Why a Command passes whatever the system under test looks like, or `null`.
+ *
+ * `exit 0`, `true`, `:`, `test 1`, `node -e "process.exit(0)"`, and any
+ * Command whose last stage is `|| true`, `|| :` or `|| exit 0`. Paired with
+ * an `exit` expectation such a Command can never go red. `true` and `:` alone
+ * are also shell no-ops (`isTrivialCommand`), which verify already files as
+ * manual; this helper names the wider family so `darius spec check` and
+ * verify agree.
+ */
+export function constantPassReason(command: string): string | null {
+  const stages = splitShellStagesDetailed(command).filter(
+    (stage) => !TRANSPARENT_COMMANDS.has(stageFirstToken(stage.text)),
+  );
+  const last = stages[stages.length - 1];
+  if (last === undefined) return null;
+  if (last.separator === "||" && isConstantPassStage(last.text)) {
+    return `it ends in "|| ${last.text}", so it exits 0 whatever the earlier stages did`;
+  }
+  // `a; exit 0`: after `;` the last stage alone decides the status.
+  if (last.separator === ";" && isConstantPassStage(last.text)) {
+    return `it ends in "; ${last.text}", so it exits 0 whatever the earlier stages did`;
+  }
+  if (stages.every((stage) => isConstantPassStage(stage.text))) {
+    return "it exits 0 whatever the system looks like";
+  }
+  return null;
+}
+
+/** True when the Command exits 0 whatever the system under test looks like. */
+export function isConstantPassCommand(command: string): boolean {
+  return constantPassReason(command) !== null;
+}
+
+/**
+ * True when the Command is a placeholder, not a check: an HTML comment, or a
+ * Command whose first word is TODO, TBD, FIXME, XXX or PLACEHOLDER, or one
+ * that is only `...` or an `<angle placeholder>`.
+ */
+export function isPlaceholderCommand(command: string): boolean {
+  const text = command.trim();
+  if (text === "" || text.includes("<!--")) return true;
+  if (/^(?:\.\.\.|…|<[^<>]*>)$/.test(text)) return true;
+  return splitShellStages(text).some((stage) =>
+    /^(?:todo|tbd|fixme|xxx|placeholder)\b/i.test(stageFirstToken(stage)),
+  );
+}
+
+/** Absolute paths a Command may name: they mean the same thing on every host. */
+const PORTABLE_ABSOLUTE_PATHS: ReadonlySet<string> = new Set([
+  "/dev/null",
+  "/dev/stdin",
+  "/dev/stdout",
+  "/dev/stderr",
+]);
+
+/**
+ * The absolute paths a Command names, in order. The spec template forbids
+ * them: a Command runs from the workspace root on any host. A path counts
+ * when it starts a word (after a space, a quote, `=` or a redirect), so the
+ * `//` of a URL and the `/` inside a relative path do not.
+ */
+export function absolutePathsIn(command: string): string[] {
+  const found: string[] = [];
+  const re = /(?:^|[\s"'=<>(])(\/[A-Za-z0-9_.~+-][^\s"'`;|&)<>]*)/g;
+  for (const match of command.matchAll(re)) {
+    const path = match[1] as string;
+    if (PORTABLE_ABSOLUTE_PATHS.has(path)) continue;
+    found.push(path);
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------------------
 // Trailing-pipe exit-status masking
 // ---------------------------------------------------------------------------
 
@@ -543,6 +635,18 @@ export function classifyItem(item: VerifyItemInput, opts: RunOptions = {}): Item
   // already refuses the tick, names the item, and ledgers the attempt as
   // `error`.
   if (parsed.kind === "exit") {
+    // A Command that exits 0 whatever happened (`exit 0`, `test 1`,
+    // `... || true`) can never fail `Expected: exit 0` (darius 0.76.0).
+    const constant = parsed.code === 0 ? constantPassReason(item.command) : null;
+    if (constant !== null) {
+      return {
+        kind: "grammar-error",
+        reason:
+          `grammar error: the Command passes whatever the system looks like: ${constant}. ` +
+          `Write a Command that can fail, or assert on its output.`,
+      };
+    }
+
     const filter = trailingPipeFilter(item.command);
     if (filter !== null) {
       return {

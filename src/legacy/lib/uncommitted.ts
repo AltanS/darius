@@ -22,6 +22,8 @@
  * output is fed in here, so the selection rule is unit-testable without a repo.
  */
 
+import { checkArtifactText, dirtyAmong } from "./artifact-paths.ts";
+
 /** A spec path relative to the repo root that is verified but uncommitted. */
 export type UncommittedVerifiedSpec = {
   /** Repo-relative path as reported by git (git mode) or the thread's spec path (store mode). */
@@ -63,14 +65,12 @@ export type ThreadForGate = {
   specPath?: string;
   stage?: string;
   closed: boolean;
-  /** Paths of the thread's artifact entries. */
+  /**
+   * The thread's artifact entries as stored: one path or a comma-separated
+   * list each. Absolute paths should be made relative by the caller.
+   */
   artifacts: string[];
 };
-
-/** Normalize `./a//b/` to `a/b` for comparing artifact and porcelain paths. */
-function normPath(p: string): string {
-  return p.trim().replace(/^\.\//, "").replace(/\/{2,}/g, "/").replace(/\/$/, "");
-}
 
 /**
  * Store-mode selection: every open thread at stage `verified` is a debt. Its
@@ -81,25 +81,27 @@ function normPath(p: string): string {
 export function selectVerifiedThreads(
   threads: readonly ThreadForGate[],
   porcelain: string,
+  prefix: string = "",
 ): UncommittedVerifiedSpec[] {
   const dirty: string[] = [];
   for (const rawLine of porcelain.split("\n")) {
     const parsed = parsePorcelainLine(rawLine.replace(/\r$/, ""));
-    if (parsed !== null) dirty.push(normPath(parsed.path));
+    if (parsed !== null) dirty.push(parsed.path);
   }
 
   const result: UncommittedVerifiedSpec[] = [];
   for (const thread of threads) {
     if (thread.stage !== "verified" || thread.closed) continue;
-    const dirtyArtifacts: string[] = [];
-    for (const artifact of thread.artifacts) {
-      const a = normPath(artifact);
-      if (a === "" || dirtyArtifacts.includes(a)) continue;
-      // An artifact may name a directory: any dirty file below it counts.
-      if (dirty.some((d) => d === a || d.startsWith(`${a}/`))) {
-        dirtyArtifacts.push(a);
+    // One normaliser for record, check and this list (0.76.0): an entry may
+    // hold a comma-separated list, and porcelain paths are relative to the
+    // git top level while artifacts are relative to the project root.
+    const artifacts: string[] = [];
+    for (const text of thread.artifacts) {
+      for (const check of checkArtifactText(text, "/")) {
+        if (check.ok && !artifacts.includes(check.path)) artifacts.push(check.path);
       }
     }
+    const dirtyArtifacts = dirtyAmong(dirty, artifacts, prefix);
     result.push({
       path: thread.specPath ?? `.tracker/worklog/${thread.worklogFile}`,
       gitStatus: THREAD_GIT_STATUS,

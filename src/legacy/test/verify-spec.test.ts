@@ -33,7 +33,7 @@ agent: test
   - Command: \`awk 'BEGIN{print "hello"}'\`
   - Expected: \`stdout contains "hello"\`
 - [ ] Exit zero check
-  - Command: \`exit 0\`
+  - Command: \`test -d .\`
   - Expected: \`exit 0\`
 - [ ] No command here
 `;
@@ -51,7 +51,7 @@ agent: test
 ### Implementation
 
 - [ ] Real check
-  - Command: \`exit 0\`
+  - Command: \`test -d .\`
   - Expected: \`exit 0\`
 - [ ] Confirmed by hand
   - Command: \`echo manual: confirm the dashboard renders\`

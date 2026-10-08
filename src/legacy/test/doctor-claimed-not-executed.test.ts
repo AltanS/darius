@@ -153,7 +153,7 @@ describe("doctor — claimed, not executed", () => {
     writeSpec(
       "01-clean.md",
       `- [x] Real check
-  - Command: \`exit 0\`
+  - Command: \`test -d .\`
   - Expected: \`exit 0\``,
     );
     expect(warningsOf("verified-not-executed")).toHaveLength(0);

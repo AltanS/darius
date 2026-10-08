@@ -27,6 +27,14 @@ import { appendLedgerEntry, readLedger } from "../lib/verification/ledger.ts";
 
 const SPEC = ".tracker/M1-probe/01-p.md";
 
+/** A spec with `n` checklist items (index 0..n-1); `verified` needs each of them (0.76.0). */
+function specText(n: number, skipped: number[] = []): string {
+  const items = Array.from({ length: n }, (_, i) =>
+    [`- [${skipped.includes(i) ? "-" : " "}] item ${String(i)}`, "  - Command: `test -f src/a.ts`", "  - Expected: exit 0"].join("\n"),
+  );
+  return ["# P", "", "## Verification Checklist", "", ...items, ""].join("\n");
+}
+
 function git(cwd: string, args: string[]): string {
   const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
@@ -57,7 +65,7 @@ describe("stage evidence", () => {
     initTracker({ projectRoot: tmpDir });
     trackerRoot = join(tmpDir, ".tracker");
     mkdirSync(join(trackerRoot, "M1-probe"), { recursive: true });
-    writeFileSync(join(tmpDir, SPEC), "# P\n");
+    writeFileSync(join(tmpDir, SPEC), specText(1));
     worklogPath = join(trackerRoot, "worklog", "M1-probe.md");
     mkdirSync(join(tmpDir, "src"), { recursive: true });
     writeFileSync(join(tmpDir, "src", "a.ts"), "export const a = 1;\n");
@@ -96,11 +104,18 @@ describe("stage evidence", () => {
     return git(tmpDir, ["rev-parse", "HEAD"]);
   }
 
+  /** Change an artifact file, so the next commit touches it. */
+  function touch(path = "src/a.ts"): void {
+    appendFileSync(join(tmpDir, path), `// ${String(Math.random())}\n`);
+  }
+
   /** A thread at `committed`, with its work in a real commit. */
   function committed(): string {
     const id = dispatched();
+    appendThread({ worklogPath, threadId: id, section: "artifact", message: "src/a.ts" });
     ledger(0, "pass");
     setStage({ worklogPath, threadId: id, stage: "verified" });
+    touch();
     const sha = commitAll("work");
     setStage({ worklogPath, threadId: id, stage: "committed", commit: sha });
     return id;
@@ -174,7 +189,7 @@ describe("stage evidence", () => {
 
   it("verified: refused with no ledger line, accepted after a passing one", () => {
     const id = dispatched();
-    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "verified" })).message).toMatch(/no passing ledger line/);
+    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "verified" })).message).toMatch(/no passing ledger line for .* on items #0/);
     ledger(0, "pass");
     setStage({ worklogPath, threadId: id, stage: "verified" });
     expect(listThreads({ trackerRoot })[0]?.stage).toBe("verified");
@@ -183,10 +198,11 @@ describe("stage evidence", () => {
   it("verified: a pass from before the dispatch does not count", () => {
     ledger(0, "pass", "2020-01-01T00:00:00.000Z");
     const id = dispatched();
-    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "verified" })).message).toMatch(/no passing ledger line/);
+    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "verified" })).message).toMatch(/no passing ledger line for .* on items #0/);
   });
 
   it("verified: refused while an item's latest result is a failure", () => {
+    writeFileSync(join(tmpDir, SPEC), specText(2));
     const id = dispatched();
     ledger(0, "pass");
     ledger(1, "fail");
@@ -209,8 +225,10 @@ describe("stage evidence", () => {
 
   it("committed: defaults to HEAD and records the sha", () => {
     const id = dispatched();
+    appendThread({ worklogPath, threadId: id, section: "artifact", message: "src/a.ts" });
     ledger(0, "pass");
     setStage({ worklogPath, threadId: id, stage: "verified" });
+    touch();
     const sha = commitAll("work");
     setStage({ worklogPath, threadId: id, stage: "committed" });
     expect(listThreads({ trackerRoot })[0]?.stageStamp?.commit).toBe(sha);
@@ -218,6 +236,7 @@ describe("stage evidence", () => {
 
   it("committed: refused when the sha is not an ancestor of HEAD", () => {
     const id = dispatched();
+    appendThread({ worklogPath, threadId: id, section: "artifact", message: "src/a.ts" });
     ledger(0, "pass");
     setStage({ worklogPath, threadId: id, stage: "verified" });
     commitAll("tracker");
@@ -247,7 +266,7 @@ describe("stage evidence", () => {
     commitAll("tracker");
     mkdirSync(join(tmpDir, "src", "deep"), { recursive: true });
     writeFileSync(join(tmpDir, "src", "deep", "new.ts"), "x\n");
-    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "committed" })).message).toMatch(/dirty or untracked: src\//);
+    expect(refusal(() => setStage({ worklogPath, threadId: id, stage: "committed" })).message).toMatch(/dirty or untracked: src\b/);
   });
 
   it("committed: an Artifacts entry with several paths is checked path by path", () => {
@@ -286,8 +305,10 @@ describe("stage evidence", () => {
   it("reviewed: refused without a Review: note after the commit, accepted with one", () => {
     const id = dispatched();
     appendThread({ worklogPath, threadId: id, section: "note", message: "Review: too early" });
+    appendThread({ worklogPath, threadId: id, section: "artifact", message: "src/a.ts" });
     ledger(0, "pass");
     setStage({ worklogPath, threadId: id, stage: "verified" });
+    touch();
     setStage({ worklogPath, threadId: id, stage: "committed", commit: commitAll("work") });
     appendThread({ worklogPath, threadId: id, section: "note", message: "not a review" });
     // The note before the committed stamp may share its millisecond; push the stamp clearly after it.
