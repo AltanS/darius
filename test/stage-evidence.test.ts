@@ -53,7 +53,7 @@ function checkout(withGit: boolean, runtime: string): Checkout {
   return { root, id: opened.stdout.trim() };
 }
 
-test("set-stage refuses with exit 1 and needs a reason for --force, under both runtimes", () => {
+test("set-stage refuses with exit 1, and needs a reason for --force (exit 2), under both runtimes", () => {
   for (const runtime of RUNTIMES) {
     const { root, id } = checkout(true, runtime);
     const skip = cli(["worklog", "set-stage", id, "committed"], root, runtime);
@@ -63,7 +63,7 @@ test("set-stage refuses with exit 1 and needs a reason for --force, under both r
     assert.equal(verified.code, 1);
     assert.match(verified.stderr, /no passing ledger line/u);
     const bare = cli(["worklog", "set-stage", id, "verified", "--force"], root, runtime);
-    assert.equal(bare.code, 1);
+    assert.equal(bare.code, 2);
     assert.match(bare.stderr, /--force needs a non-empty --reason/u);
     const forced = cli(["worklog", "set-stage", id, "verified", "--force", "--reason", "smoke"], root, runtime);
     assert.equal(forced.code, 0, forced.stderr);

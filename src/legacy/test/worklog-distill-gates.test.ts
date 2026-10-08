@@ -297,7 +297,7 @@ describe("worklog distill — eligibility gates", () => {
 
     for (const bad of ["--min-age-days=soon", "--min-age-days=-1"]) {
       const { stderr, exitCode } = check("cross-cutting.md", [bad]);
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(2);
       expect(stderr).toContain("--min-age-days must be a non-negative number");
     }
   });

@@ -222,7 +222,7 @@ export function planRestore(project: Project, history: ReadonlyMap<string, TreeL
     ({ basis, versions } = undoVersions(history, target));
   } else if (SHA_ARG.test(at)) {
     const version = versionWithSha(history, target, at);
-    basis = `version ${version.after ?? at} of ${version.id}`;
+    basis = `restore version ${(version.after ?? at).slice(0, 12)}`;
     versions = [version];
   } else if (ULID_ARG.test(at)) {
     basis = `the tree as of ${at}`;
@@ -231,6 +231,13 @@ export function planRestore(project: Project, history: ReadonlyMap<string, TreeL
     throw new UsageError(`--at takes a blob sha (7 to 64 hex characters) or a ledger id, not '${at}'`);
   }
   const steps = versions.map((version) => stepFor(project, version)).toSorted((a, b) => (a.path < b.path ? -1 : 1));
+  // The removal is already undone when every file is back in the working copy (a later put, or an
+  // earlier restore): "undo the removal" would be wrong. The plan then goes back to a version.
+  const live = steps.length > 0 && steps.every((step) => step.state === "same" || step.state === "differs");
+  if (at === undefined && live) {
+    const [only] = steps;
+    basis = steps.length === 1 && only !== undefined ? `restore version ${only.sha.slice(0, 12)}` : `restore ${String(steps.length)} versions from before a removal that is already undone`;
+  }
   return { basis, steps };
 }
 
@@ -312,9 +319,10 @@ export interface TreeRemoval {
  * Removes `folder` from the tree as one delete. Under the project lock: a
  * sync first, so every file is in the index; then one `tree.removed` line per
  * file under it, all with one time, then `applyTree` deletes them. Host-local
- * files left in the folder (lock and temp files) go with it.
+ * files left in the folder (lock and temp files) go with it. `note` rides on
+ * every removal line (the reason of an archive that was not complete).
  */
-export function removeTreeFolder(project: Project, folder: string, options: { who?: string } = {}): TreeRemoval {
+export function removeTreeFolder(project: Project, folder: string, options: { who?: string; note?: string } = {}): TreeRemoval {
   if (!isTreePath(folder)) throw new UsageError(`not a folder of the tracker tree: ${folder}`);
   return project.withLock(() => {
     const synced = syncTree(project, { who: options.who });
@@ -324,7 +332,11 @@ export function removeTreeFolder(project: Project, folder: string, options: { wh
     const files = [...indexedFiles(project)].filter(([path]) => path.startsWith(`${folder}/`)).toSorted(([a], [b]) => (a < b ? -1 : 1));
     appendLines(
       project,
-      files.map(([path, entry]) => ({ who, at, type: TREE_REMOVED, path, prev_sha: localSha(project, entry.sha) })),
+      files.map(([path, entry]) => {
+        const line: LedgerLineInput = { who, at, type: TREE_REMOVED, path, prev_sha: localSha(project, entry.sha) };
+        if (options.note !== undefined) line.note = options.note;
+        return line;
+      }),
     );
     const applied = applyTree(project);
     problems.push(...applied.problems);

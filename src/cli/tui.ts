@@ -18,6 +18,7 @@ export function isInteractive(): boolean {
 
 export const tuiCommand: Command = {
   name: "tui",
+  flags: [],
   summary: "the Due and Run screens: answer held runs, resume them",
   async run(): Promise<number> {
     if (!isInteractive()) throw new UsageError("tui needs a terminal: stdin and stdout must both be a TTY");

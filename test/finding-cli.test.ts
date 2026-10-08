@@ -12,7 +12,7 @@ import { parseArgs } from "../src/cli/args.ts";
 import { findingCommand } from "../src/cli/finding.ts";
 import type { Command } from "../src/cli/registry.ts";
 import { readLedger } from "../src/core/ledger.ts";
-import { UsageError } from "../src/core/model.ts";
+import { NotFoundError, UsageError } from "../src/core/model.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-finding-cli-"));
@@ -96,7 +96,7 @@ test("finding show prints the detail and the history; an unknown key is a usage 
   const json = JSON.parse((await finding("fc-show", ["show", "link-12", "--json"])).stdout);
   assert.equal(json.finding.runs, 2);
   assert.equal(json.finding.history.length, 2);
-  await assert.rejects(finding("fc-show", ["show", "nope"]), UsageError);
+  await assert.rejects(finding("fc-show", ["show", "nope"]), NotFoundError);
   await assert.rejects(finding("fc-show", ["show", "link-12", "--ritual", "other"]), /no finding 'link-12' in ritual 'other'/u);
   await assert.rejects(finding("fc-show", ["show"]), /missing <key>/u);
   await assert.rejects(finding("fc-show", ["frob"]), /needs a verb/u);

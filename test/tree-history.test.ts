@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { initRepo, NO_GIT } from "./helpers/git.ts";
+import { commitAll, initRepo, NO_GIT } from "./helpers/git.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-tree-history-"));
@@ -81,6 +81,12 @@ function closeThreads(repo: Repo): void {
   for (const thread of threads) ok(repo, ["worklog", "close", thread.threadId, "--status", "done"]);
 }
 
+/** Ticks every item of the fixture spec, so the milestone is complete. */
+function completeSpec(repo: Repo): void {
+  const spec = join(tracker(repo), "M1-alpha", "01-spec-one.md");
+  writeFileSync(spec, readFileSync(spec, "utf8").replaceAll("- [ ]", "- [x]"));
+}
+
 function writeArchiveDoc(repo: Repo, text = "---\nname: Alpha\nslug: M1-alpha\narchived: 2026-10-08\n---\n# Alpha\n"): void {
   mkdirSync(join(tracker(repo), "archive"), { recursive: true });
   writeFileSync(join(tracker(repo), "archive", "M1-alpha.md"), text);
@@ -108,6 +114,7 @@ interface LedgerRow {
   at?: string;
   body_sha?: string;
   prev_sha?: string | null;
+  note?: string;
 }
 
 function ledgerLines(repo: Repo): LedgerRow[] {
@@ -273,6 +280,7 @@ test("milestone archive in store mode: --dry-run writes nothing, the run records
     await t.test(runtime, () => {
       const repo = storeRepo(runtime);
       closeThreads(repo);
+      completeSpec(repo);
       writeArchiveDoc(repo);
       capture(repo);
       const folder = join(tracker(repo), "M1-alpha");
@@ -303,6 +311,7 @@ test("milestone archive in store mode: --dry-run writes nothing, the run records
 test("milestone archive --keep checks and removes nothing", { skip: NO_GIT }, () => {
   const repo = storeRepo();
   closeThreads(repo);
+  completeSpec(repo);
   writeArchiveDoc(repo);
   const out: { outcome: string; removed: string[] } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--keep", "--json"]));
   assert.equal(out.outcome, "kept");
@@ -331,14 +340,17 @@ test("git mode: milestone archive runs the checks, deletes nothing and prints th
 
   const dry = ok(repo, ["milestone", "archive", "alpha", "--dry-run"]);
   assert.match(dry, /tracker in git/u);
-  const result: { outcome: string; action: string; command: string; undo: string; removed: string[] } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--json"]));
+  const result: { outcome: string; action: string; command: string; undo: string | null; removed: string[] } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--json"]));
   assert.equal(result.outcome, "ready");
   assert.equal(result.action, "print");
-  assert.equal(result.command, "git rm -r -q .tracker/M1-alpha/");
-  assert.equal(result.undo, "git checkout HEAD -- .tracker/M1-alpha/");
+  // The folder is not in git here: no `git rm`, and no `git checkout` undo line (0.77.0).
+  assert.equal(result.command, "rm -r .tracker/M1-alpha/");
+  assert.equal(result.undo, null);
   assert.deepEqual(result.removed, []);
   const out = ok(repo, ["milestone", "archive", "alpha"]);
-  assert.match(out, /run: git rm -r -q \.tracker\/M1-alpha\//u);
+  assert.match(out, /run: rm -r \.tracker\/M1-alpha\//u);
+  assert.match(out, /not tracked by git/u);
+  assert.doesNotMatch(out, /git checkout/u);
   assert.equal(dirHash(join(repo.dir, ".tracker")), before, "darius writes nothing to a tracker in git");
 });
 
@@ -350,4 +362,138 @@ test("milestone archive: usage errors exit 2, an unknown milestone exits 1", { s
   const missing = darius(repo, ["milestone", "archive", "beta"]);
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /no active milestone beta/u);
+});
+
+/** The thread ids of `worklog list --json`, with their stage and whether they are closed. */
+function threadsOf(repo: Repo): { threadId: string; stage?: string; closedAt?: string; closeStatus?: string }[] {
+  return JSON.parse(ok(repo, ["worklog", "list", "--json"])).threads;
+}
+
+test("milestone archive refuses a milestone with open items and lists them; --incomplete archives with the reason", { skip: NO_GIT }, () => {
+  const repo = storeRepo();
+  closeThreads(repo);
+  writeArchiveDoc(repo);
+  capture(repo);
+
+  const refused = darius(repo, ["milestone", "archive", "alpha", "--json"]);
+  assert.equal(refused.code, 1);
+  const result: { outcome: string; checks: { name: string; ok: boolean; detail: string }[]; open_items: { spec: string; index: number }[] } = JSON.parse(refused.stdout);
+  assert.equal(result.outcome, "refused");
+  const items = result.checks.find((check) => check.name === "items");
+  assert.equal(items?.ok, false);
+  assert.match(items?.detail ?? "", /01-spec-one\.md #0/u);
+  assert.match(items?.detail ?? "", /--incomplete/u);
+  assert.deepEqual(result.open_items.map((item) => [item.spec, item.index]), [["01-spec-one.md", 0], ["01-spec-one.md", 1], ["01-spec-one.md", 2]]);
+  assert.ok(existsSync(join(tracker(repo), "M1-alpha")));
+
+  // Skipped items are not open; a tick closes the rest.
+  const spec = join(tracker(repo), "M1-alpha", "01-spec-one.md");
+  ok(repo, ["mark", spec, "0", "--skipped"]);
+  const still = darius(repo, ["milestone", "archive", "alpha"]);
+  assert.equal(still.code, 1);
+  assert.match(still.stdout, /2 not done/u);
+
+  assert.equal(darius(repo, ["milestone", "archive", "alpha", "--incomplete"]).code, 2, "the reason is required");
+  const forced = ok(repo, ["milestone", "archive", "alpha", "--incomplete", "scope cut, rest moves to M2"]);
+  assert.match(forced, /archived anyway \(--incomplete: scope cut, rest moves to M2\)/u);
+  assert.equal(existsSync(join(tracker(repo), "M1-alpha")), false);
+  const removed = ledgerLines(repo).filter((line) => line.type === "tree.removed" && String(line.path).startsWith("M1-alpha/"));
+  assert.equal(removed.length, 2);
+  assert.ok(removed.every((line) => line.note === "archived incomplete: scope cut, rest moves to M2"));
+});
+
+test("milestone archive closes threads at stage reviewed and still refuses an earlier stage", { skip: NO_GIT }, () => {
+  const repo = storeRepo();
+  completeSpec(repo);
+  writeArchiveDoc(repo);
+  capture(repo);
+  const [thread] = threadsOf(repo);
+  assert.ok(thread !== undefined);
+
+  ok(repo, ["worklog", "set-stage", thread.threadId, "dispatched", "--force", "--reason", "test"]);
+  const early = darius(repo, ["milestone", "archive", "alpha"]);
+  assert.equal(early.code, 1);
+  assert.match(early.stdout, /refused {2}open threads: 1 open before stage reviewed/u);
+  assert.ok(existsSync(join(tracker(repo), "M1-alpha")));
+
+  ok(repo, ["worklog", "set-stage", thread.threadId, "reviewed", "--force", "--reason", "test"]);
+  const dry = ok(repo, ["milestone", "archive", "alpha", "--dry-run"]);
+  assert.match(dry, new RegExp(`will close: ${thread.threadId} \\(alpha\\.md\\), stage reviewed`, "u"));
+  assert.equal(threadsOf(repo)[0]?.closedAt, undefined, "a dry run closes nothing");
+  const dryJson: { will_close: string[]; closed: string[] } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--dry-run", "--json"]));
+  assert.deepEqual(dryJson.will_close, [thread.threadId]);
+  assert.deepEqual(dryJson.closed, []);
+
+  const out = ok(repo, ["milestone", "archive", "alpha"]);
+  assert.match(out, new RegExp(`closed: ${thread.threadId} \\(stage reviewed\\) as done`, "u"));
+  assert.equal(existsSync(join(tracker(repo), "M1-alpha")), false);
+  const closed = threadsOf(repo)[0];
+  assert.equal(closed?.closeStatus, "done");
+  assert.equal(closed?.stage, "reviewed");
+  assert.equal(ledgerLines(repo).filter((line) => line.type === "tree.put" && line.path === "worklog/alpha.md").length >= 2, true, "the close is recorded in the store");
+});
+
+test("git mode: the undo line and the delete command follow whether git tracks the folder", { skip: NO_GIT }, () => {
+  repos += 1;
+  const repo: Repo = { dir: join(SANDBOX, `tracked-${String(repos)}`), project: `tracked-${String(repos)}`, runtime: "node" };
+  mkdirSync(join(repo.dir, ".tracker", "M1-alpha"), { recursive: true });
+  initRepo(repo.dir);
+  writeFileSync(join(repo.dir, ".darius.toml"), `project = "${repo.project}"\n`);
+  writeFileSync(join(repo.dir, ".tracker", "M1-alpha", "00-README.md"), "# Alpha\n");
+  writeFileSync(join(repo.dir, ".tracker", "M1-alpha", "01-one.md"), "# One\n");
+  writeArchiveDoc(repo);
+  commitAll(repo.dir, "tracker");
+  const result: { command: string; undo: string | null; tracked_by_git: boolean } = JSON.parse(ok(repo, ["milestone", "archive", "alpha", "--json"]));
+  assert.equal(result.tracked_by_git, true);
+  assert.equal(result.command, "git rm -r -q .tracker/M1-alpha/");
+  assert.equal(result.undo, "git checkout HEAD -- .tracker/M1-alpha/");
+  assert.match(ok(repo, ["milestone", "archive", "alpha"]), /undo before the commit: git checkout HEAD -- \.tracker\/M1-alpha\//u);
+});
+
+test("tree restore --force on a live file says 'restore version', not 'undo the removal'", { skip: NO_GIT }, () => {
+  const repo = storeRepo();
+  const spec = join(tracker(repo), "M1-alpha", "01-spec-one.md");
+  const bytes = readFileSync(spec);
+  unlinkSync(spec);
+  capture(repo);
+  ok(repo, ["tree", "restore", ".tracker/M1-alpha/01-spec-one.md"]);
+  assert.deepEqual(readFileSync(spec), bytes);
+
+  // The file is live again; the removal in its history is already undone.
+  const again = ok(repo, ["tree", "restore", ".tracker/M1-alpha/01-spec-one.md", "--force"]);
+  assert.match(again, /\(restore version [0-9a-f]{12}\)/u);
+  assert.doesNotMatch(again, /undo the removal/u);
+  assert.match(again, /nothing to write/u, "the working copy already holds it");
+
+  const sha = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+  const named = ok(repo, ["tree", "restore", ".tracker/M1-alpha/01-spec-one.md", "--at", sha, "--force"]);
+  assert.match(named, new RegExp(`restore version ${sha}`, "u"));
+});
+
+test("tree restore of a milestone folder warns about its archive doc and its distilled worklog, with the commands", { skip: NO_GIT }, () => {
+  const repo = storeRepo();
+  closeThreads(repo);
+  completeSpec(repo);
+  writeArchiveDoc(repo);
+  capture(repo);
+  ok(repo, ["milestone", "archive", "alpha"]);
+  const stub = "# Alpha\n\nsummary of the work\n";
+  const distilled = spawnSync(BIN, ["worklog", "distill", "alpha.md", "--stdin", "--min-age-days", "0", "--force"], {
+    cwd: repo.dir,
+    env: { ...process.env, DARIUS_STATE_DIR: join(SANDBOX, "state"), DARIUS_CONFIG_DIR: join(SANDBOX, "config"), DARIUS_WHO: "dev@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    encoding: "utf8",
+    input: stub,
+  });
+  assert.equal(distilled.status, 0, distilled.stderr);
+
+  const out = ok(repo, ["tree", "restore", ".tracker/M1-alpha/"]);
+  assert.match(out, /warning: M1-alpha has an archive document, archive\/M1-alpha\.md, so the milestone is now listed twice\./u);
+  assert.match(out, /rm \.tracker\/archive\/M1-alpha\.md/u);
+  assert.match(out, /mv \.tracker\/archive\/M1-alpha\.md/u);
+  assert.match(out, /warning: worklog\/alpha\.md is a distilled stub/u);
+  const before = /raw copied: .*sha256 ([0-9a-f]{12})/u.exec(distilled.stderr + distilled.stdout)?.[1];
+  assert.ok(before !== undefined);
+  assert.match(out, new RegExp(`darius tree restore \\.tracker/worklog/alpha\\.md --at ${before}`, "u"));
+  const json: { follow_up: string[] } = JSON.parse(ok(repo, ["tree", "restore", ".tracker/M1-alpha/", "--force", "--json"]));
+  assert.deepEqual(json.follow_up, [], "nothing was written the second time, so no new warning");
 });

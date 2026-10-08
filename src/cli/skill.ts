@@ -595,6 +595,7 @@ function uninstall(args: ParsedArgs): number {
 
 export const skillCommand: Command = {
   name: "skill",
+  flags: [],
   summary:
     "print the Claude Code skill for darius; install | uninstall the skill and 11 procedure skills; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
   async run(args: ParsedArgs): Promise<number> {

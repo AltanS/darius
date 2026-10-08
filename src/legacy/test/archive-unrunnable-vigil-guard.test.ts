@@ -100,7 +100,7 @@ describe("archive-check", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("REFUSED");
     expect(result.stderr).toContain("stale-soak");
-    expect(result.stderr).toContain("tracker vigil close");
+    expect(result.stderr).toContain("darius vigil close");
   });
 
   it("REFUSES on a vigil with no Command at all", () => {
@@ -162,7 +162,7 @@ describe("archive-check", () => {
 
   it("requires a milestone argument", () => {
     const result = run(["archive-check"]);
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("Usage:");
   });
 });

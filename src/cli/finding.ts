@@ -27,7 +27,7 @@ import { collectFindings, FINDING_RESET, type Finding, type FindingStatus } from
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const VERBS = "list | show | close | reopen | reset";
 
@@ -99,7 +99,7 @@ function lookup(findings: readonly Finding[], key: string, ritual: string | unde
   const matches = findings.filter((finding) => finding.key === key && (ritual === undefined || finding.ritual === ritual));
   const [first] = matches;
   if (first === undefined) {
-    throw new UsageError(`no finding '${key}'${ritual === undefined ? "" : ` in ritual '${ritual}'`}`);
+    throw new NotFoundError(`no finding '${key}'${ritual === undefined ? "" : ` in ritual '${ritual}'`}`);
   }
   if (matches.length > 1) {
     throw new UsageError(`finding '${key}' is in ${String(matches.length)} rituals (${matches.map((match) => match.ritual).join(", ")}); pass --ritual SLUG`);
@@ -229,6 +229,7 @@ function findingReset(args: ParsedArgs): number {
 
 export const findingCommand: Command = {
   name: "finding",
+  flags: ["all", "open", "ritual", "who", "note"],
   summary: "list, show, close, reopen and reset the findings rituals report across runs",
   audience: "session",
   usage: `finding ${VERBS.replaceAll(" | ", "|")}`,

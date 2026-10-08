@@ -41,6 +41,18 @@ export interface Command {
   audience?: "session";
   /** The verb's shape for the skill's table, e.g. `run start|complete <run>`. Defaults to the name. */
   usage?: string;
+  /**
+   * The full usage text `darius <name> --help` prints (stdout, exit 0).
+   * Absent: `usage: darius <usage or name>` and the summary.
+   */
+  help?: string;
+  /**
+   * Every flag the command reads, without the dashes. Present: an unknown
+   * flag is a usage error (exit 2, "unknown option --x") before the command
+   * runs. Absent: no check. `json`, `help`, `stdin` and `project` are always
+   * accepted (src/cli/args.ts, `GLOBAL_FLAGS`).
+   */
+  flags?: readonly string[];
   run(args: ParsedArgs): Promise<number>;
 }
 
@@ -51,7 +63,7 @@ export interface Command {
  * maps it to exit 2 -- the probe contract's "the caller is wrong", never 1
  * ("the work failed").
  */
-export { UsageError } from "../core/model.ts";
+export { NotFoundError, UsageError } from "../core/model.ts";
 
 const commands = new Map<string, Command>();
 
@@ -61,6 +73,12 @@ export function register(command: Command): void {
     throw new Error(`darius: command "${command.name}" registered twice`);
   }
   commands.set(command.name, command);
+}
+
+/** The text `darius <command> --help` prints. */
+export function commandHelp(command: Command): string {
+  if (command.help !== undefined) return command.help;
+  return `usage: darius ${command.usage ?? command.name}\n${command.summary}`;
 }
 
 /** Looks up a registered command by its exact top-level name. */

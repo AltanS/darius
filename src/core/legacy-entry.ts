@@ -91,6 +91,8 @@ export interface LegacyThread {
   closedAt?: string;
   closeStatus?: string;
   specPath?: string;
+  /** The Work Loop stage (`planned` to `reviewed`); absent for a thread opened outside the loop. */
+  stage?: string;
   worklogFile: string;
 }
 
@@ -104,15 +106,16 @@ export interface LegacyWorklogFile {
 interface LegacyWorklog {
   listThreads(opts: { trackerRoot: string; activeOnly?: boolean }): LegacyThread[];
   listWorklogFiles(opts: { trackerRoot: string }): LegacyWorklogFile[];
+  closeThread(opts: { worklogPath: string; threadId: string; status: "done" | "blocked" | "cancelled" }): void;
 }
 
 async function loadWorklog(): Promise<LegacyWorklog> {
   // SAFETY: darius's own vendored module; both functions are checked before use.
   const loaded = (await import(VENDORED_WORKLOG.href)) as Partial<LegacyWorklog>;
-  if (loaded.listThreads === undefined || loaded.listWorklogFiles === undefined) {
-    throw new Error(`the legacy worklog module at ${fileURLToPath(VENDORED_WORKLOG)} exports no listThreads() or listWorklogFiles()`);
+  if (loaded.listThreads === undefined || loaded.listWorklogFiles === undefined || loaded.closeThread === undefined) {
+    throw new Error(`the legacy worklog module at ${fileURLToPath(VENDORED_WORKLOG)} exports no listThreads(), listWorklogFiles() or closeThread()`);
   }
-  return { listThreads: loaded.listThreads, listWorklogFiles: loaded.listWorklogFiles };
+  return { listThreads: loaded.listThreads, listWorklogFiles: loaded.listWorklogFiles, closeThread: loaded.closeThread };
 }
 
 /** Every open worklog thread under `trackerRoot`, read through the vendored parser. Reads only. */
@@ -123,4 +126,36 @@ export async function openWorklogThreads(trackerRoot: string): Promise<LegacyThr
 /** Every worklog file under `trackerRoot` with its state, read through the vendored parser. Reads only. */
 export async function worklogFiles(trackerRoot: string): Promise<LegacyWorklogFile[]> {
   return (await loadWorklog()).listWorklogFiles({ trackerRoot });
+}
+
+/**
+ * Closes one worklog thread as `done` through the vendored writer, the way
+ * `darius worklog close <id> --status done` does. `worklogPath` is the file
+ * under the tracker tree. Throws when the thread is not in the file.
+ */
+export async function closeWorklogThreadDone(worklogPath: string, threadId: string): Promise<void> {
+  (await loadWorklog()).closeThread({ worklogPath, threadId, status: "done" });
+}
+
+/** One checklist item of a spec as the vendored parser reads it. */
+export interface LegacyChecklistItem {
+  /** Zero-based, the index `darius mark` and `darius verify-item` take. */
+  index: number;
+  label: string;
+  state: "pending" | "in_progress" | "verified" | "skipped" | "blocked";
+}
+
+const VENDORED_CHECKLIST = new URL("../legacy/lib/markdown/checklist.ts", import.meta.url);
+const VENDORED_FRONTMATTER = new URL("../legacy/lib/markdown/frontmatter.ts", import.meta.url);
+
+/** The checklist items of a spec file's text, read through the vendored parser. Reads only. */
+export async function checklistItems(specText: string): Promise<LegacyChecklistItem[]> {
+  // SAFETY: darius's own vendored modules; both functions are checked before use.
+  const checklist = (await import(VENDORED_CHECKLIST.href)) as { parseChecklist?: (content: string) => LegacyChecklistItem[] };
+  // SAFETY: as above.
+  const frontmatter = (await import(VENDORED_FRONTMATTER.href)) as { parseFrontmatter?: (raw: string) => { content: string } };
+  if (checklist.parseChecklist === undefined || frontmatter.parseFrontmatter === undefined) {
+    throw new Error("the legacy checklist parser is missing parseChecklist() or parseFrontmatter()");
+  }
+  return checklist.parseChecklist(frontmatter.parseFrontmatter(specText).content);
 }

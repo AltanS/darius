@@ -69,7 +69,7 @@ import { followUpOf } from "../runner/follow-up.ts";
 import { acknowledgeRun, answerRun } from "../runner/hold.ts";
 import { readStdin } from "./args.ts";
 import { runFollowUp, runNow, runResume } from "./run-due.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const VERBS = "start | hold | answer | resume | complete | ack | list | show | proposal | now | follow-up";
 const PROPOSAL_FIELDS = ["proposed", "current", "why", "effect"] as const;
@@ -133,7 +133,7 @@ function runStart(args: ParsedArgs): number {
   const slug = requirePositional(args, 1, "<ritual> slug");
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project.name}`);
   const who = stringFlag(args, "who") ?? defaultWho();
 
   const result = project.withLock((): StartResult => {
@@ -194,7 +194,7 @@ function runHold(args: ParsedArgs): number {
   const project = currentProject(args);
   const lines = findRunLines(readLedger(project), runId);
   const item = runItemRef(lines);
-  if (item === undefined) throw new UsageError(`no run '${runId}' in ${project.name}`);
+  if (item === undefined) throw new NotFoundError(`no run '${runId}' in ${project.name}`);
   const phase = currentPhase(lines);
   if (phase !== "running") throw new UsageError(`run '${runId}' is not running (phase: ${phase ?? "unknown"})`);
   const who = stringFlag(args, "who") ?? defaultWho();
@@ -542,7 +542,7 @@ function runShow(args: ParsedArgs): number {
   const ledger = readLedger(project);
   const lines = findRunLines(ledger, runId);
   const row = runRows(ledger).find((candidate) => candidate.run === runId);
-  if (row === undefined) throw new UsageError(`no run '${runId}' in ${project.name}`);
+  if (row === undefined) throw new NotFoundError(`no run '${runId}' in ${project.name}`);
   const completed = lines.findLast((line) => line.type === "run.completed");
   const sha = completed?.findings_sha;
   const findings = isText(sha) ? getBlobText(project, sha) : null;

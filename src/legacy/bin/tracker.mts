@@ -190,14 +190,47 @@ import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runDelegation } from "../lib/delegation.ts";
 import { runHookDrift, runHookStop } from "../lib/hooks.ts";
+import { usageFor, wantsHelp } from "../lib/usage.ts";
 
-/** Runs one tracker command. `argv` excludes the program name. Returns the exit code (verbs that fail call process.exit themselves). */
+/** Verbs that print their own usage for `--help`. */
+const SELF_HELP_VERBS: ReadonlySet<string> = new Set(["migrate", "agents", "uncommitted-verified", "claim", "release", "loop-check"]);
+
+/**
+ * Runs one tracker command. `argv` excludes the program name. Returns the exit code (verbs that fail call process.exit themselves).
+ *
+ * The contract around every verb (docs/concept.md, "CLI contract"): `--help`
+ * or `-h` anywhere prints the usage on stdout, exits 0 and runs nothing; a
+ * mistake in the command line that `node:util` parseArgs finds (an unknown
+ * option, a missing value) is a usage error, exit 2.
+ */
 export async function main(argv: string[]): Promise<number> {
+  const verb = argv[0];
+  if (verb !== undefined && !SELF_HELP_VERBS.has(verb) && wantsHelp(argv.slice(1))) {
+    const usage = usageFor(argv);
+    if (usage !== null) {
+      process.stdout.write(`${usage.join("\n")}\n`);
+      return 0;
+    }
+  }
+  try {
+    return await dispatch(argv);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    const code = "code" in error && typeof error.code === "string" ? error.code : "";
+    if (!code.startsWith("ERR_PARSE_ARGS_")) throw error;
+    const unknown = /^Unknown option '(--?[^']+)'/u.exec(error.message);
+    const text = unknown === null ? error.message : `unknown option ${unknown[1] ?? ""}`;
+    process.stderr.write(`darius ${argv[0] ?? ""}: ${text}\n`);
+    return 2;
+  }
+}
+
+async function dispatch(argv: string[]): Promise<number> {
   const rawArgs = argv;
   const subcommand = rawArgs[0];
 
   if (subcommand === "root") {
-    runRoot();
+    runRoot(rawArgs.slice(1));
     return 0;
   }
 
@@ -306,12 +339,13 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (subcommand === "hook-stop") {
-    return runHookStop();
-  }
-
-  if (subcommand === "hook-drift") {
-    return runHookDrift();
+  if (subcommand === "hook-stop" || subcommand === "hook-drift") {
+    // A hook takes no arguments: its input is JSON on stdin. A stray flag is a usage error.
+    if (rawArgs.length > 1) {
+      process.stderr.write(`darius ${subcommand}: unknown option ${rawArgs[1] ?? ""} (a hook takes no arguments)\n`);
+      return 2;
+    }
+    return subcommand === "hook-stop" ? runHookStop() : runHookDrift();
   }
 
   if (subcommand === "delegation") {
@@ -339,7 +373,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (!subcommand) {
-    process.stderr.write("Usage: tracker <subcommand> [args]\n");
+    process.stderr.write("Usage: darius <subcommand> [args]\n");
     process.stderr.write("  root\n");
     process.stderr.write("  show <spec-path> [--json]\n");
     process.stderr.write("  status [--json]\n");
@@ -378,21 +412,22 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write("  vigil list [--all] [--json]\n");
     process.stderr.write("  vigil close <slug> --verdict <held|failed> [--date <YYYY-MM-DD>]\n");
     process.stderr.write("  archive-check <milestone-folder|slug>\n");
-    return 1;
+    return 2;
   }
 
-  process.stderr.write(`Unknown subcommand: ${subcommand}\n`);
-  return 1;
+  process.stderr.write(`darius: unknown command: ${subcommand}\n`);
+  return 2;
 }
 
 // ---------------------------------------------------------------------------
 // tracker root
 // ---------------------------------------------------------------------------
 
-function runRoot(): void {
+function runRoot(args: string[]): void {
+  parseArgs({ args, options: {}, allowPositionals: false });
   const trackerDir = findTrackerRoot(process.cwd());
   if (trackerDir === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
   process.stdout.write(`${trackerDir}\n`);
@@ -442,14 +477,14 @@ function runShow(args: string[]): void {
   const pathArg = positionals[0];
 
   if (!pathArg) {
-    process.stderr.write("Usage: tracker show <spec-path> [--json]\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius show <spec-path> [--json]\n");
+    process.exit(2);
   }
 
   const filePath = resolve(pathArg);
 
   if (!existsSync(filePath)) {
-    process.stderr.write(`tracker show: file not found: ${filePath}\n`);
+    process.stderr.write(`darius show: file not found: ${filePath}\n`);
     process.exit(1);
   }
 
@@ -470,7 +505,7 @@ function runShow(args: string[]): void {
     process.stdout.write(`Tasks:  ${view.verifiedCount}/${view.totalCount}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker show: ${message}\n`);
+    process.stderr.write(`darius show: ${message}\n`);
     process.exit(1);
   }
 }
@@ -491,7 +526,7 @@ function runStatus(args: string[]): void {
 
   const trackerRoot = findTrackerRoot(process.cwd());
   if (trackerRoot === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
 
@@ -528,8 +563,8 @@ function runList(args: string[]): void {
     return;
   }
 
-  process.stderr.write("Usage: tracker list <milestones|specs> [options]\n");
-  process.exit(1);
+  process.stderr.write("Usage: darius list <milestones|specs> [options]\n");
+  process.exit(2);
 }
 
 function runListMilestones(args: string[]): void {
@@ -543,7 +578,7 @@ function runListMilestones(args: string[]): void {
 
   const trackerRoot = findTrackerRoot(process.cwd());
   if (trackerRoot === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
 
@@ -580,7 +615,7 @@ function runListSpecs(args: string[]): void {
 
   const trackerRoot = findTrackerRoot(process.cwd());
   if (trackerRoot === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
 
@@ -674,7 +709,7 @@ function runNext(args: string[]): void {
 
   const trackerRoot = findTrackerRoot(process.cwd());
   if (trackerRoot === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
 
@@ -723,16 +758,16 @@ function runNext(args: string[]): void {
       }
       if (claim.state === "held") {
         process.stderr.write(
-          `tracker next: ⚠ --force: offering ${ref} despite a LIVE claim by ${claimHolder(claim.claim)}.\n`,
+          `darius next: ⚠ --force: offering ${ref} despite a LIVE claim by ${claimHolder(claim.claim)}.\n`,
         );
       } else if (claim.state === "stale") {
         process.stderr.write(
-          `tracker next: NOTE: ${ref} carries a STALE claim by ${claimHolder(claim.claim)} (${claim.expiryLabel}).\n`,
+          `darius next: NOTE: ${ref} carries a STALE claim by ${claimHolder(claim.claim)} (${claim.expiryLabel}).\n`,
         );
       }
       if (skippedClaimed.length > 0 && !values.json) {
         process.stderr.write(
-          `tracker next: skipped ${skippedClaimed.length} spec(s) claimed by another live session: ` +
+          `darius next: skipped ${skippedClaimed.length} spec(s) claimed by another live session: ` +
             `${skippedClaimed.map((c) => c.spec).join(", ")}\n`,
         );
       }
@@ -749,7 +784,7 @@ function runNext(args: string[]): void {
       process.stdout.write(JSON.stringify({ status: "claimed", skippedClaimed }, null, 2) + "\n");
     }
     process.stderr.write(
-      `tracker next: REFUSED: every ready spec is claimed by another live session: ` +
+      `darius next: REFUSED: every ready spec is claimed by another live session: ` +
         `${skippedClaimed.map((c) => `${c.spec} (${c.session ?? "unknown"})`).join(", ")}. ` +
         "Wait, or re-run with --force.\n",
     );
@@ -770,7 +805,7 @@ function runInit(_args: string[]): void {
     process.stdout.write(`tracker: initialized .tracker/ in ${projectRoot}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker init: ${message}\n`);
+    process.stderr.write(`darius init: ${message}\n`);
     process.exit(1);
   }
 }
@@ -792,8 +827,8 @@ function runAdd(args: string[]): void {
     return;
   }
 
-  process.stderr.write("Usage: tracker add <milestone|spec> [options]\n");
-  process.exit(1);
+  process.stderr.write("Usage: darius add <milestone|spec> [options]\n");
+  process.exit(2);
 }
 
 function runAddMilestone(args: string[]): void {
@@ -811,9 +846,9 @@ function runAddMilestone(args: string[]): void {
 
   if (!values.name || !values.slug || !values.owner) {
     process.stderr.write(
-      "Usage: tracker add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]\n",
+      "Usage: darius add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   // Explicit number is opt-in; auto-mint is the default. Either way the
@@ -823,9 +858,9 @@ function runAddMilestone(args: string[]): void {
   if (values.number !== undefined) {
     if (!/^\d+$/.test(values.number)) {
       process.stderr.write(
-        `tracker add milestone: invalid --number "${values.number}" (expected a positive integer)\n`,
+        `darius add milestone: invalid --number "${values.number}" (expected a positive integer)\n`,
       );
-      process.exit(1);
+      process.exit(2);
     }
     explicitNumber = parseInt(values.number, 10);
   }
@@ -844,18 +879,18 @@ function runAddMilestone(args: string[]): void {
 
     if (result.kind === "exists") {
       process.stdout.write(
-        `tracker add milestone: milestone with slug "${values.slug}" already exists at ${result.folderPath}\n`,
+        `darius add milestone: milestone with slug "${values.slug}" already exists at ${result.folderPath}\n`,
       );
       return;
     }
 
     process.stdout.write(
-      `tracker add milestone: created M${result.number}-${values.slug} at ${result.folderPath}\n`,
+      `darius add milestone: created M${result.number}-${values.slug} at ${result.folderPath}\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker add milestone: ${message}\n`);
-    process.exit(1);
+    process.stderr.write(`darius add milestone: ${message}\n`);
+    process.exit(failCode(err));
   }
 }
 
@@ -877,32 +912,32 @@ function runAddSpec(args: string[]): void {
 
   if (!values.milestone || !values.name || !values.template) {
     process.stderr.write(
-      "Usage: tracker add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n",
+      "Usage: darius add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   // --manual is all-or-nothing: an operator decision with no owner and no
   // expiry is the promise this guard exists to refuse.
   if (values.manual && (!values.owner || !values.expires)) {
     process.stderr.write(
-      "tracker add spec: --manual requires --owner <who> and --expires <YYYY-MM-DD>\n",
+      "darius add spec: --manual requires --owner <who> and --expires <YYYY-MM-DD>\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
   if (!values.manual && (values.owner || values.expires)) {
     process.stderr.write(
-      "tracker add spec: --owner/--expires only apply with --manual\n",
+      "darius add spec: --owner/--expires only apply with --manual\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const validTemplates: TemplateKind[] = ["generic", "api-endpoint", "ui-component", "library"];
   if (!validTemplates.includes(values.template as TemplateKind)) {
     process.stderr.write(
-      `tracker add spec: invalid template "${values.template}". Allowed: ${validTemplates.join(", ")}\n`,
+      `darius add spec: invalid template "${values.template}". Allowed: ${validTemplates.join(", ")}\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -922,13 +957,13 @@ function runAddSpec(args: string[]): void {
 
     if (result.kind === "exists") {
       process.stdout.write(
-        `tracker add spec: spec "${values.name}" already exists at ${result.filePath}\n`,
+        `darius add spec: spec "${values.name}" already exists at ${result.filePath}\n`,
       );
       return;
     }
 
     process.stdout.write(
-      `tracker add spec: created ${result.filePath}\n`,
+      `darius add spec: created ${result.filePath}\n`,
     );
     if (!values.manual) {
       process.stdout.write(
@@ -938,8 +973,8 @@ function runAddSpec(args: string[]): void {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker add spec: ${message}\n`);
-    process.exit(1);
+    process.stderr.write(`darius add spec: ${message}\n`);
+    process.exit(failCode(err));
   }
 }
 
@@ -967,15 +1002,15 @@ function runMark(args: string[]): void {
 
   if (!specPath || !taskIdxStr) {
     process.stderr.write(
-      "Usage: tracker mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"]\n",
+      "Usage: darius mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const taskIndex = parseInt(taskIdxStr, 10);
   if (isNaN(taskIndex) || taskIndex < 0) {
-    process.stderr.write(`tracker mark: invalid task index "${taskIdxStr}"\n`);
-    process.exit(1);
+    process.stderr.write(`darius mark: invalid task index "${taskIdxStr}"\n`);
+    process.exit(2);
   }
 
   let state: MarkState;
@@ -986,9 +1021,9 @@ function runMark(args: string[]): void {
   else if (values.pending) state = "pending";
   else {
     process.stderr.write(
-      "tracker mark: must specify one of --verified, --in-progress, --blocked, --skipped, --pending\n",
+      "darius mark: must specify one of --verified, --in-progress, --blocked, --skipped, --pending\n",
     );
-    process.exit(1);
+    process.exit(2);
     return;
   }
 
@@ -996,7 +1031,7 @@ function runMark(args: string[]): void {
 
   if (evidence !== undefined && evidence !== "" && state !== "verified") {
     process.stderr.write(
-      `tracker mark: --evidence only applies to --verified (got --${state})\n`,
+      `darius mark: --evidence only applies to --verified (got --${state})\n`,
     );
     process.exit(1);
   }
@@ -1004,7 +1039,7 @@ function runMark(args: string[]): void {
   const override = values.override?.trim();
   if (override !== undefined && (override === "" || state !== "verified")) {
     process.stderr.write(
-      'tracker mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n',
+      'darius mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n',
     );
     process.exit(1);
   }
@@ -1032,7 +1067,7 @@ function runMark(args: string[]): void {
   const runnable = classified !== null && (classified.kind === "would-execute" || classified.kind === "file-check");
   if (state === "verified" && runnable && override === undefined) {
     process.stderr.write(
-      `tracker mark: REFUSED: task ${taskIndex} has a runnable check (${JSON.stringify(targetItem?.command ?? "")}). ` +
+      `darius mark: REFUSED: task ${taskIndex} has a runnable check (${JSON.stringify(targetItem?.command ?? "")}). ` +
         "Run it instead:\n" +
         `  darius verify-item ${specPath} ${taskIndex}\n` +
         "  If it truly cannot run here, mark it with a reason and evidence:\n" +
@@ -1042,23 +1077,23 @@ function runMark(args: string[]): void {
   }
   if (override !== undefined && !runnable) {
     process.stderr.write(
-      `tracker mark: --override is for a runnable check; task ${taskIndex} is manual. Use --evidence "..." alone\n`,
+      `darius mark: --override is for a runnable check; task ${taskIndex} is manual. Use --evidence "..." alone\n`,
     );
     process.exit(1);
   }
   if (override !== undefined && (evidence === undefined || evidence === "")) {
     process.stderr.write(
-      `tracker mark: --override needs --evidence "<what was checked, how, by whom>" too\n`,
+      `darius mark: --override needs --evidence "<what was checked, how, by whom>" too\n`,
     );
     process.exit(1);
   }
 
   if (state === "verified" && commandIsTrivial && (evidence === undefined || evidence === "")) {
     process.stderr.write(
-      `tracker mark: task ${taskIndex} has a shell no-op Command ` +
+      `darius mark: task ${taskIndex} has a shell no-op Command ` +
         `(${JSON.stringify(targetItem?.command ?? "")}) — running it proves nothing, so a bare\n` +
         `  --verified would be an unevidenced claim. Re-run with what you actually checked:\n` +
-        `  tracker mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
+        `  darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
     );
     process.exit(1);
   }
@@ -1088,15 +1123,15 @@ function runMark(args: string[]): void {
       });
       if (!logged) {
         process.stderr.write(
-          `tracker mark: warning — could not append to ${LEDGER_FILENAME}; the [x] stands but is unevidenced\n`,
+          `darius mark: warning — could not append to ${LEDGER_FILENAME}; the [x] stands but is unevidenced\n`,
         );
       }
     }
 
-    process.stdout.write(`tracker mark: task ${taskIndex} marked as ${state} in ${specPath}\n`);
+    process.stdout.write(`darius mark: task ${taskIndex} marked as ${state} in ${specPath}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker mark: ${message}\n`);
+    process.stderr.write(`darius mark: ${message}\n`);
     process.exit(1);
   }
 }
@@ -1139,11 +1174,11 @@ function runSetStatus(args: string[]): void {
 
   if (!target || !statusArg) {
     process.stderr.write(
-      "Usage: tracker set-status <spec-path|milestone-folder> <status>\n" +
+      "Usage: darius set-status <spec-path|milestone-folder> <status>\n" +
         "  Spec statuses: Not Started | In Progress | Complete | Blocked | Archived\n" +
         "  Milestone-only statuses: Skipped | Deferred | Closed\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const validStatuses: (SpecStatus | MilestoneOverrideStatus)[] = [
@@ -1159,9 +1194,9 @@ function runSetStatus(args: string[]): void {
 
   if (!validStatuses.includes(statusArg as SpecStatus | MilestoneOverrideStatus)) {
     process.stderr.write(
-      `tracker set-status: invalid status "${statusArg}". Allowed: ${validStatuses.join(", ")}\n`,
+      `darius set-status: invalid status "${statusArg}". Allowed: ${validStatuses.join(", ")}\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -1172,11 +1207,11 @@ function runSetStatus(args: string[]): void {
       status: statusArg as SpecStatus | MilestoneOverrideStatus,
       trackerRoot,
     });
-    process.stdout.write(`tracker set-status: set status to "${statusArg}" in ${target}\n`);
+    process.stdout.write(`darius set-status: set status to "${statusArg}" in ${target}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker set-status: ${message}\n`);
-    process.exit(1);
+    process.stderr.write(`darius set-status: ${message}\n`);
+    process.exit(failCode(err));
   }
 }
 
@@ -1194,15 +1229,15 @@ function runIndex(args: string[]): void {
   });
 
   if (!values.rebuild) {
-    process.stderr.write("Usage: tracker index --rebuild\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius index --rebuild\n");
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
 
   try {
     rebuildIndex(trackerRoot);
-    process.stdout.write(`tracker index: rebuilt ${join(trackerRoot, "00-INDEX.md")}\n`);
+    process.stdout.write(`darius index: rebuilt ${join(trackerRoot, "00-INDEX.md")}\n`);
 
     // The worklog index rides the same rebuild so update-index and wrap-up get
     // it for free. A project with no worklog directory has nothing to index —
@@ -1210,12 +1245,12 @@ function runIndex(args: string[]): void {
     const worklogIndex = rebuildWorklogIndex(trackerRoot);
     if (worklogIndex !== null) {
       process.stdout.write(
-        `tracker index: rebuilt ${worklogIndex.path} (${worklogIndex.rows.length} worklog file(s))\n`,
+        `darius index: rebuilt ${worklogIndex.path} (${worklogIndex.rows.length} worklog file(s))\n`,
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker index: ${message}\n`);
+    process.stderr.write(`darius index: ${message}\n`);
     process.exit(1);
   }
 }
@@ -1224,10 +1259,19 @@ function runIndex(args: string[]): void {
 // requireTrackerRoot — exit 1 if no .tracker/ found
 // ---------------------------------------------------------------------------
 
+/**
+ * The exit code for an error a verb caught: a message that starts with
+ * "Invalid" names a bad flag value (usage, 2); anything else is a failure (1).
+ */
+function failCode(cause: unknown): number {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /^Invalid\b/u.test(message) ? 2 : 1;
+}
+
 function requireTrackerRoot(): string {
   const trackerRoot = findTrackerRoot(process.cwd());
   if (trackerRoot === null) {
-    process.stderr.write("tracker: no .tracker/ directory found\n");
+    process.stderr.write("darius: no .tracker/ directory found\n");
     process.exit(1);
   }
   return trackerRoot;
@@ -1251,9 +1295,9 @@ function parseTimeoutFlag(raw: string | undefined, command: string): number {
   const seconds = Number(raw);
   if (!Number.isInteger(seconds) || seconds <= 0) {
     process.stderr.write(
-      `tracker ${command}: --timeout takes a positive whole number of seconds (got ${JSON.stringify(raw)})\n`,
+      `darius ${command}: --timeout takes a positive whole number of seconds (got ${JSON.stringify(raw)})\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
   return seconds * 1000;
 }
@@ -1379,7 +1423,7 @@ function printDryRunReport(opts: {
   const timeoutSeconds = (opts.runOptions.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS) / 1000;
 
   process.stdout.write(
-    `DRY RUN (tracker ${opts.command}) — nothing was executed and nothing was written ` +
+    `DRY RUN (darius ${opts.command}) — nothing was executed and nothing was written ` +
       `(no ledger line, no [x]).\n` +
       `Commands would run from: ${opts.runOptions.cwd ?? process.cwd()} (timeout ${timeoutSeconds}s)\n\n`,
   );
@@ -1421,14 +1465,14 @@ function runVerify(args: string[]): void {
   const specPath = positionals[0];
   if (!specPath) {
     process.stderr.write(
-      "Usage: tracker verify <spec-path> [--dry-run] [--recheck] [--timeout <seconds>]\n",
+      "Usage: darius verify <spec-path> [--dry-run] [--recheck] [--timeout <seconds>]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const absPath = resolve(specPath);
   if (!existsSync(absPath)) {
-    process.stderr.write(`tracker verify: spec not found: ${absPath}\n`);
+    process.stderr.write(`darius verify: spec not found: ${absPath}\n`);
     process.exit(1);
   }
 
@@ -1442,7 +1486,7 @@ function runVerify(args: string[]): void {
     view = parseSpec(raw, absPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker verify: parse error: ${message}\n`);
+    process.stderr.write(`darius verify: parse error: ${message}\n`);
     process.exit(1);
   }
 
@@ -1532,7 +1576,7 @@ function runVerify(args: string[]): void {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`tracker verify: failed to mark task ${item.index}: ${message}\n`);
+        process.stderr.write(`darius verify: failed to mark task ${item.index}: ${message}\n`);
       }
       if (isRecheck) {
         // Re-stamps verification_passed: the tick is now backed by a run that
@@ -1593,7 +1637,7 @@ function runVerify(args: string[]): void {
     for (const m of manualItems) {
       process.stdout.write(`  [${m.index}] ${m.label}\n`);
       process.stdout.write(
-        `      tracker mark ${specPath} ${m.index} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
+        `      darius mark ${specPath} ${m.index} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
       );
     }
   }
@@ -1617,7 +1661,7 @@ function runVerify(args: string[]): void {
     process.stderr.write(
       "The [x] was NOT removed — a tick records that the check passed then, and unticking it\n" +
         "would erase the only evidence that this ever worked. Fix the code (or re-scope the item),\n" +
-        `then re-run: tracker verify ${specPath} --recheck\n`,
+        `then re-run: darius verify ${specPath} --recheck\n`,
     );
   }
 
@@ -1653,20 +1697,20 @@ function runVerifyItem(args: string[]): void {
 
   if (!specPath || !taskIdxStr) {
     process.stderr.write(
-      "Usage: tracker verify-item <spec-path> <task-idx> [--dry-run] [--recheck] [--timeout <seconds>]\n",
+      "Usage: darius verify-item <spec-path> <task-idx> [--dry-run] [--recheck] [--timeout <seconds>]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const taskIndex = parseInt(taskIdxStr, 10);
   if (isNaN(taskIndex) || taskIndex < 0) {
-    process.stderr.write(`tracker verify-item: invalid task index "${taskIdxStr}"\n`);
-    process.exit(1);
+    process.stderr.write(`darius verify-item: invalid task index "${taskIdxStr}"\n`);
+    process.exit(2);
   }
 
   const absPath = resolve(specPath);
   if (!existsSync(absPath)) {
-    process.stderr.write(`tracker verify-item: spec not found: ${absPath}\n`);
+    process.stderr.write(`darius verify-item: spec not found: ${absPath}\n`);
     process.exit(1);
   }
 
@@ -1681,14 +1725,14 @@ function runVerifyItem(args: string[]): void {
     view = parseSpec(raw, absPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker verify-item: parse error: ${message}\n`);
+    process.stderr.write(`darius verify-item: parse error: ${message}\n`);
     process.exit(1);
   }
 
   const item = view.checklistItems.find((i) => i.index === taskIndex);
   if (!item) {
     process.stderr.write(
-      `tracker verify-item: task index ${taskIndex} not found (${view.checklistItems.length} items)\n`,
+      `darius verify-item: task index ${taskIndex} not found (${view.checklistItems.length} items)\n`,
     );
     process.exit(1);
   }
@@ -1727,7 +1771,7 @@ function runVerifyItem(args: string[]): void {
       );
       return;
     }
-    process.stderr.write(`tracker verify-item: task ${taskIndex} has no Command/Expected pair\n`);
+    process.stderr.write(`darius verify-item: task ${taskIndex} has no Command/Expected pair\n`);
     process.exit(1);
   }
 
@@ -1740,7 +1784,7 @@ function runVerifyItem(args: string[]): void {
     (item.expected !== null && hasCwdPrefix(item.expected, cwd))
   ) {
     process.stderr.write(
-      `tracker verify-item: warning — task ${taskIndex} contains an absolute path; specs must use repo-relative paths (issue #4). Stripped at run time, but fix the spec.\n`,
+      `darius verify-item: warning — task ${taskIndex} contains an absolute path; specs must use repo-relative paths (issue #4). Stripped at run time, but fix the spec.\n`,
     );
   }
 
@@ -1779,10 +1823,10 @@ function runVerifyItem(args: string[]): void {
     // to be verified and it was not; an exit 0 here would read as success and
     // is exactly how a no-op earns a green tick.
     process.stderr.write(
-      `tracker verify-item: task ${taskIndex} NOT verified — ${result.reason}\n`,
+      `darius verify-item: task ${taskIndex} NOT verified — ${result.reason}\n`,
     );
     process.stderr.write(
-      `  tracker mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
+      `  darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
     );
     process.exit(1);
   }
@@ -1798,7 +1842,7 @@ function runVerifyItem(args: string[]): void {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`tracker verify-item: failed to mark task: ${message}\n`);
+      process.stderr.write(`darius verify-item: failed to mark task: ${message}\n`);
       process.exit(1);
     }
     process.stdout.write(
@@ -1811,23 +1855,23 @@ function runVerifyItem(args: string[]): void {
 
   if (result.outcome === "timeout") {
     process.stderr.write(
-      `tracker verify-item: task ${taskIndex} TIMED OUT after ${timeoutMs / 1000}s — ${result.reason}\n`,
+      `darius verify-item: task ${taskIndex} TIMED OUT after ${timeoutMs / 1000}s — ${result.reason}\n`,
     );
     process.exit(1);
   }
 
   if (isRegression) {
     process.stderr.write(
-      `tracker verify-item: !!! REGRESSION — task ${taskIndex} was already [x] and no longer passes: ${result.reason}\n`,
+      `darius verify-item: !!! REGRESSION — task ${taskIndex} was already [x] and no longer passes: ${result.reason}\n`,
     );
     process.stderr.write(
       `  The [x] was NOT removed — a tick records that the check passed then. Fix the code (or re-scope\n` +
-        `  the item), then re-run: tracker verify-item ${specPath} ${taskIndex} --recheck\n`,
+        `  the item), then re-run: darius verify-item ${specPath} ${taskIndex} --recheck\n`,
     );
     process.exit(1);
   }
 
-  process.stderr.write(`tracker verify-item: task ${taskIndex} failed: ${result.reason}\n`);
+  process.stderr.write(`darius verify-item: task ${taskIndex} failed: ${result.reason}\n`);
   process.exit(1);
 }
 
@@ -1884,9 +1928,9 @@ async function runWorklog(args: string[]): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: tracker worklog <open|append|close|list|set-stage|dispatch|park|distill|index> [options]\n",
+    "Usage: darius worklog <open|append|close|list|set-stage|dispatch|park|distill|index> [options]\n",
   );
-  process.exit(1);
+  process.exit(2);
 }
 
 function runWorklogOpen(args: string[]): void {
@@ -1910,18 +1954,18 @@ function runWorklogOpen(args: string[]): void {
   // set-stage/dispatch as the Work Loop progresses.
   if (values.stage !== undefined && values.stage !== "planned") {
     process.stderr.write(
-      `tracker worklog open: --stage must be "planned" at open, got "${values.stage}"\n`,
+      `darius worklog open: --stage must be "planned" at open, got "${values.stage}"\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   const worklogDir = join(trackerRoot, "worklog");
   if (!slug) {
     process.stderr.write(
-      "tracker worklog open: name the milestone: worklog open <milestone-slug>\n",
+      "darius worklog open: name the milestone: worklog open <milestone-slug>\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
   const fileName = `${slug}.md`;
 
@@ -1931,7 +1975,7 @@ function runWorklogOpen(args: string[]): void {
   // thread nobody can reach again.
   if (isWorklogIndexFile(fileName)) {
     process.stderr.write(
-      `tracker worklog open: "${fileName}" is a generated index name — ` +
+      `darius worklog open: "${fileName}" is a generated index name — ` +
         "00- files are excluded from every worklog listing, so this thread " +
         "would be unreachable. Pick a slug that does not start with 00-.\n",
     );
@@ -1942,7 +1986,7 @@ function runWorklogOpen(args: string[]): void {
   // so only the active tree counts. The file name stays exactly as passed.
   if (findActiveMilestone(trackerRoot, slug) === null) {
     process.stderr.write(
-      `tracker worklog open: "${slug}" names no milestone in .tracker/. ` +
+      `darius worklog open: "${slug}" names no milestone in .tracker/. ` +
         "A worklog belongs to a milestone: add it first (darius add milestone <name>), " +
         "or put findings in a plain doc in the repo.\n",
     );
@@ -1986,7 +2030,7 @@ function runWorklogOpen(args: string[]): void {
     process.stdout.write(`${threadId}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog open: ${message}\n`);
+    process.stderr.write(`darius worklog open: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2004,14 +2048,14 @@ function runWorklogAppend(args: string[]): void {
   const threadId = positionals[0];
   if (!threadId) {
     process.stderr.write(
-      'Usage: tracker worklog append <thread-id> --section "<section>" --message "..."\n',
+      'Usage: darius worklog append <thread-id> --section "<section>" --message "..."\n',
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if (!values.section || !values.message) {
-    process.stderr.write("tracker worklog append: --section and --message are required\n");
-    process.exit(1);
+    process.stderr.write("darius worklog append: --section and --message are required\n");
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -2019,7 +2063,7 @@ function runWorklogAppend(args: string[]): void {
   // Find the worklog file for this thread
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`tracker worklog append: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog append: thread not found: ${threadId}\n`);
     process.exit(1);
   }
 
@@ -2030,10 +2074,10 @@ function runWorklogAppend(args: string[]): void {
       section: values.section,
       message: values.message,
     });
-    process.stdout.write(`tracker worklog append: appended to ${threadId}\n`);
+    process.stdout.write(`darius worklog append: appended to ${threadId}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog append: ${message}\n`);
+    process.stderr.write(`darius worklog append: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2050,23 +2094,23 @@ function runWorklogClose(args: string[]): void {
   const threadId = positionals[0];
   if (!threadId) {
     process.stderr.write(
-      "Usage: tracker worklog close <thread-id> --status <done|blocked|cancelled>\n",
+      "Usage: darius worklog close <thread-id> --status <done|blocked|cancelled>\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const validStatuses = ["done", "blocked", "cancelled"];
   if (!values.status || !validStatuses.includes(values.status)) {
     process.stderr.write(
-      `tracker worklog close: --status must be one of: ${validStatuses.join(", ")}\n`,
+      `darius worklog close: --status must be one of: ${validStatuses.join(", ")}\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`tracker worklog close: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog close: thread not found: ${threadId}\n`);
     process.exit(1);
   }
 
@@ -2076,17 +2120,17 @@ function runWorklogClose(args: string[]): void {
       threadId,
       status: values.status as "done" | "blocked" | "cancelled",
     });
-    process.stdout.write(`tracker worklog close: closed ${threadId} with status ${values.status}\n`);
+    process.stdout.write(`darius worklog close: closed ${threadId} with status ${values.status}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog close: ${message}\n`);
+    process.stderr.write(`darius worklog close: ${message}\n`);
     process.exit(1);
   }
 }
 
 async function runWorklogSetStage(args: string[]): Promise<void> {
   const usage =
-    `Usage: tracker worklog set-stage <thread-id> <${WORKLOG_STAGES.join("|")}> ` +
+    `Usage: darius worklog set-stage <thread-id> <${WORKLOG_STAGES.join("|")}> ` +
     `[--commit <sha>] [--no-git] [--no-code "<why>"] [--force --reason "<why>"] [--session <id>]\n`;
   let values: { commit?: string; "no-git"?: boolean; "no-code"?: string; force?: boolean; reason?: string; session?: string };
   let positionals: string[];
@@ -2105,7 +2149,7 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog set-stage: ${message}\n${usage}`);
+    process.stderr.write(`darius worklog set-stage: ${message}\n${usage}`);
     process.exit(2);
   }
 
@@ -2118,22 +2162,22 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
 
   if (!(WORKLOG_STAGES as readonly string[]).includes(stage)) {
     process.stderr.write(
-      `tracker worklog set-stage: invalid stage "${stage}". Allowed: ${WORKLOG_STAGES.join(", ")}\n`,
+      `darius worklog set-stage: invalid stage "${stage}". Allowed: ${WORKLOG_STAGES.join(", ")}\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if (values.force && !values.reason?.trim()) {
     process.stderr.write(
-      'tracker worklog set-stage: --force needs a non-empty --reason "<why>". It is recorded on the thread.\n',
+      'darius worklog set-stage: --force needs a non-empty --reason "<why>". It is recorded on the thread.\n',
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`tracker worklog set-stage: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog set-stage: thread not found: ${threadId}\n`);
     process.exit(1);
   }
 
@@ -2160,10 +2204,10 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
       session: resolveSessionId(values.session),
     });
     const forced = values.force ? " (forced)" : "";
-    process.stdout.write(`tracker worklog set-stage: ${threadId} → ${stage}${forced}\n`);
+    process.stdout.write(`darius worklog set-stage: ${threadId} → ${stage}${forced}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog set-stage: ${message}\n`);
+    process.stderr.write(`darius worklog set-stage: ${message}\n`);
     process.exit(err instanceof StageRefusal ? err.exitCode : 1);
   }
 }
@@ -2184,15 +2228,15 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
   const threadId = positionals[0];
   if (!threadId || !values.agent) {
     process.stderr.write(
-      'Usage: tracker worklog dispatch <thread-id> --agent <invocable> [--reason "<one-line>"]\n',
+      'Usage: darius worklog dispatch <thread-id> --agent <invocable> [--reason "<one-line>"]\n',
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`tracker worklog dispatch: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog dispatch: thread not found: ${threadId}\n`);
     process.exit(1);
   }
 
@@ -2224,11 +2268,11 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
       actingSession: acting.acting,
     });
     process.stdout.write(
-      `tracker worklog dispatch: ${threadId} → dispatched (agent: ${values.agent})\n`,
+      `darius worklog dispatch: ${threadId} → dispatched (agent: ${values.agent})\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog dispatch: ${message}\n`);
+    process.stderr.write(`darius worklog dispatch: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2245,24 +2289,24 @@ function runWorklogPark(args: string[]): void {
   const threadId = positionals[0];
   if (!threadId || !values.reason || !values.reason.trim()) {
     process.stderr.write(
-      'Usage: tracker worklog park <thread-id> --reason "<why this work is being deferred>"\n',
+      'Usage: darius worklog park <thread-id> --reason "<why this work is being deferred>"\n',
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`tracker worklog park: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog park: thread not found: ${threadId}\n`);
     process.exit(1);
   }
 
   try {
     parkThread({ worklogPath, threadId, reason: values.reason });
-    process.stdout.write(`tracker worklog park: ${threadId} parked (closed: blocked)\n`);
+    process.stdout.write(`darius worklog park: ${threadId} parked (closed: blocked)\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog park: ${message}\n`);
+    process.stderr.write(`darius worklog park: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2332,16 +2376,16 @@ function runWorklogIndex(args: string[]): void {
     const result = rebuildWorklogIndex(trackerRoot);
     if (result === null) {
       process.stdout.write(
-        `tracker worklog index: no ${join(trackerRoot, "worklog")} directory — nothing to index\n`,
+        `darius worklog index: no ${join(trackerRoot, "worklog")} directory — nothing to index\n`,
       );
       return;
     }
     process.stdout.write(
-      `tracker worklog index: rebuilt ${result.path} (${result.rows.length} file(s))\n`,
+      `darius worklog index: rebuilt ${result.path} (${result.rows.length} file(s))\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog index: ${message}\n`);
+    process.stderr.write(`darius worklog index: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2374,10 +2418,10 @@ function runWorklogDistill(args: string[]): void {
   // already closes.
   if (values.list && (values.check || positionals.length > 0)) {
     process.stderr.write(
-      "tracker worklog distill: --list surveys every file and cannot be combined with " +
+      "darius worklog distill: --list surveys every file and cannot be combined with " +
         "--check or a <file> argument\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if (values.list) {
@@ -2406,11 +2450,11 @@ function runWorklogDistill(args: string[]): void {
   const file = positionals[0];
   if (!file) {
     process.stderr.write(
-      "Usage: tracker worklog distill <file> (--content <path> | --stdin) [--force] [--min-age-days N]\n" +
-        "       tracker worklog distill <file> --check [--min-age-days N]\n" +
-        "       tracker worklog distill --list [--json] [--min-age-days N]\n",
+      "Usage: darius worklog distill <file> (--content <path> | --stdin) [--force] [--min-age-days N]\n" +
+        "       darius worklog distill <file> --check [--min-age-days N]\n" +
+        "       darius worklog distill --list [--json] [--min-age-days N]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if (values.check) {
@@ -2418,7 +2462,7 @@ function runWorklogDistill(args: string[]): void {
     // The reason is the contract on stdout — scriptable. Detail rides stderr.
     process.stdout.write(`${gate.reason}\n`);
     if (!gate.eligible) {
-      process.stderr.write(`tracker worklog distill: ${gate.detail}\n`);
+      process.stderr.write(`darius worklog distill: ${gate.detail}\n`);
       process.exit(1);
     }
     return;
@@ -2427,9 +2471,9 @@ function runWorklogDistill(args: string[]): void {
   const contentPath = values.content;
   if ((contentPath !== undefined) === values.stdin) {
     process.stderr.write(
-      "tracker worklog distill: exactly one of --content <path> or --stdin is required\n",
+      "darius worklog distill: exactly one of --content <path> or --stdin is required\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   let content = "";
@@ -2440,13 +2484,13 @@ function runWorklogDistill(args: string[]): void {
       contentPath === undefined ? readFileSync(0, "utf-8") : readFileSync(contentPath, "utf-8");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog distill: cannot read stub content: ${message}\n`);
+    process.stderr.write(`darius worklog distill: cannot read stub content: ${message}\n`);
     process.exit(1);
   }
 
   if (content.trim() === "") {
     process.stderr.write(
-      "tracker worklog distill: refusing to distill to empty content — the stub must say something\n",
+      "darius worklog distill: refusing to distill to empty content — the stub must say something\n",
     );
     process.exit(1);
   }
@@ -2462,18 +2506,18 @@ function runWorklogDistill(args: string[]): void {
 
     if (result.oversize) {
       process.stdout.write(
-        `tracker worklog distill: warning — stub is ${result.bytes} bytes, ` +
+        `darius worklog distill: warning — stub is ${result.bytes} bytes, ` +
           `over the ${STUB_WARN_BYTES}-byte anchor budget\n`,
       );
     }
     process.stdout.write(
-      `tracker worklog distill: ${result.worklogFile} → anchor stub ` +
+      `darius worklog distill: ${result.worklogFile} → anchor stub ` +
         `(raw ${result.rawPreserved}: ${result.rawPath}, ` +
         `sha256 ${result.sourceSha256.slice(0, 12)}…)\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker worklog distill: ${message}\n`);
+    process.stderr.write(`darius worklog distill: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2490,9 +2534,9 @@ function parseMinAgeDays(raw: string | undefined): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 0) {
     process.stderr.write(
-      `tracker worklog distill: --min-age-days must be a non-negative number, got "${raw}"\n`,
+      `darius worklog distill: --min-age-days must be a non-negative number, got "${raw}"\n`,
     );
-    process.exit(1);
+    process.exit(2);
   }
   return parsed;
 }
@@ -2507,9 +2551,15 @@ function runDoctor(args: string[]): void {
     options: {
       fix: { type: "boolean", default: false },
       quick: { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
     },
     allowPositionals: false,
   });
+
+  if (values.quick && values.json) {
+    process.stderr.write("darius doctor: --quick prints one line and has no --json form\n");
+    process.exit(2);
+  }
 
   if (values.quick) {
     runDoctorQuick();
@@ -2520,6 +2570,11 @@ function runDoctor(args: string[]): void {
 
   try {
     const report = executeDoctorCheck({ trackerRoot, fix: values.fix });
+    if (values.json) {
+      process.stdout.write(JSON.stringify({ ok: report.healthy, ...report }, null, 2) + "\n");
+      if (!report.healthy) process.exit(1);
+      return;
+    }
     const output = formatDoctorReport(report);
     process.stdout.write(output + "\n");
 
@@ -2530,10 +2585,10 @@ function runDoctor(args: string[]): void {
     const message = err instanceof Error ? err.message : String(err);
     // Check if this is the future-version error from the schema check
     if (message.includes("plugin is too old")) {
-      process.stderr.write(`tracker doctor: ${message}\n`);
+      process.stderr.write(`darius doctor: ${message}\n`);
       process.exit(1);
     }
-    process.stderr.write(`tracker doctor: ${message}\n`);
+    process.stderr.write(`darius doctor: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2594,7 +2649,7 @@ function runDoctorQuick(): void {
 
   if (onDiskVersion === null) {
     process.stdout.write(
-      "tracker: clean, run `tracker doctor` to stamp schema version\n",
+      "tracker: clean, run `darius doctor` to stamp schema version\n",
     );
     return;
   }
@@ -2635,8 +2690,8 @@ function runScan(args: string[]): void {
     return;
   }
 
-  process.stderr.write("Usage: tracker scan <artifacts|stubs> <path>\n");
-  process.exit(1);
+  process.stderr.write("Usage: darius scan <artifacts|stubs> <path>\n");
+  process.exit(2);
 }
 
 function runScanArtifacts(args: string[]): void {
@@ -2648,8 +2703,8 @@ function runScanArtifacts(args: string[]): void {
 
   const scanPath = positionals[0];
   if (!scanPath) {
-    process.stderr.write("Usage: tracker scan artifacts <path>\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius scan artifacts <path>\n");
+    process.exit(2);
   }
 
   const absPath = resolve(scanPath);
@@ -2673,8 +2728,8 @@ function runScanStubs(args: string[]): void {
 
   const scanPath = positionals[0];
   if (!scanPath) {
-    process.stderr.write("Usage: tracker scan stubs <path>\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius scan stubs <path>\n");
+    process.exit(2);
   }
 
   const absPath = resolve(scanPath);
@@ -2696,9 +2751,9 @@ function runScanStubs(args: string[]): void {
 function runMigrateCommand(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(
-      "Usage: tracker migrate [--from v1|v8|auto] [--dry-run|--apply]\n" +
+      "Usage: darius migrate [--from v1|v8|auto] [--dry-run|--apply]\n" +
         "\n" +
-        "Upgrade a legacy tracker to v9 CLI-native format.\n" +
+        "Upgrade a legacy darius to v9 CLI-native format.\n" +
         "\n" +
         "Options:\n" +
         "  --from v1|v8|auto   Force version detection (default: auto)\n" +
@@ -2733,9 +2788,9 @@ function runMigrateCommand(args: string[]): void {
   if (fromArg && fromArg !== "auto") {
     if (fromArg !== "v1" && fromArg !== "v8") {
       process.stderr.write(
-        `tracker migrate: invalid --from value "${fromArg}". Allowed: v1, v8, auto\n`,
+        `darius migrate: invalid --from value "${fromArg}". Allowed: v1, v8, auto\n`,
       );
-      process.exit(1);
+      process.exit(2);
     }
     fromVersion = fromArg;
   }
@@ -2752,21 +2807,21 @@ function runMigrateCommand(args: string[]): void {
     process.stdout.write(result.diffText + "\n");
 
     if (result.noOp) {
-      process.stdout.write("tracker migrate: nothing to do.\n");
+      process.stdout.write("darius migrate: nothing to do.\n");
       return;
     }
 
     if (!dryRun) {
       process.stdout.write(
-        `tracker migrate: applied ${result.changeCount} change(s).\n`,
+        `darius migrate: applied ${result.changeCount} change(s).\n`,
       );
       if (result.logPath) {
-        process.stdout.write(`tracker migrate: log written to ${result.logPath}\n`);
+        process.stdout.write(`darius migrate: log written to ${result.logPath}\n`);
       }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker migrate: ${message}\n`);
+    process.stderr.write(`darius migrate: ${message}\n`);
     process.exit(1);
   }
 }
@@ -2800,14 +2855,14 @@ async function runCounselGate(args: string[]): Promise<void> {
   const transcriptArg = positionals[0];
   if (!transcriptArg) {
     process.stderr.write(
-      "Usage: tracker counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--single-dissent surface|confirm|ignore] [--ack-dissent] [--json]\n",
+      "Usage: darius counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--single-dissent surface|confirm|ignore] [--ack-dissent] [--json]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const transcriptPath = resolve(transcriptArg);
   if (!existsSync(transcriptPath)) {
-    process.stderr.write(`tracker counsel-gate: transcript not found: ${transcriptPath}\n`);
+    process.stderr.write(`darius counsel-gate: transcript not found: ${transcriptPath}\n`);
     process.exit(1);
   }
 
@@ -2816,7 +2871,7 @@ async function runCounselGate(args: string[]): Promise<void> {
   // Exactly one ```darius-review block, and no near miss (0.76.0).
   const fenceProblem = reviewFenceProblem(raw);
   if (fenceProblem !== null) {
-    process.stderr.write(`tracker counsel-gate: bad review transcript: ${fenceProblem}\n`);
+    process.stderr.write(`darius counsel-gate: bad review transcript: ${fenceProblem}\n`);
     process.exit(2);
   }
 
@@ -2829,7 +2884,7 @@ async function runCounselGate(args: string[]): Promise<void> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const prefix = err instanceof ReviewFormatError ? "bad review transcript" : "parse error";
-      process.stderr.write(`tracker counsel-gate: ${prefix}: ${message}\n`);
+      process.stderr.write(`darius counsel-gate: ${prefix}: ${message}\n`);
       process.exit(2);
     }
   }
@@ -2843,7 +2898,7 @@ async function runCounselGate(args: string[]): Promise<void> {
     if (review === null && trackerRoot !== null && specKey !== null) {
       if (await specIsHighRisk(join(trackerRoot, specKey))) {
         process.stderr.write(
-          "tracker counsel-gate: bad review transcript: the spec is high risk, so only a ```darius-review block is accepted\n",
+          "darius counsel-gate: bad review transcript: the spec is high risk, so only a ```darius-review block is accepted\n",
         );
         process.exit(2);
       }
@@ -2869,13 +2924,13 @@ async function runCounselGate(args: string[]): Promise<void> {
       counsel = parseCounselTranscript(raw);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`tracker counsel-gate: parse error: ${message}\n`);
+      process.stderr.write(`darius counsel-gate: parse error: ${message}\n`);
       process.exit(1);
     }
 
     if (counsel.advisors.length === 0) {
       process.stderr.write(
-        `tracker counsel-gate: no advisor verdicts found in ${transcriptPath}\n`,
+        `darius counsel-gate: no advisor verdicts found in ${transcriptPath}\n`,
       );
       process.exit(1);
     }
@@ -2938,13 +2993,13 @@ async function specIsHighRisk(absSpec: string): Promise<boolean> {
 function runCounselOverride(specArg: string | undefined, reasonArg: string, json: boolean): void {
   const reason = reasonArg.trim();
   if (!specArg || reason === "") {
-    process.stderr.write('Usage: tracker counsel-gate --spec <spec-path> --override "<reason>"\n');
+    process.stderr.write('Usage: darius counsel-gate --spec <spec-path> --override "<reason>"\n');
     process.exit(2);
   }
   const trackerRoot = requireTrackerRoot();
   const spec = canonicalSpecRef({ trackerRoot, ref: specArg });
   if (spec === null) {
-    process.stderr.write(`tracker counsel-gate: --spec not found in .tracker/: ${specArg}\n`);
+    process.stderr.write(`darius counsel-gate: --spec not found in .tracker/: ${specArg}\n`);
     process.exit(1);
   }
   const absSpec = join(trackerRoot, spec);
@@ -2966,9 +3021,9 @@ function resolveCounselThreshold(flagValue: string | undefined): number {
     const parsed = Number.parseInt(flagValue, 10);
     if (!Number.isInteger(parsed) || parsed < 1) {
       process.stderr.write(
-        `tracker counsel-gate: --threshold must be a positive integer, got ${flagValue}\n`,
+        `darius counsel-gate: --threshold must be a positive integer, got ${flagValue}\n`,
       );
-      process.exit(1);
+      process.exit(2);
     }
     return parsed;
   }
@@ -3017,13 +3072,13 @@ function resolveMaxCounselRounds(flagValue: string | undefined): number {
     const parsed = Number.parseInt(flagValue, 10);
     if (!Number.isInteger(parsed) || parsed < 1) {
       process.stderr.write(
-        `tracker counsel-gate: --max-rounds must be a positive integer, got ${flagValue}\n`,
+        `darius counsel-gate: --max-rounds must be a positive integer, got ${flagValue}\n`,
       );
-      process.exit(1);
+      process.exit(2);
     }
     if (parsed > budget) {
       process.stderr.write(
-        `tracker counsel-gate: NOTE: --max-rounds ${parsed} cannot raise the budget; using ${budget} (max_counsel_rounds)\n`,
+        `darius counsel-gate: NOTE: --max-rounds ${parsed} cannot raise the budget; using ${budget} (max_counsel_rounds)\n`,
       );
       return budget;
     }
@@ -3079,9 +3134,9 @@ function resolveSingleDissentMode(
     return fromFlag;
   }
   process.stderr.write(
-    `tracker counsel-gate: --single-dissent must be surface|confirm|ignore, got ${fromFlag}\n`,
+    `darius counsel-gate: --single-dissent must be surface|confirm|ignore, got ${fromFlag}\n`,
   );
-  process.exit(1);
+  process.exit(2);
 }
 
 function readSingleDissentModeFromConfig(): string | null {
@@ -3109,7 +3164,7 @@ function writeCounselFrontmatter(
   transcript: { transcript: string; sha256: string },
 ): void {
   if (!existsSync(specPath)) {
-    process.stderr.write(`tracker counsel-gate: --spec not found: ${specPath}\n`);
+    process.stderr.write(`darius counsel-gate: --spec not found: ${specPath}\n`);
     process.exit(1);
   }
 
@@ -3218,7 +3273,7 @@ function decisionToJSON(
 
 function runAgents(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write("Usage: tracker agents [--json]\n");
+    process.stdout.write("Usage: darius agents [--json]\n");
     process.stdout.write("\n");
     process.stdout.write("List all dispatchable agents discovered from installed plugins,\n");
     process.stdout.write("project .claude/agents/, and user ~/.claude/agents/.\n");
@@ -3251,6 +3306,7 @@ function runAgents(args: string[]): void {
 
   if (agents.length === 0) {
     process.stdout.write("No agents found\n");
+    process.stdout.write("  No expert agents found. The main thread can implement, or use a general-purpose agent.\n");
     return;
   }
 
@@ -3312,7 +3368,7 @@ function collectThreadsForGate(trackerRoot: string): ThreadForGate[] {
 
 function runUncommittedVerified(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write("Usage: tracker uncommitted-verified [--json]\n");
+    process.stdout.write("Usage: darius uncommitted-verified [--json]\n");
     process.stdout.write("\n");
     process.stdout.write("List verified-but-uncommitted spec files (dirty in git AND carrying a\n");
     process.stdout.write("verification_passed: stamp). Exit 0 with an empty list when none.\n");
@@ -3348,7 +3404,7 @@ function runUncommittedVerified(args: string[]): void {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker uncommitted-verified: git status failed: ${message}\n`);
+    process.stderr.write(`darius uncommitted-verified: git status failed: ${message}\n`);
     process.exit(1);
   }
 
@@ -3401,7 +3457,7 @@ function requireClaimContext(sessionFlag: string | undefined, command: string): 
   const trackerRoot = requireTrackerRoot();
   const session = resolveSessionId(sessionFlag);
   if (session === null) {
-    process.stderr.write(`tracker ${command}: ${NO_SESSION_MESSAGE}\n`);
+    process.stderr.write(`darius ${command}: ${NO_SESSION_MESSAGE}\n`);
     process.exit(1);
   }
   return { trackerRoot, session };
@@ -3458,9 +3514,9 @@ type ClaimAction = "claimed" | "refreshed" | "takeover-stale" | "takeover-live" 
 function runClaim(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(
-      "Usage: tracker claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n",
+      "Usage: darius claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n",
     );
-    process.stdout.write("       tracker claim --list [--json]\n");
+    process.stdout.write("       darius claim --list [--json]\n");
     process.stdout.write("\n");
     process.stdout.write(
       "Take an advisory, expiring claim on a spec so a concurrent session on the\n" +
@@ -3491,9 +3547,9 @@ function runClaim(args: string[]): void {
   const refArg = positionals[0];
   if (!refArg) {
     process.stderr.write(
-      "Usage: tracker claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n",
+      "Usage: darius claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   let ttlMs: number;
@@ -3501,14 +3557,14 @@ function runClaim(args: string[]): void {
     ttlMs = parseTtl(values.ttl);
   } catch (err) {
     const message = err instanceof TtlParseError ? err.message : String(err);
-    process.stderr.write(`tracker claim: ${message}\n`);
+    process.stderr.write(`darius claim: ${message}\n`);
     process.exit(1);
   }
 
   const { trackerRoot, session } = requireClaimContext(values.session, "claim");
   const ref = canonicalSpecRef({ trackerRoot, ref: refArg });
   if (ref === null) {
-    process.stderr.write(`tracker claim: no spec at ${refArg} in .tracker/. A claim names an existing spec.\n`);
+    process.stderr.write(`darius claim: no spec at ${refArg} in .tracker/. A claim names an existing spec.\n`);
     process.exit(1);
   }
   // With --json stdout carries the JSON only; the human lines go to stderr.
@@ -3550,7 +3606,7 @@ function runClaim(args: string[]): void {
 
   if (action === "refused") {
     process.stderr.write(
-      `tracker claim: REFUSED — ${ref} is claimed by ${other} ` +
+      `darius claim: REFUSED — ${ref} is claimed by ${other} ` +
         `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}).\n`,
     );
     process.stderr.write(
@@ -3651,7 +3707,7 @@ function runClaimList(sessionFlag: string | undefined, json: boolean): void {
 function runRelease(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(
-      "Usage: tracker release <spec-ref> [--session <id>] [--force] [--json]\n",
+      "Usage: darius release <spec-ref> [--session <id>] [--force] [--json]\n",
     );
     process.stdout.write("\n");
     process.stdout.write(
@@ -3673,14 +3729,14 @@ function runRelease(args: string[]): void {
 
   const refArg = positionals[0];
   if (!refArg) {
-    process.stderr.write("Usage: tracker release <spec-ref> [--session <id>] [--force] [--json]\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius release <spec-ref> [--session <id>] [--force] [--json]\n");
+    process.exit(2);
   }
 
   const { trackerRoot, session } = requireClaimContext(values.session, "release");
   const ref = normalizeClaimRef({ trackerRoot, ref: refArg });
   if (canonicalSpecRef({ trackerRoot, ref: refArg }) === null && readClaims(trackerRoot).claims[ref] === undefined) {
-    process.stderr.write(`tracker release: no spec at ${refArg} in .tracker/, and no claim under that name.\n`);
+    process.stderr.write(`darius release: no spec at ${refArg} in .tracker/, and no claim under that name.\n`);
     process.exit(1);
   }
   const now = new Date();
@@ -3716,7 +3772,7 @@ function runRelease(args: string[]): void {
 
   if (action === "refused") {
     process.stderr.write(
-      `tracker release: REFUSED — ${ref} is claimed by another live ${other} ` +
+      `darius release: REFUSED — ${ref} is claimed by another live ${other} ` +
         `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}). Use --force to release it anyway.\n`,
     );
     process.exit(1);
@@ -3768,9 +3824,9 @@ function claimGate(opts: {
 
   if (status.state === "stale") {
     process.stderr.write(
-      `tracker ${command}: NOTE — ${status.ref} carries a STALE claim by ` +
+      `darius ${command}: NOTE — ${status.ref} carries a STALE claim by ` +
         `${claimHolder(status.claim)} (claimed ${status.ageLabel} ago, ${status.expiryLabel}). ` +
-        `Proceeding; run \`tracker claim ${status.ref}\` to take it over cleanly.\n`,
+        `Proceeding; run \`darius claim ${status.ref}\` to take it over cleanly.\n`,
     );
     return false;
   }
@@ -3779,14 +3835,14 @@ function claimGate(opts: {
 
   if (force) {
     process.stderr.write(
-      `tracker ${command}: ⚠ ${overrideFlag} — proceeding despite a LIVE claim on ${status.ref} ` +
+      `darius ${command}: ⚠ ${overrideFlag} — proceeding despite a LIVE claim on ${status.ref} ` +
         `by ${claimHolder(status.claim)} (claimed ${status.ageLabel} ago).\n`,
     );
     return false;
   }
 
   process.stderr.write(
-    `tracker ${command}: REFUSED — ${status.ref} is claimed by ${claimHolder(status.claim)} ` +
+    `darius ${command}: REFUSED — ${status.ref} is claimed by ${claimHolder(status.claim)} ` +
       `(claimed ${status.ageLabel} ago, ${status.expiryLabel}).\n`,
   );
   process.stderr.write(
@@ -3812,7 +3868,7 @@ function sessionForWrite(
   if (fromFlag !== "" && env !== null && fromFlag !== env) {
     if (!asOther) {
       process.stderr.write(
-        `tracker ${command}: REFUSED: --session ${fromFlag} is not this session (${env}). ` +
+        `darius ${command}: REFUSED: --session ${fromFlag} is not this session (${env}). ` +
           "Pass --as-other-session to act for it; that is recorded.\n",
       );
       process.exit(1);
@@ -3846,13 +3902,13 @@ async function reviewGateBlocks(trackerRoot: string, specRef: string, command: s
     reviewRequired = (await mod.checkSpecFile(absSpec, process.cwd())).result.reviewRequired;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker ${command}: REFUSED: spec check failed on ${spec}: ${message}\n`);
+    process.stderr.write(`darius ${command}: REFUSED: spec check failed on ${spec}: ${message}\n`);
     return true;
   }
   if (!reviewRequired) return false;
   const check = checkCounselStamp(trackerRoot, spec, absSpec);
   if (check.ok) return false;
-  process.stderr.write(`tracker ${command}: REFUSED: ${check.reason}\n`);
+  process.stderr.write(`darius ${command}: REFUSED: ${check.reason}\n`);
   return true;
 }
 
@@ -3869,7 +3925,7 @@ async function reviewGateBlocks(trackerRoot: string, specRef: string, command: s
 
 function runLoopCheckCommand(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write("Usage: tracker loop-check [--json] [--session <id>] [--bounce <id>] [--max-bounces N]\n");
+    process.stdout.write("Usage: darius loop-check [--json] [--session <id>] [--bounce <id>] [--max-bounces N]\n");
     process.stdout.write("\n");
     process.stdout.write("Detect Work Loop threads stuck in a pre-terminal stage. With --session\n");
     process.stdout.write("(--bounce is the older name), only threads owned by that session count,\n");
@@ -3893,8 +3949,9 @@ function runLoopCheckCommand(args: string[]): void {
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker loop-check: ${message}\n`);
-    process.exit(1);
+    process.stderr.write(`darius loop-check: ${message}\n`);
+    // Exit 1 means "stuck" to the Stop hook; a bad command line is a usage error.
+    process.exit(2);
   }
 
   let maxBounces: number | undefined;
@@ -3902,9 +3959,9 @@ function runLoopCheckCommand(args: string[]): void {
     maxBounces = Number.parseInt(values["max-bounces"], 10);
     if (!Number.isInteger(maxBounces) || maxBounces < 1) {
       process.stderr.write(
-        `tracker loop-check: --max-bounces must be a positive integer, got ${values["max-bounces"]}\n`,
+        `darius loop-check: --max-bounces must be a positive integer, got ${values["max-bounces"]}\n`,
       );
-      process.exit(1);
+      process.exit(2);
     }
   }
 
@@ -4014,8 +4071,8 @@ function runRitual(args: string[]): void {
     return;
   }
 
-  process.stderr.write("Usage: tracker ritual <add|run|complete|list> [options]\n");
-  process.exit(1);
+  process.stderr.write("Usage: darius ritual <add|run|complete|list> [options]\n");
+  process.exit(2);
 }
 
 function runRitualAdd(args: string[]): void {
@@ -4034,9 +4091,9 @@ function runRitualAdd(args: string[]): void {
 
   if (!values.name || !values.slug) {
     process.stderr.write(
-      "Usage: tracker ritual add --name <name> --slug <slug> [--cadence <7d|2w|1m>] [--due <YYYY-MM-DD>] [--agent <name>] [--owner <email>]\n",
+      "Usage: darius ritual add --name <name> --slug <slug> [--cadence <7d|2w|1m>] [--due <YYYY-MM-DD>] [--agent <name>] [--owner <email>]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -4051,15 +4108,15 @@ function runRitualAdd(args: string[]): void {
       owner: values.owner,
     });
     if (result.kind === "exists") {
-      process.stdout.write(`tracker ritual add: already exists at ${result.dirPath}\n`);
+      process.stdout.write(`darius ritual add: already exists at ${result.dirPath}\n`);
     } else {
-      process.stdout.write(`tracker ritual add: created ${result.ritualPath}\n`);
+      process.stdout.write(`darius ritual add: created ${result.ritualPath}\n`);
     }
   } catch (err) {
     process.stderr.write(
-      `tracker ritual add: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius ritual add: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
+    process.exit(failCode(err));
   }
 }
 
@@ -4075,23 +4132,23 @@ function runRitualRun(args: string[]): void {
 
   const slug = values.slug ?? positionals[0];
   if (!slug) {
-    process.stderr.write("Usage: tracker ritual run <slug> [--date <YYYY-MM-DD>]\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius ritual run <slug> [--date <YYYY-MM-DD>]\n");
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
   try {
     const result = stampRun({ trackerRoot, slug, date: values.date });
     if (result.kind === "exists") {
-      process.stdout.write(`tracker ritual run: run already exists at ${result.runPath}\n`);
+      process.stdout.write(`darius ritual run: run already exists at ${result.runPath}\n`);
     } else {
-      process.stdout.write(`tracker ritual run: stamped ${result.runPath}\n`);
+      process.stdout.write(`darius ritual run: stamped ${result.runPath}\n`);
     }
   } catch (err) {
     process.stderr.write(
-      `tracker ritual run: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius ritual run: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
+    process.exit(failCode(err));
   }
 }
 
@@ -4107,8 +4164,8 @@ function runRitualComplete(args: string[]): void {
 
   const slug = values.slug ?? positionals[0];
   if (!slug) {
-    process.stderr.write("Usage: tracker ritual complete <slug> [--today <YYYY-MM-DD>]\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius ritual complete <slug> [--today <YYYY-MM-DD>]\n");
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -4120,13 +4177,13 @@ function runRitualComplete(args: string[]): void {
     const pruned =
       result.pruned.length > 0 ? `, pruned ${result.pruned.length} run(s) to ledger` : "";
     process.stdout.write(
-      `tracker ritual complete: ${slug} ran ${result.lastRun}, ${rolled}${pruned}\n`,
+      `darius ritual complete: ${slug} ran ${result.lastRun}, ${rolled}${pruned}\n`,
     );
   } catch (err) {
     process.stderr.write(
-      `tracker ritual complete: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius ritual complete: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
+    process.exit(failCode(err));
   }
 }
 
@@ -4193,8 +4250,8 @@ function runVigil(args: string[]): void {
     return;
   }
 
-  process.stderr.write("Usage: tracker vigil <add|list|set-body|close> [options]\n");
-  process.exit(1);
+  process.stderr.write("Usage: darius vigil <add|list|set-body|close> [options]\n");
+  process.exit(2);
 }
 
 function runVigilAdd(args: string[]): void {
@@ -4217,16 +4274,16 @@ function runVigilAdd(args: string[]): void {
   const slug = values.slug ?? positionals[0];
   if (!slug) {
     process.stderr.write(
-      'Usage: tracker vigil add <slug> [--name "Title"] [--due <YYYY-MM-DD>] [--until "<event>"] [--from <ref>] [--agent <name>] [--stdin | --content <path>]\n',
+      'Usage: darius vigil add <slug> [--name "Title"] [--due <YYYY-MM-DD>] [--until "<event>"] [--from <ref>] [--agent <name>] [--stdin | --content <path>]\n',
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if (values.content !== undefined && values.stdin) {
     process.stderr.write(
-      "tracker vigil add: --content <path> and --stdin are mutually exclusive\n",
+      "darius vigil add: --content <path> and --stdin are mutually exclusive\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const bodySupplied = values.stdin || values.content !== undefined;
@@ -4246,26 +4303,26 @@ function runVigilAdd(args: string[]): void {
       body,
     });
     if (result.kind === "exists") {
-      process.stdout.write(`tracker vigil add: already exists at ${result.vigilPath}\n`);
+      process.stdout.write(`darius vigil add: already exists at ${result.vigilPath}\n`);
       // Never silently drop a body the caller piped in: `add` is idempotent by
       // design, so the second run has to say which command would land it.
       if (bodySupplied) {
         process.stdout.write(
-          `  body NOT written — replace it with \`tracker vigil set-body ${slug} --stdin\`\n`,
+          `  body NOT written — replace it with \`darius vigil set-body ${slug} --stdin\`\n`,
         );
       }
     } else {
       process.stdout.write(
-        `tracker vigil add: created ${result.vigilPath} ` +
+        `darius vigil add: created ${result.vigilPath} ` +
           `(${result.executableCommands} executable Command${result.executableCommands === 1 ? "" : "s"})\n`,
       );
     }
     warnIfGuardedSpecNeverShipped(trackerRoot, values.from);
   } catch (err) {
     process.stderr.write(
-      `tracker vigil add: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius vigil add: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
+    process.exit(failCode(err));
   }
 }
 
@@ -4291,16 +4348,16 @@ function runVigilSetBody(args: string[]): void {
   const slug = values.slug ?? positionals[0];
   if (!slug) {
     process.stderr.write(
-      "Usage: tracker vigil set-body <slug> (--stdin | --content <path>)\n",
+      "Usage: darius vigil set-body <slug> (--stdin | --content <path>)\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   if ((values.content !== undefined) === values.stdin) {
     process.stderr.write(
-      "tracker vigil set-body: exactly one of --content <path> or --stdin is required\n",
+      "darius vigil set-body: exactly one of --content <path> or --stdin is required\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const body = readVigilBody("vigil set-body", values.content);
@@ -4309,12 +4366,12 @@ function runVigilSetBody(args: string[]): void {
   try {
     const result = setVigilBody({ trackerRoot, slug, body });
     process.stdout.write(
-      `tracker vigil set-body: wrote ${result.vigilPath} ` +
+      `darius vigil set-body: wrote ${result.vigilPath} ` +
         `(${result.executableCommands} executable Command${result.executableCommands === 1 ? "" : "s"})\n`,
     );
   } catch (err) {
     process.stderr.write(
-      `tracker vigil set-body: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius vigil set-body: ${err instanceof Error ? err.message : String(err)}\n`,
     );
     process.exit(1);
   }
@@ -4328,7 +4385,7 @@ function readVigilBody(command: string, contentPath: string | undefined): string
       : readFileSync(contentPath, "utf-8");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`tracker ${command}: cannot read body: ${message}\n`);
+    process.stderr.write(`darius ${command}: cannot read body: ${message}\n`);
     process.exit(1);
   }
 }
@@ -4355,10 +4412,10 @@ function warnIfGuardedSpecNeverShipped(trackerRoot: string, from: string | undef
   if (verified > 0) return;
 
   process.stderr.write(
-    `tracker vigil add: WARNING — ${specPath} has 0 verified items.\n` +
+    `darius vigil add: WARNING — ${specPath} has 0 verified items.\n` +
       "  A vigil guards work that shipped. If this spec has not shipped, the vigil cannot be\n" +
-      "  closed by any evidence and will sit in `tracker due` forever. Confirm the deploy, or\n" +
-      "  arm the vigil after `tracker verify` has ticked the spec.\n",
+      "  closed by any evidence and will sit in `darius due` forever. Confirm the deploy, or\n" +
+      "  arm the vigil after `darius verify` has ticked the spec.\n",
   );
 }
 
@@ -4425,9 +4482,9 @@ function runVigilClose(args: string[]): void {
   const slug = values.slug ?? positionals[0];
   if (!slug || !values.verdict) {
     process.stderr.write(
-      "Usage: tracker vigil close <slug> --verdict <held|failed> [--date <YYYY-MM-DD>]\n",
+      "Usage: darius vigil close <slug> --verdict <held|failed> [--date <YYYY-MM-DD>]\n",
     );
-    process.exit(1);
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -4441,12 +4498,12 @@ function runVigilClose(args: string[]): void {
     if (result.kind === "already-closed") {
       const resolved = result.resolved ? `, resolved ${result.resolved}` : "";
       process.stdout.write(
-        `tracker vigil close: ${slug} already closed (verdict ${result.verdict}${resolved}) — not overwritten\n`,
+        `darius vigil close: ${slug} already closed (verdict ${result.verdict}${resolved}) — not overwritten\n`,
       );
       return;
     }
     process.stdout.write(
-      `tracker vigil close: ${slug} closed — verdict ${result.verdict}, resolved ${result.resolved}\n`,
+      `darius vigil close: ${slug} closed — verdict ${result.verdict}, resolved ${result.resolved}\n`,
     );
     if (result.verdict === "failed") {
       process.stdout.write(
@@ -4455,9 +4512,9 @@ function runVigilClose(args: string[]): void {
     }
   } catch (err) {
     process.stderr.write(
-      `tracker vigil close: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius vigil close: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
+    process.exit(failCode(err));
   }
 }
 
@@ -4508,8 +4565,8 @@ function runArchiveCheck(args: string[]): void {
 
   const milestoneArg = values.milestone ?? positionals[0];
   if (!milestoneArg) {
-    process.stderr.write("Usage: tracker archive-check <milestone-folder|slug> [--json]\n");
-    process.exit(1);
+    process.stderr.write("Usage: darius archive-check <milestone-folder|slug> [--json]\n");
+    process.exit(2);
   }
 
   const trackerRoot = requireTrackerRoot();
@@ -4519,7 +4576,7 @@ function runArchiveCheck(args: string[]): void {
     milestonePath = resolveMilestonePath(trackerRoot, milestoneArg);
   } catch (err) {
     process.stderr.write(
-      `tracker archive-check: ${err instanceof Error ? err.message : String(err)}\n`,
+      `darius archive-check: ${err instanceof Error ? err.message : String(err)}\n`,
     );
     process.exit(1);
     return;
@@ -4552,13 +4609,13 @@ function runArchiveCheck(args: string[]): void {
 
   if (blocking.length === 0) {
     process.stdout.write(
-      `tracker archive-check: clear — no armed vigil from ${basename(milestonePath)} is unrunnable\n`,
+      `darius archive-check: clear — no armed vigil from ${basename(milestonePath)} is unrunnable\n`,
     );
     return;
   }
 
   process.stderr.write(
-    `tracker archive-check: REFUSED — ${basename(milestonePath)} armed ${blocking.length} vigil(s) ` +
+    `darius archive-check: REFUSED — ${basename(milestonePath)} armed ${blocking.length} vigil(s) ` +
       "that nobody can run:\n",
   );
   for (const v of blocking) {
@@ -4571,7 +4628,7 @@ function runArchiveCheck(args: string[]): void {
   process.stderr.write(
     "\nArchiving would orphan them: the milestone that explains the check disappears and the\n" +
       "vigil stays due forever. Fix each one — give it a real Command — or close it:\n" +
-      "  tracker vigil close <slug> --verdict held|failed\n",
+      "  darius vigil close <slug> --verdict held|failed\n",
   );
   process.exit(1);
 }

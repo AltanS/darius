@@ -324,7 +324,7 @@ describe("worklog", () => {
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain(
-      'tracker worklog open: "acme-deploy-latency" names no milestone in .tracker/.',
+      'darius worklog open: "acme-deploy-latency" names no milestone in .tracker/.',
     );
     expect(stderr).toContain("darius add milestone <name>");
     expect(existsSync(join(worklogDir, "acme-deploy-latency.md"))).toBe(false);
@@ -333,7 +333,7 @@ describe("worklog", () => {
   it("CLI worklog open refuses a missing slug and writes no default.md", () => {
     const { stderr, exitCode } = runOpen(["--message", "x"]);
 
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(stderr).toContain("name the milestone: worklog open <milestone-slug>");
     expect(existsSync(join(worklogDir, "default.md"))).toBe(false);
   });

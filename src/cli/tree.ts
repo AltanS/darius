@@ -21,13 +21,18 @@
  * Exit codes: 0 done (or nothing to do), 1 refused, 2 usage.
  */
 
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import { worklogFiles } from "../core/legacy-entry.ts";
 import { findMarker } from "../core/marker.ts";
 import { openProject, type Project } from "../core/store.ts";
 import { planRestore, restoreRefusal, restoreTree, treeLog, treeTarget, type RestorePlan, type TreeTarget } from "../core/tree-history.ts";
 import { appendLines, defaultWho, readLedger } from "../core/ledger.ts";
 import { readTreeConflicts, TREE_RESOLVED } from "../core/tree-conflicts.ts";
-import { ensureTreeLink, foldTree } from "../core/tree.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { ensureTreeLink, foldTree, treeDir, TREE_PUT } from "../core/tree.ts";
+import type { TreeLine } from "../core/tree.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const USAGE =
   "usage: darius tree log <path> [--json] | darius tree restore <path> [--at <sha|ledger-id>] [--dry-run] [--force] [--json] | darius tree resolve <path> [--json]";
@@ -67,6 +72,10 @@ function runLog(args: ParsedArgs): number {
   const history = foldTree(tree.project, problems);
   const target = treeTarget(tree.project, pathArg(args), tree.checkout, history);
   const entries = treeLog(history, target);
+  // A path with no history and no file is not in the tree: that is an error, not an empty log.
+  if (entries.length === 0 && target.prefix !== "" && !existsSync(join(tree.checkout, ".tracker", target.prefix))) {
+    throw new NotFoundError(`no tree lines and no file or folder at ${label(target)}; check the path (darius tree log .tracker/ lists the whole tree)`);
+  }
   if (args.json) {
     console.log(JSON.stringify({ project: tree.project.name, path: label(target), folder: target.folder, lines: entries, problems }));
     return 0;
@@ -93,7 +102,49 @@ function printPlan(plan: RestorePlan, heading: string): void {
   }
 }
 
-function runRestore(args: ParsedArgs): number {
+const MILESTONE_FOLDER = /^M\d+-[^/]+$/u;
+
+/** The sha of the version of `path` before its newest put (what a distill replaced), short; null when there is none. */
+function versionBeforeNewest(history: ReadonlyMap<string, TreeLine[]>, path: string): string | null {
+  const puts = (history.get(path) ?? []).filter((line) => line.type === TREE_PUT);
+  const before = puts.at(-2)?.after;
+  return before === undefined || before === null ? null : before.slice(0, 12);
+}
+
+/**
+ * After a restore of a milestone folder: what else lists or hides it. An archive
+ * document in `archive/` lists the milestone a second time, and a distilled
+ * worklog stub holds none of its threads. Each warning names the commands that
+ * end it. Reads only.
+ */
+async function restoreFollowUps(project: Project, target: TreeTarget, history: ReadonlyMap<string, TreeLine[]>): Promise<string[]> {
+  if (!target.folder || !MILESTONE_FOLDER.test(target.prefix)) return [];
+  const folder = target.prefix;
+  const lines: string[] = [];
+  const archiveDir = join(treeDir(project), "archive");
+  const archive = existsSync(archiveDir) ? readdirSync(archiveDir).find((name) => name.toLowerCase() === `${folder.toLowerCase()}.md`) : undefined;
+  if (archive !== undefined) {
+    lines.push(
+      `${folder} has an archive document, archive/${archive}, so the milestone is now listed twice.`,
+      `  Remove the document: rm .tracker/archive/${archive}`,
+      `  or rename it:        mv .tracker/archive/${archive} .tracker/archive/${archive.replace(/\.md$/u, "")}.old`,
+    );
+  }
+  const names = new Set([`${folder.toLowerCase()}.md`, `${folder.toLowerCase().replace(/^m\d+-/u, "")}.md`]);
+  const stubs = (await worklogFiles(treeDir(project))).filter((entry) => entry.state === "distilled" && names.has(entry.worklogFile.toLowerCase()));
+  for (const stub of stubs) {
+    const path = `worklog/${stub.worklogFile}`;
+    const sha = versionBeforeNewest(history, path) ?? "<sha of the pre-distill version>";
+    lines.push(
+      `worklog/${stub.worklogFile} is a distilled stub, so the threads of ${folder} are not in it.`,
+      `  Bring the threads back: darius tree restore .tracker/${path} --at ${sha} --force`,
+      `  (find the version with: darius tree log .tracker/${path})`,
+    );
+  }
+  return lines;
+}
+
+async function runRestore(args: ParsedArgs): Promise<number> {
   const tree = storeTree(process.cwd());
   if ("error" in tree) {
     console.error(`darius: ${tree.error}`);
@@ -118,12 +169,14 @@ function runRestore(args: ParsedArgs): number {
   }
   ensureTreeLink(tree.checkout, tree.project);
   const result = restoreTree(tree.project, target, { at: atValue, force });
+  const followUp = result.restored.length > 0 ? await restoreFollowUps(tree.project, target, foldTree(tree.project, [])) : [];
   if (args.json) {
-    console.log(JSON.stringify({ project: tree.project.name, path: label(target), dry_run: false, basis: result.plan.basis, steps: result.plan.steps, restored: result.restored, problems: [...problems, ...result.problems] }));
+    console.log(JSON.stringify({ project: tree.project.name, path: label(target), dry_run: false, basis: result.plan.basis, steps: result.plan.steps, restored: result.restored, problems: [...problems, ...result.problems], follow_up: followUp }));
   } else {
     for (const problem of [...problems, ...result.problems]) console.error(`darius: ${problem}`);
-    printPlan(result.plan, `restored ${label(target)}`);
+    printPlan(result.plan, result.restored.length > 0 ? `restored ${label(target)}` : `nothing to write for ${label(target)}`);
     console.log(`${String(result.restored.length)} file(s) written back and recorded as tree.put`);
+    for (const line of followUp) console.log(line.startsWith(" ") ? line : `warning: ${line}`);
   }
   return result.restored.length === result.plan.steps.filter((step) => step.state !== "same").length ? 0 : 1;
 }
@@ -156,12 +209,14 @@ function runResolve(args: ParsedArgs): number {
 
 export const treeCommand: Command = {
   name: "tree",
+  help: USAGE,
+  flags: ["at", "dry-run", "force"],
   summary: "read the tracker tree's history in the store, restore a past version, resolve a conflict",
   usage: "tree log|restore|resolve <path>",
   async run(args) {
     const sub = args.positional[0];
     if (sub === "log") return runLog(args);
-    if (sub === "restore") return runRestore(args);
+    if (sub === "restore") return await runRestore(args);
     if (sub === "resolve") return runResolve(args);
     throw new UsageError(USAGE);
   },

@@ -154,7 +154,7 @@ describe("worklog guards", () => {
       "M1-foo.md",
     ]);
 
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(stderr).toContain("--list");
     expect(stdout).toBe("");
   });
@@ -169,7 +169,7 @@ describe("worklog guards", () => {
       "M1-foo.md",
     ]);
 
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(stderr).toContain("cannot be combined");
     expect(stdout).toBe("");
   });

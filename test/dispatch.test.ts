@@ -100,12 +100,12 @@ test("routeVerb: darius verbs, legacy verbs, the vigil clash, and unknown verbs"
   assert.equal(routeVerb("no-such-verb", undefined, isRegistered, RITUAL_ONLY), "unknown");
 });
 
-test("no legacy verb is also a registered darius verb, except vigil", () => {
+test("no legacy verb is also a registered darius verb, except vigil and root (native since 0.77.0)", () => {
   const result = darius(["help", "--json"]);
   assert.equal(result.status, 0, result.stderr);
   const names: string[] = JSON.parse(result.stdout).commands.map((command: { name: string }) => command.name);
   const clashes = names.filter((name) => LEGACY_VERBS.has(name));
-  assert.deepEqual(clashes, ["vigil"]);
+  assert.deepEqual(clashes, ["root", "vigil"]);
 });
 
 test("a legacy verb gets the whole argv, and its stdout, stderr and exit code pass through", () => {

@@ -25,6 +25,7 @@ import { policyCheckCommand } from "./policy-check.ts";
 import { profileCommand } from "./profile.ts";
 import { pushCommand } from "./push.ts";
 import { ritualCommand } from "./ritual.ts";
+import { rootCommand } from "./root.ts";
 import { runCommand } from "./run.ts";
 import { runDueCommand } from "./run-due.ts";
 import { selftestCommand } from "./selftest.ts";
@@ -53,6 +54,7 @@ const COMMANDS: readonly Command[] = [
   profileCommand,
   pushCommand,
   ritualCommand,
+  rootCommand,
   runCommand,
   runDueCommand,
   selftestCommand,

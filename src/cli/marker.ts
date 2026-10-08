@@ -46,7 +46,7 @@ import { markerDirty } from "../core/reconcile.ts";
 import { unifiedDiff } from "../core/text-diff.ts";
 import { errorMessage } from "../runtime.ts";
 import { readWorkspaceIcon } from "../web/workspace-icon.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 import { atomicWrite } from "./ritual-export.ts";
 
 const USAGE = "usage: darius marker check [<dir>] [--resolved <slug>] [--json] | darius marker factor [<dir>] [--write] [--json]";
@@ -225,7 +225,7 @@ function printResolved(dir: string | undefined, slug: string, isJson: boolean): 
   const ritual = marker.rituals.find((one) => one.slug === slug);
   if (ritual === undefined) {
     const known = marker.rituals.map((one) => one.slug);
-    throw new UsageError(`no [rituals.${slug}] in ${marker.file}; known: ${known.length === 0 ? "none" : known.join(", ")}`);
+    throw new NotFoundError(`no [rituals.${slug}] in ${marker.file}; known: ${known.length === 0 ? "none" : known.join(", ")}`);
   }
   const view = resolvedPolicy(ritual);
   if (isJson) {
@@ -337,6 +337,8 @@ async function runFactor(args: ParsedArgs): Promise<number> {
 
 export const markerCommand: Command = {
   name: "marker",
+  help: USAGE,
+  flags: ["write", "resolved"],
   summary:
     "check a repo's .darius.toml: marker check [<dir>] parses it as run-due does, errors on a missing skill file and lists warnings; --resolved <slug> prints a ritual's effective policy; marker factor [--write] moves rules that rituals share into [policies.*]",
   audience: "session",

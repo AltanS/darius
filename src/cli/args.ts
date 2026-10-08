@@ -66,11 +66,21 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "keep",
 ]);
 
+/** Flags every command accepts: `src/cli.ts` reads them before the command runs. */
+export const GLOBAL_FLAGS: ReadonlySet<string> = new Set(["json", "help", "stdin", "project"]);
+
 function looksLikeFlag(token: string): boolean {
   return token.startsWith("--") && token.length > 2;
 }
 
-export function parseArgs(argv: string[]): ParsedArgs {
+/**
+ * `known`: the flags the command reads (`Command.flags`). With it, a flag
+ * outside it and `GLOBAL_FLAGS` is a UsageError "unknown option --x" at once,
+ * which also stops a stray `--bogus` at the end from reading as "needs a
+ * value". Without it, any flag name is accepted.
+ */
+export function parseArgs(argv: string[], known?: readonly string[]): ParsedArgs {
+  const accepted = known === undefined ? null : new Set(known);
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   const repeated: Record<string, string[]> = {};
@@ -100,6 +110,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     const body = token.slice(2);
     const equalsAt = body.indexOf("=");
+    const name = equalsAt >= 0 ? body.slice(0, equalsAt) : body;
+    if (accepted !== null && !accepted.has(name) && !GLOBAL_FLAGS.has(name)) throw new UsageError(`unknown option --${name}`);
     if (equalsAt >= 0) {
       setValue(body.slice(0, equalsAt), body.slice(equalsAt + 1));
       index += 1;

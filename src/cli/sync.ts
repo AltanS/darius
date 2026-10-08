@@ -212,6 +212,7 @@ async function alertAfterSync(): Promise<void> {
 
 export const syncCommand: Command = {
   name: "sync",
+  flags: ["all-projects", "pull-only"],
   summary: "pull from and push to the bucket: --project P | --all-projects, --pull-only",
   async run(args: ParsedArgs): Promise<number> {
     const run = await syncAll(args);

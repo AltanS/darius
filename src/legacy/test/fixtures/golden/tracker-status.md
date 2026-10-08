@@ -1,4 +1,4 @@
-# agent-plugins — Tracker Status
+# agent-plugins — darius status
 
 ## Progress Dashboard
 

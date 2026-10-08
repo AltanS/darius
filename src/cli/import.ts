@@ -73,6 +73,8 @@ function formatReport(report: ImportReport): string[] {
 
 export const importCommand: Command = {
   name: "import",
+  help: USAGE,
+  flags: ["dry-run"],
   summary: "mirror a legacy .tracker/ (rituals, runs, verification log) into a project, read-only. --project, --dry-run",
   async run(args: ParsedArgs): Promise<number> {
     const [source, ...extra] = args.positional;

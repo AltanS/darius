@@ -174,3 +174,15 @@ export class UsageError extends Error {
     this.name = "UsageError";
   }
 }
+
+/**
+ * The caller named something that does not exist: a ritual, a run, a profile,
+ * a finding. `src/cli.ts` maps this to exit code 1 ("refused or failed"), not
+ * 2: the command line was well formed, the item is missing (since 0.77.0).
+ */
+export class NotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotFoundError";
+  }
+}

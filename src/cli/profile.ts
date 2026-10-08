@@ -27,7 +27,7 @@ import { GLOBAL_PROJECT, openProject, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { checkProfileFields } from "../harness/profile.ts";
 import { errorMessage } from "../runtime.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const VERBS = "add | set | list | show";
 
@@ -159,7 +159,7 @@ function runSet(args: ParsedArgs): number {
   const name = requireName(args);
   const project = globalProject();
   const doc = project.readItem<Profile>("profile", name);
-  if (doc === null) throw new UsageError(`no profile '${name}'; use profile add`);
+  if (doc === null) throw new NotFoundError(`no profile '${name}'; use profile add`);
   const fields = fieldsFromArgs(args, fieldsOf(doc.header));
   check(fields, name);
   const { id, created, tags } = doc.header;
@@ -206,7 +206,7 @@ function runList(args: ParsedArgs): number {
 function runShow(args: ParsedArgs): number {
   const name = requireName(args);
   const profile = readProfiles().find((candidate) => candidate.slug === name);
-  if (profile === undefined) throw new UsageError(`no profile '${name}'`);
+  if (profile === undefined) throw new NotFoundError(`no profile '${name}'`);
   if (args.json) printJson({ profile });
   else console.log(`${profile.slug}: ${describe(fieldsOf(profile))}`);
   return 0;
@@ -214,6 +214,7 @@ function runShow(args: ParsedArgs): number {
 
 export const profileCommand: Command = {
   name: "profile",
+  flags: ["harness", "model", "effort", "permissions", "surface", "max-turns", "arg", "title", "who"],
   summary: "store-wide harness profiles: add, set, list, show (a ritual picks one with --profile)",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];

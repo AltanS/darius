@@ -34,7 +34,7 @@ import { parentResult, planFollowUp, type FollowUp, type FollowUpRequest } from 
 import { runDue, viewRun, DEFAULT_RUN_TIMEOUT_MS, type RunDueOptions } from "../runner/run-due.ts";
 import { deliverReport, skipAlerts, type BatchReport, type ReportScope } from "../runner/report.ts";
 import { errorMessage } from "../runtime.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
@@ -256,7 +256,7 @@ export async function runNow(args: ParsedArgs): Promise<number> {
   if (forwarded !== undefined) return forwarded;
   const store = openProject(project);
   const doc = store.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project}`);
   const wrongHost = refuseWrongHost(args, { project: store, ledger: readLedger(store), doc });
   if (wrongHost !== undefined) return wrongHost;
   const now: NonNullable<RunDueOptions["now"]> = {};
@@ -303,7 +303,7 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   const store = openProject(project);
   const ledger = readLedger(store);
   const view = viewRun(ledger, run);
-  if (view.item === undefined) throw new UsageError(`no run '${run}' in ${project}`);
+  if (view.item === undefined) throw new NotFoundError(`no run '${run}' in ${project}`);
   if (!view.item.startsWith(RITUAL_PREFIX)) throw new UsageError(`run '${run}' belongs to ${view.item}; only ritual runs resume`);
   if (view.phase !== "held") return refuseResume(args, run, `run '${run}' is not held (phase: ${view.phase ?? "unknown"})`);
   if (!view.isAnswered) {

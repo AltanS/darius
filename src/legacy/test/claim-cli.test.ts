@@ -492,7 +492,7 @@ describe("claim / release CLI", () => {
     expect(stdout).toContain("(1 STALE)");
     expect(stdout).toContain("sessA");
     expect(stdout).toContain("sessB");
-    expect(stdout).toContain("tracker release");
+    expect(stdout).toContain("darius release");
   });
 
   it("doctor says nothing about claims when none are held", () => {

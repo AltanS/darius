@@ -264,6 +264,7 @@ function check(args: ParsedArgs, harness: HarnessAdapter): number {
 
 export const policyCheckCommand: Command = {
   name: "policy-check",
+  flags: ["preflight", "harness", "policy"],
   summary: "pre-tool hook for unattended runs: deny held or write commands (reads hook JSON on stdin)",
   async run(args: ParsedArgs): Promise<number> {
     // An unknown harness still gets a deny; exit 2 blocks in every harness darius knows.

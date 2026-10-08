@@ -255,7 +255,7 @@ test("spec check exit codes and JSON shape, under both runtimes", () => {
     assert.equal(cli(["spec", "check"], root, runtime).code, 2);
     assert.equal(cli(["spec"], root, runtime).code, 2);
     const missing = cli(["spec", "check", ".tracker/M1-t/09-none.md"], root, runtime);
-    assert.equal(missing.code, 2);
+    assert.equal(missing.code, 1, "a spec that does not exist is not found, not a usage error");
     assert.match(missing.stderr, /no spec at/u);
   }
 });

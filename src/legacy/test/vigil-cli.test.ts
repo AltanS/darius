@@ -115,10 +115,10 @@ describe("vigil CLI", () => {
     expect(stderr).toMatch(/not found/i);
   });
 
-  it("vigil close with an invalid verdict exits 1", () => {
+  it("vigil close with an invalid verdict exits 2", () => {
     runTracker(["vigil", "add", "soak", "--due", "2020-01-01"]);
     const { exitCode, stderr } = runTracker(["vigil", "close", "soak", "--verdict", "maybe"]);
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(stderr).toMatch(/verdict/i);
   });
 });

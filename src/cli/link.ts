@@ -143,6 +143,8 @@ function runLink(args: ParsedArgs): number {
 
 export const linkCommand: Command = {
   name: "link",
+  help: USAGE,
+  flags: ["force", "list"],
   summary: "record which checkout on this host holds a project; run it inside the checkout. --force, --list",
   async run(args: ParsedArgs): Promise<number> {
     return args.flags.list === true ? runList(args) : runLink(args);

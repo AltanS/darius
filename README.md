@@ -165,6 +165,7 @@ store between hosts (steps 2 and 3 of [Install](#install)).
 - [Quick start](#quick-start-one-host-no-bucket)
 - [Install](#install), [Update](#update), [NixOS and Nix](#nixos-and-nix)
 - [Link a repo](#link-a-repo), [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)
+- [Milestones, specs and tasks](#milestones-specs-and-tasks), [Vigils](#vigils), [Runs](#runs), [Worktrees](#worktrees), [Exit codes](#exit-codes)
 - [Commands](#commands)
 - [Develop](#develop)
 - More: [Backups](docs/backups.md), [Marker reference](docs/marker.md), [Design](docs/concept.md)
@@ -464,6 +465,97 @@ inputs.darius = {
   (`swept-today`). run-due acquires leases per ritual. A host lacking a project checkout skips
   the job (`no-workdir`), so run `darius link` in each checkout first.
 
+## Milestones, specs and tasks
+
+The tracker verbs plan work. They act on the tracker tree: in the store when `kinds` lists
+`milestone`, else in `.tracker/` in git.
+
+```bash
+darius add milestone --name "Checkout" --slug checkout --owner dev@example.com
+darius add spec --milestone checkout --name "Cart totals" --template generic
+darius next                               # the first open task
+darius mark .tracker/M1-checkout/01-cart-totals.md 0 --verified --evidence "ran the suite"
+darius verify-item .tracker/M1-checkout/01-cart-totals.md 1
+```
+
+A spec is a markdown file with a `## Verification Checklist`. Each item is a `- [ ]` line. It can
+carry one check under it:
+
+```markdown
+- [ ] The totals add up
+  - Command: `bun test cart`
+  - Expected: `exit 0`
+- [ ] The page looks right
+  - Manual: a person looks at it on a phone
+```
+
+`Command:` is a shell command. `Expected:` says what a pass is (`exit 0`, `stdout contains ...`).
+A `Manual:` item has no command. A new spec holds placeholder Commands that fail on purpose. Replace
+each one with a real check.
+
+Item indexes are 0-based: the first item is `0`.
+`mark <spec> <index> --verified|--in-progress|--blocked|--skipped|--pending` sets a state by hand,
+and a tick on a no-op Command needs `--evidence`. `verify-item <spec> <index>` runs the item's
+Command and ticks the item when it passes. `verify <spec>` does this for every item.
+`darius spec check <spec>` checks the spec itself, with no model.
+
+## Vigils
+
+A vigil is a one-shot check that waits for a date or an event.
+
+```bash
+darius vigil add cache-soak --due 2026-11-01 --stdin < body.md
+darius vigil add first-batch --until "the first real batch ran"
+darius vigil set-body cache-soak --stdin < body.md
+darius vigil close cache-soak --verdict held
+```
+
+`--due` waits for a date. `--until` waits for an event that you name. The body has a
+`## Verification Checklist` with items that carry a `Command:`. `set-body --stdin` replaces the body
+and keeps the header.
+
+The daily sweep runs the Commands of every vigil that is due. What it reports:
+
+- `held`: every check passed. The sweep closes the vigil.
+- `failed`: a check failed. The vigil stays open and is flagged. A person must look, because a
+  machine cannot tell a broken guard from a closed precondition.
+- `finding`: an event-gated vigil passed before the event was confirmed. Nothing closes.
+- `pending`: not every check passed yet. This is not a failure.
+- `awaiting-manual`: the checks passed but a manual item is still open.
+- `skipped`: nothing ran. The vigil is heavy, has no Command, or is not due.
+
+## Runs
+
+`darius run start <ritual>` and `darius run-due --unattended` start a headless `claude -p` session,
+so `claude` must be on `PATH`. Before the first unattended run on a host, prove that the harness
+blocks what the policy says it blocks with `darius harness check` (exit 0 passed, 1 failed, 3
+inconclusive).
+
+## Cadence and the first due date
+
+`cadence` takes `Nd`, `Nw` or `Nm`: `1d` is every day, `1w` every week, `2w` every two weeks, `1m`
+every month. A new ritual is due at once: its first due date is today. Set `from` to start later.
+With the default `anchor = "due"` the schedule is a grid, so a late run does not move the next one.
+With `anchor = "completion"` the next due date counts from the day the run finished.
+
+## Worktrees
+
+All worktrees of one checkout use the same tracker tree. With `milestone` in `kinds` there is one
+tree per project in the store, so a spec added on a branch shows on main and in every other
+worktree at once. `darius root --json` prints `{ mode, trackerRoot, project, linked }` and changes
+nothing: `mode` is `store`, `git` or `none`, and `trackerRoot` is the absolute path of the tree. In
+`git` mode each branch has its own copy of `.tracker/`, as git says.
+
+## Exit codes
+
+- `0`: it worked.
+- `1`: refused or failed. A named item that is not there (`ritual show nope`) is also `1`.
+- `2`: usage. A missing argument, an unknown option, a bad value, an unknown verb.
+- `3`: the environment gave no answer (no bucket, no `bash`, no harness).
+
+`--help` or `-h` anywhere in a command prints its usage and exits `0`; nothing else runs. With
+`--json`, stdout holds JSON only, also on an error: `{"ok":false,"error":"...","code":2}`.
+
 ## Commands
 
 Every command accepts `--json` (writes one JSON object to stdout) and `--project P`. Run `darius help` for
@@ -479,9 +571,10 @@ the full reference.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
 - `darius sync [--all-projects]`: pull from and push to the bucket.
 - `darius snapshot create|list|status|check|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair.
+- `darius root [--json]`: print the tracker tree path; `--json` reports the mode (`store`, `git`, `none`).
 - `darius init [--project P] [--no-import]`: set up a repo: `.darius.toml`, the link, and the tracker link, or an import of its rituals when a `.tracker/` folder exists.
 - `darius onboard [scan] [--dry-run] [--only vigil]`: move a repo's `.tracker/` into the store. Never commits.
-- `darius milestone archive <milestone> [--dry-run] [--keep]`: remove an archived milestone's folder. It refuses without the archive document or while a worklog thread is open. In the store it removes the folder and prints the line that undoes it; in a git tracker it removes nothing and prints the `git rm` command to run.
+- `darius milestone archive <milestone> [--dry-run] [--keep] [--incomplete "<reason>"]`: remove an archived milestone's folder. It refuses without the archive document, while an item is neither done nor skipped (`--incomplete "<reason>"` archives anyway and records the reason), or while a worklog thread is open before stage `reviewed`. It closes the `reviewed` threads as done. In the store it removes the folder and prints the line that undoes it; in a git tracker it removes nothing and prints the `git rm` command to run.
 - `darius tree log|restore <path> [--at <sha|ledger-id>] [--dry-run] [--force]`: list the versions of a tracker file or folder in the store, and bring a past version back. Only when `kinds` lists `milestone`; git has the history otherwise.
 - `darius tree resolve <path>`: keep the current version of a file with an open tree conflict, so `doctor` and `due` stop showing it. The lost version stays a blob.
 - `darius link [--force] | --list`: record which checkout on this host holds a project.

@@ -86,7 +86,7 @@ version: 2
 
 ## Current Focus
 
-_No milestones yet. Run \`tracker add milestone\` to create one._
+_No milestones yet. Run \`darius add milestone\` to create one._
 
 ## Blockers
 
@@ -344,6 +344,9 @@ export function addSpec(opts: AddSpecOpts): AddSpecResult {
     .replace(/\{\{TASK_2\}\}/g, "<!-- TODO: task 2 -->")
     .replace(/\{\{CMD_1\}\}/g, scaffoldPlaceholderCommand(manual))
     .replace(/\{\{CMD_2\}\}/g, scaffoldPlaceholderCommand(manual))
+    // Every other template's `*_CMD` slot (library, api-endpoint, ui-component) is a Command too:
+    // it fails like the generic ones until someone writes the check.
+    .replace(/\{\{[A-Z0-9_]*CMD[A-Z0-9_]*\}\}/g, scaffoldPlaceholderCommand(manual))
     .replace(/\{\{INTEGRATION_1\}\}/g, "<!-- TODO: integration test 1 -->")
     .replace(/\{\{INT_CMD_1\}\}/g, scaffoldPlaceholderCommand(manual))
     .replace(/\{\{PROP_1\}\}/g, "children")
@@ -370,7 +373,7 @@ export function addSpec(opts: AddSpecOpts): AddSpecResult {
 
   // The structural refusal (M315/07). Nothing reaches disk with a Command that
   // cannot fail — not from a template regression, not from a caller.
-  assertScaffoldCommandsRunnable(bodyContent, `tracker add spec (${fileName})`);
+  assertScaffoldCommandsRunnable(bodyContent, `darius add spec (${fileName})`);
 
   const content = attachFrontmatterComments(
     serializeFrontmatter(frontmatter, bodyContent),
@@ -1407,7 +1410,7 @@ export function assertVigilBodyIsWorkable(
   if (executableCount === 0) {
     throw new Error(
       `${context} — no checklist item carries an executable \`Command:\`. An armed vigil with ` +
-        "nothing to run can never be closed by any evidence, and `tracker doctor` fails on one. " +
+        "nothing to run can never be closed by any evidence, and `darius doctor` fails on one. " +
         "Give at least one item a real assertion.",
     );
   }

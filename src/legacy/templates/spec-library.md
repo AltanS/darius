@@ -27,7 +27,7 @@ template: library
 
 ## Verification Checklist
 
-<!-- PATHS: every path in a `Command:` line — and anywhere in this spec — MUST be repo-relative (e.g. `src/x.ts`, NOT `/home/you/repo/src/x.ts`). Verification runs from the repo root and .tracker/ is committed, so an absolute path leaks your home-dir layout into git history and won't run on any other machine. -->
+<!-- PATHS: every path in a `Command:` line — and anywhere in this spec — MUST be repo-relative (e.g. `src/x.ts`, NOT `/home/you/repo/src/x.ts`). Verification runs from the repo root, and tracker files are shared with other hosts and sessions, so an absolute path leaks your home-dir layout and won't run on any other machine. -->
 
 ### Implementation
 

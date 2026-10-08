@@ -140,6 +140,7 @@ async function flush(args: ParsedArgs): Promise<number> {
 
 export const pushCommand: Command = {
   name: "push",
+  flags: ["subject", "force", "dry-run"],
   summary: "phone notifications: keys, status, devices, forget, test, flush",
   async run(args: ParsedArgs): Promise<number> {
     switch (args.positional[0]) {

@@ -120,6 +120,9 @@ interface Survey {
   blockers: string[];
   /** Nothing to do here: no `.tracker` folder. */
   nothing: boolean;
+  /** The store already owns what the scope moves (since 0.77.0 the verdict of scan and --dry-run). */
+  onboarded: boolean;
+  scope: Scope;
 }
 
 /** One file of `.tracker/` that onboard copies. */
@@ -336,6 +339,8 @@ function survey(marker: Marker, scope: Scope): Survey {
     problems: [],
     blockers: [],
     nothing: false,
+    onboarded: false,
+    scope,
   };
   const { handle, ...store } = surveyStore(marker.project);
   result.store = store;
@@ -363,6 +368,7 @@ function survey(marker: Marker, scope: Scope): Survey {
     result.problems.push(...pending.problems);
   }
   addBlockers(result, scope);
+  result.onboarded = result.nothing && (scope === "vigil" ? result.kinds.includes("vigil") : isTree && tracker === "link");
   return result;
 }
 
@@ -393,8 +399,12 @@ function addBlockers(result: Survey, scope: Scope): void {
 
 // --- output ------------------------------------------------------------------
 
+function onboardedLine(scope: Scope): string {
+  return `already onboarded: the store owns the ${scope === "vigil" ? "vigils" : "tracker"} here. darius sync brings it up to date.`;
+}
+
 function surveyJson(result: Survey) {
-  return {
+  const body = {
     project: result.project,
     dir: result.root,
     kinds: result.kinds,
@@ -409,6 +419,8 @@ function surveyJson(result: Survey) {
     problems: result.problems,
     blockers: result.blockers,
   };
+  if (!result.onboarded) return body;
+  return { status: "already-onboarded", ...body };
 }
 
 function surveyLines(result: Survey): string[] {
@@ -424,7 +436,8 @@ function surveyLines(result: Survey): string[] {
   lines.push(`store: ${result.store.exists ? `${result.store.tree ? "holds a tree" : "no tree"}, ${String(result.store.vigils)} vigil items` : "none on this host"}`);
   if (result.tracker === "link") lines.push(`pending tree changes: ${result.pending.length === 0 ? "none" : result.pending.join(", ")}`);
   lines.push(...result.problems.map((problem) => `! ${problem}`));
-  if (result.nothing) lines.push("· nothing to do: there is no .tracker/ folder here");
+  if (result.onboarded) lines.unshift(`✓ ${onboardedLine(result.scope)}`);
+  else if (result.nothing) lines.push("· nothing to do: there is no .tracker/ folder here");
   else if (result.blockers.length === 0) lines.push("✓ nothing blocks the move");
   else lines.push(...result.blockers.map((blocker) => `✗ ${blocker}`));
   return lines;
@@ -619,6 +632,7 @@ async function runScan(marker: Marker, scope: Scope, json: boolean): Promise<num
   const result = survey(marker, scope);
   if (json) console.log(JSON.stringify({ mode: "scan", ...surveyJson(result) }));
   else for (const line of surveyLines(result)) console.log(line);
+  if (result.onboarded) return EXIT_OK;
   if (result.nothing) return EXIT_NOTHING;
   return result.blockers.length === 0 ? EXIT_OK : EXIT_REFUSED;
 }
@@ -626,7 +640,8 @@ async function runScan(marker: Marker, scope: Scope, json: boolean): Promise<num
 async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<number> {
   const result = survey(marker, scope);
   const project = result.store.exists ? openProject(marker.project) : null;
-  let vigils: VigilStep | { error: string } = { summary: "not run: no store for the project on this host", result: null, heavy: [] };
+  const notRun = !result.store.exists ? "no store for the project on this host" : result.onboarded ? "the store already owns the tracker" : "there is no .tracker/ folder here";
+  let vigils: VigilStep | { error: string } = { summary: `not run: ${notRun}`, result: null, heavy: [] };
   if (project !== null && result.tracker === "folder") {
     try {
       vigils = importVigils(project, marker.dir, marker.kinds, true);
@@ -641,19 +656,19 @@ async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<numb
   } else {
     for (const line of surveyLines(result)) console.log(line);
     // A failed import is already a blocker line above.
-    if (!("error" in vigils)) console.log(`· vigils: ${vigils.summary}`);
-    if (scope === "all") {
+    if (!("error" in vigils) && !result.onboarded) console.log(`· vigils: ${vigils.summary}`);
+    if (scope === "all" && !result.onboarded) {
       console.log(`· would copy ${String(copy.length)} files${project === null ? "" : ` into ${treeDir(project)}`}:`);
       for (const file of copy) console.log(`  ${file.path}`);
     }
   }
+  if (result.onboarded) return EXIT_OK;
   if (result.nothing) return EXIT_NOTHING;
   return result.blockers.length === 0 ? EXIT_OK : EXIT_REFUSED;
 }
 
 function refuse(result: Survey, json: boolean): number {
-  const done = result.tracker === "link" && result.kinds.includes("milestone");
-  const nothing = done ? "already onboarded: the store owns the tracker here. darius sync brings it up to date." : "nothing to do: there is no .tracker/ folder here";
+  const nothing = result.onboarded ? onboardedLine(result.scope) : "nothing to do: there is no .tracker/ folder here";
   const blockers = result.nothing ? [nothing] : result.blockers;
   if (json) console.log(JSON.stringify({ mode: "move", ok: false, ...surveyJson(result), blockers }));
   else for (const blocker of blockers) console.error(`darius onboard: ${blocker}`);
@@ -760,6 +775,8 @@ async function run(args: ParsedArgs): Promise<number> {
 
 export const onboardCommand: Command = {
   name: "onboard",
+  help: USAGE,
+  flags: ["dry-run", "only"],
   summary: "move this repo's .tracker/ into the darius store: scan, --dry-run, --only vigil",
   usage: "onboard [scan] [--dry-run] [--only vigil]",
   run,

@@ -16,14 +16,16 @@
 
 import { parseArgs, readStdin } from "./cli/args.ts";
 import { registerCommands } from "./cli/commands.ts";
-import { getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
+import { commandHelp, getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
 import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { rebuildTrackerIndex, runLegacy } from "./core/legacy-entry.ts";
+import { withJsonErrors, wantsJson } from "./core/json-errors.ts";
 import { readLedger } from "./core/ledger.ts";
 import { findMarker } from "./core/marker.ts";
 import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } from "./core/paths.ts";
 import { openProject, type Project } from "./core/store.ts";
+import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeLink, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
@@ -61,7 +63,14 @@ function printHelpText(): void {
 const helpCommand: Command = {
   name: "help",
   summary: "list every registered command",
+  usage: "help [<command>]",
   async run(args) {
+    const topic = args.positional[0];
+    const asked = topic === undefined ? undefined : getCommand(topic);
+    if (asked !== undefined) {
+      console.log(commandHelp(asked));
+      return 0;
+    }
     if (args.json) {
       console.log(JSON.stringify({ version: VERSION, commands: helpEntries() }));
       return 0;
@@ -82,7 +91,32 @@ function resolveCommandName(first: string | undefined): string {
   return first;
 }
 
+/** True when `--help` or `-h` is among `args`, before a bare `--`. */
+function wantsHelp(args: readonly string[]): boolean {
+  for (const token of args) {
+    if (token === "--") return false;
+    if (token === "--help" || token === "-h") return true;
+  }
+  return false;
+}
+
+/** The line for a verb nobody knows: the closest verbs when there are any (docs/concept.md, "CLI contract"). */
+function unknownCommandMessage(name: string): string {
+  const known = [...listCommands().map((command) => command.name), ...LEGACY_VERBS];
+  const near = closestNames(name, known);
+  if (near.length === 0) return `darius: unknown command: ${name}. Run 'darius help'.`;
+  return `darius: unknown command: ${name}. Did you mean: ${near.join(", ")}?`;
+}
+
+/**
+ * The command line, with the JSON error contract around it (src/core/json-errors.ts):
+ * with `--json` a failure that printed no JSON prints `{"ok":false,...}` on stdout.
+ */
 async function main(argv: string[]): Promise<number> {
+  return withJsonErrors(wantsJson(argv), () => dispatch(argv));
+}
+
+async function dispatch(argv: string[]): Promise<number> {
   const first = argv[0];
 
   if (first === "--version" || first === "-v") {
@@ -93,22 +127,30 @@ async function main(argv: string[]): Promise<number> {
   const name = resolveCommandName(first);
   const owned = ownedKinds(argv, process.cwd());
   // A broken marker must never send a vigil write to the legacy writer.
-  if (!owned.ok && name === "vigil" && argv[1] !== "sweep") {
+  if (!owned.ok && name === "vigil" && argv[1] !== "sweep" && !wantsHelp(argv.slice(1))) {
     console.error(`darius: ${owned.error}`);
     return 1;
   }
   const kinds = owned.ok ? owned.kinds : DEFAULT_KINDS;
   const route = routeVerb(name, argv[1], (verb) => getCommand(verb) !== undefined, kinds);
-  if (route === "legacy") return runLegacyVerb(argv, owned);
   const command = getCommand(name);
+  // --help prints the usage and does nothing else: no store, no tree, no link.
+  if (name !== "help" && wantsHelp(argv.slice(1))) {
+    if (route === "legacy") return runLegacy(argv);
+    if (command !== undefined) {
+      console.log(commandHelp(command));
+      return 0;
+    }
+  }
+  if (route === "legacy") return runLegacyVerb(argv, owned);
   if (route === "unknown" || command === undefined) {
-    console.error(`darius: unknown command '${name}'. Run 'darius help'.`);
+    console.error(unknownCommandMessage(name));
     return 2;
   }
 
   let args: ParsedArgs;
   try {
-    args = parseArgs(argv.slice(1));
+    args = parseArgs(argv.slice(1), command.flags);
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`darius: ${error.message}`);
@@ -129,7 +171,7 @@ async function main(argv: string[]): Promise<number> {
     return await command.run(args);
   } catch (error) {
     if (error instanceof UsageError) {
-      console.error(`darius: ${error.message}`);
+      console.error(error.message.startsWith("usage: ") ? error.message : `darius: ${error.message}`);
       return 2;
     }
     console.error(`darius: ${errorMessage(error)}`);
@@ -283,7 +325,7 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
   }
   process.once("exit", (code) => {
     finish();
-    if (code !== 0 && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
+    if (code === 1 && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
       console.error("darius: no .tracker/ here or above. Run darius init in the repo root to create one.");
     }
   });

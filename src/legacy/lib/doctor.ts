@@ -401,11 +401,14 @@ export function runDoctor(opts: {
         const agentValue = data["agent"];
         if (typeof agentValue !== "string" || agentValue.trim() === "") continue;
         const agentName = agentValue.trim();
+        // `add spec` stamps `unassigned` on every spec without an agent. That is
+        // the normal state, not a roster miss, so it earns no warning per spec.
+        if (agentName === "unassigned") continue;
         if (!rosterInvocables.has(agentName)) {
           warnings.push({
             kind: "agent-not-in-roster",
             file: specPath,
-            detail: `WARN: agent '${agentName}' in ${specPath} is not in the live agent roster. Run \`tracker agents\` to see available agents.`,
+            detail: `WARN: agent '${agentName}' in ${specPath} is not in the live agent roster. Run \`darius agents\` to see available agents.`,
             warnOnly: true,
           });
         }
@@ -496,8 +499,8 @@ export function runDoctor(opts: {
         `WARN: ${claimed.length} checklist item(s) are marked verified with a shell no-op Command ` +
         `(echo/printf/true/:) and have NO entry in ${LEDGER_FILENAME} — claimed, not executed:\n` +
         `${shown}${more}\n` +
-        `      Either replace the Command with a real check and re-run \`tracker verify\`, or record ` +
-        `what was actually done: \`tracker mark <spec> <idx> --verified --evidence "..."\`.`,
+        `      Either replace the Command with a real check and re-run \`darius verify\`, or record ` +
+        `what was actually done: \`darius mark <spec> <idx> --verified --evidence "..."\`.`,
       warnOnly: true,
     });
   }
@@ -528,8 +531,8 @@ export function runDoctor(opts: {
         `WARN: ${claimStatuses.length} outstanding session claim(s)` +
         (staleCount > 0 ? ` (${staleCount} STALE)` : "") +
         ` in ${CLAIMS_FILENAME}:\n${shown}${more}\n` +
-        `      Release your own with \`tracker release <spec>\`; a STALE claim can be taken ` +
-        `over with \`tracker claim <spec>\` (no --takeover needed).`,
+        `      Release your own with \`darius release <spec>\`; a STALE claim can be taken ` +
+        `over with \`darius claim <spec>\` (no --takeover needed).`,
       warnOnly: true,
     });
   }
@@ -581,7 +584,7 @@ export function runDoctor(opts: {
       detail:
         `vigil "${v.slug}" is ARMED but unrunnable — ${cause}, so no evidence can ever close it. ` +
         `Give it at least one executable Command in ${v.file}, or close it now with ` +
-        `\`tracker vigil close ${v.slug} --verdict held|failed\`.`,
+        `\`darius vigil close ${v.slug} --verdict held|failed\`.`,
     });
   }
 
@@ -765,13 +768,13 @@ export function formatDoctorReport(report: DoctorReport): string {
   }
 
   if (report.healthy) {
-    const base = "## tracker doctor: OK\n\nAll checks passed — tracker is healthy.\n";
+    const base = "## darius doctor: OK\n\nAll checks passed — tracker is healthy.\n";
     if (warningLines.length === 0) return base;
     return base + "\n## Warnings\n\n" + warningLines.join("\n") + "\n";
   }
 
   const lines: string[] = [];
-  lines.push("## tracker doctor: FINDINGS");
+  lines.push("## darius doctor: FINDINGS");
   lines.push("");
   lines.push(`Found ${report.findings.length} issue(s):`);
   lines.push("");

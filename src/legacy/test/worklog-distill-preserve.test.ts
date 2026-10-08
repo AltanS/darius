@@ -244,7 +244,7 @@ describe("worklog distill — raw preservation and provenance", () => {
 
     for (const args of [[], ["--stdin", "--content", stubPath]]) {
       const { stderr, exitCode } = runTracker(["worklog", "distill", "M9-done.md", ...args], STUB);
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(2);
       expect(stderr).toContain("exactly one of --content <path> or --stdin");
     }
     expect(readWorklog()).toBe(RAW);

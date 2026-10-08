@@ -95,11 +95,11 @@ describe("ritual CLI", () => {
     expect(stdout).toContain("cadence=7d");
   });
 
-  it("rejects an invalid cadence with exit 1", () => {
+  it("rejects an invalid cadence with exit 2", () => {
     const { exitCode, stderr } = runTracker([
       "ritual", "add", "--name", "Bad", "--slug", "bad", "--cadence", "whenever",
     ]);
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(stderr).toMatch(/cadence/i);
   });
 

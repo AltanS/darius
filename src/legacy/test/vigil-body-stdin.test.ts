@@ -225,7 +225,7 @@ describe("vigil bodies over stdin", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("already exists");
     expect(stdout).toContain("body NOT written");
-    expect(stdout).toContain("tracker vigil set-body soak --stdin");
+    expect(stdout).toContain("darius vigil set-body soak --stdin");
   });
 
   it("add with no --stdin still scaffolds the template body", () => {
@@ -310,18 +310,18 @@ describe("vigil bodies over stdin", () => {
   it("set-body requires exactly one of --stdin or --content", () => {
     runTracker(["vigil", "add", "soak", "--until", "batch"]);
     const neither = runTracker(["vigil", "set-body", "soak"]);
-    expect(neither.exitCode).toBe(1);
+    expect(neither.exitCode).toBe(2);
     expect(neither.stderr).toContain("exactly one of --content <path> or --stdin");
 
     const both = runTracker(["vigil", "set-body", "soak", "--stdin", "--content", "/nope"]);
-    expect(both.exitCode).toBe(1);
+    expect(both.exitCode).toBe(2);
     expect(both.stderr).toContain("exactly one of --content <path> or --stdin");
   });
 
-  it("set-body without a slug prints usage and exits 1", () => {
+  it("set-body without a slug prints usage and exits 2", () => {
     const { exitCode, stderr } = runTracker(["vigil", "set-body"]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("Usage: tracker vigil set-body <slug>");
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("Usage: darius vigil set-body <slug>");
   });
 
   it("a vigil written over stdin passes doctor", () => {

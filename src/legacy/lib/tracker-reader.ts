@@ -631,7 +631,7 @@ function deriveMilestoneStatus(
 export function formatTrackerStatus(state: TrackerState): string {
   const lines: string[] = [];
 
-  lines.push(`# ${state.projectName} — Tracker Status`);
+  lines.push(`# ${state.projectName} — darius status`);
   lines.push("");
 
   // Active Milestones / Progress Dashboard table
@@ -739,7 +739,7 @@ function progressBar(verified: number, total: number): string {
 
 function progressPct(verified: number, total: number): number {
   if (total === 0) return 0;
-  return Math.round((verified / total) * 10) * 10;
+  return Math.round((verified / total) * 100);
 }
 
 // ---------------------------------------------------------------------------

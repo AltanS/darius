@@ -45,7 +45,11 @@ const NATIVE_SUBVERBS = {
   vigil: ["sweep"],
 } as const satisfies Record<Kind, readonly string[]>;
 
-/** The verbs darius does not own: each one goes to the vendored legacy CLI. */
+/**
+ * The verbs darius does not own: each one goes to the vendored legacy CLI.
+ * `root` is listed for the verb tables but answered natively since 0.77.0
+ * (src/cli/root.ts): `--json` reports the mode and creates a missing store link.
+ */
 export const LEGACY_VERBS: ReadonlySet<string> = new Set([
   "root",
   "status",

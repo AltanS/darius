@@ -242,8 +242,16 @@ test("onboard moves the tracker into the store; every read verb answers the same
   assert.equal(again.code, 1);
   assert.match(again.stderr, /already onboarded: the store owns the tracker here/u);
   const rescan = darius(at, ["onboard", "scan"], dir);
-  assert.equal(rescan.code, 3, rescan.stdout);
+  assert.equal(rescan.code, 0, rescan.stdout);
+  assert.match(rescan.stdout, /^✓ already onboarded: the store owns the tracker here/mu);
   assert.match(rescan.stdout, /^pending tree changes: none$/mu);
+  assert.doesNotMatch(rescan.stdout, /nothing to do/u, "one verdict, not two");
+  assert.equal(JSON.parse(darius(at, ["onboard", "scan", "--json"], dir).stdout).status, "already-onboarded");
+  const dry = darius(at, ["onboard", "--dry-run"], dir);
+  assert.equal(dry.code, 0, dry.stdout);
+  assert.match(dry.stdout, /already onboarded/u);
+  assert.doesNotMatch(dry.stdout, /no store for the project/u);
+  assert.equal(JSON.parse(darius(at, ["onboard", "--dry-run", "--json"], dir).stdout).status, "already-onboarded");
 });
 
 test("onboard --dry-run writes nothing to the repo or the store", { skip: NO_GIT }, () => {
@@ -421,6 +429,6 @@ test("onboard --only vigil moves the vigils into the store and leaves the rest o
   assert.deepEqual(JSON.parse(list.stdout).map((record: { slug: string }) => record.slug).toSorted(), ["cache-check", "guard-soak", "old-soak"]);
   const again = darius(at, ["onboard", "--only", "vigil"], dir);
   assert.equal(again.code, 1);
-  assert.match(again.stderr, /nothing to do/u);
-  assert.equal(darius(at, ["onboard", "scan", "--only", "vigil"], dir).code, 3, "nothing left to move");
+  assert.match(again.stderr, /already onboarded: the store owns the vigils here/u);
+  assert.equal(darius(at, ["onboard", "scan", "--only", "vigil"], dir).code, 0, "already onboarded");
 });

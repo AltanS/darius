@@ -2,6 +2,32 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.77.0] - 2026-10-08
+
+### Added
+
+- `--help` and `-h` anywhere in a command print its usage on stdout and exit 0. Nothing else runs: `init --help`, `link --help`, `onboard --help`, `due --help` and `skill --help` no longer act. It covers sub-verbs and the vendored verbs. `darius help <command>` prints the same text.
+- With `--json`, a failure that printed no JSON prints `{"ok":false,"error":"...","code":N}` on stdout and exits with N. Success shapes are unchanged.
+- `darius root --json` reports `{ mode: "store"|"git"|"none", trackerRoot, project, linked }`. It changes nothing on disk. Skills use it to detect the mode.
+- `darius doctor --json` reports `{ ok, healthy, findings, warnings }`.
+- An unknown verb prints `unknown command: X. Did you mean: Y?`, exit 2.
+- `darius milestone archive` checks the items: it refuses while an item is neither done nor skipped and lists them. `--incomplete "<reason>"` archives anyway and records the reason. It closes threads at stage `reviewed` as done (a dry run lists them as "will close").
+- `darius tree restore` of a milestone folder warns about an archive document and a distilled worklog stub, with the commands that end each. The JSON adds `follow_up`.
+- `onboard scan` and `onboard --dry-run` on an onboarded repo print `already onboarded` and exit 0 (JSON: `status: "already-onboarded"`).
+- README: sections for milestones and specs, vigils, runs, cadence, worktrees and exit codes. `docs/concept.md` has a "CLI contract" section.
+
+### Changed
+
+- A usage mistake exits 2 in every verb, including the vendored ones (`list`, `add`, `set-status`, `index`, `verify`, `worklog`, `scan`, `vigil`, `ritual`, `doctor`, `loop-check`, `mark`, `claim`, `release` and the rest): a missing argument, an unknown option, a bad value. `hook-stop` and `root` refuse an unknown option with exit 2.
+- A named item that is not there (`ritual show`, `run show`, `profile show`, `finding show`, `spec check`, `tree log`) exits 1, not 2.
+- `due --bogus` and `tree restore --bogus` say `unknown option --bogus`, not `needs a value`.
+- Human messages, usage lines, the index header and the status title say `darius`, not `tracker`. The generated index reads `darius index --rebuild`; an index with the old header still counts as current. `--json` fields and values are unchanged.
+- Progress is the exact percent: 3 of 4 is 75%, not 80%.
+- `doctor` no longer warns on `agent: unassigned`. `darius agents` with no agents prints a hint; its JSON is still `[]`.
+- A git-mode `milestone archive` on a folder that git does not track says so, prints `rm -r`, and gives no `git checkout` line.
+- `tree restore --force` on a file that is live again reads `restore version <sha>`, not `undo the removal`.
+- Spec templates say tracker files are shared with other hosts and sessions (not that `.tracker/` is committed). Every `*_CMD` slot of the library, api-endpoint and ui-component templates is the failing placeholder Command, like the generic one.
+
 ## [0.76.0] - 2026-10-08
 
 ### Added

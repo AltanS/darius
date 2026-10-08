@@ -122,6 +122,7 @@ function list(args: ParsedArgs): number {
 
 export const harnessCommand: Command = {
   name: "harness",
+  flags: ["who"],
   summary: "check that a harness version obeys the darius gate on this host, and list the checks",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];

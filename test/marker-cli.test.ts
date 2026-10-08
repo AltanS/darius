@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { parseArgs } from "../src/cli/args.ts";
 import { linkCommand } from "../src/cli/link.ts";
 import { markerCommand } from "../src/cli/marker.ts";
-import { UsageError, type Command } from "../src/cli/registry.ts";
+import { NotFoundError, UsageError, type Command } from "../src/cli/registry.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-marker-cli-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -198,14 +198,14 @@ test("marker check --resolved prints on_hold: deny, in text and JSON (0.66.0)", 
   assert.equal(json.on_hold, "deny");
 });
 
-test("marker check --resolved: an unknown slug is a usage error naming the known slugs; a bad file exits 1", async () => {
+test("marker check --resolved: an unknown slug is not found (exit 1) and names the known slugs; a bad file exits 1", async () => {
   await assert.rejects(
     runCli(markerCommand, ["check", policyCheckout("factored"), "--resolved", "nope"]),
-    (cause: Error) => cause instanceof UsageError && /no \[rituals\.nope\] in .*known: daily-report, link-audit, fact-check, content-fix$/u.test(cause.message),
+    (cause: Error) => cause instanceof NotFoundError && /no \[rituals\.nope\] in .*known: daily-report, link-audit, fact-check, content-fix$/u.test(cause.message),
   );
   await assert.rejects(
     runCli(markerCommand, ["check", checkout('v = 2\nproject = "acme-web"\n'), "--resolved", "x"]),
-    (cause: Error) => cause instanceof UsageError && cause.message.endsWith("known: none"),
+    (cause: Error) => cause instanceof NotFoundError && cause.message.endsWith("known: none"),
   );
   const bad = await runCli(markerCommand, ["check", checkout(`v = 3\nproject = "acme-web"\ntz = "UTC"\n[rituals.a]\ntitle = "A"\nskill = "a"\nhold_extra = ['(']\n`), "--resolved", "a"]);
   assert.equal(bad.code, 1);

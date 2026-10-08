@@ -69,7 +69,7 @@ import { ulid } from "../core/ulid.ts";
 import { checkoutDir, projectWorkdir } from "../core/workdir.ts";
 import { errorMessage } from "../runtime.ts";
 import { runExport } from "./ritual-export.ts";
-import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
+import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const VERBS = "add | list | show | set | pause | resume | retire | reconcile | export";
 
@@ -381,7 +381,7 @@ function runShow(args: ParsedArgs): number {
   const slug = requirePositional(args, 1, "<slug>");
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project.name}`);
   const ledger = readLedger(project);
   const state = ritualState(doc, ledger, { now: new Date() });
   const handoff = latestHandoff(project, ledger, slug);
@@ -427,7 +427,7 @@ function runSet(args: ParsedArgs): number {
   const slug = requirePositional(args, 1, "<slug>");
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project.name}`);
   const marker = v3Marker(project);
   if (isRepoRitual(doc, slug, marker)) {
     const flag = givenGitFlag(args);
@@ -478,7 +478,7 @@ function setLifecycle(args: ParsedArgs, state: "active" | "paused" | "retired"):
   const slug = requirePositional(args, 1, "<slug>");
   const project = currentProject(args);
   const doc = project.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new UsageError(`no ritual '${slug}' in ${project.name}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project.name}`);
   const current = ritualState(doc, readLedger(project), { now: new Date() });
   if (current.lifecycle === "retired") {
     throw new UsageError(`ritual '${slug}' is retired (terminal); its lifecycle cannot change`);

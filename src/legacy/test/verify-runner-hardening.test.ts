@@ -499,7 +499,7 @@ describe("verify runner hardening (v10.7.1)", () => {
       // the space-separated dash form before we ever see the value.
       for (const bad of ["--timeout=0", "--timeout=-5", "--timeout=abc", "--timeout=1.5"]) {
         const { exitCode, stderr } = runTracker(["verify", specPath, bad]);
-        expect(exitCode).toBe(1);
+        expect(exitCode).toBe(2);
         expect(stderr).toContain("--timeout takes a positive whole number of seconds");
       }
     });
