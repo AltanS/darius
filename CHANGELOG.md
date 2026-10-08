@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.70.1] - 2026-10-08
+
+### Fixed
+
+- `darius claim`, `next` and `worklog dispatch` now read the session id from `--session`, else `CLAUDE_CODE_SESSION_ID` (the variable Claude Code sets), else the older `CLAUDE_SESSION_ID`. Before, a claim without `--session` was always refused.
+- `darius uncommitted-verified` works in store mode (`milestone` in `kinds`). It lists each open worklog thread at stage `verified`, with the new fields `source`, `threadId` and `dirtyArtifacts`; `gitStatus` is `verified-uncommitted`. Before, the list was always empty, so the commit-first gate never fired. A repo with `.tracker/` in git is unchanged.
+- The `darius-commit` skill describes store mode: code-only commits, the verify check reads thread stages, the index rebuild runs when no code changed, the progress trailer comes from `darius show --json`, and `.pending-sync` drift warns and never blocks.
+
 ## [0.70.0] - 2026-10-06
 
 ### Added

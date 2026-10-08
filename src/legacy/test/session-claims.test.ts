@@ -104,14 +104,25 @@ describe("formatDuration", () => {
 });
 
 describe("resolveSessionId", () => {
-  it("prefers the flag, then the env var", () => {
-    expect(resolveSessionId("flagged", { CLAUDE_SESSION_ID: "env" })).toBe("flagged");
-    expect(resolveSessionId(undefined, { CLAUDE_SESSION_ID: "env" })).toBe("env");
+  it("prefers the flag, then CLAUDE_CODE_SESSION_ID, then CLAUDE_SESSION_ID", () => {
+    const both = { CLAUDE_CODE_SESSION_ID: "code", CLAUDE_SESSION_ID: "old" };
+    expect(resolveSessionId("flagged", both)).toBe("flagged");
+    expect(resolveSessionId(undefined, both)).toBe("code");
+    expect(resolveSessionId(undefined, { CLAUDE_CODE_SESSION_ID: "code" })).toBe("code");
+    expect(resolveSessionId(undefined, { CLAUDE_SESSION_ID: "old" })).toBe("old");
   });
 
-  it("returns null when neither is present or both are blank", () => {
+  it("falls through a blank CLAUDE_CODE_SESSION_ID to the older name", () => {
+    expect(
+      resolveSessionId(undefined, { CLAUDE_CODE_SESSION_ID: "  ", CLAUDE_SESSION_ID: "old" }),
+    ).toBe("old");
+  });
+
+  it("returns null when neither is present or all are blank", () => {
     expect(resolveSessionId(undefined, {})).toBeNull();
-    expect(resolveSessionId("   ", { CLAUDE_SESSION_ID: "  " })).toBeNull();
+    expect(
+      resolveSessionId("   ", { CLAUDE_CODE_SESSION_ID: " ", CLAUDE_SESSION_ID: "  " }),
+    ).toBeNull();
   });
 });
 

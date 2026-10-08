@@ -73,7 +73,7 @@ Invoke `/darius-work-verify` once per finished task (pass spec path, thread id, 
 
 ## Stage 4: Commit
 
-When every task in the batch verifies, invoke `/darius-commit` scoped to the batch's specs (once per batch, not per task). Unrelated `.pending-sync` drift warnings don't block.
+When every task in the batch verifies, invoke `/darius-commit` scoped to the batch's specs (once per batch, not per task). `.pending-sync` drift warns and never blocks. In a store-owned project the commit holds code only.
 
 ## Stage 5: Review, YOU do this, and YOU log it
 

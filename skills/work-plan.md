@@ -30,7 +30,7 @@ Recognized flags:
    ```
    STATUS: commit_first
    SPECS:
-     - {path}   ({gitStatus})
+     - {path}   ({gitStatus})   # store mode: gitStatus is verified-uncommitted, plus threadId and dirtyArtifacts
    ```
    The driving agent routes this straight to `/darius-commit` (scoped to those specs) before re-invoking work-plan. Skip this gate only with `--skip-commit-first` (intentional deferral) or when the CLI is unavailable / not a git repo (the command exits non-zero, proceed in that case).
 
@@ -78,7 +78,7 @@ Recognized flags:
 
    Then **claim the spec**, one per selected task, on shared checkouts:
    `!darius claim <spec-path>`
-   Advisory and expiring (default TTL 8h; `--ttl`). Session id comes from `$CLAUDE_SESSION_ID` or `--session <id>`, without one the claim is refused, so drop the task from the plan rather than claiming anonymously. A live claim by another session is refused naming it (`--takeover` overrides); a stale one is taken over automatically with a notice. Release with `darius release <spec-path>` when the spec's work lands or is parked.
+   Advisory and expiring (default TTL 8h; `--ttl`). Session id comes from `--session <id>`, else `$CLAUDE_CODE_SESSION_ID` (Claude Code sets it), else the older `$CLAUDE_SESSION_ID`, without one the claim is refused, so drop the task from the plan rather than claiming anonymously. A live claim by another session is refused naming it (`--takeover` overrides); a stale one is taken over automatically with a notice. Release with `darius release <spec-path>` when the spec's work lands or is parked.
 
 7. **Determine agent** per task by fetching the live agent roster via `darius agents --json`:
    `!darius agents --json`

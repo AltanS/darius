@@ -59,10 +59,12 @@ describe("claim / release CLI", () => {
   function runTracker(
     args: string[],
     session?: string,
+    envVars: Record<string, string> = session !== undefined ? { CLAUDE_SESSION_ID: session } : {},
   ): { stdout: string; stderr: string; exitCode: number } {
     const env = { ...process.env };
     delete env["CLAUDE_SESSION_ID"];
-    if (session !== undefined) env["CLAUDE_SESSION_ID"] = session;
+    delete env["CLAUDE_CODE_SESSION_ID"];
+    Object.assign(env, envVars);
 
     const result = spawnSync(
       "node",
@@ -123,8 +125,29 @@ describe("claim / release CLI", () => {
     expect(exitCode).toBe(1);
     expect(stderr).toContain("no session id");
     expect(stderr).toContain("--session");
-    expect(stderr).toContain("CLAUDE_SESSION_ID");
+    expect(stderr).toContain("CLAUDE_CODE_SESSION_ID");
     expect(existsSync(join(trackerRoot, ".session-claims.json"))).toBe(false);
+  });
+
+  it("claims with only CLAUDE_CODE_SESSION_ID set", () => {
+    const { exitCode } = runTracker(["claim", SPEC_REF], undefined, { CLAUDE_CODE_SESSION_ID: "codeSess" });
+    expect(exitCode).toBe(0);
+    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("codeSess");
+  });
+
+  it("still claims with only the older CLAUDE_SESSION_ID set", () => {
+    const { exitCode } = runTracker(["claim", SPEC_REF], undefined, { CLAUDE_SESSION_ID: "oldSess" });
+    expect(exitCode).toBe(0);
+    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("oldSess");
+  });
+
+  it("--session wins over both env vars", () => {
+    const { exitCode } = runTracker(["claim", SPEC_REF, "--session", "flagged"], undefined, {
+      CLAUDE_CODE_SESSION_ID: "codeSess",
+      CLAUDE_SESSION_ID: "oldSess",
+    });
+    expect(exitCode).toBe(0);
+    expect(readClaims(trackerRoot).claims[SPEC_REF]!.session).toBe("flagged");
   });
 
   it("accepts --session as an alternative to the env var", () => {

@@ -24,11 +24,92 @@
 
 /** A spec path relative to the repo root that is verified but uncommitted. */
 export type UncommittedVerifiedSpec = {
-  /** Repo-relative path as reported by git. */
+  /** Repo-relative path as reported by git (git mode) or the thread's spec path (store mode). */
   path: string;
-  /** Git porcelain status code (e.g. " M", "A ", "??"). */
+  /**
+   * Git porcelain status code (e.g. " M", "A ", "??"). In store mode it is the
+   * fixed word {@link THREAD_GIT_STATUS}, because no tracker file is in git.
+   */
   gitStatus: string;
+  /** Where the entry came from. Absent in older output, which was always `git`. */
+  source?: "git" | "thread";
+  /** Store mode only: the worklog thread that is verified but not committed. */
+  threadId?: string;
+  /** Store mode only: artifacts of that thread that are dirty in `git status`. */
+  dirtyArtifacts?: string[];
 };
+
+/** The `gitStatus` of a store-mode entry: the thread is verified, the code is not committed. */
+export const THREAD_GIT_STATUS = "verified-uncommitted";
+
+/**
+ * Does the marker text list `milestone` in its root `kinds`? Then the store owns
+ * the tracker tree, `.tracker` is a git-ignored link, and git cannot see a spec.
+ * A light scan on purpose: the marker is validated by darius itself, this
+ * vendored lib only needs the one fact.
+ */
+export function markerListsMilestone(markerText: string): boolean {
+  const kinds = /^[ \t]*kinds[ \t]*=[ \t]*\[([^\]]*)\]/m.exec(markerText);
+  if (kinds === null) return false;
+  const body = kinds[1]!.split("\n").map((l) => l.replace(/#.*$/, "")).join("\n");
+  return /["']milestone["']/.test(body);
+}
+
+/** One worklog thread, reduced to what the store-mode gate needs. */
+export type ThreadForGate = {
+  threadId: string;
+  /** Worklog file basename, the fallback path when the thread names no spec. */
+  worklogFile: string;
+  specPath?: string;
+  stage?: string;
+  closed: boolean;
+  /** Paths of the thread's artifact entries. */
+  artifacts: string[];
+};
+
+/** Normalize `./a//b/` to `a/b` for comparing artifact and porcelain paths. */
+function normPath(p: string): string {
+  return p.trim().replace(/^\.\//, "").replace(/\/{2,}/g, "/").replace(/\/$/, "");
+}
+
+/**
+ * Store-mode selection: every open thread at stage `verified` is a debt. Its
+ * artifacts that are dirty in git are listed as extra information. Pass
+ * porcelain from `git status --porcelain -uall`, so untracked files are listed
+ * one by one and not folded into their directory.
+ */
+export function selectVerifiedThreads(
+  threads: readonly ThreadForGate[],
+  porcelain: string,
+): UncommittedVerifiedSpec[] {
+  const dirty: string[] = [];
+  for (const rawLine of porcelain.split("\n")) {
+    const parsed = parsePorcelainLine(rawLine.replace(/\r$/, ""));
+    if (parsed !== null) dirty.push(normPath(parsed.path));
+  }
+
+  const result: UncommittedVerifiedSpec[] = [];
+  for (const thread of threads) {
+    if (thread.stage !== "verified" || thread.closed) continue;
+    const dirtyArtifacts: string[] = [];
+    for (const artifact of thread.artifacts) {
+      const a = normPath(artifact);
+      if (a === "" || dirtyArtifacts.includes(a)) continue;
+      // An artifact may name a directory: any dirty file below it counts.
+      if (dirty.some((d) => d === a || d.startsWith(`${a}/`))) {
+        dirtyArtifacts.push(a);
+      }
+    }
+    result.push({
+      path: thread.specPath ?? `.tracker/worklog/${thread.worklogFile}`,
+      gitStatus: THREAD_GIT_STATUS,
+      source: "thread",
+      threadId: thread.threadId,
+      dirtyArtifacts,
+    });
+  }
+  return result;
+}
 
 /**
  * Matches a tracker spec file: `.tracker/M<N>-<slug>/NN-NAME.md`, excluding the

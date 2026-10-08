@@ -100,6 +100,7 @@ import {
   dispatchThread,
   parkThread,
   isWorklogIndexFile,
+  scanWorklogDir,
   WORKLOG_STAGES,
   type WorklogStage,
 } from "../lib/worklog.ts";
@@ -140,7 +141,10 @@ import {
 } from "../lib/counsel-gate.ts";
 import {
   selectVerifiedUncommitted,
+  selectVerifiedThreads,
+  markerListsMilestone,
   hasVerificationPassed,
+  type ThreadForGate,
 } from "../lib/uncommitted.ts";
 import {
   readClaims,
@@ -2932,12 +2936,60 @@ function runAgents(args: string[]): void {
 // deterministic brake against "verified the spec, never committed it".
 // ---------------------------------------------------------------------------
 
+/**
+ * Store mode: the nearest `.darius.toml` at or above the project root lists
+ * `milestone` in `kinds`. Same fact as `treeRoute` in src/cli.ts, read here
+ * without importing darius code into the vendored engine. A missing or
+ * unreadable marker means git mode.
+ */
+function projectOwnsTrackerTree(projectRoot: string): boolean {
+  let dir = projectRoot;
+  for (let depth = 0; depth < 50; depth++) {
+    const file = join(dir, ".darius.toml");
+    if (existsSync(file)) {
+      try {
+        return markerListsMilestone(readFileSync(file, "utf-8"));
+      } catch {
+        return false;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  return false;
+}
+
+/** Every worklog thread, reduced to the fields the store-mode gate reads. */
+function collectThreadsForGate(trackerRoot: string): ThreadForGate[] {
+  const threads: ThreadForGate[] = [];
+  for (const { file, doc } of scanWorklogDir(trackerRoot)) {
+    for (const thread of doc.threads) {
+      threads.push({
+        threadId: thread.threadId,
+        worklogFile: file,
+        specPath: thread.specPath,
+        stage: thread.stage,
+        closed: Boolean(thread.closedAt),
+        artifacts: thread.entries.flatMap((e) => (e.kind === "artifact" && e.path ? [e.path] : [])),
+      });
+    }
+  }
+  return threads;
+}
+
 function runUncommittedVerified(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write("Usage: tracker uncommitted-verified [--json]\n");
     process.stdout.write("\n");
     process.stdout.write("List verified-but-uncommitted spec files (dirty in git AND carrying a\n");
     process.stdout.write("verification_passed: stamp). Exit 0 with an empty list when none.\n");
+    process.stdout.write("\n");
+    process.stdout.write("When the .darius.toml marker lists milestone in kinds, .tracker is a\n");
+    process.stdout.write("git-ignored link and git sees no spec. Then each open worklog thread at\n");
+    process.stdout.write("stage verified is listed instead. Its entry has source \"thread\", threadId,\n");
+    process.stdout.write("gitStatus \"verified-uncommitted\", and dirtyArtifacts (its artifacts that\n");
+    process.stdout.write("are dirty in git).\n");
     return;
   }
 
@@ -2950,13 +3002,16 @@ function runUncommittedVerified(args: string[]): void {
   const trackerRoot = findTrackerRoot(process.cwd());
   const projectRoot = trackerRoot !== null ? resolve(join(trackerRoot, "..")) : process.cwd();
 
+  const storeMode = trackerRoot !== null && projectOwnsTrackerTree(projectRoot);
+
   let porcelain: string;
   try {
     // -c core.quotePath=false keeps unicode/space paths unquoted so the path
-    // regex matches. Scope to the repo containing the tracker.
+    // regex matches. Scope to the repo containing the tracker. Store mode adds
+    // -uall so an untracked artifact is listed as a file, not as its folder.
     porcelain = execFileSync(
       "git",
-      ["-c", "core.quotePath=false", "status", "--porcelain"],
+      ["-c", "core.quotePath=false", "status", "--porcelain", ...(storeMode ? ["-uall"] : [])],
       { cwd: projectRoot, encoding: "utf-8" },
     );
   } catch (err) {
@@ -2965,15 +3020,18 @@ function runUncommittedVerified(args: string[]): void {
     process.exit(1);
   }
 
-  const specs = selectVerifiedUncommitted(porcelain, (repoRelPath) => {
-    const abs = resolve(projectRoot, repoRelPath);
-    if (!existsSync(abs)) return false;
-    try {
-      return hasVerificationPassed(readFileSync(abs, "utf-8"));
-    } catch {
-      return false;
-    }
-  });
+  const specs =
+    storeMode && trackerRoot !== null
+      ? selectVerifiedThreads(collectThreadsForGate(trackerRoot), porcelain)
+      : selectVerifiedUncommitted(porcelain, (repoRelPath) => {
+          const abs = resolve(projectRoot, repoRelPath);
+          if (!existsSync(abs)) return false;
+          try {
+            return hasVerificationPassed(readFileSync(abs, "utf-8"));
+          } catch {
+            return false;
+          }
+        });
 
   if (values.json) {
     process.stdout.write(JSON.stringify(specs, null, 2) + "\n");

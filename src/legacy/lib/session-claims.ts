@@ -38,10 +38,13 @@ export const CLAIMS_FILENAME = ".session-claims.json";
 export const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000;
 
 /** Env var carrying the Claude Code session id. */
-export const SESSION_ENV_VAR = "CLAUDE_SESSION_ID";
+export const SESSION_ENV_VAR = "CLAUDE_CODE_SESSION_ID";
+
+/** Older name, still read after {@link SESSION_ENV_VAR} for back compat. */
+export const LEGACY_SESSION_ENV_VAR = "CLAUDE_SESSION_ID";
 
 export type SessionClaim = {
-  /** Opaque session identifier — whatever `--session` / $CLAUDE_SESSION_ID says. */
+  /** Opaque session identifier — whatever `--session` / $CLAUDE_CODE_SESSION_ID says. */
   session: string;
   /** ISO-8601 instant the claim was taken. */
   at: string;
@@ -135,7 +138,7 @@ export function mutateClaims<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the acting session id: `--session` flag, else $CLAUDE_SESSION_ID.
+ * Resolve the acting session id: `--session` flag, else $CLAUDE_CODE_SESSION_ID, else $CLAUDE_SESSION_ID.
  *
  * Returns null when neither is present. Callers that WRITE a claim must refuse
  * on null — an anonymous claim names nobody, so the refusal message it produces
@@ -152,11 +155,13 @@ export function resolveSessionId(
   if (fromFlag) return fromFlag;
   const fromEnv = env[SESSION_ENV_VAR]?.trim();
   if (fromEnv) return fromEnv;
+  const fromLegacyEnv = env[LEGACY_SESSION_ENV_VAR]?.trim();
+  if (fromLegacyEnv) return fromLegacyEnv;
   return null;
 }
 
 export const NO_SESSION_MESSAGE =
-  `no session id — pass --session <id> or set $${SESSION_ENV_VAR}. ` +
+  `no session id — pass --session <id> or set $${SESSION_ENV_VAR} ($${LEGACY_SESSION_ENV_VAR} also works). ` +
   `A claim that names no session cannot tell the next session who to go ask.`;
 
 // ---------------------------------------------------------------------------
