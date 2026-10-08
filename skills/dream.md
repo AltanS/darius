@@ -15,11 +15,15 @@ allowed-tools: Read, Bash
 command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
 ```
 
-A worklog that has gone quiet is still worth something, but not at full size. Dreaming replaces it with an **anchor stub**: the handful of facts a future agent would otherwise have to rediscover, small enough to read on sight. Nothing is lost, `distill` copies the original to `.tracker/archive/worklog-raw/<file>` and stamps the stub with the source digest before writing.
+A worklog that has gone quiet is still worth something, but not at full size. Dreaming replaces it with an **anchor stub**: the handful of facts a future agent would otherwise have to rediscover, small enough to read on sight. Nothing is lost, `distill` copies the original to `archive/worklog-raw/<file>` in the tracker tree and stamps the stub with the source digest before writing.
 
 **You author content. The CLI owns the files.** Never Write, Edit, or `rm` a worklog file, and never write the `<!-- distilled: ... -->` stamp yourself. Every change goes through `worklog distill`, which enforces the eligibility gates, preserves the raw copy, and swaps atomically.
 
+Paths in this skill are tracker-relative: `worklog/<file>`, `archive/<slug>.md`. They sit below the tracker root, which `darius root --json` prints as `trackerRoot`. The checkout has no `.tracker` path in store mode, so never build one. Git mode (deprecated) keeps the tree in `.tracker/` of the checkout.
+
 ## 1. Survey
+
+The line below starts with `!`. In a skill, `!` followed by a backticked command runs that command in a shell when the skill loads, and its output replaces the line. If you see the command and no output, run it yourself with Bash.
 
 !`darius worklog distill --list --json $ARGUMENTS`
 
@@ -31,7 +35,7 @@ Ineligible rows are not failures and are never argued with, `open-threads`, `mil
 
 ## 2. Read the source
 
-`Read` the eligible worklog in full, from `.tracker/worklog/<file>`. Read it once and author from it, the anchors must be facts *in the file*, never inferred, never imported from your own memory of the project.
+`Read` the eligible worklog in full, from `<trackerRoot>/worklog/<file>`. Take `trackerRoot` from `darius root --json`. Read it once and author from it, the anchors must be facts *in the file*, never inferred, never imported from your own memory of the project.
 
 ## 3. Decide what survives
 
@@ -65,8 +69,8 @@ A short stub from a long execution trace is the correct outcome, not a failure t
 
 ## Trail
 
-- Raw: `.tracker/archive/worklog-raw/<file>`
-- Archive: `.tracker/archive/<milestone-slug>.md`   ← milestone files only; omit for cross-cutting ones
+- Raw: `archive/worklog-raw/<file>`
+- Archive: `archive/<milestone-slug>.md`   ← milestone files only; omit for cross-cutting ones
 ```
 
 **Size:** target ≤ 40 lines. Up to ~80 is permitted when the source is genuinely dense with durable content (a curated handoff for a large milestone), never to pad an execution trace. Over 4 KB the CLI warns and still writes; treat the warning as a prompt to cut, not as a pass.
@@ -91,8 +95,8 @@ worklog parser, fenced code block, `<!-- opened: -->`, fake open threads, legacy
 
 ## Trail
 
-- Raw: `.tracker/archive/worklog-raw/M9-old-thing.md`
-- Archive: `.tracker/archive/M9-old-thing.md`
+- Raw: `archive/worklog-raw/M9-old-thing.md`
+- Archive: `archive/M9-old-thing.md`
 ```
 
 ## 5. Land it
@@ -114,7 +118,7 @@ Quote the heredoc delimiter (`<<'STUB'`), an unquoted one lets the shell expand 
 On success it prints the raw-copy disposition and the source digest:
 
 ```
-darius worklog distill: M9-old-thing.md → anchor stub (raw copied: .tracker/archive/worklog-raw/M9-old-thing.md, sha256 0c78aaea3d27…)
+darius worklog distill: M9-old-thing.md → anchor stub (raw copied: archive/worklog-raw/M9-old-thing.md, sha256 0c78aaea3d27…)
 ```
 
 ## 6. Rebuild the index
@@ -123,7 +127,7 @@ Once, after the last file, not per file:
 
 `darius worklog index`
 
-Distilled files then read `distilled` in the `State` column of `.tracker/worklog/00-INDEX.md`. In a store-owned project (`darius root --json` says `mode: "store"`) darius records the stubs and the raw copies at the next darius verb or sync; `worklog index` is that verb, so end with it.
+Distilled files then read `distilled` in the `State` column of `worklog/00-INDEX.md`. In store mode (`darius root --json` says `mode: "store"`) darius records the stubs and the raw copies at the next darius verb or sync; `worklog index` is that verb, so end with it.
 
 ## 7. Report
 
@@ -143,7 +147,7 @@ darius ritual add worklog-dream --title "Worklog dream" --cadence 1m
 
 It then shows up in `darius due` monthly; `darius run start worklog-dream` starts the run and `darius run complete <run> --outcome complete` rolls it forward.
 
-Archiving a milestone distills that milestone's worklog on the way out (`skills/archive/SKILL.md` step 8), so the ritual exists to catch the backlog and the cross-cutting files archive never touches.
+Archiving a milestone distills that milestone's worklog on the way out (`/darius-archive` step 8), so the ritual exists to catch the backlog and the cross-cutting files archive never touches.
 
 ## Rules
 

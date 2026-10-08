@@ -79,6 +79,11 @@ test("the repo holds the static text: 11 skills and no agent, with no em dash an
     assert.ok(!text.includes(EM_DASH), `${name} has an em dash`);
     assert.doesNotMatch(text, /\/tracker:|\btracker:[a-z]|CLAUDE_PLUGIN_ROOT|delegation\.mts/u, name);
     assert.equal(readStamp(text), null, `${name} is unstamped source`);
+    // 0.78.1: store mode has no `.tracker` path. Only a line about git mode may name one.
+    for (const line of text.split("\n").filter((entry) => entry.includes(".tracker"))) {
+      assert.match(line, /[Gg]it mode|no `\.tracker` path|folder in git/u, `${name}: ${line.slice(0, 80)}`);
+    }
+    assert.doesNotMatch(text, /Set `counsel: addressed`|set `counsel: addressed`|test -L/u, name);
   }
   for (const name of PROCEDURE_SKILLS) {
     assert.match(readFileSync(join(dir, `${name}.md`), "utf8"), new RegExp(`^---\\nname: darius-${name}\\n`, "u"), name);

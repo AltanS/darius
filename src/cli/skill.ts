@@ -88,30 +88,29 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and the checkout has no .tracker; \`darius root\` prints the tree. Spec paths are tracker-relative (\`M1-x/01-y.md\`); \`.tracker/...\` still works. None of it is in git.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first, and \`onboard\` only when the operator asks.
 - In the tracker tree, use a darius verb wherever one exists: task marks, statuses, the index, worklogs, vigils. Write spec text by hand.
-- Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a milestone README or a spec file. Reading code, worklogs, counsel transcripts and CLAUDE.md is fine.
+- Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a README or a spec file. Reading code, worklogs and CLAUDE.md is fine.
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
-- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file (open-threads, milestone-active, not-archived, too-recent, already-distilled) with its reason; do not fix it.
+- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file with its reason; do not fix it.
 - A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.
 - The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself; it does not hand spec text to a worker.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first; darius says so.
 - In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
 - Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
-- A tracker verb with no arguments prints its usage.
 
 ## Prose
 
 For worklog entries, findings, handoff and vigil bodies.
 
 - Short sentences. Facts, not narrative. One line per item.
-- Name the thing, its state, the next step. No recap. At most 8 lines per entry.
+- Name the thing, its state, the next step. At most 8 lines per entry.
 - Findings: at most 4000 characters. The result block holds the items.
 
 ## Exit codes
 
 - 0: done.
-- 1: refused or failed. Tracker verbs also exit 1 on a usage error. Read stderr. Never fall back to editing files.
+- 1: refused or failed. Read stderr. Never fall back to editing files.
 - 2: usage error. Fix the command line.
-- 3: the environment is inconclusive. Stop and report to the operator.
+- 3: the environment is inconclusive. Stop and report.
 
 ## Verbs
 `;
@@ -124,8 +123,8 @@ function trackerVerbs(): string {
 const TAIL = `
 \`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, do the work, then \`run complete\`.
 \`run follow-up <run> --approve N|--item KEY\` is for a person: a new run that runs the lines of question N as written, or the proposal of item KEY.
-Findings are items a ritual reports with a \`key\`. \`finding list|show\` read them; \`finding close|reopen <key>\` and \`finding reset\` are for a person.
-On the wrong host \`run now\`, \`run resume\` and \`run follow-up\` refuse and print the \`ssh <host> darius ...\` command for the right one; a person may add \`--on <host>\`, a run never does.
+Findings are items a ritual reports with a \`key\`. \`finding list|show\` read them; \`finding close|reopen|reset\` are for a person.
+On the wrong host \`run now|resume|follow-up\` refuse and print the \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
 
@@ -133,18 +132,13 @@ A snapshot is a dated tar.gz of this host's store, in a local folder and optiona
 
 - Read: \`snapshot status\`, \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
 - Act: \`snapshot create\` makes one now. \`snapshot check\` tests the bucket.
-- Settings: \`snapshot config set <key> <value>\`, \`snapshot config unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
+- Settings: \`snapshot config set <key> <value>\` and \`unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
 - Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
 - Exit 1: refused. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
 - Restore is by hand with \`tar -xzf\`, and only when the operator asks.
 
-## Examples
-
-The next task, and rituals due:
-
-    darius next
-    darius due --json
+## Example
 
 Start a run by hand, then complete it with its findings:
 

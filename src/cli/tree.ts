@@ -212,6 +212,7 @@ export const treeCommand: Command = {
   name: "tree",
   help: USAGE,
   flags: ["at", "dry-run", "force"],
+  audience: "session",
   summary: "read the tracker tree's history in the store, restore a past version, resolve a conflict",
   usage: "tree log|restore|resolve <path>",
   async run(args) {

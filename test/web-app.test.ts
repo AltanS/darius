@@ -337,7 +337,7 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
       "In progress",
       "target 10 Sep, past",
       "7 of 10 checks done",
-      ".tracker/M7-cart/",
+      ">M7-cart/</code>",
       "README",
       "Readme &lt;script&gt;alert(1)&lt;/script&gt; goal",
       "Specs (2)",

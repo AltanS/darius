@@ -243,7 +243,7 @@ function printBrief(args: ParsedArgs): number {
 export const dueCommand: Command = {
   name: "due",
   flags: ["all-projects", "brief"],
-  summary: "rituals and vigils due now, computed from the ledger. --project P | --all-projects | --brief",
+  summary: "rituals and vigils due now, computed from the ledger.",
   audience: "session",
   usage: "due [--all-projects] [--brief]",
   async run(args: ParsedArgs): Promise<number> {

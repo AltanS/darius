@@ -19,9 +19,11 @@ Reflect on what recent implementation work revealed and propose updates to track
 
 Invoked manually, by the Work Loop driver (`/darius-work` Stage 6, after a review block exposes a genuine gap, and after `STATUS: spec_invalid` from the spec check), and automatically by `archive` at milestone completion.
 
+A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output. Paths are tracker-relative (`M2-api-layer/01-auth.md`). To read or edit a file of the tree, join the path to `trackerRoot` from `darius root --json`, or use `absPath` from `show --json` or `list specs --json`. The checkout has no `.tracker` path in store mode.
+
 ## Auto-Run Policy
 
-1. **`.tracker/config.yml`**: auto-invoke after spec completion only when `auto_enrich: on`. Default is `off`.
+1. **`config.yml`** in the tracker root: auto-invoke after spec completion only when `auto_enrich: on`. Default is `off`.
 2. **Size threshold**: even with `auto_enrich: on`, skip specs whose total diff from start to completion is ≤ `enrich_threshold_loc` LOC across referenced files (default 20).
 3. **`enrich: skip` frontmatter**: excluded from auto-runs regardless of config.
 
@@ -29,7 +31,7 @@ Invoked manually, by the Work Loop driver (`/darius-work` Stage 6, after a revie
 
 Compute `current_sha = sha256(spec_body + worklog_thread_body)` and compare against `last_enriched_sha:` in spec frontmatter. If they match, print `NO_OP: <spec-slug> sha=<current_sha>` and stop. After a successful pass, write the new sha and `enriched_at: <ISO>`.
 
-Write proposals to `.tracker/.enrich/<spec-slug>.draft.md` first; atomic-rename onto the spec only after user approval. A crash mid-run leaves the draft recoverable; the spec itself is never partially modified.
+Write proposals to `<trackerRoot>/.enrich/<spec-slug>.draft.md` first; atomic-rename onto the spec only after user approval. A crash mid-run leaves the draft recoverable; the spec itself is never partially modified.
 
 Phase 4b (milestone Lessons) uses a separate idempotency check based on an HTML marker in the README.
 
@@ -42,8 +44,8 @@ Phase 4b (milestone Lessons) uses a separate idempotency check based on an HTML 
    - no argument → current focus milestone
 
 2. **Load tracker state**:
-   `!darius status --json`
-   Read `currentFocus` to identify the active milestone.
+   `!darius next --json`
+   Read `milestone` to identify the active milestone. Do not read `currentFocus` from `status`. With no open task, use `darius list milestones --json`.
 
 3. **List in-scope specs**:
    `!darius list specs --milestone <slug> --json`
@@ -51,7 +53,7 @@ Phase 4b (milestone Lessons) uses a separate idempotency check based on an HTML 
 4. **Load each spec's parsed state**:
    `!darius show <spec-path> --json`
 
-5. **Read review transcripts**: for each in-scope spec, read `{MILESTONE}/_counsel/{spec-slug}.md` if present. Since darius 0.74.0 it holds one reviewer's ```darius-review JSON block: five items (`data-loss`, `irreversible`, `hidden-scope`, `missing-test`, `rollback`), each `ok`, `concern` or `blocker` with one line of reason. Older transcripts hold four advisor sections with `**Verdict**: thumbs_*` lines. If you were invoked for `spec_invalid`, fix each listed problem and re-run `darius spec check <spec>` until it passes. A manual item needs a `- Manual: <reason>` line; a high-risk spec needs a `## Rollback` section with text.
+5. **Read review transcripts**: for each in-scope spec, read `<trackerRoot>/{MILESTONE}/_counsel/{spec-slug}.md` if present. Since darius 0.74.0 it holds one reviewer's ```darius-review JSON block: five items (`data-loss`, `irreversible`, `hidden-scope`, `missing-test`, `rollback`), each `ok`, `concern` or `blocker` with one line of reason. Older transcripts hold four advisor sections with `**Verdict**: thumbs_*` lines. If you were invoked for `spec_invalid`, fix each listed problem and re-run `darius spec check <spec>` until it passes (it exits 1 on a problem). A manual item needs a `- Manual: <reason>` line; a high-risk spec needs a `## Rollback` section with text.
 
 6. **Read recent work and code**:
    - `git log --oneline -30` and `git diff HEAD~10 --stat`
@@ -107,16 +109,17 @@ Present findings as a structured proposal grouped by spec file:
 ## Phase 4: Apply
 
 1. **Ask user** via AskUserQuestion: apply all / select subset / skip.
-2. **Apply selected changes**: edit spec files, add/remove/update checklist items, update frontmatter counts and `depends_on`. **Repo-relative paths only**: every path you write into a spec, `Command:`/`Expected:` lines (as in the `src/middleware/auth.ts` example above) and prose, must be repo-relative, never `/home/you/repo/...`. Verification runs from the repo root and `.tracker/` is shared (committed, or synced through the darius store), so absolute paths leak the author's home-dir layout and won't run on other machines.
+2. **Apply selected changes**: edit spec files, add/remove/update checklist items, update frontmatter counts and `depends_on`. **Repo-relative paths only**: every path you write into a spec, `Command:`/`Expected:` lines (as in the `src/middleware/auth.ts` example above) and prose, must be repo-relative, never `/home/you/repo/...`. Verification runs from the repo root and the tracker tree is shared with other hosts, so absolute paths leak the author's home-dir layout and won't run on other machines.
 3. **Rebuild index**:
    `!darius index --rebuild`
-   In a project whose `.darius.toml` `kinds` lists `milestone`, darius records the spec edits above at the next darius verb or sync. This command is that verb, so the phase ends with it.
-4. **New specs**: if approved, invoke `darius add`.
-5. **Commit**: invoke `/darius-commit` with context "tracker enrich: update specs based on implementation learnings".
+   In store mode (`darius root --json` says `mode: "store"`), darius records the spec edits above at the next darius verb or sync. This command is that verb, so the phase ends with it.
+4. **Review stamps**: a review stamp is tied to the spec text. Run `darius spec check <spec> --json`. If it shows `reviewRequired: true` and a `counsel` stamp, your edit made the stamp stale (ticking a box is not an edit). Do not touch the `counsel:` lines. Tell the driver: run the review again (`/darius-work` Review Handling), or `darius counsel-gate --spec <spec> --override "<reason>"`. Never write `counsel:`, `counsel_override:` or `counsel: addressed` into a spec yourself.
+5. **New specs**: if approved, invoke `darius add spec --milestone <slug> --name "<name>" --template <generic|api-endpoint|ui-component|library>`.
+6. **Commit**: invoke `/darius-commit` with context "tracker enrich: update specs based on implementation learnings". In store mode the spec edits are not in git, so the commit holds code only.
 
 ## Phase 4b: Lessons (when `--milestone M{N}` is passed)
 
-1. Read the milestone's `00-README.md` and frontmatter.
+1. Read the milestone's `00-README.md` and frontmatter (`<trackerRoot>/{MILESTONE}/00-README.md`).
 2. **Skip flag**: if frontmatter has `lessons: skip`, print `LESSONS_SKIPPED: M{N}` and stop.
 3. **Idempotency check** on the existing `## Lessons` section:
    - First non-blank line is `<!-- enriched: <ISO> -->` → enrich-authored, may be replaced.
@@ -129,7 +132,7 @@ Present findings as a structured proposal grouped by spec file:
    _No lessons of note, mechanical milestone._
    ```
 6. Otherwise write 3–7 bullets prefixed by `<!-- enriched: <ISO> -->`, replacing any prior enrich-authored content.
-7. Commit via `/darius-commit` with context "tracker enrich: milestone lessons". In a store-owned project the Lessons edit is not in git and is recorded at the next darius verb; `darius index --rebuild` (run by `/darius-commit`) is that verb.
+7. Commit via `/darius-commit` with context "tracker enrich: milestone lessons". In store mode the Lessons edit is not in git and is recorded at the next darius verb; `darius index --rebuild` (run by `/darius-commit`) is that verb.
 
 ## Rules
 
@@ -139,4 +142,5 @@ Present findings as a structured proposal grouped by spec file:
 - **Don't inflate**: only propose changes that genuinely reflect learnings.
 - **Preserve verified items**: never modify or remove items already marked `[x]`.
 - **Respect review transcripts** (`_counsel/`): read them, quote them when relevant, never delete them.
+- **Never write review stamps**: `counsel:` and `counsel_override:` come from `counsel-gate` only. `counsel: addressed` is not valid. Never write it.
 - If nothing to propose, say so: "Specs look accurate, no enrichment needed."

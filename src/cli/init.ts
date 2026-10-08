@@ -361,7 +361,7 @@ export const initCommand: Command = {
   name: "init",
   help: USAGE,
   flags: ["no-import"],
-  summary: "set up this repo: write .darius.toml, link this checkout, create the tracker or import its rituals. --project, --no-import",
+  summary: "set up this repo: write .darius.toml, link this checkout, create the tracker or import its rituals.",
   audience: "session",
   usage: "init [--project <name>] [--no-import]",
   run,

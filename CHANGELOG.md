@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.78.1] - 2026-10-08
+
+### Changed
+
+- The work-loop skills assume no `.tracker` path. They use tracker-relative paths, detect the mode with `darius root --json`, and read tree files through `trackerRoot` or `absPath`. Git mode gets one short line where it differs. The dream skill reads `worklog/<file>` of the tree, and its stubs write `archive/worklog-raw/<file>`.
+- The skills teach the 0.76.0 to 0.78.0 flags: `mark --verified --override --evidence`, `set-stage committed --no-code`, `counsel-gate --spec --override`, `worklog open --takeover` and `--as-other-session`, `next --json` with `skippedClaimed` (not `currentFocus`), comma or newline artifact lists, `milestone archive --incomplete`, `spec check`, and `tree log|restore|resolve`. No skill hand-writes a `counsel:` stamp or `addressed`. A review stamp is tied to the spec text, so an edit after review means a new review or an override.
+- Skill fixes from real runs: review notes use `worklog append --section note --message "Review: ..."` with 3 words or more; checklist indexes are 0-based; an empty agent roster means the main thread does the work, with `--agent main`; one worklog thread per spec; a code commit made before the thread exists is recorded with `set-stage committed --commit <sha> --force --reason`; reviews state their effort level (`high` per spec, `xhigh` per milestone); wrap-up reads `openedAt`; the `!darius ...` notation is explained where it appears.
+- The generated `darius` skill lists `spec check`, `tree log|restore|resolve` and `milestone archive` (these verbs are now `audience: "session"`). It is trimmed to 7000 bytes or less so the hard limit of 7168 keeps room. A test holds that.
+- Web: the milestone page shows the tracker-relative folder (`M12-cart/`), not `.tracker/M12-cart/`. `web/build/` is rebuilt.
+
+### Fixed
+
+- `--help` for `mark`, `worklog open`, `worklog set-stage`, `worklog dispatch` and `counsel-gate` lists the 0.76.0 flags: `--override`, `--takeover`, `--as-other-session` and `--no-code`.
+- `worklog list --json` shows a thread's `specPath` tracker-relative in store mode, whatever form `worklog open --spec` got. The field name is unchanged.
+
 ## [0.78.0] - 2026-10-08
 
 ### Changed

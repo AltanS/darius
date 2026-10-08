@@ -45,7 +45,7 @@ export default function Milestone({ loaderData }: Route.ComponentProps): React.R
           <StateWord state={view.status} />
           <span>{head.started === null ? "not started" : `started ${head.started}`}</span>
           {target === null ? <span>no target</span> : target.past ? <span className="ms-late">{`target ${target.text}, past`}</span> : <span>{`target ${target.text}`}</span>}
-          <code className="msd-dir">{`.tracker/${view.dir}/`}</code>
+          <code className="msd-dir">{`${view.dir}/`}</code>
         </p>
         <p className="ms-prog msd-prog">
           <progress className={`ms-bar${head.ticked ? " ms-bar-done" : ""}`} value={head.done} max={Math.max(head.total, 1)} aria-hidden="true" />

@@ -10,6 +10,10 @@ Edit the text here and ship it with a release. Never patch the installed copies 
 
 ## Where the tracker lives
 
-`kinds` in the project's `.darius.toml` says what the darius store owns. With `milestone` in it, the whole tracker tree lives in the store, and the checkout has no `.tracker` path (0.78.0). `darius root` prints the tracker root. In these skills a path written as `.tracker/<path>` means `<tracker root>/<path>` for file tools. darius verbs take both forms, `.tracker/M12-cart/01-api.md` and the tracker-relative `M12-cart/01-api.md`. Nothing of the tree is in git, and it is never staged. darius records file edits at the next darius verb or sync, so a skill that edits tracker files ends with a darius verb, for example `darius index --rebuild`. A repo with a real `.tracker/` folder in git works as before until `darius onboard` moves it.
+`kinds` in the project's `.darius.toml` says what the darius store owns. With `milestone` in it, the whole tracker tree lives in the store, and the checkout has no `.tracker` path (0.78.0). `darius root --json` prints `{mode, trackerRoot, project, linked}`. `mode` is `store`, `git` or `none`.
+
+In these skills a path is tracker-relative (`M12-cart/01-api.md`, `worklog/<slug>.md`, `archive/<slug>.md`). darius verbs take it as it is. A skill that reads a file of the tree with a file tool takes the path from `trackerRoot`, or from `absPath` in `list specs --json`, `show --json` and `next --json`. Nothing of the tree is in git, and it is never staged. darius records file edits at the next darius verb or sync, so a skill that edits tracker files ends with a darius verb, for example `darius index --rebuild`.
+
+Git mode (a real `.tracker/` folder in git) still works but is deprecated. `darius onboard` moves it into the store. A skill mentions it in one short line, only where its behaviour differs.
 
 Keep the prose rules: short sentences, no em dashes.

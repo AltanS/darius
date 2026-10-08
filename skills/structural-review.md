@@ -16,13 +16,15 @@ command -v darius >/dev/null || { echo "darius is not installed. Install it: bas
 
 Deep structural analysis for dead code, unused exports, and incomplete refactors. Called by `/work` (spec/milestone completion) and `/archive` (gate check).
 
+A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output.
+
 $ARGUMENTS
 
 If no explicit file list is provided, enumerate artifact paths from the current focus milestone:
 
 `!darius list specs --json`
 
-Extract `path` fields; for each spec use `darius show <path> --json` to get the artifact list.
+Extract `path` fields (tracker-relative); for each spec use `darius show <path> --json` to get the artifact list. Do not read `currentFocus` from `status`; `darius next --json` names the active milestone.
 
 ## Per-file analysis
 

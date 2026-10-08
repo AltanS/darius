@@ -338,6 +338,7 @@ export const milestoneCommand: Command = {
   name: "milestone",
   help: USAGE,
   flags: ["dry-run", "keep", "incomplete"],
+  audience: "session",
   summary: "archive a milestone: check it is done and remove its folder",
   usage: "milestone archive <milestone> [--dry-run] [--keep] [--incomplete <reason>]",
   async run(args) {

@@ -20,7 +20,9 @@ import { VERSION } from "../src/version.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const RUNTIMES = ["node", "bun"] as const;
-const SESSION_VERBS = ["due", "finding", "init", "marker", "ritual", "run"];
+const SESSION_VERBS = ["due", "finding", "init", "marker", "milestone", "ritual", "run", "spec", "tree"];
+/** The next release adds a few lines to the generated skill; keep room under the hard limit. */
+const SKILL_HEADROOM_BYTES = 7000;
 
 interface Sandbox {
   root: string;
@@ -63,6 +65,7 @@ test("the skill stays under 7168 bytes, and its stamp names this version and has
     const result = darius(env, ["skill"], { runtime });
     assert.equal(result.code, 0, result.stderr);
     assert.ok(Buffer.byteLength(result.stdout) < SKILL_MAX_BYTES, `${runtime}: ${String(Buffer.byteLength(result.stdout))} bytes`);
+    assert.ok(Buffer.byteLength(result.stdout) <= SKILL_HEADROOM_BYTES, `${runtime}: ${String(Buffer.byteLength(result.stdout))} bytes leaves under 168 free`);
     const stamp = readStamp(result.stdout);
     assert.ok(stamp !== null);
     assert.equal(stamp.version, VERSION);
@@ -91,6 +94,9 @@ test("the verb table lists the session verbs only, in registry order", () => {
   for (const hidden of ["setup", "update", "serve", "tui", "selftest", "harness", "push", "link", "profile", "policy-check", "import", "sync", "vigil", "skill"]) {
     assert.doesNotMatch(text, new RegExp(`\\| \`darius ${hidden}\\b`, "u"), hidden);
   }
+  assert.match(text, /\| `darius spec check <spec> \[--json\]` \|/u);
+  assert.match(text, /\| `darius tree log\\\|restore\\\|resolve <path>` \|/u);
+  assert.match(text, /\| `darius milestone archive <milestone> .*--incomplete <reason>\]` \|/u);
   const help = darius(env, ["help"]).stdout;
   assert.match(help, /darius setup/, "help still lists every command");
 });

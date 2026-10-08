@@ -19,7 +19,7 @@
  *   shell no-op (echo/printf/true/:) classifies as `manual`: nothing runs,
  *   nothing is auto-marked, and `mark --verified` on it requires --evidence.
  *   worklog open <milestone-slug> --spec <path> [--message "..."] [--session <id>]
- *   worklog set-stage <thread-id> <stage> [--commit <sha>] [--no-git] [--force --reason "..."]
+ *   worklog set-stage <thread-id> <stage> [--commit <sha>] [--no-git] [--no-code "..."] [--force --reason "..."]
  *   worklog append <thread-id> --section "<s>" --message "..."
  *   worklog close <thread-id> --status <done|blocked|cancelled>
  *   worklog list [--active] [--milestone M1] [--json]
@@ -387,11 +387,11 @@ async function dispatch(argv: string[]): Promise<number> {
     process.stderr.write("  add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n");
     process.stderr.write("      Scaffolded Commands are deliberate failures (`test -f /nonexistent/...`) — replace them with real\n");
     process.stderr.write("      assertions. --manual scaffolds operator decisions instead, and needs a named owner and an expiry.\n");
-    process.stderr.write("  mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"]\n");
+    process.stderr.write("  mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"] [--override \"<why the check cannot run>\"]\n");
     process.stderr.write("  set-status <spec-path|milestone-folder> <status>\n");
     process.stderr.write("  index --rebuild\n");
     process.stderr.write("  worklog index\n");
-    process.stderr.write("  worklog set-stage <thread-id> <planned|dispatched|verified|committed|reviewed> [--commit <sha>] [--no-git] [--force --reason \"...\"]\n");
+    process.stderr.write("  worklog set-stage <thread-id> <planned|dispatched|verified|committed|reviewed> [--commit <sha>] [--no-git] [--no-code \"...\"] [--force --reason \"...\"]\n");
     process.stderr.write("  counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--max-rounds N] [--ack-dissent] [--json]\n");
     process.stderr.write("      reads a ```darius-review block (one reviewer, 0.74.0) or the older four-advisor transcript.\n");
     process.stderr.write("  agents [--json]\n");
@@ -988,7 +988,7 @@ function runMark(args: string[]): void {
 
   if (!specPath || !taskIdxStr) {
     process.stderr.write(
-      "Usage: darius mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"]\n",
+      "Usage: darius mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"] [--override \"<why the check cannot run>\"]\n",
     );
     process.exit(2);
   }
@@ -2214,7 +2214,7 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
   const threadId = positionals[0];
   if (!threadId || !values.agent) {
     process.stderr.write(
-      'Usage: darius worklog dispatch <thread-id> --agent <invocable> [--reason "<one-line>"]\n',
+      'Usage: darius worklog dispatch <thread-id> --agent <invocable> [--reason "<one-line>"] [--force] [--session <id>] [--as-other-session]\n',
     );
     process.exit(2);
   }
@@ -2310,11 +2310,20 @@ function runWorklogList(args: string[]): void {
 
   const trackerRoot = requireTrackerRoot();
 
-  const threads = listThreads({
+  const listed = listThreads({
     trackerRoot,
     activeOnly: values.active,
     milestoneSlug: values.milestone,
   });
+  // Store mode (0.78.1): a thread's `specPath` shows tracker-relative, whatever
+  // form was typed at `worklog open`. The worklog file keeps what was typed.
+  const threads = isStoreTree(trackerRoot)
+    ? listed.map((t) =>
+        t.specPath === undefined
+          ? t
+          : { ...t, specPath: canonicalSpecRef({ trackerRoot, ref: t.specPath, cwd: null }) ?? t.specPath },
+      )
+    : listed;
   // Legacy (pre-CLI, marker-less) files have no threads to list, so they ride
   // alongside the threads as per-file rows instead of vanishing from the view.
   const files = listWorklogFiles({ trackerRoot, milestoneSlug: values.milestone });
@@ -2841,7 +2850,7 @@ async function runCounselGate(args: string[]): Promise<void> {
   const transcriptArg = positionals[0];
   if (!transcriptArg) {
     process.stderr.write(
-      "Usage: darius counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--single-dissent surface|confirm|ignore] [--ack-dissent] [--json]\n",
+      "Usage: darius counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--single-dissent surface|confirm|ignore] [--ack-dissent] [--json]\n       darius counsel-gate --spec <spec-path> --override \"<reason>\"\n",
     );
     process.exit(2);
   }

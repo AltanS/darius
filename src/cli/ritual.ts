@@ -533,7 +533,7 @@ export const ritualCommand: Command = {
   summary: "add, list, show, edit and change lifecycle of rituals; reconcile mirrors a v3 .darius.toml into the store; export builds one from the store",
   audience: "session",
   // In a v3 project add and retire are refused for repo rituals, and set takes host, owner, agent, tag and due only.
-  usage: `ritual ${VERBS.replaceAll(" | ", "|")} (v3 project: add refused; set host|owner|agent|tag|due only; retire refused; export [--write] prints or writes a v3 marker)`,
+  usage: `ritual ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

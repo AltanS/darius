@@ -290,6 +290,9 @@ test("a whole Work Loop in a checkout with no .tracker: open, mark, verify in th
 
   const thread = ok(at, ["worklog", "open", "alpha", "--spec", `.tracker/${spec}`, "--message", "start", "--session", "s1"], dir).trim();
   assert.match(thread, /alpha$/u);
+  // 0.78.1: the thread was opened with the old form; the listing shows it tracker-relative.
+  const listedThreads: { threads: { threadId: string; specPath: string }[] } = JSON.parse(ok(at, ["worklog", "list", "--json"], dir));
+  assert.deepEqual(listedThreads.threads.map((entry) => [entry.threadId, entry.specPath]), [[thread, spec]]);
   ok(at, ["mark", `.tracker/${spec}`, "0", "--in-progress"], dir);
   assert.match(readFileSync(absSpec, "utf8"), /- \[~\] Create `out\.txt`/u);
   ok(at, ["worklog", "dispatch", thread, "--agent", "general-purpose", "--reason", "test", "--session", "s1"], dir);
