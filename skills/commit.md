@@ -34,9 +34,9 @@ Atomically commit code changes alongside the tracker record.
 6. **Prune drift ledger**: remove `.pending-sync` entries for files now staged. Legacy mode: stage the updated ledger. Store mode: `.pending-sync` is host-local, so prune it and do not stage it.
 7. **Compose commit message** (LLM): conventional commit reflecting the code change with a tracker progress trailer, e.g. `Tracker: M2-api-layer/01-AUTH 3/5 -> 4/5 verified`. Read the progress from `darius show <spec> --json` (`verified` and `total`), never from a git diff. The "before" count is the one the Work Loop context recorded at plan time. If it is unknown, write `4/5 verified`.
 8. **Create commit** via Bash using the composed message.
-9. **Stamp loop stage**: after the commit lands, for each worklog thread whose spec is in this commit's scope:
-   `!darius worklog set-stage <thread-id> committed`
-   (Thread IDs come from the Work Loop context or `darius worklog list --active --json` filtered by the scoped spec paths. Skip threads not at stage `verified`.)
+9. **Stamp loop stage**: after the commit lands, read its sha (`git rev-parse HEAD`). For each worklog thread whose spec is in this commit's scope:
+   `!darius worklog set-stage <thread-id> committed --commit <sha>`
+   (Thread IDs come from the Work Loop context or `darius worklog list --active --json` filtered by the scoped spec paths. Skip threads not at stage `verified`.) It refuses (exit 1) when the sha is not in HEAD's history or an artifact of the thread is still dirty or untracked: commit those files, then retry. Outside a git repo it exits 3; report that instead of retrying. The review stage (`reviewed`) is not this skill's job.
 
 If no tracker exists, stage changed files and create a conventional commit directly via Bash.
 

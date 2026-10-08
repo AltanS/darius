@@ -108,7 +108,7 @@ describe("tracker uncommitted-verified CLI", () => {
     const threadId = openThread({ worklogPath, slug: "t1", specPath: SPEC_REF, stage: "dispatched" });
     appendThread({ worklogPath, threadId, section: "artifact", message: "src/a.ts" });
     appendThread({ worklogPath, threadId, section: "artifact", message: "src/clean.ts" });
-    setStage({ worklogPath, threadId, stage: "verified" });
+    setStage({ worklogPath, threadId, stage: "verified", force: true, reason: "test" });
     mkdirSync(join(tmpDir, "src"));
     writeFileSync(join(tmpDir, "src", "a.ts"), "export {};\n");
 
@@ -129,7 +129,7 @@ describe("tracker uncommitted-verified CLI", () => {
   it("store mode: a committed thread returns none", () => {
     const tree = setupStoreMode();
     const threadId = openThread({ worklogPath, slug: "t1", specPath: SPEC_REF, stage: "verified" });
-    setStage({ worklogPath, threadId, stage: "committed" });
+    setStage({ worklogPath, threadId, stage: "committed", force: true, reason: "test" });
 
     expect(runGate(tmpDir)).toEqual({ exitCode: 0, entries: [] });
     rmSync(tree, { recursive: true, force: true });

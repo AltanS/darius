@@ -18,7 +18,8 @@
  *   (committed — it is the evidence behind each `[x]`). A Command that is a
  *   shell no-op (echo/printf/true/:) classifies as `manual`: nothing runs,
  *   nothing is auto-marked, and `mark --verified` on it requires --evidence.
- *   worklog open <milestone-slug> --spec <path> [--message "..."]
+ *   worklog open <milestone-slug> --spec <path> [--message "..."] [--session <id>]
+ *   worklog set-stage <thread-id> <stage> [--commit <sha>] [--no-git] [--force --reason "..."]
  *   worklog append <thread-id> --section "<s>" --message "..."
  *   worklog close <thread-id> --status <done|blocked|cancelled>
  *   worklog list [--active] [--milestone M1] [--json]
@@ -166,6 +167,7 @@ import {
   type SessionClaim,
 } from "../lib/session-claims.ts";
 import { atomicWriteFileSync } from "../lib/atomic.ts";
+import { StageRefusal } from "../lib/stage-evidence.ts";
 import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runDelegation } from "../lib/delegation.ts";
@@ -335,13 +337,14 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write("  set-status <spec-path|milestone-folder> <status>\n");
     process.stderr.write("  index --rebuild\n");
     process.stderr.write("  worklog index\n");
+    process.stderr.write("  worklog set-stage <thread-id> <planned|dispatched|verified|committed|reviewed> [--commit <sha>] [--no-git] [--force --reason \"...\"]\n");
     process.stderr.write("  counsel-gate <transcript-path> [--spec <spec-path>] [--threshold N] [--max-rounds N] [--json]\n");
     process.stderr.write("  agents [--json]\n");
     process.stderr.write("  uncommitted-verified [--json]\n");
     process.stderr.write("  claim <spec-ref> [--session <id>] [--ttl 8h] [--takeover] [--json]\n");
     process.stderr.write("  claim --list [--json]\n");
     process.stderr.write("  release <spec-ref> [--session <id>] [--force] [--json]\n");
-    process.stderr.write("  loop-check [--json] [--bounce <agent-id>] [--max-bounces N]\n");
+    process.stderr.write("  loop-check [--json] [--session <id>] [--bounce <id>] [--max-bounces N]\n");
     process.stderr.write("  hook-stop   (Stop hook, reads the hook JSON on stdin)\n");
     process.stderr.write("  hook-drift  (PostToolUse hook, reads the hook JSON on stdin)\n");
     process.stderr.write("  delegation <validate|return-validate> '<json>'\n");
@@ -1798,6 +1801,7 @@ function runWorklogOpen(args: string[]): void {
       spec: { type: "string" },
       message: { type: "string" },
       stage: { type: "string" },
+      session: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -1857,6 +1861,7 @@ function runWorklogOpen(args: string[]): void {
       specPath: values.spec,
       message: values.message,
       stage: values.stage as WorklogStage | undefined,
+      session: resolveSessionId(values.session),
     });
     process.stdout.write(`${threadId}\n`);
   } catch (err) {
@@ -1960,20 +1965,46 @@ function runWorklogClose(args: string[]): void {
 }
 
 function runWorklogSetStage(args: string[]): void {
-  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
+  const usage =
+    `Usage: tracker worklog set-stage <thread-id> <${WORKLOG_STAGES.join("|")}> ` +
+    `[--commit <sha>] [--no-git] [--force --reason "<why>"] [--session <id>]\n`;
+  let values: { commit?: string; "no-git"?: boolean; force?: boolean; reason?: string; session?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args,
+      options: {
+        commit: { type: "string" },
+        "no-git": { type: "boolean", default: false },
+        force: { type: "boolean", default: false },
+        reason: { type: "string" },
+        session: { type: "string" },
+      },
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`tracker worklog set-stage: ${message}\n${usage}`);
+    process.exit(2);
+  }
 
   const threadId = positionals[0];
   const stage = positionals[1];
   if (!threadId || !stage) {
-    process.stderr.write(
-      `Usage: tracker worklog set-stage <thread-id> <${WORKLOG_STAGES.join("|")}>\n`,
-    );
+    process.stderr.write(usage);
     process.exit(1);
   }
 
   if (!(WORKLOG_STAGES as readonly string[]).includes(stage)) {
     process.stderr.write(
       `tracker worklog set-stage: invalid stage "${stage}". Allowed: ${WORKLOG_STAGES.join(", ")}\n`,
+    );
+    process.exit(1);
+  }
+
+  if (values.force && !values.reason?.trim()) {
+    process.stderr.write(
+      'tracker worklog set-stage: --force needs a non-empty --reason "<why>". It is recorded on the thread.\n',
     );
     process.exit(1);
   }
@@ -1986,12 +2017,23 @@ function runWorklogSetStage(args: string[]): void {
   }
 
   try {
-    setStage({ worklogPath, threadId, stage: stage as WorklogStage });
-    process.stdout.write(`tracker worklog set-stage: ${threadId} → ${stage}\n`);
+    setStage({
+      worklogPath,
+      threadId,
+      stage: stage as WorklogStage,
+      trackerRoot,
+      commit: values.commit,
+      noGit: values["no-git"],
+      force: values.force,
+      reason: values.reason,
+      session: resolveSessionId(values.session),
+    });
+    const forced = values.force ? " (forced)" : "";
+    process.stdout.write(`tracker worklog set-stage: ${threadId} → ${stage}${forced}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`tracker worklog set-stage: ${message}\n`);
-    process.exit(1);
+    process.exit(err instanceof StageRefusal ? err.exitCode : 1);
   }
 }
 
@@ -2037,7 +2079,13 @@ function runWorklogDispatch(args: string[]): void {
   }
 
   try {
-    dispatchThread({ worklogPath, threadId, agent: values.agent, reason: values.reason });
+    dispatchThread({
+      worklogPath,
+      threadId,
+      agent: values.agent,
+      reason: values.reason,
+      session: resolveSessionId(values.session),
+    });
     process.stdout.write(
       `tracker worklog dispatch: ${threadId} → dispatched (agent: ${values.agent})\n`,
     );
@@ -3441,7 +3489,7 @@ function claimGate(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// tracker loop-check [--json] [--bounce <agent-id>] [--max-bounces N]
+// tracker loop-check [--json] [--session <id>] [--bounce <id>] [--max-bounces N]
 //
 // The Work Loop exit gate's decision engine: detects threads stuck in a
 // pre-terminal stage (planned|dispatched|verified) at turn end. Called by
@@ -3453,21 +3501,24 @@ function claimGate(opts: {
 
 function runLoopCheckCommand(args: string[]): void {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write("Usage: tracker loop-check [--json] [--bounce <agent-id>] [--max-bounces N]\n");
+    process.stdout.write("Usage: tracker loop-check [--json] [--session <id>] [--bounce <id>] [--max-bounces N]\n");
     process.stdout.write("\n");
-    process.stdout.write("Detect Work Loop threads stuck in a pre-terminal stage. With --bounce,\n");
-    process.stdout.write("track a per-agent-invocation block budget (default max 2) and report\n");
-    process.stdout.write("STATUS: exhausted (exit 0) once it is spent.\n");
+    process.stdout.write("Detect Work Loop threads stuck in a pre-terminal stage. With --session\n");
+    process.stdout.write("(--bounce is the older name), only threads owned by that session count,\n");
+    process.stdout.write("each thread has its own block budget (default max 2 per 24 h), and\n");
+    process.stdout.write("STATUS: exhausted (exit 0) is reported once every own thread spent it.\n");
+    process.stdout.write("Threads of other sessions are listed in a NOTICE line and never block.\n");
     return;
   }
 
-  let values: { json?: boolean; bounce?: string; "max-bounces"?: string };
+  let values: { json?: boolean; bounce?: string; session?: string; "max-bounces"?: string };
   try {
     ({ values } = parseArgs({
       args,
       options: {
         json: { type: "boolean", default: false },
         bounce: { type: "string" },
+        session: { type: "string" },
         "max-bounces": { type: "string" },
       },
       allowPositionals: false,
@@ -3502,7 +3553,7 @@ function runLoopCheckCommand(args: string[]): void {
 
   let result: LoopCheckResult;
   try {
-    result = runLoopCheck({ trackerRoot, bounceId: values.bounce, maxBounces });
+    result = runLoopCheck({ trackerRoot, session: values.session, bounceId: values.bounce, maxBounces });
   } catch {
     // Fail open on any internal error.
     result = { status: "clean", threads: [] };

@@ -20,6 +20,7 @@ import { appendFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunOutcome } from "./runner.ts";
+import { gitHead, hostName } from "../host-stamp.ts";
 
 export const LEDGER_FILENAME = ".verification-log.jsonl";
 
@@ -60,6 +61,10 @@ export type LedgerEntry = {
   pluginVersion: string;
   /** ISO-8601 timestamp. */
   at: string;
+  /** Git HEAD of the checkout when the line was written, or `none` (0.72.0; absent on older lines). */
+  head?: string;
+  /** Host that wrote the line (0.72.0; absent on older lines). */
+  host?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -170,6 +175,10 @@ export type AppendLedgerOpts = {
   evidence?: string;
   /** Injectable for tests; defaults to now. */
   at?: string;
+  /** Injectable for tests; defaults to the checkout's git HEAD. */
+  head?: string;
+  /** Injectable for tests; defaults to this host's name. */
+  host?: string;
 };
 
 /**
@@ -193,6 +202,8 @@ export function appendLedgerEntry(opts: AppendLedgerOpts): boolean {
     outcome: opts.outcome,
     pluginVersion: getPluginVersion(),
     at: opts.at ?? new Date().toISOString(),
+    head: opts.head ?? gitHead(dirname(resolve(opts.trackerRoot))),
+    host: opts.host ?? hostName(),
   };
 
   if (opts.evidence !== undefined && opts.evidence.trim() !== "") {

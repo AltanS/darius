@@ -77,7 +77,7 @@ When every task in the batch verifies, invoke `/darius-commit` scoped to the bat
 
 ## Stage 5: Review, YOU do this, and YOU log it
 
-Every review writes a worklog note (`darius worklog append <thread-id> --message "Review: ..."`). No silent passes.
+Every review writes a worklog note (`darius worklog append <thread-id> --message "Review: ..."`). No silent passes. Then close the stage: `darius worklog set-stage <thread-id> reviewed`. It succeeds only when a note that starts with `Review:` was written after the commit stamp. A `committed` thread is still open loop work until it is `reviewed`.
 
 - **Per task:** skim the implementation, real, matches spec *intent* (not just the literal verification grep)? Log `Review: pass, <reason>` or fail.
 - **Per spec** (all items `[x]`): run `dev-tools:code-review` on the artifact files. **Reopen, don't defer to Lessons**, any unfinished spec intent: an untested spec-required branch, a missing implied assertion, behavior wrong despite a matching grep, anything you'd flag on someone else's PR. "Warning" severity is not automatically non-blocking. Reopened tasks → back to the implementing agent via Task → re-verify → re-review.
@@ -91,7 +91,7 @@ After spec/milestone completion, invoke `/darius-enrich` if the work revealed su
 
 ## Exit Gate
 
-A Stop hook guards your turn end: any worklog thread sitting in a pre-terminal stage (`planned`/`dispatched`/`verified`) bounces the stop with the literal next action. Do what the bounce names, or park the thread explicitly with a reason. Stage stamps ride the skills you already call, never hand-edit a stage to silence the gate.
+A Stop hook guards your turn end. It blocks only on threads your session owns (`worklog open` and `dispatch` record the session) that sit in a pre-terminal stage: `planned`, `dispatched`, `verified` or `committed`. `reviewed`, closed and parked threads are done. The bounce names the literal next action. Do it, or park the thread with a reason. Each thread may bounce a stop 2 times per 24 h; after that the hook reports it and lets the stop through, while your other threads still block. Threads of other sessions, or of none, show in one notice line and never block. Stage stamps ride the skills you already call. Never hand-edit a stage to silence the gate. Each stage needs its evidence, so a stage cannot be skipped.
 
 ## Counsel Handling (only when `.tracker/config.yml` has `counsel_gate: on`)
 

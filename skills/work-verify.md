@@ -36,11 +36,11 @@ $ARGUMENTS
 
 5. **Rebuild index**: `!darius index --rebuild`
 
-6. **Log artifacts**: `darius worklog append <thread-id> --section Artifacts --message "<paths>"`
+6. **Log artifacts**: `darius worklog append <thread-id> --section Artifacts --message "<paths>"` (repo-relative paths, comma separated; the `committed` stage checks that none of them is dirty)
 
 7. **Stamp loop stage** (only when every check above passed):
    `!darius worklog set-stage <thread-id> verified`
-   On any `STATUS: fail` return, skip this, the thread stays `dispatched` so the exit gate keeps the loop open.
+   It succeeds only with ledger evidence: a passing `verify-item` (or an evidenced `mark`) for this spec since the dispatch, and no item whose latest result failed. So call it after steps 3 and 4. If it refuses, return `STATUS: fail / REASON: verification` with its message. On any `STATUS: fail` return, skip this, the thread stays `dispatched` so the exit gate keeps the loop open.
 
 8. **Return**: `STATUS: pass | SPEC: {path} | VERIFIED: {done}/{total} | TOUCHED_FILES: {list}`
 

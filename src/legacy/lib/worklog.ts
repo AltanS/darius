@@ -23,6 +23,18 @@ import {
 import { join, dirname, basename } from "node:path";
 import { generateThreadId } from "./ulid.ts";
 import { atomicWriteFileSync } from "./atomic.ts";
+import {
+  NO_GIT_HEAD,
+  StageRefusal,
+  dirtyArtifacts,
+  gitHead,
+  hostName,
+  inGitRepo,
+  isAncestorOfHead,
+  ledgerVerdict,
+  projectRootOf,
+  resolveCommit,
+} from "./stage-evidence.ts";
 
 // ---------------------------------------------------------------------------
 // Lock constants
@@ -60,18 +72,46 @@ export type WorklogEntry = {
 
 /**
  * Work Loop position, stamped on threads opened by work-plan.
- * Forward-only: planned → dispatched → verified → committed.
+ * Forward-only: planned → dispatched → verified → committed → reviewed.
  * Threads without a stage (legacy, or opened outside the Work Loop)
- * are exempt from loop gating.
+ * are exempt from loop gating. `reviewed` is new in 0.72.0.
  */
-export type WorklogStage = "planned" | "dispatched" | "verified" | "committed";
+export type WorklogStage = "planned" | "dispatched" | "verified" | "committed" | "reviewed";
 
 export const WORKLOG_STAGES: readonly WorklogStage[] = [
   "planned",
   "dispatched",
   "verified",
   "committed",
+  "reviewed",
 ];
+
+/** Stages with an evidence rule. A forward move may not skip one of them. */
+const EVIDENCE_STAGES: readonly WorklogStage[] = ["verified", "committed", "reviewed"];
+
+/** A note whose text starts with this prefix is the review that `reviewed` needs. */
+export const REVIEW_NOTE_PREFIX = "Review:";
+
+/**
+ * Evidence recorded with every stage change (0.72.0). Stored as one
+ * `<!-- stamp: {json} -->` comment per change, next to the `<!-- stage: -->`
+ * line, so an older reader keeps the stage and carries the stamp as prose.
+ */
+export type StageStamp = {
+  stage: WorklogStage;
+  /** ISO-8601 time of the change. */
+  at: string;
+  /** Git HEAD of the checkout, or `none` outside git. */
+  head: string;
+  host: string;
+  /** `committed` only: the commit the work landed in, or `none` with --no-git. */
+  commit?: string;
+  /** Set when `--force --reason` skipped the evidence rules. */
+  forced?: boolean;
+  reason?: string;
+  /** The acting session, when one was resolved. */
+  session?: string;
+};
 
 export type WorklogThread = {
   threadId: string;
@@ -81,6 +121,10 @@ export type WorklogThread = {
   closeStatus?: "done" | "blocked" | "cancelled";
   specPath?: string;
   stage?: WorklogStage;
+  /** Session that owns the thread (set by open and dispatch, 0.72.0). */
+  session?: string;
+  /** Stage stamps in the order they were written (0.72.0). */
+  stamps?: StageStamp[];
   entries: WorklogEntry[];
   /**
    * The verbatim `## ...` header line as read from disk. When present, the
@@ -126,6 +170,8 @@ export type OpenThreadOpts = {
   specPath?: string;
   message?: string;
   stage?: WorklogStage;
+  /** Acting session id; recorded as the thread owner when set. */
+  session?: string | null;
 };
 
 /**
@@ -134,6 +180,7 @@ export type OpenThreadOpts = {
  */
 export function openThread(opts: OpenThreadOpts): string {
   const { worklogPath, slug, specPath, message, stage } = opts;
+  const session = opts.session ?? undefined;
   const threadId = generateThreadId(slug);
 
   withLock(worklogPath, () => {
@@ -147,6 +194,10 @@ export function openThread(opts: OpenThreadOpts): string {
       stage,
       entries: [],
     };
+    if (session) thread.session = session;
+    if (stage !== undefined) {
+      thread.stamps = [makeStamp(worklogPath, stage, { session })];
+    }
 
     if (message) {
       thread.entries.push({
@@ -229,16 +280,44 @@ export type SetStageOpts = {
   worklogPath: string;
   threadId: string;
   stage: WorklogStage;
+  /** The `.tracker/` dir; defaults to the parent of the worklog dir. */
+  trackerRoot?: string;
+  /** `committed`: the commit the work landed in (default HEAD). */
+  commit?: string;
+  /** `committed` outside git: record `commit: none` instead of refusing. */
+  noGit?: boolean;
+  /** Skip the evidence and no-skip rules. Needs a non-empty `reason`. */
+  force?: boolean;
+  reason?: string;
+  /** Acting session id, recorded on the stamp when set. */
+  session?: string | null;
 };
 
 /**
  * Set a thread's Work Loop stage. Transitions are forward-only:
- * planned → dispatched → verified → committed.
- * Same-stage is an idempotent no-op; an unset stage accepts any first stamp.
- * Throws on backward transitions and on closed threads.
+ * planned → dispatched → verified → committed → reviewed.
+ * Same-stage is an idempotent no-op; an unset stage counts as before `planned`.
+ *
+ * Since 0.72.0 every change writes a {@link StageStamp}, and a forward move may
+ * not skip `verified` or `committed`. Evidence rules:
+ * - `verified`: a passing ledger line for the spec since dispatch, no failing item.
+ * - `committed`: the commit is an ancestor of HEAD, no artifact is dirty.
+ *   Outside git it refuses with exit 3 unless `noGit` is set.
+ * - `reviewed`: a `Review:` note written after the committed stamp.
+ * `force` with a reason skips all of these and marks the stamp `forced`.
+ *
+ * Throws on backward transitions and on closed threads; evidence refusals
+ * throw {@link StageRefusal} with the exit code to use.
  */
 export function setStage(opts: SetStageOpts): void {
   const { worklogPath, threadId, stage } = opts;
+  const force = opts.force === true;
+  const reason = opts.reason?.trim() ?? "";
+  if (force && reason === "") {
+    throw new StageRefusal("--force needs a non-empty --reason");
+  }
+  const trackerRoot = opts.trackerRoot ?? dirname(dirname(worklogPath));
+  const repoRoot = projectRootOf(trackerRoot);
 
   withLock(worklogPath, () => {
     const doc = readDocForMutation(worklogPath);
@@ -250,22 +329,147 @@ export function setStage(opts: SetStageOpts): void {
       throw new Error(`Thread is closed: ${threadId} (stage changes are not allowed)`);
     }
 
-    if (thread.stage !== undefined) {
-      const current = WORKLOG_STAGES.indexOf(thread.stage);
-      const requested = WORKLOG_STAGES.indexOf(stage);
-      if (requested < current) {
-        throw new Error(
-          `Backward stage transition rejected: ${thread.stage} → ${stage} (thread ${threadId})`,
+    const current = thread.stage === undefined ? -1 : WORKLOG_STAGES.indexOf(thread.stage);
+    const requested = WORKLOG_STAGES.indexOf(stage);
+    if (requested < current) {
+      throw new Error(
+        `Backward stage transition rejected: ${thread.stage} → ${stage} (thread ${threadId})`,
+      );
+    }
+    if (requested === current) {
+      return; // idempotent
+    }
+
+    const extra: Partial<StageStamp> = {};
+    if (force) {
+      extra.forced = true;
+      extra.reason = reason;
+      if (stage === "committed") {
+        const sha = opts.commit ? resolveCommit(repoRoot, opts.commit) : null;
+        extra.commit = sha ?? opts.commit ?? gitHead(repoRoot);
+      }
+    } else {
+      const skipped = WORKLOG_STAGES.slice(current + 1, requested).filter((s) =>
+        EVIDENCE_STAGES.includes(s),
+      );
+      if (skipped.length > 0) {
+        throw new StageRefusal(
+          `cannot move ${thread.stage ?? "(no stage)"} → ${stage}: it skips ${skipped.join(", ")}. ` +
+            `Each of those stages needs its own evidence (thread ${threadId})`,
         );
       }
-      if (requested === current) {
-        return; // idempotent
-      }
+      if (stage === "verified") checkVerified(thread, trackerRoot);
+      if (stage === "committed") extra.commit = checkCommitted(thread, repoRoot, opts);
+      if (stage === "reviewed") checkReviewed(thread);
     }
 
     thread.stage = stage;
+    const stamp = makeStamp(worklogPath, stage, { trackerRoot, session: opts.session ?? undefined, ...extra });
+    thread.stamps = [...(thread.stamps ?? []), stamp];
+    if (force) {
+      thread.entries.push({
+        kind: "note",
+        text: `Forced to ${stage}: ${reason}`,
+        timestamp: stamp.at,
+      });
+    }
     writeDoc(worklogPath, doc);
   });
+}
+
+/** The latest stamp for `stage`, or undefined. */
+export function latestStamp(thread: { stamps?: StageStamp[] }, stage: WorklogStage): StageStamp | undefined {
+  const stamps = thread.stamps ?? [];
+  for (let i = stamps.length - 1; i >= 0; i--) {
+    if (stamps[i]!.stage === stage) return stamps[i];
+  }
+  return undefined;
+}
+
+function checkVerified(thread: WorklogThread, trackerRoot: string): void {
+  if (!thread.specPath) {
+    throw new StageRefusal(
+      `cannot move to verified: thread ${thread.threadId} names no spec, so no ledger line can vouch for it`,
+    );
+  }
+  const since = latestStamp(thread, "dispatched")?.at ?? thread.openedAt;
+  const verdict = ledgerVerdict(trackerRoot, thread.specPath, since);
+  if (!verdict.ok) {
+    throw new StageRefusal(`cannot move to verified: ${verdict.reason}`);
+  }
+}
+
+function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageOpts): string {
+  if (!inGitRepo(repoRoot)) {
+    if (opts.noGit) return NO_GIT_HEAD;
+    throw new StageRefusal(
+      `cannot move to committed: ${repoRoot} is not a git checkout. ` +
+        "Pass --no-git to record the stage without a commit",
+      3,
+    );
+  }
+  const ref = opts.commit ?? "HEAD";
+  const sha = resolveCommit(repoRoot, ref);
+  if (sha === null) {
+    throw new StageRefusal(`cannot move to committed: ${ref} names no commit`);
+  }
+  if (!isAncestorOfHead(repoRoot, sha)) {
+    throw new StageRefusal(`cannot move to committed: ${sha} is not an ancestor of HEAD`);
+  }
+  // One artifact entry may list several paths, comma or space separated.
+  const artifacts = thread.entries.flatMap((e) =>
+    e.kind === "artifact" && e.path ? e.path.split(/[\s,]+/).filter((p) => p !== "") : [],
+  );
+  const dirty = dirtyArtifacts(repoRoot, artifacts);
+  if (dirty === null) {
+    throw new StageRefusal("cannot move to committed: git status failed", 3);
+  }
+  if (dirty.length > 0) {
+    throw new StageRefusal(
+      `cannot move to committed: these artifacts are dirty or untracked: ${dirty.join(", ")}. ` +
+        "Commit them first",
+    );
+  }
+  return sha;
+}
+
+function checkReviewed(thread: WorklogThread): void {
+  const since = latestStamp(thread, "committed")?.at;
+  const sinceMs = since === undefined ? Number.NEGATIVE_INFINITY : Date.parse(since);
+  const found = thread.entries.some(
+    (e) =>
+      e.kind === "note" &&
+      (e.text ?? "").trimStart().startsWith(REVIEW_NOTE_PREFIX) &&
+      !(Date.parse(e.timestamp) < sinceMs),
+  );
+  if (!found) {
+    throw new StageRefusal(
+      `cannot move to reviewed: thread ${thread.threadId} has no note starting with "${REVIEW_NOTE_PREFIX}" ` +
+        `written after it was committed. Add one with ` +
+        `\`darius worklog append ${thread.threadId} --section note --message "Review: ..."\``,
+    );
+  }
+}
+
+/** Build a stamp for a stage change made now, from this checkout and host. */
+function makeStamp(
+  worklogPath: string,
+  stage: WorklogStage,
+  extra: Partial<StageStamp> & { trackerRoot?: string },
+): StageStamp {
+  const { trackerRoot, ...rest } = extra;
+  const repoRoot = projectRootOf(trackerRoot ?? dirname(dirname(worklogPath)));
+  const stamp: StageStamp = {
+    stage,
+    at: new Date().toISOString(),
+    head: gitHead(repoRoot),
+    host: hostName(),
+  };
+  if (rest.commit !== undefined) stamp.commit = rest.commit;
+  if (rest.forced) stamp.forced = true;
+  if (rest.reason !== undefined) stamp.reason = rest.reason;
+  if (rest.session) stamp.session = rest.session;
+  return stamp;
 }
 
 export type DispatchThreadOpts = {
@@ -273,14 +477,19 @@ export type DispatchThreadOpts = {
   threadId: string;
   agent: string;
   reason?: string;
+  /** Acting session id; becomes the thread owner when set. */
+  session?: string | null;
 };
 
 /**
  * Stage-2 sugar: mark a thread `dispatched` and record the agent selection
  * in one locked write. Replaces the prose-mandated "Agent selected:" logging.
+ * Since 0.72.0 it also stamps the stage and records the acting session as the
+ * thread owner, which the exit gate uses.
  */
 export function dispatchThread(opts: DispatchThreadOpts): void {
   const { worklogPath, threadId, agent, reason } = opts;
+  const session = opts.session ?? undefined;
 
   withLock(worklogPath, () => {
     const doc = readDocForMutation(worklogPath);
@@ -298,6 +507,8 @@ export function dispatchThread(opts: DispatchThreadOpts): void {
     }
 
     thread.stage = "dispatched";
+    if (session) thread.session = session;
+    thread.stamps = [...(thread.stamps ?? []), makeStamp(worklogPath, "dispatched", { session })];
     thread.entries.push({
       kind: "note",
       text: `Agent selected: ${agent}${reason ? ` — ${reason}` : ""}`,
@@ -358,8 +569,20 @@ export type ThreadSummary = {
   closeStatus?: string;
   specPath?: string;
   stage?: WorklogStage;
+  /** Owning session (0.72.0). Absent on threads opened before it or with no session. */
+  session?: string;
+  /** Every stage stamp, oldest first (0.72.0). Absent on threads without one. */
+  stamps?: StageStamp[];
+  /** The stamp of the current stage, when one was written (0.72.0). */
+  stageStamp?: StageStamp;
+  /** True when the latest stage change used --force (0.72.0). */
+  forced?: boolean;
   entryCount: number;
   worklogFile: string;
+  /** Paths of the thread's artifact entries (0.72.0). */
+  artifacts?: string[];
+  /** Timestamps of notes that start with `Review:` (0.72.0). */
+  reviewNotes?: string[];
   /**
    * Set only when the containing file is legacy — it holds unmarked `## `
    * headings that folded into freeform. The thread itself is real; the flag
@@ -477,6 +700,19 @@ export function listThreads(opts: ListThreadsOpts): ThreadSummary[] {
         entryCount: thread.entries.length,
         worklogFile: file,
       };
+      if (thread.session) summary.session = thread.session;
+      if (thread.stamps && thread.stamps.length > 0) {
+        summary.stamps = thread.stamps;
+        const current = thread.stage ? latestStamp(thread, thread.stage) : undefined;
+        if (current) summary.stageStamp = current;
+        if (thread.stamps[thread.stamps.length - 1]!.forced) summary.forced = true;
+      }
+      const artifacts = thread.entries.flatMap((e) => (e.kind === "artifact" && e.path ? [e.path] : []));
+      if (artifacts.length > 0) summary.artifacts = artifacts;
+      const reviews = thread.entries
+        .filter((e) => e.kind === "note" && (e.text ?? "").trimStart().startsWith(REVIEW_NOTE_PREFIX))
+        .map((e) => e.timestamp);
+      if (reviews.length > 0) summary.reviewNotes = reviews;
       if (legacy) {
         summary.legacy = true;
       }
@@ -784,6 +1020,44 @@ const OPENED_RE = /^<!-- opened: (.+) -->$/;
 const SPEC_RE = /^<!-- spec: (.+) -->$/;
 const STAGE_RE = /^<!-- stage: (.+) -->$/;
 const CLOSED_RE = /^<!-- closed: (.+) status: (.+) -->$/;
+const SESSION_RE = /^<!-- session: (.+) -->$/;
+const STAMP_RE = /^<!-- stamp: (\{.*\}) -->$/;
+
+/** The verbatim line a parsed stamp came from, so a rewrite never reformats it. */
+const STAMP_RAW = new WeakMap<StageStamp, string>();
+
+/** One stamp as a metadata comment. `<` and `>` are escaped so `-->` cannot end it early. */
+function formatStamp(stamp: StageStamp): string {
+  const json = JSON.stringify(stamp).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  return `<!-- stamp: ${json} -->`;
+}
+
+/** Parse a stamp comment; null when the JSON or its required fields are bad (it stays prose). */
+function parseStamp(line: string): StageStamp | null {
+  const match = STAMP_RE.exec(line.trim());
+  if (!match) return null;
+  try {
+    const parsed: unknown = JSON.parse(match[1] ?? "");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.stage !== "string" || !(WORKLOG_STAGES as readonly string[]).includes(obj.stage)) return null;
+    if (typeof obj.at !== "string") return null;
+    const stamp: StageStamp = {
+      stage: obj.stage as WorklogStage,
+      at: obj.at,
+      head: typeof obj.head === "string" ? obj.head : NO_GIT_HEAD,
+      host: typeof obj.host === "string" ? obj.host : "unknown",
+    };
+    if (typeof obj.commit === "string") stamp.commit = obj.commit;
+    if (obj.forced === true) stamp.forced = true;
+    if (typeof obj.reason === "string") stamp.reason = obj.reason;
+    if (typeof obj.session === "string") stamp.session = obj.session;
+    STAMP_RAW.set(stamp, line);
+    return stamp;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Read the `<!-- opened: ... -->` marker that promotes a `## ` heading to a real
@@ -799,6 +1073,7 @@ function readThreadOpenedMarker(lines: string[], headingIndex: number): string |
     if (opened) return (opened[1] ?? "").trim();
     if (line.trim() === "") continue;
     if (SPEC_RE.test(line) || STAGE_RE.test(line) || CLOSED_RE.test(line)) continue;
+    if (SESSION_RE.test(line) || STAMP_RE.test(line)) continue;
     return null;
   }
   return null;
@@ -822,6 +1097,8 @@ function readThreadOpenedMarker(lines: string[], headingIndex: number): string |
  * <!-- opened: <ISO> -->
  * <!-- spec: <path> -->
  * <!-- stage: <stage> -->
+ * <!-- session: <id> -->              (0.72.0, optional)
+ * <!-- stamp: {"stage":...} -->       (0.72.0, one per stage change)
  * <!-- closed: <ISO> status: <done|blocked|cancelled> -->
  * <freeform prose>
  * ### <timestamp> [<kind>]
@@ -921,6 +1198,22 @@ export function parseWorklogMarkdown(raw: string): WorklogDoc {
       continue;
     }
 
+    // Metadata comment: <!-- session: ... --> (0.72.0)
+    const sessionMatch = SESSION_RE.exec(line);
+    if (sessionMatch) {
+      currentThread.session = (sessionMatch[1] ?? "").trim();
+      continue;
+    }
+
+    // Metadata comment: <!-- stamp: {...} --> (0.72.0). A bad one stays prose.
+    if (STAMP_RE.test(line)) {
+      const stamp = parseStamp(line);
+      if (stamp !== null) {
+        currentThread.stamps = [...(currentThread.stamps ?? []), stamp];
+        continue;
+      }
+    }
+
     // Metadata comment: <!-- stage: ... -->
     const stageMatch = STAGE_RE.exec(line);
     if (stageMatch) {
@@ -989,6 +1282,14 @@ export function serializeWorklogMarkdown(doc: WorklogDoc): string {
       parts.push(`<!-- stage: ${thread.stage} -->`);
     }
 
+    if (thread.session) {
+      parts.push(`<!-- session: ${thread.session} -->`);
+    }
+
+    for (const stamp of thread.stamps ?? []) {
+      parts.push(STAMP_RAW.get(stamp) ?? formatStamp(stamp));
+    }
+
     if (thread.closedAt && thread.closeStatus) {
       parts.push(`<!-- closed: ${thread.closedAt} status: ${thread.closeStatus} -->`);
     }
@@ -1018,7 +1319,9 @@ export function serializeWorklogMarkdown(doc: WorklogDoc): string {
 
 function sectionToKind(section: string): WorklogEntry["kind"] {
   const lower = section.toLowerCase();
-  if (lower === "artifact") return "artifact";
+  // `Artifacts` is what the work-verify skill passes; it was filed as a note
+  // before 0.72.0, which hid the paths from the committed-stage check.
+  if (lower === "artifact" || lower === "artifacts") return "artifact";
   if (lower === "blocker") return "blocker";
   return "note";
 }

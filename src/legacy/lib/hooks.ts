@@ -12,6 +12,11 @@
  * `.tracker/.loop-bounces.json`, which `runLoopCheck` keeps (the same file the
  * shell gate reached through `darius loop-check --bounce`).
  *
+ * Since 0.72.0 the gate blocks only on threads owned by the stopping session
+ * (the payload `session_id`), with a budget per thread. Threads of other
+ * sessions, or of none, show up in one notice line and never block. A payload
+ * with no `session_id` never blocks.
+ *
  * Debugging: TRACKER_LOOP_DEBUG=1 prints to stderr (with the observed
  * agent_type); TRACKER_LOOP_DEBUG_FILE also appends the lines to a file.
  * TRACKER_DRIFT_DEBUG=1 does the same for hook-drift.
@@ -19,7 +24,7 @@
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { formatLoopCheckReport, runLoopCheck } from "./loop-check.ts";
+import { formatLoopCheckReport, formatOthersNotice, runLoopCheck } from "./loop-check.ts";
 
 type Payload = Record<string, unknown>;
 
@@ -103,14 +108,23 @@ export function decideStop(payload: Payload, cwd: string): string | null {
     return null;
   }
 
-  const bounceKey = agentId !== "" ? agentId : sessionId;
   const root = findTrackerParent(hookCwd !== "" ? hookCwd : cwd);
   if (root === null) {
     stopDebug("no tracker, pass");
     return null;
   }
 
-  const result = runLoopCheck({ trackerRoot: join(root, ".tracker"), bounceId: bounceKey === "" ? undefined : bounceKey });
+  const trackerRoot = join(root, ".tracker");
+  if (sessionId === "") {
+    // No owner to match: report every open thread, block on none.
+    const query = runLoopCheck({ trackerRoot });
+    stopDebug(`no session_id, loop-check status=${query.status}, notice only`);
+    if (query.status !== "stuck") return null;
+    const notice = formatOthersNotice({ ...query, others: query.threads });
+    return notice === null ? null : `{"systemMessage": ${JSON.stringify(notice)}}`;
+  }
+
+  const result = runLoopCheck({ trackerRoot, session: sessionId });
   const report = formatLoopCheckReport(result).replace(/\n+$/u, "");
   stopDebug(`loop-check status=${result.status}`);
   stopDebug(report);
@@ -123,7 +137,8 @@ export function decideStop(payload: Payload, cwd: string): string | null {
     const message = `⚠ Turn ended mid-Work-Loop (bounce budget exhausted). Stuck threads:\n${report}`;
     return `{"systemMessage": ${JSON.stringify(message)}}`;
   }
-  return null;
+  const notice = formatOthersNotice(result);
+  return notice === null ? null : `{"systemMessage": ${JSON.stringify(notice)}}`;
 }
 
 /** `darius hook-stop`: reads the Stop hook JSON on stdin. Always exits 0. */

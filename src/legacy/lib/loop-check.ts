@@ -1,27 +1,32 @@
 /**
  * Loop check — deterministic verdict on "is a Work Loop mid-flight?".
  *
- * Decision engine behind the SubagentStop exit gate (lib/loop-gate.sh).
- * A thread is STUCK iff it is open and its stage is pre-terminal
- * (planned | dispatched | verified). `committed` is terminal for gating;
- * stage-less threads (legacy / non-loop) and closed threads are exempt.
+ * Decision engine behind the Stop / SubagentStop exit gate (`darius hook-stop`).
+ * A thread is PRE-TERMINAL iff it is open and its stage is planned,
+ * dispatched, verified, or committed with a 0.72.0 stamp. `reviewed`,
+ * closed and parked threads are terminal; so is a `committed` thread with no
+ * stamp (written before 0.72.0). Stage-less threads are exempt.
  *
  * Every legal mid-loop pause (commit_first, counsel blocked/needs_ack/
  * exhausted) occurs in work-plan BEFORE the worklog thread is opened, so
  * "open thread in pre-terminal stage" ⇒ drift, not a legal pause.
  *
- * Bounce budget: the gate may block a stop at most `maxBounces` times per
- * agent invocation (keyed on the SubagentStop `agent_id`). After that the
- * stop is allowed (status `exhausted`) so a confused session never
- * ping-pongs forever. State lives in .tracker/.loop-bounces.json and
- * self-prunes after 24h.
+ * Gate mode (since 0.72.0): given the stopping session, the gate blocks only
+ * on pre-terminal threads that session owns. Threads owned by another session
+ * or by none go to `others`, a notice that never blocks. The bounce budget is
+ * per thread: each thread may block at most `maxBounces` times per 24 h. A
+ * thread over budget goes to `exhausted` (a notice); the others still block.
+ * State lives in .tracker/.loop-bounces.json as `thread:<id>` keys; entries of
+ * the old per-session shape are ignored and dropped.
+ *
+ * Query mode (no session): every pre-terminal thread is listed, no state.
  *
  * The gate FAILS OPEN: any internal error yields `clean`.
  */
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { listThreads, type WorklogStage } from "./worklog.ts";
+import { latestStamp, listThreads, type ThreadSummary, type WorklogStage } from "./worklog.ts";
 import { atomicWriteFileSync } from "./atomic.ts";
 
 // ---------------------------------------------------------------------------
@@ -35,21 +40,35 @@ export type StuckThread = {
   stage: WorklogStage;
   specPath?: string;
   next: string;
+  /** Owning session, when the thread records one (0.72.0). */
+  session?: string;
+  /** Times this thread has blocked a stop in the last 24 h (gate mode, 0.72.0). */
+  bounces?: number;
 };
 
 export type LoopCheckResult = {
   status: LoopCheckStatus;
+  /** Gate mode: the threads that block (or, when exhausted, the ones over budget). Query mode: all pre-terminal threads. */
   threads: StuckThread[];
-  /** Bounce count for the given agent id, present only when bounceId was supplied. */
+  /** Highest bounce count among `threads`, present only in gate mode. */
   bounces?: number;
   maxBounces?: number;
+  /** Gate mode: pre-terminal threads owned by another session or by none (0.72.0). */
+  others?: StuckThread[];
+  /** Gate mode: own threads over their bounce budget, when others still block (0.72.0). */
+  exhausted?: StuckThread[];
 };
 
 export type LoopCheckOpts = {
   trackerRoot: string;
-  /** SubagentStop agent_id — enables the bounce budget. Omit for pure query mode. */
+  /** The stopping session: enables gate mode (owner filter and budget). */
+  session?: string;
+  /**
+   * Older name for `session`, from the `--bounce <id>` flag. Used only when
+   * `session` is absent.
+   */
   bounceId?: string;
-  /** Blocks allowed before the gate gives up (default 2). */
+  /** Blocks allowed per thread before the gate gives up on it (default 2). */
   maxBounces?: number;
   /** Injectable clock for tests. */
   now?: Date;
@@ -57,7 +76,7 @@ export type LoopCheckOpts = {
 
 const DEFAULT_MAX_BOUNCES = 2;
 const BOUNCE_TTL_MS = 24 * 60 * 60 * 1000;
-const PRE_TERMINAL_STAGES: readonly WorklogStage[] = ["planned", "dispatched", "verified"];
+const BOUNCE_KEY_PREFIX = "thread:";
 
 type BounceFile = Record<string, { count: number; updatedAt: string }>;
 
@@ -65,8 +84,27 @@ type BounceFile = Record<string, { count: number; updatedAt: string }>;
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Is this open thread still mid-loop? Exported for tests and other gates. */
+export function isPreTerminal(t: Pick<ThreadSummary, "stage" | "closedAt" | "stamps">): boolean {
+  if (t.closedAt) return false;
+  switch (t.stage) {
+    case "planned":
+    case "dispatched":
+    case "verified":
+      return true;
+    case "committed":
+      // A committed stamp means 0.72.0 wrote it: the review is still owed.
+      // No stamp: written before 0.72.0, terminal as it was then.
+      return latestStamp(t, "committed") !== undefined;
+    case "reviewed":
+    case undefined:
+      return false;
+  }
+}
+
 export function runLoopCheck(opts: LoopCheckOpts): LoopCheckResult {
-  const { trackerRoot, bounceId } = opts;
+  const { trackerRoot } = opts;
+  const session = opts.session ?? opts.bounceId;
   const maxBounces = opts.maxBounces ?? DEFAULT_MAX_BOUNCES;
   const now = opts.now ?? new Date();
 
@@ -78,33 +116,61 @@ export function runLoopCheck(opts: LoopCheckOpts): LoopCheckResult {
     return { status: "clean", threads: [] };
   }
 
-  if (!bounceId) {
+  if (session === undefined || session === "") {
     return {
       status: stuck.length > 0 ? "stuck" : "clean",
       threads: stuck,
     };
   }
 
-  const bouncePath = join(trackerRoot, ".loop-bounces.json");
-  let bounces = readBounceFile(bouncePath);
-  bounces = pruneBounces(bounces, now);
+  const own = stuck.filter((t) => t.session === session);
+  const others = stuck.filter((t) => t.session !== session);
 
-  if (stuck.length === 0) {
-    // Loop completed — clear this invocation's entry so the file self-cleans.
-    delete bounces[bounceId];
-    writeBounceFile(bouncePath, bounces);
-    return { status: "clean", threads: [] };
+  const bouncePath = join(trackerRoot, ".loop-bounces.json");
+  const stuckIds = new Set(stuck.map((t) => t.threadId));
+  const bounces: BounceFile = {};
+  for (const [key, value] of Object.entries(pruneBounces(readBounceFile(bouncePath), now))) {
+    // Old per-session keys are dropped; a thread that left the loop resets.
+    if (key.startsWith(BOUNCE_KEY_PREFIX) && stuckIds.has(key.slice(BOUNCE_KEY_PREFIX.length))) {
+      bounces[key] = value;
+    }
   }
 
-  const count = (bounces[bounceId]?.count ?? 0) + 1;
-  bounces[bounceId] = { count, updatedAt: now.toISOString() };
+  const blocking: StuckThread[] = [];
+  const exhausted: StuckThread[] = [];
+  for (const t of own) {
+    const key = `${BOUNCE_KEY_PREFIX}${t.threadId}`;
+    const prev = bounces[key]?.count ?? 0;
+    if (prev >= maxBounces) {
+      exhausted.push({ ...t, bounces: prev });
+      continue;
+    }
+    bounces[key] = { count: prev + 1, updatedAt: now.toISOString() };
+    blocking.push({ ...t, bounces: prev + 1 });
+  }
   writeBounceFile(bouncePath, bounces);
 
-  if (count > maxBounces) {
-    return { status: "exhausted", threads: stuck, bounces: count, maxBounces };
-  }
+  const extras: Pick<LoopCheckResult, "others" | "exhausted"> = {};
+  if (others.length > 0) extras.others = others;
 
-  return { status: "stuck", threads: stuck, bounces: count, maxBounces };
+  if (blocking.length > 0) {
+    if (exhausted.length > 0) extras.exhausted = exhausted;
+    const top = Math.max(...blocking.map((t) => t.bounces ?? 0));
+    return { status: "stuck", threads: blocking, bounces: top, maxBounces, ...extras };
+  }
+  if (exhausted.length > 0) {
+    const top = Math.max(...exhausted.map((t) => t.bounces ?? 0));
+    return { status: "exhausted", threads: exhausted, bounces: top, maxBounces, ...extras };
+  }
+  return { status: "clean", threads: [], ...extras };
+}
+
+function formatThread(lines: string[], t: StuckThread, withNext: boolean): void {
+  const spec = t.specPath ? `  SPEC: ${t.specPath}` : "";
+  const owner = t.session ? `  SESSION: ${t.session}` : "";
+  const bounces = t.bounces !== undefined ? `  BOUNCES: ${String(t.bounces)}` : "";
+  lines.push(`  - THREAD: ${t.threadId}  STAGE: ${t.stage}${spec}${owner}${bounces}`);
+  if (withNext) lines.push(`    NEXT: ${t.next}`);
 }
 
 /**
@@ -120,14 +186,26 @@ export function formatLoopCheckReport(result: LoopCheckResult): string {
 
   if (result.threads.length > 0) {
     lines.push("THREADS:");
-    for (const t of result.threads) {
-      const spec = t.specPath ? `  SPEC: ${t.specPath}` : "";
-      lines.push(`  - THREAD: ${t.threadId}  STAGE: ${t.stage}${spec}`);
-      lines.push(`    NEXT: ${t.next}`);
-    }
+    for (const t of result.threads) formatThread(lines, t, true);
   }
 
+  if (result.exhausted && result.exhausted.length > 0) {
+    lines.push("OVER BUDGET (not blocking):");
+    for (const t of result.exhausted) formatThread(lines, t, true);
+  }
+
+  const notice = formatOthersNotice(result);
+  if (notice !== null) lines.push(notice);
+
   return lines.join("\n");
+}
+
+/** One line naming the pre-terminal threads this session does not own, or null. */
+export function formatOthersNotice(result: LoopCheckResult): string | null {
+  const others = result.others ?? [];
+  if (others.length === 0) return null;
+  const items = others.map((t) => `${t.threadId} (${t.stage}, ${t.session ? `session ${t.session}` : "no session"})`);
+  return `NOTICE: open threads of other sessions, not blocking: ${items.join(", ")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,36 +217,40 @@ function findStuckThreads(trackerRoot: string): StuckThread[] {
   const stuck: StuckThread[] = [];
 
   for (const t of threads) {
-    if (t.stage === undefined) continue;
-    if (!PRE_TERMINAL_STAGES.includes(t.stage as WorklogStage)) continue;
-
-    stuck.push({
+    if (t.stage === undefined || !isPreTerminal(t)) continue;
+    const entry: StuckThread = {
       threadId: t.threadId,
-      stage: t.stage as WorklogStage,
+      stage: t.stage,
       specPath: t.specPath,
-      next: nextAction(t.threadId, t.stage as WorklogStage),
-    });
+      next: nextAction(t.threadId, t.stage),
+    };
+    if (t.session) entry.session = t.session;
+    stuck.push(entry);
   }
 
   return stuck;
 }
 
 function nextAction(threadId: string, stage: WorklogStage): string {
+  const park = `or park: \`darius worklog park ${threadId} --reason "…"\``;
   switch (stage) {
     case "planned":
       return (
         `Stage 2 (dispatch): \`darius worklog dispatch ${threadId} --agent <invocable> --reason "…"\` ` +
-        `then Task-delegate per the Delegation Envelope; or park: \`darius worklog park ${threadId} --reason "…"\``
+        `then Task-delegate per the Delegation Envelope; ${park}`
       );
     case "dispatched":
-      return (
-        `Stage 3 (verify): collect the Task result and run /darius-work-verify for thread ${threadId}; ` +
-        `or park: \`darius worklog park ${threadId} --reason "…"\``
-      );
+      return `Stage 3 (verify): collect the Task result and run /darius-work-verify for thread ${threadId}; ${park}`;
     case "verified":
       return `Stage 4 (commit): run /darius-commit. Verified work is a debt; close it before stopping`;
     case "committed":
-      // Not reachable (committed is terminal for gating); exhaustive for the type.
+      return (
+        `Stage 5 (review): review the commit, write a note that starts with "Review:" ` +
+        `(\`darius worklog append ${threadId} --section note --message "Review: …"\`), ` +
+        `then \`darius worklog set-stage ${threadId} reviewed\`; ${park}`
+      );
+    case "reviewed":
+      // Not reachable (reviewed is terminal); exhaustive for the type.
       return "";
   }
 }

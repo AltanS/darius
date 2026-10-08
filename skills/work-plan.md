@@ -74,7 +74,7 @@ Recognized flags:
 
 6. **Create worklog thread(s)**: one per selected task:
    `!darius worklog open <milestone-slug> --spec <spec-path> --message "<task description>" --stage planned`
-   Returns the generated `thread-id`. The `--stage planned` stamp arms the Work Loop exit gate: from this moment the thread must progress (`dispatched` → `verified` → `committed`) or be explicitly parked, the driving agent cannot silently end the turn on it.
+   Returns the generated `thread-id`. The `--stage planned` stamp arms the Work Loop exit gate: from this moment the thread must progress (`dispatched` → `verified` → `committed` → `reviewed`) or be explicitly parked, the driving agent cannot silently end the turn on it.
 
    Then **claim the spec**, one per selected task, on shared checkouts:
    `!darius claim <spec-path>`

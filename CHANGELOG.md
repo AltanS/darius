@@ -2,6 +2,28 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.72.0] - 2026-10-08
+
+### Added
+
+- Every Work Loop stage change writes a stamp with the git HEAD (`none` outside git), the host and the time. `worklog list --json` shows the new fields `stamps`, `stageStamp`, `forced`, `session`, `artifacts` and `reviewNotes`. An older reader keeps the stage and carries the stamp as prose.
+- New stage `reviewed`, after `committed`. `worklog set-stage <id> reviewed` needs a note that starts with `Review:`, written after the commit stamp.
+- `worklog set-stage` takes `--commit <sha>`, `--no-git`, `--force --reason "<why>"` and `--session <id>`. A forced stamp records `forced` and the reason, and the thread gets a note.
+- `worklog open` and `worklog dispatch` record the acting session (`--session`, else `CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`) as the thread owner.
+- Verification ledger lines carry `head` and `host`. Older lines without them still parse.
+- `loop-check` takes `--session <id>`; `--bounce` is the older name for it. The JSON result can hold `others` and `exhausted`, and each thread can hold `session` and `bounces`.
+
+### Changed
+
+- `worklog set-stage <id> verified` refuses (exit 1) unless the ledger has a passing line for the thread's spec since the dispatch and no item whose latest result failed.
+- `worklog set-stage <id> committed` refuses (exit 1) unless the commit is an ancestor of HEAD and no artifact of the thread is dirty or untracked. Outside git it exits 3 unless `--no-git` is passed.
+- A forward stage move may not skip `verified` or `committed`. `park` still works from any stage.
+- The Stop hook blocks only on threads owned by the stopping session. Threads of another session, or of none, show in one notice line and never block. A Stop payload without `session_id` never blocks.
+- The bounce budget is per thread: 2 blocks per thread per 24 h. A thread over budget is reported and the other threads still block. Old per-session entries in `.loop-bounces.json` are dropped.
+- `committed` with a stamp is no longer terminal for the exit gate; `reviewed` is. A `committed` thread from before 0.72.0 has no stamp and stays terminal.
+- `worklog append --section Artifacts` files an artifact entry, as `--section artifact` does. Before it filed a note.
+- The `darius-work`, `darius-commit`, `darius-work-verify` and `darius-work-plan` skills describe the `reviewed` stage, `set-stage committed --commit <sha>`, the ledger rule for `verified`, and the owner-only exit gate.
+
 ## [0.71.0] - 2026-10-08
 
 ### Changed

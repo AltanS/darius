@@ -21,6 +21,9 @@ import {
   parkThread,
 } from "../lib/worklog.ts";
 
+/** Evidence is not the subject of these tests: skip it the sanctioned way. */
+const FORCE = { force: true, reason: "test without evidence" } as const;
+
 describe("worklog stage", () => {
   let tmpDir: string;
   let trackerRoot: string;
@@ -112,14 +115,15 @@ describe("worklog stage", () => {
   // transitions
   // -------------------------------------------------------------------------
 
-  it("transition: forward path planned → dispatched → verified → committed", () => {
+  it("transition: forward path planned → dispatched → verified → committed → reviewed (forced)", () => {
     const threadId = openThread({ worklogPath, slug: "fwd", stage: "planned" });
 
     setStage({ worklogPath, threadId, stage: "dispatched" });
-    setStage({ worklogPath, threadId, stage: "verified" });
-    setStage({ worklogPath, threadId, stage: "committed" });
+    setStage({ worklogPath, threadId, stage: "verified", ...FORCE });
+    setStage({ worklogPath, threadId, stage: "committed", ...FORCE });
+    setStage({ worklogPath, threadId, stage: "reviewed", ...FORCE });
 
-    expect(listThreads({ trackerRoot })[0]?.stage).toBe("committed");
+    expect(listThreads({ trackerRoot })[0]?.stage).toBe("reviewed");
   });
 
   it("transition: same-stage is an idempotent no-op", () => {
@@ -132,7 +136,7 @@ describe("worklog stage", () => {
 
   it("transition: backward is rejected", () => {
     const threadId = openThread({ worklogPath, slug: "back", stage: "planned" });
-    setStage({ worklogPath, threadId, stage: "verified" });
+    setStage({ worklogPath, threadId, stage: "verified", ...FORCE });
 
     expect(() => setStage({ worklogPath, threadId, stage: "dispatched" })).toThrow(
       /Backward stage transition/,
@@ -140,11 +144,12 @@ describe("worklog stage", () => {
     expect(listThreads({ trackerRoot })[0]?.stage).toBe("verified");
   });
 
-  it("transition: unset stage accepts any first stamp", () => {
+  it("transition: unset stage accepts a first stamp up to dispatched, and refuses a skip to committed", () => {
     const threadId = openThread({ worklogPath, slug: "first-stamp" });
 
-    setStage({ worklogPath, threadId, stage: "verified" });
-    expect(listThreads({ trackerRoot })[0]?.stage).toBe("verified");
+    expect(() => setStage({ worklogPath, threadId, stage: "committed" })).toThrow(/skips verified/);
+    setStage({ worklogPath, threadId, stage: "dispatched" });
+    expect(listThreads({ trackerRoot })[0]?.stage).toBe("dispatched");
   });
 
   it("transition: closed thread rejects stage changes", () => {
@@ -201,7 +206,7 @@ describe("worklog stage", () => {
     dispatchThread({ worklogPath, threadId, agent: "a" });
     expect(() => dispatchThread({ worklogPath, threadId, agent: "b" })).not.toThrow();
 
-    setStage({ worklogPath, threadId, stage: "verified" });
+    setStage({ worklogPath, threadId, stage: "verified", ...FORCE });
     expect(() => dispatchThread({ worklogPath, threadId, agent: "c" })).toThrow(
       /Backward stage transition/,
     );

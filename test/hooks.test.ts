@@ -31,6 +31,8 @@ function cli(argv: string[], opts: { cwd: string; input?: string; runtime?: stri
   delete env.TRACKER_LOOP_DEBUG;
   delete env.TRACKER_LOOP_DEBUG_FILE;
   delete env.TRACKER_DRIFT_DEBUG;
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.CLAUDE_SESSION_ID;
   const result = spawnSync(BIN, argv, { encoding: "utf8", env, cwd: opts.cwd, input: opts.input ?? "", timeout: 20_000 });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -39,12 +41,13 @@ function scratch(): string {
   return mkdtempSync(join(tmpdir(), "darius-hooks-"));
 }
 
-/** A checkout whose worklog holds one open thread in the `planned` stage. */
-function stuckCheckout(): string {
+/** A checkout whose worklog holds one open thread in the `planned` stage, owned by `session` (none when null). */
+function stuckCheckout(session: string | null = "sess-1"): string {
   const root = scratch();
   mkdirSync(join(root, ".tracker", "worklog"), { recursive: true });
   mkdirSync(join(root, ".tracker", "M1-t-stuck"), { recursive: true });
-  const opened = cli(["worklog", "open", "t-stuck", "--stage", "planned"], { cwd: root });
+  const owner = session === null ? [] : ["--session", session];
+  const opened = cli(["worklog", "open", "t-stuck", "--stage", "planned", ...owner], { cwd: root });
   assert.equal(opened.code, 0, opened.stderr);
   return root;
 }
@@ -67,7 +70,7 @@ test("hook-stop blocks a Stop with an open planned thread, under both runtimes",
 });
 
 test("hook-stop finds the tracker from the payload cwd, and spends the bounce budget before it lets go", () => {
-  const root = stuckCheckout();
+  const root = stuckCheckout("sess-budget");
   const elsewhere = scratch();
   const payload = stopPayload(root, { session_id: "sess-budget" });
   for (const round of [1, 2]) {
@@ -121,6 +124,23 @@ test("hook-stop honours TRACKER_LOOP_DEBUG_FILE", () => {
   assert.equal(result.status, 0);
   assert.match(readFileSync(log, "utf8"), /^loop-gate: event=Notification agent_type=<empty>/mu);
   assert.match(readFileSync(log, "utf8"), /unrecognized event \(Notification\), pass/u);
+});
+
+test("hook-stop never blocks on a thread of another session or of none: one notice line", () => {
+  for (const runtime of RUNTIMES) {
+    for (const owner of ["sess-other", null]) {
+      const root = stuckCheckout(owner);
+      const result = cli(["hook-stop"], { cwd: root, input: stopPayload(root), runtime });
+      assert.equal(result.code, 0, result.stderr);
+      const message = JSON.parse(result.stdout);
+      assert.equal(message.decision, undefined);
+      assert.match(message.systemMessage, /^NOTICE: open threads of other sessions, not blocking: \S+t-stuck \(planned, /u);
+      assert.equal(message.systemMessage.split("\n").length, 1);
+    }
+  }
+  const root = stuckCheckout();
+  const anonymous = cli(["hook-stop"], { cwd: root, input: JSON.stringify({ hook_event_name: "Stop", cwd: root }) });
+  assert.equal(JSON.parse(anonymous.stdout).decision, undefined, "no session_id never blocks");
 });
 
 /** A checkout with one spec that names `src/app.ts`. */
