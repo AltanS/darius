@@ -63,6 +63,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "daily",
   "headless",
   "banner",
+  "keep",
 ]);
 
 function looksLikeFlag(token: string): boolean {

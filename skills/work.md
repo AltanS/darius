@@ -87,7 +87,7 @@ Rule of thumb: "this task is incomplete" → reopen. "Next time we'd plan differ
 
 ## Stage 6: Learn
 
-After spec/milestone completion, invoke `/darius-enrich` if the work revealed surprises: discovered tasks, unexpected approaches, unanticipated sibling dependencies, scope mis-sizing, changed verification commands, a counsel warning that came true. Straightforward work that matched the spec → skip. On milestone completion (unless `lessons: skip`): `/darius-enrich --milestone M{N}`, or hand straight to `/darius-archive`, which runs it.
+After spec/milestone completion, invoke `/darius-enrich` if the work revealed surprises: discovered tasks, unexpected approaches, unanticipated sibling dependencies, scope mis-sizing, changed verification commands, a counsel warning that came true. Straightforward work that matched the spec → skip. On milestone completion (unless `lessons: skip`): `/darius-enrich --milestone M{N}` first, then `/darius-archive`, which returns `needs_lessons` without it.
 
 ## Exit Gate
 

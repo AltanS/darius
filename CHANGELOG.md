@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.73.0] - 2026-10-08
+
+### Added
+
+- `darius tree log <path>` lists the versions of a tracker file or folder in the store, newest first: ledger id, time, host and who, type, sha and size. Only when `kinds` lists `milestone`; in a git tracker it refuses, because git has the history.
+- `darius tree restore <path> [--at <sha|ledger-id>] [--dry-run] [--force]` brings a past version back. Without `--at` it undoes the newest removal; for a folder, every file of that one delete. It records a normal `tree.put`, so sync carries it. It refuses when the working copy holds another version, unless `--force`.
+- `darius milestone archive <milestone> [--dry-run] [--keep]` removes an archived milestone's folder and rebuilds the index. It refuses without a non-empty `.tracker/archive/<folder>.md` or while a worklog thread of the milestone is open, and reports whether the worklog still needs its stub. In the store the removal is one delete, and the verb prints `darius tree restore .tracker/<folder>/` to undo it. In a git tracker it writes nothing and prints `git rm -r -q .tracker/<folder>/` for you to run and commit (`"action": "print"` and `"command"` in `--json`).
+
+### Changed
+
+- A capture gives all its `tree.*` lines one time, so `tree restore` can undo a deleted folder as one delete.
+- The `darius-archive` skill uses `darius milestone archive` (a dry run, then the real call) in place of `rm -rf`, and reports the undo line.
+- The `darius-archive`, `darius-wrap-up` and `darius-sync` skills run forked on sonnet and end with a compact `STATUS` block. They no longer ask the user: `archive` needs the milestone as an argument and returns `needs_decision` or `needs_lessons`, and `sync` returns the categories first and marks the chosen items on a second call with `--apply`.
+
 ## [0.72.0] - 2026-10-08
 
 ### Added

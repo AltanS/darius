@@ -180,13 +180,18 @@ interface TreeIndex {
 }
 
 /** One `tree.*` line, decoded. */
-interface TreeLine {
+export interface TreeLine {
   id: string;
+  /** The line's time (ISO). */
+  at: string;
   host: string;
+  who: string;
   type: "tree.put" | "tree.removed";
   path: string;
   /** The content after the line: the blob for a put, null for a removal. */
   after: string | null;
+  /** The size of a put's blob; null for a removal or a line without one. */
+  size: number | null;
   exec: boolean;
   prev: string | null;
 }
@@ -222,7 +227,7 @@ function indexPath(project: Project): string {
 }
 
 /** True when `path` is a safe relative tree path: `/` separated, no empty, `.` or `..` segment. */
-function isTreePath(path: string): boolean {
+export function isTreePath(path: string): boolean {
   if (path === "" || path.startsWith("/") || path.includes("\0")) return false;
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
@@ -355,17 +360,19 @@ function decodeTreeLine(line: LedgerLine, problems: string[]): TreeLine | null {
     problems.push(`ledger line ${line.id} (${line.type}) has no valid path; skipped`);
     return null;
   }
-  if (line.type === TREE_REMOVED) return { id: line.id, host: line.host, type: TREE_REMOVED, path, after: null, exec: false, prev };
+  const base = { id: line.id, at: line.at, host: line.host, who: line.who, path, prev };
+  if (line.type === TREE_REMOVED) return { ...base, type: TREE_REMOVED, after: null, size: null, exec: false };
   const body = shaField(line, "body_sha");
   if (body === undefined || body === null) {
     problems.push(`ledger line ${line.id} (tree.put ${path}) has no valid body_sha; skipped`);
     return null;
   }
-  return { id: line.id, host: line.host, type: TREE_PUT, path, after: body, exec: line.exec === true, prev };
+  const size = isFiniteNumber(line.size) ? line.size : null;
+  return { ...base, type: TREE_PUT, after: body, size, exec: line.exec === true };
 }
 
-/** Every `tree.*` line by path, each list in ledger id order. */
-function foldTree(project: Project, problems: string[]): Map<string, TreeLine[]> {
+/** Every `tree.*` line by path, each list in ledger id order. Malformed lines go to `problems`. */
+export function foldTree(project: Project, problems: string[]): Map<string, TreeLine[]> {
   const byPath = new Map<string, TreeLine[]>();
   for (const line of readLedger(project)) {
     const tree = decodeTreeLine(line, problems);
@@ -383,10 +390,17 @@ export function hasTree(project: Project): boolean {
   return readLedger(project).some((line) => line.type === TREE_PUT || line.type === TREE_REMOVED);
 }
 
+/** The content sha and exec bit the index holds per path: what this host last captured or applied. */
+export function indexedFiles(project: Project): ReadonlyMap<string, { sha: string; exec: boolean }> {
+  const files = new Map<string, { sha: string; exec: boolean }>();
+  for (const [path, entry] of readIndex(project).files) files.set(path, { sha: entry.sha, exec: entry.exec });
+  return files;
+}
+
 // --- capture -----------------------------------------------------------------
 
 /** `prev_sha` must name a blob this host has: sync pushes every blob a line names. */
-function localSha(project: Project, sha: string | undefined): string | null {
+export function localSha(project: Project, sha: string | undefined): string | null {
   if (sha === undefined) return null;
   return getBlob(project, sha) === null ? null : sha;
 }
@@ -458,6 +472,10 @@ function planCapture(project: Project, who: string, write: boolean): CapturePlan
     plan.changed.push(path);
   }
   if (plan.next.files.size !== index.files.size) plan.dirty = true;
+  // One time for every line of a capture: a deleted folder is one set of
+  // lines, which `darius tree restore` undoes as one (src/core/tree-history.ts).
+  const at = new Date().toISOString();
+  for (const line of plan.lines) line.at = at;
   plan.changed.sort();
   return plan;
 }

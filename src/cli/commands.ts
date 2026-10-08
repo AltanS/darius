@@ -19,6 +19,7 @@ import { importCommand } from "./import.ts";
 import { initCommand } from "./init.ts";
 import { linkCommand } from "./link.ts";
 import { markerCommand } from "./marker.ts";
+import { milestoneCommand } from "./milestone.ts";
 import { onboardCommand } from "./onboard.ts";
 import { policyCheckCommand } from "./policy-check.ts";
 import { profileCommand } from "./profile.ts";
@@ -32,6 +33,7 @@ import { setupCommand } from "./setup.ts";
 import { skillCommand } from "./skill.ts";
 import { snapshotCommand } from "./snapshot.ts";
 import { syncCommand } from "./sync.ts";
+import { treeCommand } from "./tree.ts";
 import { tuiCommand } from "./tui.ts";
 import { updateCommand } from "./update.ts";
 import { vigilCommand } from "./vigil.ts";
@@ -44,6 +46,7 @@ const COMMANDS: readonly Command[] = [
   initCommand,
   linkCommand,
   markerCommand,
+  milestoneCommand,
   onboardCommand,
   policyCheckCommand,
   profileCommand,
@@ -57,6 +60,7 @@ const COMMANDS: readonly Command[] = [
   skillCommand,
   snapshotCommand,
   syncCommand,
+  treeCommand,
   tuiCommand,
   updateCommand,
   vigilCommand,

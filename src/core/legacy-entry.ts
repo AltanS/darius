@@ -79,3 +79,48 @@ export async function rebuildTrackerIndex(trackerRoot: string): Promise<void> {
   if (loaded.rebuildIndex === undefined) throw new Error(`the legacy tracker writer at ${fileURLToPath(VENDORED_WRITER)} exports no rebuildIndex()`);
   loaded.rebuildIndex(trackerRoot);
 }
+
+/** The vendored worklog module: the one parser of worklog files. */
+const VENDORED_WORKLOG = new URL("../legacy/lib/worklog.ts", import.meta.url);
+
+/** A worklog thread as the legacy `worklog list --json` reports it (the fields darius reads). */
+export interface LegacyThread {
+  threadId: string;
+  label: string;
+  openedAt: string;
+  closedAt?: string;
+  closeStatus?: string;
+  specPath?: string;
+  worklogFile: string;
+}
+
+/** A worklog file and how it reads: `clean`, `legacy` or `distilled`. */
+export interface LegacyWorklogFile {
+  worklogFile: string;
+  threadCount: number;
+  state: string;
+}
+
+interface LegacyWorklog {
+  listThreads(opts: { trackerRoot: string; activeOnly?: boolean }): LegacyThread[];
+  listWorklogFiles(opts: { trackerRoot: string }): LegacyWorklogFile[];
+}
+
+async function loadWorklog(): Promise<LegacyWorklog> {
+  // SAFETY: darius's own vendored module; both functions are checked before use.
+  const loaded = (await import(VENDORED_WORKLOG.href)) as Partial<LegacyWorklog>;
+  if (loaded.listThreads === undefined || loaded.listWorklogFiles === undefined) {
+    throw new Error(`the legacy worklog module at ${fileURLToPath(VENDORED_WORKLOG)} exports no listThreads() or listWorklogFiles()`);
+  }
+  return { listThreads: loaded.listThreads, listWorklogFiles: loaded.listWorklogFiles };
+}
+
+/** Every open worklog thread under `trackerRoot`, read through the vendored parser. Reads only. */
+export async function openWorklogThreads(trackerRoot: string): Promise<LegacyThread[]> {
+  return (await loadWorklog()).listThreads({ trackerRoot, activeOnly: true });
+}
+
+/** Every worklog file under `trackerRoot` with its state, read through the vendored parser. Reads only. */
+export async function worklogFiles(trackerRoot: string): Promise<LegacyWorklogFile[]> {
+  return (await loadWorklog()).listWorklogFiles({ trackerRoot });
+}

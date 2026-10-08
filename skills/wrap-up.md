@@ -1,6 +1,7 @@
 ---
 name: darius-wrap-up
 model: sonnet
+context: fork
 user-invocable: false
 description: End-of-session reconciliation, rebuild index from specs, close stale worklogs, and commit all tracker changes
 argument-hint: "[--dry-run]"
@@ -16,6 +17,8 @@ command -v darius >/dev/null || { echo "darius is not installed. Install it: bas
 ```
 
 End-of-session skill: rebuild index from spec reality, close stale worklog threads, commit everything atomically.
+
+This skill runs in a fork: it does not see the conversation. It judges from the tracker and git only, never from "the current work". It asks nothing; it ends with the **Return** block.
 
 ## Phase 1: Rebuild Index (ALWAYS runs)
 
@@ -44,5 +47,18 @@ This one command rebuilds both indexes: `.tracker/00-INDEX.md` and the worklog i
    `!darius status --json`
    Summarize index count changes and worklog threads closed. If `--dry-run`, show what WOULD change but write nothing.
 2. **Commit**: if files changed and NOT `--dry-run`, invoke `/darius-commit` with message context "tracker wrap-up: reconcile index and close worklogs". When `.tracker` is a link to the darius store (`kinds` lists `milestone`), the tracker files are not in git: commit only code changes, never `git add .tracker`, and skip the commit when only tracker files changed. The index rebuild in Phase 1 still runs; it is the darius verb that records the tracker changes.
+
+## Return
+
+One compact block, and nothing after it. The main thread relays it as it is:
+
+```
+STATUS: done | dry_run | failed
+INDEX: rebuilt ({specs} specs, {verified}/{items} items verified)
+THREADS_CLOSED: {n} ({thread ids, status each}) | none
+COMMIT: {sha} {subject} | none ({why})
+NEXT: {the next actionable spec from darius status} | none
+REASON: {what failed, for failed}
+```
 
 Read-heavy, write-careful: read everything, only write what's actually wrong. Never modify verification checklist items (`[x]`, `[ ]`, etc.). Idempotent: running twice produces no changes the second time.
