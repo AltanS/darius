@@ -53,6 +53,8 @@ export const DISMISSALS_LISTED = 10;
 /** Open asks are read from this many of the latest complete runs. */
 const OPEN_RUNS = 3;
 const LAPSED_MAX = 10;
+/** What an answer prints for a question whose text is not in the result blob. */
+const QUESTION_UNAVAILABLE = "(question text not available)";
 
 /** The operator's note on the source run, from its acknowledgement. */
 export interface OperatorNote {
@@ -148,7 +150,9 @@ function isList(value: JsonValue | undefined): value is readonly JsonValue[] {
 
 /** The first acknowledgement of `run` that carries a note. */
 function operatorNote(ledger: readonly LedgerLine[], run: string): OperatorNote | null {
-  const ack = ledger.find((line) => line.type === "run.acknowledged" && line.run === run && isText(line.note) && line.note.trim() !== "");
+  const ack = ledger.find(
+    (line) => line.type === "run.acknowledged" && line.run === run && line.note_from_answers !== true && isText(line.note) && line.note.trim() !== "",
+  );
   if (ack === undefined || !isText(ack.note)) return null;
   return { who: ack.who, at: ack.at, note: ack.note.trim() };
 }
@@ -157,7 +161,8 @@ function operatorNote(ledger: readonly LedgerLine[], run: string): OperatorNote 
 function dismissal(ledger: readonly LedgerLine[], run: string, questions: readonly ResultQuestion[]): Dismissal | null {
   if (questions.length === 0) return null;
   const ack = ledger.find((line) => line.type === "run.acknowledged" && line.run === run);
-  return ack === undefined ? null : { who: ack.who, at: ack.at };
+  // An answer-only ack (note_from_answers) is an answer, not a dismissal.
+  return ack === undefined || ack.note_from_answers === true ? null : { who: ack.who, at: ack.at };
 }
 
 /** How many questions the run's ledger line counts. */
@@ -233,7 +238,8 @@ function scanAcks(ledger: readonly LedgerLine[], item: string, now: Date): AckSc
     if (line.type === "run.started") startedAt.set(line.run, index);
     if (line.type === "run.completed") completions.set(line.run, line);
     if (line.type === "run.acknowledged" && !firstAck.has(line.run)) firstAck.set(line.run, { line, index });
-    if ((line.type === "run.started" || line.type === "run.resumed") && isList(line.answers_read)) {
+    // A follow-up never consumes an answer, whatever its lines say.
+    if ((line.type === "run.started" || line.type === "run.resumed") && !followUps.has(line.run) && isList(line.answers_read)) {
       reads.set(line.run, [...(reads.get(line.run) ?? []), ...line.answers_read.filter(isText)]);
     }
   });
@@ -277,6 +283,11 @@ function carried(project: Project, ack: AckCandidate): CarriedAnswer {
     question: oneLine(question.text),
     answer: answered.get(index + 1) ?? null,
   }));
+  // An answer is never dropped: when its question is gone (no blob, or a number past the blob), it still prints.
+  for (const [n, text] of answered) {
+    if (!items.some((item) => item.n === n)) items.push({ n, question: QUESTION_UNAVAILABLE, answer: text });
+  }
+  items.sort((a, b) => a.n - b.n);
   return {
     id: ack.line.id,
     run: isText(ack.line.run) ? ack.line.run : "",
@@ -389,8 +400,10 @@ function followUpWhat(answer: CarriedAnswer): string {
 
 /** The lines of one carried ack. `isShort` leaves out the questions nobody answered. */
 function ackLines(answer: CarriedAnswer, isShort: boolean): string[] {
-  const verb = answer.kind === "dismissed" ? "dismissed" : "answered";
-  const lines = [isShort ? `Run ${answer.run} (${day(answer.runAt)}), ${answer.who} on ${day(answer.at)}:` : `Run ${answer.run} (${day(answer.runAt)}), ${verb} by ${answer.who} on ${day(answer.at)}:`];
+  // A follow-up is not an answer: its header says only who started it, in both blocks.
+  let by = isShort ? answer.who : `${answer.kind === "dismissed" ? "dismissed" : "answered"} by ${answer.who}`;
+  if (answer.followUp !== null) by = `by ${answer.who}`;
+  const lines = [`Run ${answer.run} (${day(answer.runAt)}), ${by} on ${day(answer.at)}:`];
   const asked = answer.items.map((item) => oneLine(item.question));
   if (answer.followUp !== null) {
     const what = followUpWhat(answer);
@@ -398,11 +411,11 @@ function ackLines(answer: CarriedAnswer, isShort: boolean): string[] {
     return lines;
   }
   if (answer.kind === "dismissed") {
-    lines.push(asked.length === 0 ? "The operator chose not to act on the questions of that run." : `The operator chose not to act on: ${asked.join("; ")}`);
+    lines.push(asked.length === 0 ? "The operator chose not to act on the questions of this run." : `The operator chose not to act on: ${asked.join("; ")}`);
     return lines;
   }
   for (const item of answer.items) {
-    if (!answer.hasAnswers) lines.push(`Q${String(item.n)}: ${item.question}`);
+    if (!answer.hasAnswers) lines.push(`Q${String(item.n)}: ${item.question} / see the note`);
     else if (item.answer !== null) lines.push(`Q${String(item.n)}: ${item.question} / A: ${oneLine(item.answer)}`);
     else if (!isShort) lines.push(`Q${String(item.n)}: ${item.question} / no answer`);
   }

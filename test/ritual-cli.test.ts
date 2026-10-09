@@ -614,7 +614,7 @@ test("handoff: an acknowledgement with a note stays the operator's answer, and t
   const store = openProject(project);
   assert.equal(latestHandoff(store, readLedger(store), "heartbeat")?.dismissed, null);
   const answered = handoffTextOf(project);
-  assert.match(answered, /^Run \S+ \(\d{4}-\d{2}-\d{2}\), answered by owner on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\?\nNote: yes, delete it$/mu);
+  assert.match(answered, /^Run \S+ \(\d{4}-\d{2}-\d{2}\), answered by owner on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\? \/ see the note\nNote: yes, delete it$/mu);
   assert.match(answered, /^Its note: Check post 7 again\.$/mu);
   assert.equal(answered.includes("chose not to act"), false);
   assert.equal(answered.includes("has not answered yet"), false);

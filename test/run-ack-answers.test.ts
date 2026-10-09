@@ -184,6 +184,22 @@ test("run ack --answer on a run that asked nothing is a usage error; a failed ru
   assert.equal(acksOf(project).length, 1);
 });
 
+test("run ack --answer on a held run and on an open run is a refusal: exit 1, nothing written", async () => {
+  const project = "ra-not-closed";
+  await addRitual(project, "heartbeat");
+  const open = await start(project, "heartbeat");
+  const running = await runCli(runCommand, project, ["ack", open, "--answer", "1=yes", "--json"]);
+  assert.equal(running.code, 1);
+  assert.match(JSON.parse(running.stdout).error, /is running; only a failed or abandoned run can be acknowledged/u);
+  assert.equal((await runCli(runCommand, project, ["hold", open, "--question", "ok?"])).code, 0);
+  const held = await runCli(runCommand, project, ["ack", open, "--answer", "1=yes", "--json"]);
+  assert.equal(held.code, 1);
+  assert.match(JSON.parse(held.stdout).error, /is held: answer and resume it/u);
+  const darius = spawnSync(join(import.meta.dirname, "..", "bin", "darius"), ["run", "ack", open, "--answer", "1=yes", "--project", project], { env: process.env, encoding: "utf8" });
+  assert.equal(darius.status, 1, "the real CLI agrees");
+  assert.equal(acksOf(project).length, 0);
+});
+
 test("the exit codes of run ack through the real CLI: 2 for a usage error, 1 for a refusal, 0 for an ack", async () => {
   const project = "ra-exit";
   await addRitual(project, "heartbeat");

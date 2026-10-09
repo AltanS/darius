@@ -285,7 +285,7 @@ test("a legacy ack (no carry) on the latest run is delivered after the next comp
   assert.equal(legacy.carry, undefined);
   const pending = handoffOf(project);
   assert.deepEqual(pending.answerIds, [legacy.id], "it is shown, as 0.79.x showed it");
-  assert.match(textOf(project), /^Q1: Question 1\?\nNote: yes, delete it$/mu, "a note alone answers the run as a whole");
+  assert.match(textOf(project), /^Q1: Question 1\? \/ see the note\nNote: yes, delete it$/mu, "a note alone answers the run as a whole");
   assert.equal(pending.operator?.note, "yes, delete it", "the field the web page reads is unchanged");
 
   const b = await handRun(project, 0);
@@ -446,11 +446,75 @@ test("a follow-up shows the pending answers but does not consume them; its ack o
   assert.match(prompt, /Q1: Question 1\? \/ A: wait/u);
   assert.match(prompt, new RegExp(`The operator started follow-up ${child} \\(approved 1\\)\\.`, "u"));
   assert.doesNotMatch(prompt, /Note: follow-up/u, "the auto note is not printed as an answer");
+  assert.match(prompt, new RegExp(`Run ${parent} \\(\\d{4}-\\d{2}-\\d{2}\\), by \\S+ on \\d{4}-\\d{2}-\\d{2}:\\nThe operator started follow-up`, "u"), "a follow-up is not 'answered by'");
   assert.deepEqual(startedLine(project, next)?.answers_read, [unread, String(parentAck?.id)]);
   assert.deepEqual(handoffOf(project).answers, []);
+
+  const after = await runNow(project);
+  const decided = promptOf(project, after);
+  assert.match(decided, new RegExp(`Already decided in the last 14 days[^\\n]*\\n(?:[^\\n]*\\n)*?Run ${parent} \\(\\d{4}-\\d{2}-\\d{2}\\), by \\S+ on \\d{4}-\\d{2}-\\d{2}:\\nThe operator started follow-up ${child}`, "u"), "the 14-day block says the same");
+  assert.doesNotMatch(decided, /answered by \S+ on \d{4}-\d{2}-\d{2}:\nThe operator started follow-up/u);
+});
+
+test("a resumed follow-up run does not consume the pending answers, with or without answers_read on its lines", async () => {
+  const project = "ha-follow-up-resume";
+  linkedCheckout(project);
+  seedRitual(project, { mode: "act" });
+  const earlier = await handRun(project, 1);
+  const parent = await handRun(project, 1, { questions: [{ text: "Push main now?", commands: ["git push origin main"] }] });
+  const unread = await ack(project, earlier, "--answer", "1=wait");
+
+  mode("hold");
+  const followed = await run(project, "follow-up", parent, "--approve", "1", "--headless", "--json");
+  const child: string = JSON.parse(followed.stdout).projects[0].rituals[0].run;
+  assert.equal(linesOf(project, "run.held").some((line) => line.run === child), true, "the follow-up holds");
+  assert.equal((await run(project, "answer", child, "1", "yes")).code, 0);
+  mode("complete");
+  const resumed = await run(project, "resume", child, "--json");
+  assert.equal(resumed.code, 0, resumed.stdout);
+  const line = linesOf(project, "run.resumed").find((candidate) => candidate.run === child);
+  assert.equal(line?.fresh, true, "no session on this host: the prompt is rebuilt");
+  assert.match(promptOf(project, child), /Q1: Question 1\? \/ A: wait/u, "and it shows the answer");
+  assert.equal(line?.answers_read, undefined, "but records no read");
+  assert.equal(linesOf(project, "run.completed").find((candidate) => candidate.run === child)?.outcome, "complete");
+  assert.equal(handoffOf(project).answerIds.includes(unread), true, "so the answer is still pending");
+
+  // The second guard: lines that claim a read by a follow-up are ignored.
+  const store = openProject(project);
+  const forged = "01FORGEDFOLLOWUP0000000000";
+  appendLine(store, { who: "test", type: "run.started", item: "ritual/heartbeat", run: forged, follow_up_of: parent, answers_read: [unread] });
+  appendLine(store, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: forged, outcome: "complete" });
+  assert.equal(handoffOf(project).answerIds.includes(unread), true, "a follow-up's answers_read never delivers");
 });
 
 // --- what is not carried, and what is capped ------------------------------------------
+
+test("an answer prints even when its question is gone: no result blob, or a number past the blob's questions", async () => {
+  const project = "ha-no-blob";
+  seedRitual(project);
+  const real = await handRun(project, 2);
+  const store = openProject(project);
+  const realDone = linesOf(project, "run.completed").find((line) => line.run === real);
+  // A run whose ledger line counts two questions, but whose blob is not in the store.
+  const lost = "01LOSTBLOB0000000000000000";
+  appendLine(store, { who: "test", type: "run.started", item: "ritual/heartbeat", run: lost });
+  appendLine(store, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: lost, outcome: "complete", result: realDone?.result ?? null, result_sha: "0".repeat(64) });
+  const missing = await ack(project, lost, "--answer", "1=yes", "--answer", "2=no");
+  // The real run's blob has two questions; this ack answers a third.
+  const beyond = appendLine(store, { who: "owner", type: "run.acknowledged", item: "ritual/heartbeat", run: real, carry: true, answers: [{ n: 2, text: "second" }, { n: 3, text: "third" }], note: "Q2: second; Q3: third", note_from_answers: true });
+
+  const handoff = handoffOf(project);
+  assert.deepEqual(handoff.answerIds, [missing, beyond.id]);
+  const text = handoffLines(handoff).join("\n");
+  assert.match(text, /Q1: \(question text not available\) \/ A: yes\nQ2: \(question text not available\) \/ A: no/u);
+  assert.match(text, /Q1: Question 1\? \/ no answer\nQ2: Question 2\? \/ A: second\nQ3: \(question text not available\) \/ A: third/u);
+
+  const bare = "01LOSTBLOB0000000000000001";
+  appendLine(store, { who: "test", type: "run.started", item: "ritual/heartbeat", run: bare });
+  appendLine(store, { who: "test", type: "run.completed", item: "ritual/heartbeat", run: bare, outcome: "complete", result: realDone?.result ?? null, result_sha: "0".repeat(64) });
+  await ack(project, bare);
+  assert.match(textOf(project), /The operator chose not to act on the questions of this run\./u);
+});
 
 test("a note on a failed run with no result is not carried; neither is a bare ack of a quiet run", async () => {
   const project = "ha-failed-note";
@@ -480,7 +544,8 @@ test("an answer-only ack: the note built for 0.79.x is not printed, the items ar
   const text = handoffLines(handoff).join("\n");
   assert.match(text, /Q1: Question 1\? \/ no answer\nQ2: Question 2\? \/ A: second only/u);
   assert.doesNotMatch(text, /Note:/u);
-  assert.equal(handoff.operator?.note, "Q2: second only", "the old field keeps the built note, for the web page");
+  assert.equal(handoff.operator, null, "the built note is neither an operator note");
+  assert.equal(handoff.dismissed, null, "nor a dismissal");
 
   const b = await handRun(project, 1);
   await ack(project, b, "--answer", "1=yes", "--note", "Only this week.");

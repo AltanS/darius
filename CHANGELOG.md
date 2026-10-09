@@ -20,6 +20,7 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - The handoff drops the lines "The operator has not answered yet" and "chose not to act" and the question list of the latest run. The sections above replace them.
 - Every ack written by this version carries `carry: true` and uses the explicit delivery rule. An ack from 0.79.x or older keeps the old rule: delivered once a later complete run of the ritual started.
 - A follow-up's auto ack of its parent adds `follow_up: <run>` and `carry: true`. The prompt shows it as "The operator started follow-up <run> (<what>)".
+- The handoff prints every answer even when its question text is gone, as `Q<n>: (question text not available) / A: <answer>`. A note-only ack prints each question as `Q<n>: <question> / see the note`. A started follow-up is shown with `by <who>`, never `answered by`. A resumed follow-up reads no answers. An answer-only ack is neither the operator note nor a dismissal in the handoff fields.
 - An answer that no run read lapses after 30 days: it is not shown and not delivered.
 
 ## [0.79.2] - 2026-10-08

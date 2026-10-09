@@ -2243,7 +2243,7 @@ test("a handoff note and the operator's answer reach the next run's prompt; a cr
       const prompt = promptOf(run);
       assert.match(prompt, new RegExp(`## Handoff from the previous run\n\nThe previous run of this ritual \\(run ${first}, completed `, "u"));
       assert.match(prompt, /Its note: Check post 7 again\. The card on post 9 waits for the operator\./u);
-      assert.match(prompt, /Operator answers not yet used \(oldest first, the newest wins\):\nRun \S+ \(\d{4}-\d{2}-\d{2}\), answered by \S+ on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\?\nNote: yes, delete it/u);
+      assert.match(prompt, /Operator answers not yet used \(oldest first, the newest wins\):\nRun \S+ \(\d{4}-\d{2}-\d{2}\), answered by \S+ on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\? \/ see the note\nNote: yes, delete it/u);
       assert.ok(prompt.indexOf("## Handoff") < prompt.indexOf("## Protocol"), "the handoff comes before the protocol");
     }
     const ackId = String(linesOf(project, "run.acknowledged")[0]?.id);

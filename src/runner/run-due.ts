@@ -61,7 +61,7 @@ import { join } from "node:path";
 
 import { loadConfigIfPresent, type Config } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
-import { ritualState } from "../core/due.ts";
+import { followUpRuns, ritualState } from "../core/due.ts";
 import { collectFindings, findingPromptLines } from "../core/finding-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
@@ -688,7 +688,9 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const broken = preflightGate(gate, harness, env);
   if (broken !== undefined) return { gateBroken: broken, files };
   const bin = harnessBin(ctx, harness);
-  const isReading = followUp === undefined && resume?.sessionId === undefined;
+  // A follow-up reads nothing for good, whether it starts or resumes after a hold.
+  const isFollowUpRun = followUp !== undefined || followUpRuns(ledger).has(run);
+  const isReading = !isFollowUpRun && resume?.sessionId === undefined;
   const prepared: PreparedRun = { files, launch, bin, env, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
   if (resume?.sessionId !== undefined) prepared.sessionId = resume.sessionId;
   return prepared;
