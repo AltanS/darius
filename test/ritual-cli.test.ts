@@ -488,7 +488,7 @@ test("run ack --json: exit 0 with the outcome and note, exit 1 when refused, usa
 
   const acked = await runCli(runCommand, project, ["ack", failed, "--note", "known outage", "--who", "tester", "--json"]);
   assert.equal(acked.code, 0, acked.stdout);
-  assert.deepEqual(JSON.parse(acked.stdout), { ok: true, run: failed, outcome: "failed", note: "known outage" });
+  assert.deepEqual(JSON.parse(acked.stdout), { ok: true, run: failed, outcome: "failed", note: "known outage", answers: [] });
   assert.equal((await runCli(runCommand, project, ["list", "--json"])).stdout, listed, "run list output is unchanged");
 
   const again = await runCli(runCommand, project, ["ack", failed, "--json"]);
@@ -579,8 +579,6 @@ function handoffTextOf(project: string): string {
   return handoffLines(handoff).join("\n");
 }
 
-const DISMISSED_LINE = "The operator saw these questions and chose not to act on them. Do not act on them, and do not ask them again unless the facts changed.";
-
 test("handoff: a bare acknowledgement of a run with questions says the operator chose not to act (0.68.0)", async () => {
   const project = "handoff-dismissed";
   await addRitual(project, "heartbeat");
@@ -588,8 +586,9 @@ test("handoff: a bare acknowledgement of a run with questions says the operator 
   await completeAsking(project, run);
 
   const waiting = handoffTextOf(project);
-  assert.match(waiting, /The operator has not answered yet\. Do not act on these questions, and do not ask them again unless the facts changed\./u);
-  assert.equal(waiting.includes(DISMISSED_LINE), false, "no acknowledgement, no dismissal");
+  assert.match(waiting, /^Still open, not answered \(do not act on these, and do not ask them again unless the facts changed\):\nRun \S+ \(\d{4}-\d{2}-\d{2}\) asked:\nQ1: Delete the card\?$/mu);
+  assert.equal(waiting.includes("The operator has not answered yet"), false, "the all-or-nothing line is gone (0.80.0)");
+  assert.equal(waiting.includes("chose not to act"), false, "no acknowledgement, no dismissal");
   assert.equal(latestHandoff(openProject(project), readLedger(openProject(project)), "heartbeat")?.dismissed, null);
 
   const ack = await runCli(runCommand, project, ["ack", run, "--who", "web:owner"]);
@@ -599,9 +598,9 @@ test("handoff: a bare acknowledgement of a run with questions says the operator 
   assert.equal(handoff?.dismissed?.who, "web:owner");
   assert.equal(handoff?.operator, null);
   const dismissed = handoffTextOf(project);
-  assert.ok(dismissed.includes(`\n\n${DISMISSED_LINE}`), "the dismissal closes the handoff");
+  assert.match(dismissed, /^Operator answers not yet used \(oldest first, the newest wins\):\nRun \S+ \(\d{4}-\d{2}-\d{2}\), dismissed by web:owner on \d{4}-\d{2}-\d{2}:\nThe operator chose not to act on: Delete the card\?$/mu);
+  assert.equal(dismissed.includes("Still open"), false, "an acknowledged ask is not open");
   assert.equal(dismissed.includes("has not answered yet"), false);
-  assert.match(dismissed, /^1\. Delete the card\?$/mu, "the questions stay listed");
   assert.equal(dismissed.includes("The operator's answer"), false);
 });
 
@@ -615,9 +614,9 @@ test("handoff: an acknowledgement with a note stays the operator's answer, and t
   const store = openProject(project);
   assert.equal(latestHandoff(store, readLedger(store), "heartbeat")?.dismissed, null);
   const answered = handoffTextOf(project);
-  assert.match(answered, /^The operator's answer \(owner, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\): yes, delete it$/mu);
+  assert.match(answered, /^Run \S+ \(\d{4}-\d{2}-\d{2}\), answered by owner on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\?\nNote: yes, delete it$/mu);
   assert.match(answered, /^Its note: Check post 7 again\.$/mu);
-  assert.equal(answered.includes(DISMISSED_LINE), false);
+  assert.equal(answered.includes("chose not to act"), false);
   assert.equal(answered.includes("has not answered yet"), false);
 });
 

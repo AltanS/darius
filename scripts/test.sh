@@ -58,8 +58,13 @@ unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
 # the engine directly would then act on that real tree. Tests set their own.
 unset DARIUS_TRACKER_ROOT DARIUS_CHECKOUT_ROOT
 
+# `bun run test -- test/a.test.ts test/b.test.ts` runs just those files; no
+# argument runs them all. A leading `--` is dropped.
+if [ "${1:-}" = "--" ]; then shift; fi
+if [ "$#" -eq 0 ]; then set -- "test/*.test.ts"; fi
+
 NODE="${DARIUS_NODE:-node}"
-"$NODE" --no-warnings --test "test/*.test.ts"
+"$NODE" --no-warnings --test "$@"
 
 # The runtime matrix. `--version` loads the CLI entrypoint and everything it
 # imports under each runtime, which catches an enum, a `Bun.*` outside

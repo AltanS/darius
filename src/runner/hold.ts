@@ -8,7 +8,9 @@
  * by the TUI.
  */
 
+import { answerProblem, noteFromAnswers, type QuestionAnswer } from "../core/answers.ts";
 import { appendLine, readLedger, type LedgerLineInput } from "../core/ledger.ts";
+import type { JsonValue } from "../core/model.ts";
 import { openProject, type Project } from "../core/store.ts";
 import { viewRun, type RunView } from "./run-due.ts";
 
@@ -27,6 +29,10 @@ export function recordHold(target: { project: string; run: string }, hold: { que
     });
     return true;
   });
+}
+
+function isText(value: JsonValue | undefined): value is string {
+  return typeof value === "string";
 }
 
 export interface Answer {
@@ -56,10 +62,19 @@ export interface Acknowledge {
   who: string;
   /** Why the failure is fine, or what the operator did about it. Empty means none. */
   note?: string | undefined;
+  /** One answer per question the operator answered (0.80.0). Needs a run that asked. */
+  answers?: readonly QuestionAnswer[] | undefined;
+  /** The follow-up run the operator started instead of answering (`ackParent`, 0.80.0). */
+  followUp?: string | undefined;
+  /** The run whose `run ack-earlier` wrote this ack (0.80.0). */
+  earlierThan?: string | undefined;
 }
 
-/** How an acknowledgement went. `isUnknown` means the run does not exist: a usage error, not a refusal. */
-export type AckResult = { ok: true; outcome: string } | { ok: false; error: string; isUnknown: boolean };
+/**
+ * How an acknowledgement went. `isUnknown` means the run does not exist, and
+ * `isUsage` that the answers do not fit the run: a usage error, not a refusal.
+ */
+export type AckResult = { ok: true; outcome: string } | { ok: false; error: string; isUnknown: boolean; isUsage?: boolean };
 
 /** The outcome of a run that may be acknowledged, or why it may not. */
 function ackable(run: string, view: RunView): { outcome: string } | { error: string } {
@@ -77,6 +92,22 @@ function ackable(run: string, view: RunView): { outcome: string } | { error: str
   return { outcome };
 }
 
+/** Why the answers do not fit a run with `count` questions, or null when they do. */
+function answersProblem(run: string, answers: readonly QuestionAnswer[], count: number): string | null {
+  if (answers.length > 0 && count === 0) return `run '${run}' asked no questions; there is nothing to answer`;
+  const seen = new Set<number>();
+  for (const answer of answers) {
+    if (!Number.isInteger(answer.n) || answer.n < 1 || answer.n > count) {
+      return `run '${run}' has ${String(count)} question(s); there is no question ${String(answer.n)}`;
+    }
+    if (seen.has(answer.n)) return `question ${String(answer.n)} is answered twice`;
+    seen.add(answer.n);
+    const problem = answerProblem(answer.text);
+    if (problem !== null) return `answer ${String(answer.n)} ${problem}`;
+  }
+  return null;
+}
+
 /**
  * Appends run.acknowledged: a person saw a failed or abandoned run, or
  * answered the questions of a complete one (the note says how). It is
@@ -88,11 +119,65 @@ export function acknowledgeRun(project: Project, ack: Acknowledge): AckResult {
   return project.withLock((): AckResult => {
     const view = viewRun(readLedger(project), ack.run);
     if (view.item === undefined) return { ok: false, error: `no run '${ack.run}' in ${project.name}`, isUnknown: true };
+    const answers = ack.answers ?? [];
+    // The answers are checked first on a closed run: answers on one that asked nothing are a caller mistake, whatever else is wrong with the ack.
+    const unfit = view.phase === "closed" ? answersProblem(ack.run, answers, view.result?.questions ?? 0) : null;
+    if (unfit !== null) return { ok: false, error: unfit, isUnknown: false, isUsage: true };
     const checked = ackable(ack.run, view);
     if ("error" in checked) return { ok: false, error: checked.error, isUnknown: false };
-    const line: LedgerLineInput = { who: ack.who, type: "run.acknowledged", item: view.item, run: ack.run };
-    if (ack.note !== undefined && ack.note !== "") line.note = ack.note;
-    appendLine(project, line);
+    appendLine(project, ackLine(view.item, ack, answers));
     return { ok: true, outcome: checked.outcome };
+  });
+}
+
+/**
+ * The ack line. Every ack written since 0.80.0 carries `carry: true`: it is
+ * delivered by the explicit rule (src/core/handoff.ts). Answers without a
+ * note also write a note built from them, marked `note_from_answers`, so a
+ * 0.79.x reader sees an answer and not a dismissal.
+ */
+function ackLine(item: string, ack: Acknowledge, answers: readonly QuestionAnswer[]): LedgerLineInput {
+  const line: LedgerLineInput = { who: ack.who, type: "run.acknowledged", item, run: ack.run, carry: true };
+  if (answers.length > 0) line.answers = answers.map(({ n, text }) => ({ n, text }));
+  if (ack.note !== undefined && ack.note !== "") line.note = ack.note;
+  else if (answers.length > 0) {
+    line.note = noteFromAnswers(answers);
+    line.note_from_answers = true;
+  }
+  if (ack.followUp !== undefined) line.follow_up = ack.followUp;
+  if (ack.earlierThan !== undefined) line.earlier_than = ack.earlierThan;
+  return line;
+}
+
+export interface AckEarlier {
+  run: string;
+  who: string;
+}
+
+/** How `run ack-earlier` went: the runs it acknowledged, or why it could not start. */
+export type AckEarlierResult = { ok: true; acknowledged: string[] } | { ok: false; error: string };
+
+/**
+ * Acknowledges, bare, every run of the same ritual as `earlier.run` that is
+ * complete, asked questions, has no ack, and started before it (0.80.0).
+ * One line per run, each with `earlier_than`. Under one lock, so a run that
+ * is answered in the meantime is never dismissed over its answer.
+ */
+export function acknowledgeEarlier(project: Project, earlier: AckEarlier): AckEarlierResult {
+  return project.withLock((): AckEarlierResult => {
+    const ledger = readLedger(project);
+    const view = viewRun(ledger, earlier.run);
+    if (view.item === undefined) return { ok: false, error: `no run '${earlier.run}' in ${project.name}` };
+    const starts = ledger.flatMap((line) => (line.type === "run.started" && line.item === view.item && isText(line.run) ? [line.run] : []));
+    const here = starts.indexOf(earlier.run);
+    const acknowledged: string[] = [];
+    for (const run of here < 0 ? [] : starts.slice(0, here)) {
+      const candidate = viewRun(ledger, run);
+      if (candidate.phase !== "closed" || candidate.outcome !== "complete" || (candidate.result?.questions ?? 0) === 0) continue;
+      if (candidate.acknowledged !== undefined) continue;
+      appendLine(project, ackLine(view.item, { run, who: earlier.who, earlierThan: earlier.run }, []));
+      acknowledged.push(run);
+    }
+    return { ok: true, acknowledged };
   });
 }

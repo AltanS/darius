@@ -2243,12 +2243,17 @@ test("a handoff note and the operator's answer reach the next run's prompt; a cr
       const prompt = promptOf(run);
       assert.match(prompt, new RegExp(`## Handoff from the previous run\n\nThe previous run of this ritual \\(run ${first}, completed `, "u"));
       assert.match(prompt, /Its note: Check post 7 again\. The card on post 9 waits for the operator\./u);
-      assert.match(prompt, /Its questions for the operator:\n1\. Delete the card\?/u);
-      assert.match(prompt, /The operator's answer \([^)]+\): yes, delete it/u);
+      assert.match(prompt, /Operator answers not yet used \(oldest first, the newest wins\):\nRun \S+ \(\d{4}-\d{2}-\d{2}\), answered by \S+ on \d{4}-\d{2}-\d{2}:\nQ1: Delete the card\?\nNote: yes, delete it/u);
       assert.ok(prompt.indexOf("## Handoff") < prompt.indexOf("## Protocol"), "the handoff comes before the protocol");
     }
+    const ackId = String(linesOf(project, "run.acknowledged")[0]?.id);
+    const startedOf = (run: string): LedgerLine | undefined => linesOf(project, "run.started").find((line) => line.run === run);
+    assert.deepEqual([startedOf(crashed)?.answers_read, startedOf(third)?.answers_read], [[ackId], [ackId]], "both runs record what they read");
     const store = openProject(project);
-    assert.equal(latestHandoff(store, readLedger(store), "heartbeat"), null, "a result without a note passes nothing on");
+    const after = latestHandoff(store, readLedger(store), "heartbeat");
+    assert.deepEqual(after?.answers, [], "the third run completed, so the answer is delivered");
+    assert.equal(after?.recent.length, 1, "it stays in the prompt as decided for 14 days");
+    assert.equal(after?.note, null, "a result without a note passes no note on");
   } finally {
     delete process.env.FAKE_CLAUDE_RESULT;
   }

@@ -410,7 +410,10 @@ function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], now: Date): bo
 }
 
 /** Appends run.started under the project lock, or returns the open run that blocks it. */
-function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: string; policySha: string; skillHash?: string | undefined }): { run: string } | { blockedBy: string } {
+function startRun(
+  ctx: ProjectContext,
+  target: { doc: Document<Ritual>; run: string; policySha: string; skillHash?: string | undefined; answersRead: readonly string[] },
+): { run: string } | { blockedBy: string } {
   const { doc, run, policySha } = target;
   return ctx.project.withLock(() => {
     const state = ritualState(doc, readLedger(ctx.project), { now: ctx.now });
@@ -419,6 +422,8 @@ function startRun(ctx: ProjectContext, target: { doc: Document<Ritual>; run: str
     const line: LedgerLineInput = { who: ctx.options.who, type: "run.started", item: itemRef("ritual", doc.header.slug), run, policy_sha: policySha };
     // `skill_hash` does not end in `_sha`: sync would take such a key for a blob reference.
     if (target.skillHash !== undefined) line.skill_hash = target.skillHash;
+    // 0.80.0: the ack ids the prompt showed. Left out when none, so a line reads as before.
+    if (target.answersRead.length > 0) line.answers_read = [...target.answersRead];
     const { followUp } = ctx.options;
     if (followUp !== undefined) {
       line.follow_up_of = followUp.parent;
@@ -445,7 +450,7 @@ function ackParent(ctx: ProjectContext, followUp: FollowUp, run: string): void {
   const parts = [...(followUp.approved.length > 0 ? [`approved ${followUp.approved.join(", ")}`] : []), ...(items.length > 0 ? [`items ${items.join(", ")}`] : [])];
   const granted = followUp.grants.length > 0 ? `granted ${String(followUp.grants.length)} line(s)` : "decision by note";
   const what = parts.length > 0 ? parts.join(", ") : granted;
-  acknowledgeRun(ctx.project, { run: followUp.parent, who: ctx.options.who, note: `follow-up ${run}, ${what}` });
+  acknowledgeRun(ctx.project, { run: followUp.parent, who: ctx.options.who, note: `follow-up ${run}, ${what}`, followUp: run });
 }
 
 /** The findings `run complete` refused (src/cli/run.ts), clipped, when the run dir has them. */
@@ -513,7 +518,10 @@ function finalizeRun(
 }
 
 /** Appends run.resumed under the project lock while the run is still held and answered, or returns the run that blocks it. */
-function resumeRun(ctx: ProjectContext, target: { run: string; sessionId?: string | undefined; policySha: string }): { run: string } | { blockedBy: string } {
+function resumeRun(
+  ctx: ProjectContext,
+  target: { run: string; sessionId?: string | undefined; policySha: string; answersRead: readonly string[] },
+): { run: string } | { blockedBy: string } {
   const { run, sessionId, policySha } = target;
   return ctx.project.withLock(() => {
     const view = viewRun(readLedger(ctx.project), run);
@@ -521,6 +529,8 @@ function resumeRun(ctx: ProjectContext, target: { run: string; sessionId?: strin
     const line: LedgerLineInput = { who: ctx.options.who, type: "run.resumed", item: view.item, run, policy_sha: policySha };
     if (sessionId === undefined) line.fresh = true;
     else line.session_id = sessionId;
+    // 0.80.0: a fresh session got a rebuilt prompt with the pending answers; a live one did not.
+    if (target.answersRead.length > 0) line.answers_read = [...target.answersRead];
     appendLine(ctx.project, line);
     return { run };
   });
@@ -595,6 +605,12 @@ interface PreparedRun {
   sessionId?: string;
   /** sha256 of policy.json as written, for the run.started or run.resumed line. */
   policySha: string;
+  /**
+   * The ack ids the prompt shows, for `answers_read` (0.80.0). Empty for a
+   * follow-up (the answers stay pending for the next scheduled run) and for
+   * the resume of a live session (its prompt is not rebuilt).
+   */
+  answersRead: string[];
 }
 
 /** A resume's first message, and the session to go on with when this host still has it. */
@@ -645,7 +661,7 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const { profile, harness } = target.resolution;
   const project = ctx.project.name;
   const ledger = readLedger(ctx.project);
-  const handoff = latestHandoff(ctx.project, ledger, doc.header.slug);
+  const handoff = latestHandoff(ctx.project, ledger, doc.header.slug, ctx.now);
   const { followUp } = ctx.options;
   const prompt: PromptInput = { project, run, ritual: doc.header, body: doc.body, handoff };
   if (followUp !== undefined) prompt.followUp = followUpSection(followUp, parentResult(ctx.project, ledger, followUp.parent));
@@ -672,7 +688,8 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const broken = preflightGate(gate, harness, env);
   if (broken !== undefined) return { gateBroken: broken, files };
   const bin = harnessBin(ctx, harness);
-  const prepared: PreparedRun = { files, launch, bin, env, policySha };
+  const isReading = followUp === undefined && resume?.sessionId === undefined;
+  const prepared: PreparedRun = { files, launch, bin, env, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
   if (resume?.sessionId !== undefined) prepared.sessionId = resume.sessionId;
   return prepared;
 }
@@ -812,8 +829,8 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
     }
     const started =
       resume === undefined
-        ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill) })
-        : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha });
+        ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill), answersRead: prepared.answersRead })
+        : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha, answersRead: prepared.answersRead });
     if ("blockedBy" in started) {
       discard(prepared.files);
       return skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`);

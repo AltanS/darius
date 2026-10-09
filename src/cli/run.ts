@@ -17,7 +17,13 @@
  *                  The findings may end with one ```darius-result block
  *                  (src/core/result.ts); a run darius launched must hand one
  *                  in to complete, and an invalid block is refused.
- *   run ack <run> [--note TEXT] [--who W]                          (display only)
+ *   run ack <run> [--answer N=TEXT ...] [--note TEXT] [--who W]
+ *                  one answer per question, and a note; both reach the next
+ *                  run of the ritual until a run that read them completes
+ *                  (src/core/handoff.ts, 0.80.0). A bare ack of a run that
+ *                  asked is a dismissal.
+ *   run ack-earlier <run> [--who W]
+ *                  acks bare every earlier open ask of the same ritual
  *   run list [--open]
  *   run show <run>             the run's findings and its result block (0.24.0)
  *   run proposal <run> <key> [--field proposed|current|why|effect]
@@ -66,12 +72,13 @@ import { cutResult, FINDINGS_MAX, parseResult, readSummary, summarizeResult, typ
 import { getBlobText, itemRef, openProject, putBlob, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { followUpOf } from "../runner/follow-up.ts";
-import { acknowledgeRun, answerRun } from "../runner/hold.ts";
+import { parseAnswerFlags } from "../core/answers.ts";
+import { acknowledgeEarlier, acknowledgeRun, answerRun } from "../runner/hold.ts";
 import { readStdin } from "./args.ts";
 import { runFollowUp, runNow, runResume } from "./run-due.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "start | hold | answer | resume | complete | ack | list | show | proposal | now | follow-up";
+const VERBS = "start | hold | answer | resume | complete | ack | ack-earlier | list | show | proposal | now | follow-up";
 const PROPOSAL_FIELDS = ["proposed", "current", "why", "effect"] as const;
 const OUTCOMES = ["complete", "failed", "abandoned"] as const;
 type Outcome = (typeof OUTCOMES)[number];
@@ -142,9 +149,13 @@ function runStart(args: ParsedArgs): number {
     const openRun = state.heldRun ?? state.openRun;
     if (openRun !== undefined) return { started: false, openRun };
     const runId = ulid();
-    appendLine(project, { who, type: "run.started", item: itemRef("ritual", slug), run: runId });
+    // The handoff is read before the start line is written, and the line records the ack ids it shows: one lock, so no ack slips between.
+    const handoff = latestHandoff(project, ledger, slug);
+    const started: LedgerLineInput = { who, type: "run.started", item: itemRef("ritual", slug), run: runId };
+    if (handoff !== null && handoff.answerIds.length > 0) started.answers_read = [...handoff.answerIds];
+    appendLine(project, started);
     const findings = findingPromptLines(collectFindings(project, ledger).filter((finding) => finding.ritual === slug));
-    return { started: true, run: runId, handoff: latestHandoff(project, ledger, slug), findings };
+    return { started: true, run: runId, handoff, findings };
   });
 
   if (!result.started) {
@@ -396,23 +407,43 @@ function appendCompletion(args: ParsedArgs, completion: Completion): number {
 // --- ack ----------------------------------------------------------------------
 
 /**
- * Marks a failed or abandoned run as seen (src/runner/hold.ts). The timer
- * still does not retry the ritual today. Exit 1 when the run is not failed
- * or abandoned, or already acknowledged; an unknown run is a usage error.
+ * Marks a run as seen (src/runner/hold.ts): a failed or abandoned one, or a
+ * complete one with questions. `--answer N=TEXT` (repeatable) answers one
+ * question; `--note` adds a free note. Exit 1 when the run cannot be
+ * acknowledged or is already; an unknown run, and answers that do not fit
+ * the run, are usage errors.
  */
 function runAck(args: ParsedArgs): number {
   const runId = requirePositional(args, 1, "<run> id");
   const note = stringFlag(args, "note");
   const who = stringFlag(args, "who") ?? defaultWho();
-  const result = acknowledgeRun(currentProject(args), { run: runId, who, note });
+  const answers = parseAnswerFlags(args.repeated.answer ?? []);
+  const result = acknowledgeRun(currentProject(args), { run: runId, who, note, answers });
   if (!result.ok) {
-    if (result.isUnknown) throw new UsageError(result.error);
+    if (result.isUnknown || result.isUsage === true) throw new UsageError(result.error);
     if (args.json) printJson({ ok: false, run: runId, error: result.error });
     else console.log(`! ${result.error}`);
     return 1;
   }
-  if (args.json) printJson({ ok: true, run: runId, outcome: result.outcome, note: note === undefined || note === "" ? null : note });
-  else console.log(`✓ acknowledged run ${runId} (${result.outcome})`);
+  if (args.json) {
+    const noted = note === undefined || note === "" ? null : note;
+    printJson({ ok: true, run: runId, outcome: result.outcome, note: noted, answers });
+  } else console.log(`✓ acknowledged run ${runId} (${result.outcome})${answers.length > 0 ? `, ${String(answers.length)} answer(s)` : ""}`);
+  return 0;
+}
+
+/**
+ * Acknowledges, bare, the earlier open asks of the ritual of <run>
+ * (src/runner/hold.ts). Exit 0 with the list, possibly empty.
+ */
+function runAckEarlier(args: ParsedArgs): number {
+  const runId = requirePositional(args, 1, "<run> id");
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const result = acknowledgeEarlier(currentProject(args), { run: runId, who });
+  if (!result.ok) throw new UsageError(result.error);
+  if (args.json) printJson({ ok: true, run: runId, acknowledged: result.acknowledged });
+  else if (result.acknowledged.length === 0) console.log(`✓ no earlier open asks before run ${runId}`);
+  else console.log(`✓ acknowledged ${String(result.acknowledged.length)} earlier ask(s): ${result.acknowledged.join(", ")}`);
   return 0;
 }
 
@@ -600,7 +631,7 @@ function runProposal(args: ParsedArgs): number {
 
 export const runCommand: Command = {
   name: "run",
-  summary: "start, hold, answer, resume, complete, acknowledge, list and show ritual runs; proposal prints an approved text",
+  summary: "start, hold, answer, resume, complete, ack (--answer N=TEXT), list and show ritual runs; proposal prints an approved text",
   audience: "session",
   usage: `run ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
@@ -616,6 +647,8 @@ export const runCommand: Command = {
         return runComplete(args);
       case "ack":
         return runAck(args);
+      case "ack-earlier":
+        return runAckEarlier(args);
       case "list":
         return runList(args);
       case "show":

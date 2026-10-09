@@ -59,7 +59,7 @@ import { join } from "node:path";
 
 import { appendLine, defaultWho, hostId, isHostId, readLedger } from "../core/ledger.ts";
 import { parseDate, ritualLifecycle, ritualState, rollCadence, type RitualState } from "../core/due.ts";
-import { handoffLines, latestHandoff } from "../core/handoff.ts";
+import { handoffLines, lapsedAnswers, latestHandoff } from "../core/handoff.ts";
 import { findMarker, isAboveCap, MARKER_FILE, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
 import { reconcileProject, ritualWarnings, type ReconcileResult } from "../core/reconcile.ts";
 import type { Document, Policy, Ritual } from "../core/model.ts";
@@ -385,8 +385,9 @@ function runShow(args: ParsedArgs): number {
   const ledger = readLedger(project);
   const state = ritualState(doc, ledger, { now: new Date() });
   const handoff = latestHandoff(project, ledger, slug);
+  const lapsed = lapsedAnswers(ledger, slug);
   if (args.json) {
-    printJson({ project: project.name, header: doc.header, body: doc.body, status: state, handoff });
+    printJson({ project: project.name, header: doc.header, body: doc.body, status: state, handoff, lapsed_answers: lapsed });
     return 0;
   }
   console.log(`${doc.header.title} (${slug})`);
@@ -409,6 +410,10 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.follow_up !== undefined) console.log(`follow_up: ${doc.header.follow_up} (a follow-up runs without herdr)`);
   if (doc.header.policy.notes !== undefined) console.log(`  notes: ${doc.header.policy.notes}`);
   if (handoff !== null) console.log(`\nhandoff to the next run:\n${handoffLines(handoff).join("\n")}`);
+  if (lapsed.length > 0) {
+    const rows = lapsed.map((answer) => `  run ${answer.run}, answered by ${answer.who} on ${answer.at.slice(0, 10)}`);
+    console.log(`\nlapsed answers (older than 30 days, no run read them):\n${rows.join("\n")}`);
+  }
   console.log(`\n${doc.body}`);
   return 0;
 }

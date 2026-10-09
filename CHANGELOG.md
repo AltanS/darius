@@ -2,6 +2,26 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.80.0] - 2026-10-09
+
+### Added
+
+- `darius run ack <run> --answer N=TEXT` (repeatable) records one answer per question on the ack line: `answers: [{n, text}]`. An ack may answer some questions and leave others empty. A bad or repeated N, an N past the question count, a bad text (empty, over 500 characters, or with a line break) and `--answer` on a run that asked nothing are usage errors (exit 2). `--json` adds `answers`.
+- An answer-only ack also writes `note` ("Q1: ...; Q2: ...") with `note_from_answers: true`, so 0.79.x reads it as an answer and not as a dismissal. This version prints the items and skips that note.
+- `darius run ack-earlier <run>` acks bare every complete, unacknowledged run of the same ritual that asked questions and started before `<run>`. One `run.acknowledged` line per run, each with `earlier_than`. Exit 0 with the list, possibly empty. `--json` gives `{ok, run, acknowledged}`.
+- Answers are carried until used. Every answer or dismissal that no completed run has read goes to the next run of the ritual, oldest first, with its question text and the date of its run. The newest answer wins. `run.started` records the ack ids its prompt showed as `answers_read` (a fresh-session `run.resumed` does too), and an ack counts as delivered when a run that read it completes with outcome `complete`. A crashed run leaves it pending. A follow-up shows the answers but does not consume them.
+- The handoff prompt gains "Already decided in the last 14 days" (the newest five delivered answers), "Still open, not answered" (questions of the last three complete runs that nobody acknowledged) and a rule line: answers are claims as of their date. The prompt lists the newest ten dismissals and sums the older ones, so a pile of dismissals never hides an answer.
+- `ritual show` lists answers that lapsed unread (older than 30 days). `--json` adds `lapsed_answers`. The handoff JSON adds `answers`, `recent`, `openAsks`, `answerIds` and `lapsed`.
+- `bun run test -- <file>...` runs only the named test files.
+
+### Changed
+
+- The handoff no longer reads only the ack of the latest run. An answer given on an older run, for example while a newer run was open, now reaches the next run instead of being lost.
+- The handoff drops the lines "The operator has not answered yet" and "chose not to act" and the question list of the latest run. The sections above replace them.
+- Every ack written by this version carries `carry: true` and uses the explicit delivery rule. An ack from 0.79.x or older keeps the old rule: delivered once a later complete run of the ritual started.
+- A follow-up's auto ack of its parent adds `follow_up: <run>` and `carry: true`. The prompt shows it as "The operator started follow-up <run> (<what>)".
+- An answer that no run read lapses after 30 days: it is not shown and not delivered.
+
 ## [0.79.2] - 2026-10-08
 
 ### Fixed
