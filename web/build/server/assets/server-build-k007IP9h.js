@@ -12477,6 +12477,14 @@ function resumeNotice(result) {
 function heldKey(row) {
 	return `${row.run}:${row.holdFrom ?? 0}`;
 }
+/** The most the server reads of a request body (MAX_BODY in src/web/push-api.ts); the app may not import it at run time. */
+var BODY_LIMIT = 4096;
+/** What the form says when the answers together would not fit the request. */
+var ANSWERS_TOO_LONG = "The answers are too long together. Shorten them.";
+/** True when this body would be refused as too large: the form turns its buttons off and says so. */
+function isTooLong(body) {
+	return JSON.stringify(body).length > BODY_LIMIT;
+}
 //#endregion
 //#region app/components/questions.tsx
 function QuestionList({ questions, after }) {
@@ -12542,6 +12550,10 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 	})] });
 	const answers = answersOf(texts);
 	const isLocked = busy !== null || isDone;
+	const isTooBig = isTooLong(askBody("now", {
+		project,
+		run
+	}, texts));
 	const setText = (index, text) => setTexts(withText(texts, index, text));
 	const send = async (runNow) => {
 		setBusy(runNow ? "now" : "send");
@@ -12585,7 +12597,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 		className: "ask",
 		onSubmit: (event) => {
 			event.preventDefault();
-			if (answers.length > 0 && !isLocked) send(false);
+			if (answers.length > 0 && !isLocked && !isTooBig) send(false);
 		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, {
@@ -12630,6 +12642,11 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 				className: "fu-off",
 				children: ["Applies to the next run only. Next run: ", nextRun]
 			}),
+			isTooBig ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: ANSWERS_TOO_LONG
+			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fu-acts",
 				children: [
@@ -12637,14 +12654,14 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 						type: "submit",
 						className: "st-btn st-btn-main",
 						"aria-label": `Send answer: ${subject}`,
-						disabled: isLocked || answers.length === 0,
+						disabled: isLocked || isTooBig || answers.length === 0,
 						children: busy === "send" ? "Sending…" : "Send answer"
 					}),
 					isEarlier || !canRunNow || questions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "st-btn",
 						"aria-label": `Send and run now: ${subject}`,
-						disabled: isLocked || answers.length === 0,
+						disabled: isLocked || isTooBig || answers.length === 0,
 						onClick: () => void send(true),
 						children: busy === "now" ? "Sending…" : "Send and run now"
 					}),
@@ -12776,6 +12793,10 @@ function HeldForm({ project, row }) {
 	const [notice, setNotice] = (0, import_react.useState)(null);
 	const isLocked = busy || isDone;
 	const filled = texts.some((text) => text.trim() !== "");
+	const isTooBig = isTooLong(heldBody({
+		project,
+		run: row.run
+	}, hold, texts));
 	const send = async () => {
 		setBusy(true);
 		setError(null);
@@ -12799,7 +12820,7 @@ function HeldForm({ project, row }) {
 		className: "ask",
 		onSubmit: (event) => {
 			event.preventDefault();
-			if (filled && !isLocked) send();
+			if (filled && !isLocked && !isTooBig) send();
 		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, {
@@ -12827,13 +12848,18 @@ function HeldForm({ project, row }) {
 					});
 				}
 			}),
+			isTooBig ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: ANSWERS_TOO_LONG
+			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "fu-acts",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "submit",
 					className: "st-btn st-btn-main",
 					"aria-label": "Answer and resume: this held run",
-					disabled: isLocked || !filled,
+					disabled: isLocked || isTooBig || !filled,
 					children: busy ? "Sending…" : "Answer and resume"
 				})
 			}),
@@ -15831,9 +15857,62 @@ function loader$11({ context, params }) {
 	};
 }
 var meta$9 = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
-/** What darius puts at the top of the next run's prompt: the run's note and the operator's note on that run. */
-function HandoffCard({ handoff }) {
-	const { operator, dismissed } = handoff;
+/** One answer the next run reads: who and when, the free note, a started follow-up, and each question with its answer. */
+function AnswerEntry({ answer, when }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "handoff-answer",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rail-note",
+				children: [
+					answer.who,
+					", ",
+					when(answer.at),
+					", on the run of ",
+					when(answer.runAt)
+				]
+			}),
+			answer.followUp === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				"Started follow-up ",
+				shortRun(answer.followUp),
+				" instead of answering."
+			] }),
+			answer.items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "rec-label",
+					children: [
+						"Q",
+						item.n,
+						":"
+					]
+				}),
+				" ",
+				item.question,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rec-label",
+					children: "Answer:"
+				}),
+				" ",
+				item.answer ?? "none given"
+			] }, item.n)),
+			answer.note === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["Note: ", answer.note] })
+		]
+	});
+}
+/**
+* What darius puts at the top of the next run's prompt (0.80.0): the latest
+* run's note, the answers no run has read yet with their questions, the
+* dismissals (folded, with a count), the questions that are still open, and
+* the answers that lapsed unread. An answer given on an older run shows here
+* too: the handoff no longer reads only the latest run's ack.
+*/
+function HandoffCard({ handoff, project }) {
+	const { operator, dismissed, answers, openAsks, lapsed } = handoff;
+	const { today, offset } = useClock();
+	const when = (at) => momentText(at, today, offset);
+	const given = answers.filter((answer) => answer.kind === "answer");
+	const dismissals = answers.filter((answer) => answer.kind === "dismissed");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "card",
 		children: [
@@ -15841,7 +15920,7 @@ function HandoffCard({ handoff }) {
 				className: "text-muted",
 				children: "The latest run left no note."
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: handoff.note }),
-			operator === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			answers.length > 0 ? null : operator === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "rail-note",
 				children: [
 					handoff.questions.length > 0 ? "Your answer" : "Your note",
@@ -15851,9 +15930,66 @@ function HandoffCard({ handoff }) {
 					operator.note
 				]
 			}),
-			dismissed === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			answers.length > 0 || dismissed === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "rail-note",
 				children: [dismissed.who, " saw the questions and chose not to act on them. The next run is told not to act on them or ask them again."]
+			}),
+			given.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "fu-label",
+				children: [given.length === 1 ? "1 answer waits for the next run" : `${given.length} answers wait for the next run`, ", oldest first"]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "handoff-list",
+				children: given.map((answer) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerEntry, {
+					answer,
+					when
+				}, `${answer.run}:${answer.at}`))
+			})] }),
+			dismissals.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+				summary: dismissals.length === 1 ? "1 dismissed ask" : `${dismissals.length} dismissed asks`,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "rail-note",
+					children: "The next run is told you saw these questions and chose not to act on them."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "handoff-list",
+					children: dismissals.map((answer) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						answer.who,
+						", ",
+						when(answer.at),
+						", on the run of ",
+						when(answer.runAt)
+					] }, `${answer.run}:${answer.at}`))
+				})]
+			}),
+			openAsks.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fu-label",
+				children: "Still open, not answered"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "handoff-list",
+				children: openAsks.map((ask) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						to: href({
+							to: "run",
+							ws: project,
+							run: ask.run
+						}),
+						children: when(ask.at)
+					}),
+					": ",
+					ask.questions.join(" / ")
+				] }, ask.run))
+			})] }),
+			lapsed.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "handoff-list",
+				children: lapsed.map((answer) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "rail-note",
+					children: [
+						"An answer from ",
+						answer.who,
+						" on ",
+						when(answer.at),
+						" lapsed unread and is not delivered."
+					]
+				}, answer.run + answer.at))
 			})
 		]
 	});
@@ -16051,7 +16187,10 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 						}),
 						children: "From this run"
 					}),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandoffCard, { handoff: ritual.handoff })
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandoffCard, {
+						handoff: ritual.handoff,
+						project
+					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "History",
@@ -19232,14 +19371,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-200KyhvS.js",
+			"module": "/assets/overview-BQCGhMD6.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19249,7 +19388,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js"
+				"/assets/result-Cz7-yfuK.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19270,14 +19409,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-200KyhvS.js",
+			"module": "/assets/overview-BQCGhMD6.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19287,7 +19426,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js"
+				"/assets/result-Cz7-yfuK.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19378,13 +19517,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals--xpKy5x8.js",
+			"module": "/assets/rituals-BlU3UsQY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-CQiek752.js",
@@ -19394,7 +19533,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-B5ZEY4MZ.js"
 			],
@@ -19417,13 +19556,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals--xpKy5x8.js",
+			"module": "/assets/rituals-BlU3UsQY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-CQiek752.js",
@@ -19433,7 +19572,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-B5ZEY4MZ.js"
 			],
@@ -19456,7 +19595,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-DvSb8E95.js",
+			"module": "/assets/findings-ywaBZJCi.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19465,7 +19604,7 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -19492,7 +19631,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-DvSb8E95.js",
+			"module": "/assets/findings-ywaBZJCi.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19501,7 +19640,7 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -19590,13 +19729,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DaRGo8KK.js",
+			"module": "/assets/runs-DiozCz_k.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -19606,7 +19745,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -19629,7 +19768,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-Dstu9Vla.js",
+			"module": "/assets/ritual-D3MFxBmH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19639,8 +19778,8 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/runs-CwzME2hn.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19667,7 +19806,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BrYbn4k0.js",
+			"module": "/assets/run-C8wn1W_T.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19677,8 +19816,8 @@ var server_manifest_default = {
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/runs-CwzME2hn.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19906,13 +20045,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DaRGo8KK.js",
+			"module": "/assets/runs-DiozCz_k.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-D2Mq__4d.js",
+				"/assets/runs-CwzME2hn.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -19922,7 +20061,7 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CeCa9sw1.js",
+				"/assets/result-Cz7-yfuK.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -20071,8 +20210,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-4509f6ed.js",
-	"version": "4509f6ed",
+	"url": "/assets/manifest-6372a1fa.js",
+	"version": "6372a1fa",
 	"sri": void 0
 };
 //#endregion

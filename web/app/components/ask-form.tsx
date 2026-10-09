@@ -20,7 +20,7 @@ import { useState } from "react";
 import { Link, useRevalidator } from "react-router";
 
 import type { ResultQuestion, RunRow } from "../../../src/web/api.ts";
-import { answersOf, askBody, currentHold, earlierBody, heldBody, recommendedText, resumeNotice, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
+import { ANSWERS_TOO_LONG, answersOf, askBody, currentHold, earlierBody, heldBody, isTooLong, recommendedText, resumeNotice, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { dismissAllText, earlierText } from "../lib/view.ts";
@@ -67,6 +67,8 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
 
   const answers = answersOf(texts);
   const isLocked = busy !== null || isDone;
+  // Ten answers of 500 characters do not fit one request: say so before the press, not after a 413.
+  const isTooBig = isTooLong(askBody("now", { project, run }, texts));
   const setText = (index: number, text: string): void => setTexts(withText(texts, index, text));
 
   const send = async (runNow: boolean): Promise<void> => {
@@ -110,7 +112,7 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
       className="ask"
       onSubmit={(event) => {
         event.preventDefault();
-        if (answers.length > 0 && !isLocked) void send(false);
+        if (answers.length > 0 && !isLocked && !isTooBig) void send(false);
       }}
     >
       <QuestionList
@@ -138,14 +140,19 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
       />
       {isEarlier ? <p className="fu-off">A newer run exists. Your answer goes to the next run with its question.</p> : null}
       <p className="fu-off">Applies to the next run only. Next run: {nextRun}</p>
+      {isTooBig ? (
+        <p className="bk-note tone-bad" role="alert">
+          {ANSWERS_TOO_LONG}
+        </p>
+      ) : null}
       <div className="fu-acts">
         {questions.length === 0 ? null : (
-          <button type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || answers.length === 0}>
+          <button type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0}>
             {busy === "send" ? "Sending…" : "Send answer"}
           </button>
         )}
         {isEarlier || !canRunNow || questions.length === 0 ? null : (
-          <button type="button" className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || answers.length === 0} onClick={() => void send(true)}>
+          <button type="button" className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0} onClick={() => void send(true)}>
             {busy === "now" ? "Sending…" : "Send and run now"}
           </button>
         )}
@@ -272,6 +279,7 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
   const [notice, setNotice] = useState<RunNowNotice | null>(null);
   const isLocked = busy || isDone;
   const filled = texts.some((text) => text.trim() !== "");
+  const isTooBig = isTooLong(heldBody({ project, run: row.run }, hold, texts));
 
   const send = async (): Promise<void> => {
     setBusy(true);
@@ -298,7 +306,7 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
       className="ask"
       onSubmit={(event) => {
         event.preventDefault();
-        if (filled && !isLocked) void send();
+        if (filled && !isLocked && !isTooBig) void send();
       }}
     >
       <QuestionList
@@ -317,8 +325,13 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
           );
         }}
       />
+      {isTooBig ? (
+        <p className="bk-note tone-bad" role="alert">
+          {ANSWERS_TOO_LONG}
+        </p>
+      ) : null}
       <div className="fu-acts">
-        <button type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || !filled}>
+        <button type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
           {busy ? "Sending…" : "Answer and resume"}
         </button>
       </div>

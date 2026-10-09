@@ -1,7 +1,7 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/ritual";
-import type { RitualHandoff } from "../../../src/web/api.ts";
+import type { HandoffAnswer, RitualHandoff } from "../../../src/web/api.ts";
 import { KindWord } from "../components/chip.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { Markdown } from "../components/markdown.tsx";
@@ -11,7 +11,7 @@ import { StateWord } from "../components/row.tsx";
 import { NextStepCard, Questions, RunList } from "../components/runs.tsx";
 import { Chips, Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
-import { momentText } from "../lib/format.ts";
+import { momentText, shortRun } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
@@ -39,20 +39,107 @@ export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: 
 
 interface HandoffCardProps {
   handoff: RitualHandoff;
+  project: string;
 }
 
-/** What darius puts at the top of the next run's prompt: the run's note and the operator's note on that run. */
-function HandoffCard({ handoff }: HandoffCardProps): React.ReactNode {
-  const { operator, dismissed } = handoff;
+/** "10:30" today, "27 Sep 10:30" on another day, on the host's clock. */
+type When = (at: string) => string;
+
+interface AnswerEntryProps {
+  answer: HandoffAnswer;
+  when: When;
+}
+
+/** One answer the next run reads: who and when, the free note, a started follow-up, and each question with its answer. */
+function AnswerEntry({ answer, when }: AnswerEntryProps): React.ReactNode {
+  return (
+    <li className="handoff-answer">
+      <p className="rail-note">
+        {answer.who}, {when(answer.at)}, on the run of {when(answer.runAt)}
+      </p>
+      {answer.followUp === null ? null : <p>Started follow-up {shortRun(answer.followUp)} instead of answering.</p>}
+      {answer.items.map((item) => (
+        <p key={item.n}>
+          <span className="rec-label">Q{item.n}:</span> {item.question}
+          <br />
+          <span className="rec-label">Answer:</span> {item.answer ?? "none given"}
+        </p>
+      ))}
+      {answer.note === null ? null : <p>Note: {answer.note}</p>}
+    </li>
+  );
+}
+
+interface HandoffCardProps {
+  handoff: RitualHandoff;
+  project: string;
+}
+
+/**
+ * What darius puts at the top of the next run's prompt (0.80.0): the latest
+ * run's note, the answers no run has read yet with their questions, the
+ * dismissals (folded, with a count), the questions that are still open, and
+ * the answers that lapsed unread. An answer given on an older run shows here
+ * too: the handoff no longer reads only the latest run's ack.
+ */
+function HandoffCard({ handoff, project }: HandoffCardProps): React.ReactNode {
+  const { operator, dismissed, answers, openAsks, lapsed } = handoff;
+  const { today, offset } = useClock();
+  const when: When = (at) => momentText(at, today, offset);
+  const given = answers.filter((answer) => answer.kind === "answer");
+  const dismissals = answers.filter((answer) => answer.kind === "dismissed");
   return (
     <div className="card">
       {handoff.note === null ? <p className="text-muted">The latest run left no note.</p> : <p>{handoff.note}</p>}
-      {operator === null ? null : (
+      {answers.length > 0 ? null : operator === null ? null : (
         <p className="rail-note">
           {handoff.questions.length > 0 ? "Your answer" : "Your note"}, {operator.who}: {operator.note}
         </p>
       )}
-      {dismissed === null ? null : <p className="rail-note">{dismissed.who} saw the questions and chose not to act on them. The next run is told not to act on them or ask them again.</p>}
+      {answers.length > 0 || dismissed === null ? null : <p className="rail-note">{dismissed.who} saw the questions and chose not to act on them. The next run is told not to act on them or ask them again.</p>}
+      {given.length === 0 ? null : (
+        <>
+          <p className="fu-label">{given.length === 1 ? "1 answer waits for the next run" : `${given.length} answers wait for the next run`}, oldest first</p>
+          <ul className="handoff-list">
+            {given.map((answer) => (
+              <AnswerEntry key={`${answer.run}:${answer.at}`} answer={answer} when={when} />
+            ))}
+          </ul>
+        </>
+      )}
+      {dismissals.length === 0 ? null : (
+        <Fold summary={dismissals.length === 1 ? "1 dismissed ask" : `${dismissals.length} dismissed asks`}>
+          <p className="rail-note">The next run is told you saw these questions and chose not to act on them.</p>
+          <ul className="handoff-list">
+            {dismissals.map((answer) => (
+              <li key={`${answer.run}:${answer.at}`}>
+                {answer.who}, {when(answer.at)}, on the run of {when(answer.runAt)}
+              </li>
+            ))}
+          </ul>
+        </Fold>
+      )}
+      {openAsks.length === 0 ? null : (
+        <>
+          <p className="fu-label">Still open, not answered</p>
+          <ul className="handoff-list">
+            {openAsks.map((ask) => (
+              <li key={ask.run}>
+                <Link to={href({ to: "run", ws: project, run: ask.run })}>{when(ask.at)}</Link>: {ask.questions.join(" / ")}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {lapsed.length === 0 ? null : (
+        <ul className="handoff-list">
+          {lapsed.map((answer) => (
+            <li key={answer.run + answer.at} className="rail-note">
+              An answer from {answer.who} on {when(answer.at)} lapsed unread and is not delivered.
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -169,7 +256,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
 
           {ritual.handoff === null ? null : (
             <Section title="Note for the next run" aside={<Link to={href({ to: "run", ws: project, run: ritual.handoff.run })}>From this run</Link>}>
-              <HandoffCard handoff={ritual.handoff} />
+              <HandoffCard handoff={ritual.handoff} project={project} />
             </Section>
           )}
 

@@ -66,7 +66,10 @@
  * worked, and waits up to OUTCOME_WAIT_MS for the CLI's "started run" line
  * like the follow-up does. The ritual and the `--on` host come from the
  * run's ledger item and the ritual's host, never from the body. The ack is
- * never rolled back. `ack-earlier` dismisses, bare, the open asks of the
+ * never rolled back. When the ritual belongs to another host, the ack goes
+ * there too (`darius run ack --on HOST`) before `run now --on HOST`, so the
+ * run that starts there reads the answer. The host is checked first: a bad
+ * name writes nothing. `ack-earlier` dismisses, bare, the open asks of the
  * same ritual that the page showed under the newest one: each id must be an
  * open ask of the run's ritual that started before it, or the whole call is
  * refused with 409.
@@ -130,6 +133,9 @@ const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 const ACK_EARLIER_PATH = `${ACTION_API_PREFIX}ack-earlier`;
 const ANSWER_PATH = `${ACTION_API_PREFIX}answer`;
+
+/** What a 413 says to the person who typed the answers: ten answers of 500 characters do not fit MAX_BODY together. */
+export const ANSWERS_TOO_LONG = "The answers are too long together. Shorten them.";
 
 /** The operator's note, at most this many characters. */
 export const NOTE_MAX = 500;
@@ -335,12 +341,12 @@ function readBody(parsed: JsonValue): FollowUpBody {
 type Guarded = { reply: PushApiReply } | { parsed: JsonValue };
 
 /** The guards the follow-up and the acknowledgement share, in order: method, viewer, Origin, content type, size, JSON. */
-function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: string): Guarded {
+function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: string, tooLarge = "too large"): Guarded {
   if (request.method !== "POST") return { reply: fail(405, "POST only") };
   if (viewer.local === true) return { reply: fail(403, loopbackReason) };
   if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return { reply: fail(403, "the request must come from the darius page") };
   if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return { reply: fail(415, "send JSON") };
-  if (request.body.length > MAX_BODY) return { reply: fail(413, "too large") };
+  if (request.body.length > MAX_BODY) return { reply: fail(413, tooLarge) };
   try {
     return { parsed: JSON.parse(request.body) };
   } catch {
@@ -524,7 +530,7 @@ function ritualNowHost(project: string, slug: string): string | undefined {
 
 /** Whether the run may be acknowledged is the CLI's rule (`ackable()` in src/runner/hold.ts); its sentence is the 409. */
 async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
-  const guarded = guard(request, viewer, LOOPBACK_ACK);
+  const guarded = guard(request, viewer, LOOPBACK_ACK, ANSWERS_TOO_LONG);
   if ("reply" in guarded) return guarded.reply;
   const body = readAckBody(guarded.parsed);
   if ("error" in body) return fail(400, body.error);
@@ -533,14 +539,31 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
   if (item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
   const slug = ritualSlug(item);
   if (body.runNow && slug === undefined) return fail(400, "runNow: only a run of a ritual can start the ritual again");
+  // "Send and run now" on a ritual of another host: the ack is written there too, before the run starts there,
+  // so the run reads the answer without waiting for a sync. A plain "Send answer" stays local; sync carries it.
+  let on: string | undefined;
+  if (body.runNow && slug !== undefined) {
+    let host: { on: string | undefined } | { failed: string };
+    try {
+      host = targetHost(deps, body.project, slug);
+    } catch (cause) {
+      return fail(500, `the ritual's host could not be read: ${errorMessage(cause)}`);
+    }
+    if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
+    on = host.on;
+  }
   const argv = ["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json"];
   if (body.note !== undefined) argv.push("--note", body.note);
   for (const answer of body.answers) argv.push("--answer", `${String(answer.n)}=${answer.text}`);
+  if (on !== undefined) argv.push("--on", on);
   argv.push("--", body.run);
   const answer = await deps.run(argv);
+  if (answer.killed === true || (on !== undefined && answer.code === SSH_EXIT)) {
+    return fail(502, on === undefined ? `darius did not finish: ${answer.error}` : `${on} did not answer: ${answer.error}`);
+  }
   if (answer.code !== 0) return fail(409, answer.error);
   if (!body.runNow || slug === undefined) return { status: 200, body: { ok: true } };
-  return runNowReply(await startRunNow(body, slug, viewer, deps));
+  return runNowReply(await startRunNow(body, slug, viewer, deps, on));
 }
 
 /** What a detached run verb did within the wait: the run started, is still starting, or could not start. */
@@ -581,14 +604,11 @@ function targetHost(deps: ActionDeps, project: string, slug: string): { on: stri
   return { on };
 }
 
-function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps): Promise<RunNowOutcome> {
+function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps, on: string | undefined): Promise<RunNowOutcome> {
   return spawnWatched(deps, { project: body.project, run: body.run, logName: "run-now.log", line: NOW_STARTED_LINE }, () => {
-    // The answer is already saved: anything that throws from here on is a sentence for the card.
-    const host = targetHost(deps, body.project, slug);
-    if ("failed" in host) return host;
     const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
-    if (host.on !== undefined) argv.push("--on", host.on);
-    return { argv, on: host.on };
+    if (on !== undefined) argv.push("--on", on);
+    return { argv, on };
   });
 }
 
@@ -633,7 +653,7 @@ function readAnswerBody(parsed: JsonValue): AnswerBody {
 }
 
 async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
-  const guarded = guard(request, viewer, LOOPBACK_ANSWER);
+  const guarded = guard(request, viewer, LOOPBACK_ANSWER, ANSWERS_TOO_LONG);
   if ("reply" in guarded) return guarded.reply;
   const body = readAnswerBody(guarded.parsed);
   if ("error" in body) return fail(400, body.error);

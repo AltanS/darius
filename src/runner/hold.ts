@@ -153,10 +153,12 @@ function answersProblem(run: string, answers: readonly QuestionAnswer[], count: 
 
 /**
  * Appends run.acknowledged: a person saw a failed or abandoned run, or
- * answered the questions of a complete one (the note says how). It is
- * display only. The timer still does not retry the ritual today
+ * answered the questions of a complete one (the note says how). On a failed
+ * run it is display only: the timer does not retry the ritual today
  * (`failedToday()` in src/runner/run-due.ts); a retry is `darius run now`.
- * Refuses every other run, and a second acknowledgement.
+ * On a complete run that asked, the answers and the dismissal are carried to
+ * the next run of the ritual (src/core/handoff.ts, 0.80.0). Refuses every
+ * other run, and a second acknowledgement.
  */
 export function acknowledgeRun(project: Project, ack: Acknowledge): AckResult {
   return project.withLock((): AckResult => {

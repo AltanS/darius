@@ -407,7 +407,7 @@ async function listenAuto(port: number, gate: Gate, app: WebApp, servers: Server
 
 export const serveCommand: Command = {
   name: "serve",
-  summary: "serve this host's read-only status page: --bind auto|127.0.0.1|<tailnet ip>[,...], --port 4747",
+  summary: "serve this host's status page and its few action buttons: --bind auto|127.0.0.1|<tailnet ip>[,...], --port 4747",
   async run(args: ParsedArgs): Promise<number> {
     const binds = webBind(stringFlag(args, "bind"));
     const port = webPort(stringFlag(args, "port"));

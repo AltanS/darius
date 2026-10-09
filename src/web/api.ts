@@ -611,6 +611,48 @@ export interface RitualHandoff {
   operator: { who: string; at: string; note: string } | null;
   /** Set when the run asked questions and someone acknowledged it with no note (0.68.0): the operator chose not to act. */
   dismissed: { who: string; at: string } | null;
+  /** The answers and dismissals no completed run has read, oldest first (0.80.0): what the next run is told besides the note. */
+  answers: HandoffAnswer[];
+  /** Questions of the last few complete runs that nobody answered or dismissed: the next run is told they are still open. */
+  openAsks: HandoffOpenAsk[];
+  /** Answers older than 30 days that no run read: not delivered any more. */
+  lapsed: HandoffLapsed[];
+}
+
+/** One question of a run and the operator's answer; null when the ack left it empty. */
+export interface HandoffItem {
+  n: number;
+  question: string;
+  answer: string | null;
+}
+
+/** An acknowledgement of a run that handed in a result, waiting for the next run to read it. */
+export interface HandoffAnswer {
+  run: string;
+  /** When the answered run completed. */
+  runAt: string;
+  who: string;
+  /** When the ack was written. */
+  at: string;
+  /** `dismissed`: a bare ack of a run that asked. `answer`: answers, a note, or a follow-up. */
+  kind: "answer" | "dismissed";
+  /** The free note; null when there is none or it only repeats the answers. */
+  note: string | null;
+  /** The follow-up run the operator started instead of answering; null otherwise. */
+  followUp: string | null;
+  items: HandoffItem[];
+}
+
+export interface HandoffOpenAsk {
+  run: string;
+  at: string;
+  questions: string[];
+}
+
+export interface HandoffLapsed {
+  run: string;
+  who: string;
+  at: string;
 }
 
 export interface RitualDetail {

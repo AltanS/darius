@@ -17,9 +17,10 @@ import type { Command, ParsedArgs } from "../src/cli/registry.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { ANSWER_MAX, noteFromAnswers, parseAnswerFlags, readAnswers } from "../src/core/answers.ts";
-import { readLedger } from "../src/core/ledger.ts";
+import { hostId, readLedger } from "../src/core/ledger.ts";
 import { UsageError, type LedgerLine } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
+import { webContext } from "../src/web/context.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-run-ack-answers-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -212,6 +213,16 @@ test("the exit codes of run ack through the real CLI: 2 for a usage error, 1 for
   assert.equal(darius("--answer", "1=again"), 1);
 });
 
+test("run ack --on this host writes the ack here, answers and all (0.80.0); --on is the web's way to ack on a ritual's own host", async () => {
+  const project = "ra-on";
+  await addRitual(project, "heartbeat");
+  const run = await askingRun(project, "heartbeat", 2);
+  const acked = await runCli(runCommand, project, ["ack", run, "--answer", "2=later", "--on", hostId(), "--who", "web:owner", "--json"]);
+  assert.equal(acked.code, 0, acked.stdout);
+  assert.deepEqual(JSON.parse(acked.stdout).answers, [{ n: 2, text: "later" }]);
+  assert.equal(acksOf(project).length, 1);
+});
+
 // --- ack-earlier -----------------------------------------------------------------
 
 test("run ack-earlier acks only older, open, asking, complete runs of the same ritual, bare, with earlier_than", async () => {
@@ -272,4 +283,22 @@ test("answers.ts: the note, the flag parser and the reader of an ack line", () =
   assert.deepEqual(readAnswers(undefined), []);
   assert.deepEqual(readAnswers("text"), []);
   assert.deepEqual(readAnswers([{ n: 1, text: " ok " }, { n: 1, text: "twice" }, { n: 0, text: "zero" }, { n: 2 }, "junk", null]), [{ n: 1, text: "ok" }]);
+});
+
+test("the web ritual detail carries an answer given on an older run, with its question, and the questions still open (0.80.0)", async () => {
+  const project = "ra-web-handoff";
+  await addRitual(project, "heartbeat");
+  const older = await askingRun(project, "heartbeat", 2);
+  const open = await askingRun(project, "heartbeat", 1);
+  const newer = await askingRun(project, "heartbeat", 0);
+  assert.equal((await runCli(runCommand, project, ["ack", older, "--answer", "2=yes, delete it", "--who", "web:owner"])).code, 0);
+  const handoff = webContext("owner").ritual(project, "heartbeat")?.handoff;
+  assert.ok(handoff !== null && handoff !== undefined);
+  assert.equal(handoff.run, newer, "the latest run left the note; the answer is on an older run");
+  assert.equal(handoff.answers.length, 1);
+  const [answer] = handoff.answers;
+  assert.deepEqual([answer?.run, answer?.kind, answer?.who], [older, "answer", "web:owner"]);
+  assert.deepEqual(answer?.items, [{ n: 1, question: "Question 1?", answer: null }, { n: 2, question: "Question 2?", answer: "yes, delete it" }]);
+  assert.deepEqual(handoff.openAsks.map((ask) => [ask.run, ask.questions]), [[open, ["Question 1?"]]]);
+  assert.deepEqual(handoff.lapsed, []);
 });

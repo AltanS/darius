@@ -19,7 +19,7 @@ import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue, LedgerLine } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { NOW_STARTED_PREFIX, RESUME_STARTED_PREFIX } from "../src/cli/run-due.ts";
-import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, LOOPBACK_ANSWER, LOOPBACK_CLOSE, RESUME_STARTED_LINE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, ANSWERS_TOO_LONG, LOOPBACK_ANSWER, LOOPBACK_CLOSE, RESUME_STARTED_LINE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -675,6 +675,73 @@ test("run now: when the ritual belongs to another host, the argv ends with --on 
   assert.deepEqual(asked, [`${PROJECT}/daily`]);
 });
 
+test("run now: a host lookup that throws is a 500 before anything is written; a throw after the ack (the store, the spawn) is a runNow.error", async () => {
+  const lookup = { ...nowDeps(), nowHost: () => { throw new Error("links.toml is unreadable"); } };
+  const refused = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, lookup);
+  assert.equal(refused.status, 500);
+  assert.match(errorOf(refused.body), /the ritual's host could not be read: links\.toml is unreadable/u);
+  assert.deepEqual([lookup.calls, lookup.started], [[], []], "no ack, no run");
+  const spawn = {
+    ...nowDeps(),
+    start: () => {
+      throw new Error("disk full");
+    },
+  };
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, spawn);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the run could not be started: disk full" } } });
+  assert.equal(spawn.calls.length, 1, "the ack ran and stays");
+});
+
+test("run now: a host name that is not a plain host name is refused before the ack, and nothing is written or started", async () => {
+  for (const host of ["-oProxyCommand=x", "host b", "host;rm", "", ".x"]) {
+    const stub = { ...nowDeps(), nowHost: () => host };
+    const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, stub);
+    assert.equal(sent.status, 409, JSON.stringify(host));
+    assert.equal(errorOf(sent.body), "nothing written: the ritual's host name is not valid");
+    assert.deepEqual([stub.calls, stub.started], [[], []], "no ack on this host, none over ssh, no run");
+  }
+  const fine = { ...nowDeps(), nowHost: () => "host-b.tail1234.ts.net" };
+  await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, fine);
+  assert.deepEqual(fine.started[0]?.argv.slice(-2), ["--on", "host-b.tail1234.ts.net"]);
+  const plain = { ...nowDeps(), nowHost: () => "-bad" };
+  assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, plain)).status, 200, "a plain Send answer never reads the host");
+  assert.equal(plain.calls.length, 1);
+});
+
+test("run now on a ritual of another host: the ack and the run both go there with --on, the ack first; a plain Send answer stays local", async () => {
+  const order: string[] = [];
+  const stub = {
+    ...nowDeps(),
+    nowHost: () => "host-b",
+    run: (argv: readonly string[]) => {
+      order.push("ack");
+      stub.calls.push([...argv]);
+      return Promise.resolve({ code: 0, error: "" });
+    },
+    start: (argv: readonly string[], log: string) => {
+      order.push("run");
+      stub.started.push({ argv, log });
+      appendFileSync(log, `${NOW_STARTED_PREFIX}${CHILD} on host-b\n`);
+      return { exited: new Promise<number | null>(() => undefined) };
+    },
+  };
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, run: CHILD, host: "host-b" } });
+  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--on", "host-b", "--", ASK_NEW]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  assert.deepEqual(order, ["ack", "run"], "the answer is there before the run starts");
+
+  const local = { ...nowDeps(), nowHost: () => "host-b" };
+  await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, local);
+  assert.deepEqual(local.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--", ASK_NEW], "no --on without runNow: sync carries it");
+  assert.deepEqual(local.started, []);
+
+  const down = { ...nowDeps(undefined, { code: 255, error: "ssh: connect to host host-b port 22: no route" }), nowHost: () => "host-b" };
+  const lost = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, down);
+  assert.deepEqual(lost, { status: 502, body: { ok: false, error: "host-b did not answer: ssh: connect to host host-b port 22: no route" } });
+  assert.deepEqual(down.started, [], "no run when the ack did not arrive");
+});
+
 test("run now: the default host rule reads the ritual; a ritual the store does not have gives no --on", async () => {
   const stub = nowDeps();
   await actionApi(ackRequest({ project: PROJECT, run: OTHER_RITUAL, runNow: true }), { who: "owner" }, stub);
@@ -853,26 +920,6 @@ test("ack-earlier: against the real CLI the asks are acknowledged bare, and a se
   const again = await actionApi(post(body, { path: "/api/run/ack-earlier" }), { who: "owner" }, real);
   assert.equal(again.status, 409);
   assert.match(errorOf(again.body), /nothing dismissed: run .* is already acknowledged by web:owner/u);
-});
-
-test("run now: anything that throws after the ack (the host lookup, the store) is a runNow.error, never a 500", async () => {
-  const stub = { ...nowDeps(), nowHost: () => { throw new Error("links.toml is unreadable"); } };
-  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
-  assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the run could not be started: links.toml is unreadable" } } });
-  assert.equal(stub.calls.length, 1, "the ack ran and stays");
-  assert.deepEqual(stub.started, []);
-});
-
-test("run now: a host name that is not a plain host name is refused with a sentence, and nothing starts", async () => {
-  for (const host of ["-oProxyCommand=x", "host b", "host;rm", "", ".x"]) {
-    const stub = { ...nowDeps(), nowHost: () => host };
-    const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
-    assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the ritual's host name is not valid" } } }, JSON.stringify(host));
-    assert.deepEqual(stub.started, []);
-  }
-  const fine = { ...nowDeps(), nowHost: () => "host-b.tail1234.ts.net" };
-  await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, fine);
-  assert.deepEqual(fine.started[0]?.argv.slice(-2), ["--on", "host-b.tail1234.ts.net"]);
 });
 
 test("run now: the default host rule sends a ritual pinned to another host there with --on, and none for this host", async () => {
@@ -1200,4 +1247,19 @@ test("held: a refused resume leaves the hold answered, and a second POST may ans
   const again = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "second try" }], resume: true }), { who: "owner" }, retry);
   assert.ok(isRecord(again.body) && again.body.resumed === true);
   assert.deepEqual(answeredLines(run).map((line) => line.text), ["first try", "second try"]);
+});
+
+test("answers too long together: a 413 with a plain sentence on the ack and the answer endpoints; the real limit is what ten long answers reach", async () => {
+  const stub = nowDeps(RESUMES);
+  const ten = Array.from({ length: 10 }, (_, index) => ({ n: index + 1, text: "x".repeat(500) }));
+  const run = seedHeld();
+  const ack = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: ten }), { who: "owner" }, stub);
+  assert.deepEqual(ack, { status: 413, body: { ok: false, error: "The answers are too long together. Shorten them." } });
+  assert.equal(ANSWERS_TOO_LONG, "The answers are too long together. Shorten them.");
+  const held = await actionApi(answerRequest({ project: PROJECT, run, answers: ten, resume: true }), { who: "owner" }, stub);
+  assert.equal(held.status, 413);
+  assert.equal(errorOf(held.body), ANSWERS_TOO_LONG);
+  const follow = await actionApi(postRaw(JSON.stringify({ ...VALID, note: "x".repeat(5000) })), { who: "owner" }, deps(READY));
+  assert.equal(errorOf(follow.body), "too large", "the follow-up keeps its own word");
+  assert.deepEqual([stub.calls, stub.started], [[], []]);
 });

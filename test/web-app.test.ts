@@ -779,6 +779,9 @@ test("the ritual page shows the note for the next run, with the operator's answe
     questions: [{ text: "Delete the card?" }],
     operator: { who: "owner", at: "2026-09-30T11:00:00.000Z", note: "yes, delete it" },
     dismissed: null,
+    answers: [],
+    openAsks: [],
+    lapsed: [],
   };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
   const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
@@ -1088,6 +1091,21 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   assert.equal(rules.runNowNotice(ok).tone, "ok");
 });
 
+/** `size` answers of 500 characters. */
+const longAnswers = (size: number): string[] => Array.from({ length: size }, () => "x".repeat(500));
+
+test("the forms know when the answers together would not fit one request (the server reads 4096 characters)", () => {
+  const at = { project: "demo", run: HELD };
+  assert.equal(rules().isTooLong(rules().askBody("send", at, longAnswers(3))), false, "three long answers fit");
+  assert.equal(rules().isTooLong(rules().askBody("send", at, longAnswers(10))), true, "ten do not");
+  assert.equal(rules().isTooLong(rules().askBody("now", at, longAnswers(8))), true, "the run-now flag counts too");
+  const hold = Array.from({ length: 10 }, (_, index) => ({ n: index + 1 }));
+  assert.equal(rules().isTooLong(rules().heldBody(at, hold, longAnswers(10))), true);
+  assert.equal(rules().isTooLong(rules().heldBody(at, hold, ["short"])), false);
+  assert.equal(rules().BODY_LIMIT, 4096);
+  assert.equal(rules().ANSWERS_TOO_LONG, "The answers are too long together. Shorten them.");
+});
+
 // --- the held run's answer form (0.80.0) ----------------------------------------------------
 
 /** The demo project with the held run changed: more holds, or other questions. */
@@ -1323,6 +1341,47 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   for (const page of [home, runs, ritual, project]) assert.equal(page.includes(EVIL), false);
 });
 
+test("the ritual page shows what the next run gets: answers with their questions, dismissals folded with a count, open asks, lapsed answers (0.80.0)", async () => {
+  const from = "01KJJJJJJJJJJJJJJJJJJJJJJJ";
+  const older = "01KKKKKKKKKKKKKKKKKKKKKKKK";
+  const handoff = {
+    run: from,
+    at: "2026-09-30T10:12:00.000Z",
+    note: "Check post 7 again.",
+    questions: [],
+    operator: null,
+    dismissed: null,
+    answers: [
+      { run: older, runAt: "2026-09-28T05:00:00.000Z", who: "web:owner", at: "2026-09-29T07:30:00.000Z", kind: "answer" as const, note: null, followUp: null, items: [{ n: 1, question: `Delete the card ${EVIL}?`, answer: "No, keep it" }, { n: 2, question: "Rename it?", answer: null }] },
+      { run: "01KLLLLLLLLLLLLLLLLLLLLLLL", runAt: "2026-09-27T05:00:00.000Z", who: "web:owner", at: "2026-09-28T07:30:00.000Z", kind: "dismissed" as const, note: null, followUp: null, items: [] },
+      { run: "01KMMMMMMMMMMMMMMMMMMMMMMM", runAt: "2026-09-26T05:00:00.000Z", who: "web:owner", at: "2026-09-27T07:30:00.000Z", kind: "dismissed" as const, note: null, followUp: null, items: [] },
+    ],
+    openAsks: [{ run: "01KNNNNNNNNNNNNNNNNNNNNNNN", at: "2026-09-30T05:00:00.000Z", questions: ["Publish the draft?", "Which date?"] }],
+    lapsed: [{ run: "01KPPPPPPPPPPPPPPPPPPPPPPP", who: "web:owner", at: "2026-08-01T07:30:00.000Z" }],
+  };
+  const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
+  const page = (await readPage("/w/demo/rituals/daily-report", ctx));
+  const card = between(page, page.indexOf("Note for the next run"), page.indexOf('<h2 class="label">History</h2>'));
+  assert.ok(card.includes("Check post 7 again."), "the latest run's note stays");
+  assert.ok(card.includes("1 answer waits for the next run, oldest first"));
+  assert.ok(card.includes("Delete the card &lt;script&gt;alert(1)&lt;/script&gt;?") && card.includes("No, keep it"), "the question and its answer, as text");
+  assert.ok(card.includes("Answer:</span> none given"), "an empty answer says so");
+  assert.ok(card.includes("web:owner, 29 Sep 09:30, on the run of 07:00"), "who, when, and which run (a time alone is today)");
+  assert.ok(card.includes("<summary>2 dismissed asks</summary>"), "the dismissals fold with a count");
+  assert.ok(card.includes("Still open, not answered") && card.includes("Publish the draft? / Which date?"));
+  assert.ok(card.includes(`href="/w/demo/runs/01KNNNNNNNNNNNNNNNNNNNNNNN"`), "an open ask links its run");
+  assert.ok(card.includes("An answer from web:owner on 1 Aug 09:30 lapsed unread and is not delivered."));
+  assert.equal(page.includes(EVIL), false);
+  assertScriptsCarryNonce(page, "ritual page with a handoff");
+
+  const one = { ...handoff, answers: handoff.answers.slice(1, 2), openAsks: [], lapsed: [] };
+  const quiet = await readPage("/w/demo/rituals/daily-report", { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff: one } : null) });
+  assert.ok(quiet.includes("<summary>1 dismissed ask</summary>"));
+  assert.equal(quiet.includes("waits for the next run"), false);
+  assert.equal(quiet.includes("Still open, not answered"), false);
+  assert.equal(quiet.includes("lapsed unread"), false);
+});
+
 // --- the Acknowledge button (0.68.0) ------------------------------------------------------
 
 /** The demo project with one failed run (`outcome`), acknowledged or not; the run shows on home, the run page and the ritual page. */
@@ -1438,7 +1497,7 @@ test("an acknowledged run has no button: the card is plain and the run page says
 
 test("the ritual page says when the operator chose not to act on the questions (0.68.0)", async () => {
   const from = "01KJJJJJJJJJJJJJJJJJJJJJJJ";
-  const handoff = { run: from, at: "2026-09-30T10:12:00.000Z", note: null, questions: [{ text: "Delete the card?" }], operator: null, dismissed: { who: "web:owner", at: "2026-09-30T11:00:00.000Z" } };
+  const handoff = { run: from, at: "2026-09-30T10:12:00.000Z", note: null, questions: [{ text: "Delete the card?" }], operator: null, dismissed: { who: "web:owner", at: "2026-09-30T11:00:00.000Z" }, answers: [], openAsks: [], lapsed: [] };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
   const page = textOf(await readPage("/w/demo/rituals/daily-report", ctx));
   assert.ok(page.includes("web:owner saw the questions and chose not to act on them. The next run is told not to act on them or ask them again."));
@@ -1878,6 +1937,7 @@ test("the run page shows an item's key and the needs-code state", async () => {
 const lib = await import("../web/app/lib/findings.ts");
 const view = await import("../web/app/lib/view.ts");
 const askRules = await import("../web/app/lib/ask.ts");
+const rules = (): typeof askRules => askRules;
 
 test("findings filter logic: views, narrowing, facet options, addresses and words", () => {
   const read = (search: string) => lib.readQuery(new URLSearchParams(search));

@@ -20,7 +20,7 @@
  *                  The findings may end with one ```darius-result block
  *                  (src/core/result.ts); a run darius launched must hand one
  *                  in to complete, and an invalid block is refused.
- *   run ack <run> [--answer N=TEXT ...] [--note TEXT] [--who W]
+ *   run ack <run> [--answer N=TEXT ...] [--note TEXT] [--who W] [--on HOST]
  *                  one answer per question, and a note; both reach the next
  *                  run of the ritual until a run that read them completes
  *                  (src/core/handoff.ts, 0.80.0). A bare ack of a run that
@@ -430,14 +430,20 @@ function appendCompletion(args: ParsedArgs, completion: Completion): number {
  * complete one with questions. `--answer N=TEXT` (repeatable) answers one
  * question; `--note` adds a free note. Exit 1 when the run cannot be
  * acknowledged or is already; an unknown run, and answers that do not fit
- * the run, are usage errors.
+ * the run, are usage errors. `--on HOST` writes the ack on HOST over ssh
+ * (0.80.0): the web's "Send and run now" does so when the ritual belongs to
+ * another host, so the run that starts there reads the answer without
+ * waiting for a sync.
  */
 function runAck(args: ParsedArgs): number {
   const runId = requirePositional(args, 1, "<run> id");
   const note = stringFlag(args, "note");
   const who = stringFlag(args, "who") ?? defaultWho();
   const answers = parseAnswerFlags(args.repeated.answer ?? []);
-  const result = acknowledgeRun(currentProject(args), { run: runId, who, note, answers });
+  const project = resolveProject(stringFlag(args, "project"));
+  const forwarded = forwardOn(args, project, "ack");
+  if (forwarded !== undefined) return forwarded;
+  const result = acknowledgeRun(openProject(project), { run: runId, who, note, answers });
   if (!result.ok) {
     if (result.isUnknown || result.isUsage === true) throw new UsageError(result.error);
     if (args.json) printJson({ ok: false, run: runId, error: result.error });

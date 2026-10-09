@@ -16,8 +16,8 @@ to an S3-compatible bucket that you run. A scheduler hands due rituals to a head
 session, and you answer held questions in a terminal UI.
 
 **Status: experimental.** Rituals, vigils, runs, sync, snapshot backups, import of a legacy
-`.tracker/`, the unattended runner, the terminal UI (the Due and Run screens), and a read-only web
-status page work. Milestones and specs still run through a vendored copy of the older `tracker`
+`.tracker/`, the unattended runner, the terminal UI (the Due and Run screens), and a web
+status page (it reads the store; a few buttons call CLI verbs) work. Milestones and specs still run through a vendored copy of the older `tracker`
 CLI, which darius calls for you. They are not native to darius yet. Since 0.67.0 a project can keep
 its whole tracker tree in the darius store, and `darius onboard` moves a repo there. The design is in
 [`docs/concept.md`](docs/concept.md).

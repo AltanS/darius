@@ -87,3 +87,14 @@ export function resumeNotice(result: PostOk): RunNowNotice {
 export function heldKey(row: { run: string; holdFrom?: number | undefined }): string {
   return `${row.run}:${row.holdFrom ?? 0}`;
 }
+
+/** The most the server reads of a request body (MAX_BODY in src/web/push-api.ts); the app may not import it at run time. */
+export const BODY_LIMIT = 4096;
+
+/** What the form says when the answers together would not fit the request. */
+export const ANSWERS_TOO_LONG = "The answers are too long together. Shorten them.";
+
+/** True when this body would be refused as too large: the form turns its buttons off and says so. */
+export function isTooLong(body: PostBody): boolean {
+  return JSON.stringify(body).length > BODY_LIMIT;
+}
