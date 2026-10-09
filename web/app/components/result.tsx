@@ -10,9 +10,10 @@ import { useClock } from "../lib/clock.tsx";
 import { decideCommand } from "../lib/format.ts";
 import { actionTag, groupItems, itemStateTag, itemsText, metricTag, resultTone, resultWord, severityTone, summaryTags, type TagSpec } from "../lib/result.ts";
 import { decisionText } from "../lib/view.ts";
-import { AckButton } from "./ack.tsx";
+import { AskForm } from "./ask-form.tsx";
 import { Chip } from "./chip.tsx";
 import { Command } from "./command.tsx";
+import { QuestionList } from "./questions.tsx";
 import { Fold, Section, Status } from "./ui.tsx";
 
 interface TagProps {
@@ -35,63 +36,37 @@ export function ResultChips({ summary, isAnswered }: ResultChipsProps): React.Re
   return summaryTags(summary, isAnswered).map((tag) => <Tag key={tag.text} tag={tag} />);
 }
 
-interface QuestionListProps {
-  questions: readonly ResultQuestion[];
-}
-
-/** The questions of a result, numbered, each with its recommendation and the command lines a yes runs (0.48.0). */
-export function QuestionList({ questions }: QuestionListProps): React.ReactNode {
-  return (
-    <ol className="qs">
-      {questions.map((question, index) => (
-        <li key={`${index}`}>
-          <p>{question.text}</p>
-          {question.recommendation === undefined ? null : (
-            <p className="rec">
-              <span className="rec-label">Recommended:</span> {question.recommendation}
-            </p>
-          )}
-          {(question.commands ?? []).length === 0 ? null : (
-            <div className="q-cmds">
-              <p className="q-cmds-label">A yes runs, as written:</p>
-              <pre>
-                <code>{(question.commands ?? []).join("\n")}</code>
-              </pre>
-            </div>
-          )}
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 interface ResultQuestionsProps {
   project: string;
   row: RunRow;
   questions: readonly ResultQuestion[];
-  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  /** False for the loopback viewer: the answer form does not draw. */
   canWrite: boolean;
+  /** When an answer takes effect, in words (`nextRunText`). */
+  nextRun: string;
+  /** The run is a ritual run, so "Send and run now" can start the ritual. */
+  canRunNow: boolean;
 }
 
 /**
  * The "Questions for you" card. A complete run waits for the operator's
- * decision: the card gives the command that records it, and the Acknowledge
- * button that dismisses the questions without acting (0.68.0). Once someone
- * acknowledged the run, the card says who, when, and what they decided.
+ * answer: one box per question, "Send answer", "Send and run now" and
+ * "Dismiss, no action" (0.80.0, `AskForm`), and the command that records
+ * the same answer from a terminal. Once someone acknowledged the run, the
+ * card says who, when, and what they decided.
  */
-export function ResultQuestions({ project, row, questions, canWrite }: ResultQuestionsProps): React.ReactNode {
+export function ResultQuestions({ project, row, questions, canWrite, nextRun, canRunNow }: ResultQuestionsProps): React.ReactNode {
   const clock = useClock();
   const seen = row.acknowledged;
   const isWaiting = seen === null && row.phase === "closed" && row.outcome === "complete";
   return (
     <div className={`card card-accent next ${isWaiting ? "edge-wait" : "edge-idle"}`}>
-      <QuestionList questions={questions} />
+      {isWaiting ? <AskForm key={row.run} project={project} run={row.run} questions={questions} canWrite={canWrite} nextRun={nextRun} canRunNow={canRunNow} subject="the questions of this run" /> : <QuestionList questions={questions} />}
       {seen === null ? null : <p>{decisionText(seen, clock)}</p>}
       {isWaiting ? (
         <div className="next-cmd">
-          <p>Record your decision:</p>
+          <p>{canWrite ? "Or answer from a terminal:" : "Record your answer:"}</p>
           <Command command={decideCommand(row.run, project)} />
-          <AckButton project={project} run={row.run} canWrite={canWrite} subject="the questions of this run" hint="Or dismiss the questions without acting. The next run is told you chose not to act on them." />
         </div>
       ) : null}
     </div>
@@ -247,14 +222,18 @@ interface ResultPanelProps {
   project: string;
   row: RunRow;
   result: RunResult;
-  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  /** False for the loopback viewer: the answer form does not draw. */
   canWrite: boolean;
+  /** When an answer takes effect, in words (`nextRunText`). */
+  nextRun: string;
+  /** The run is a ritual run, so "Send and run now" can start the ritual. */
+  canRunNow: boolean;
   /** Drawn right after the questions, or after the banner when there are none (0.69.0): the follow-up card of the run page (0.48.0). */
   afterQuestions?: React.ReactNode;
 }
 
 /** The top of a run page that handed in a result: the banner, the questions, the metric tiles, the items, the actions. A result that asks puts its questions before the tiles, so the decision is the first thing after the banner. */
-export function ResultPanel({ project, row, result, canWrite, afterQuestions = null }: ResultPanelProps): React.ReactNode {
+export function ResultPanel({ project, row, result, canWrite, nextRun, canRunNow, afterQuestions = null }: ResultPanelProps): React.ReactNode {
   const tone = resultTone(result.status);
   const hasQuestions = result.questions.length > 0;
   const tiles = result.metrics.length === 0 ? null : <Tiles metrics={result.metrics} />;
@@ -275,7 +254,7 @@ export function ResultPanel({ project, row, result, canWrite, afterQuestions = n
       {hasQuestions ? (
         <>
           <Section title="Questions for you">
-            <ResultQuestions project={project} row={row} questions={result.questions} canWrite={canWrite} />
+            <ResultQuestions project={project} row={row} questions={result.questions} canWrite={canWrite} nextRun={nextRun} canRunNow={canRunNow} />
           </Section>
           {afterQuestions}
           {tiles === null ? null : <Section title="Numbers">{tiles}</Section>}

@@ -5039,6 +5039,49 @@
     max-width: 480px;
   }
 
+  /* The answer form of an Asks you card (0.80.0): a box under each question, the next-run line, three actions. */
+
+  .ask {
+    display: grid;
+    gap: 14px;
+  }
+
+  .ask-answer {
+    display: grid;
+    gap: 2px;
+  }
+
+  .ask-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ask-row .st-input {
+    flex: 1 1 220px;
+    width: auto;
+    max-width: 480px;
+  }
+
+  .ask-earlier {
+    display: grid;
+    gap: 18px;
+    padding: 4px 0 14px;
+  }
+
+  .ask-earlier-item {
+    display: grid;
+    gap: 10px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-sand-hi);
+  }
+
+  .ask-earlier-item:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
   .fu-ask {
     display: grid;
     gap: 12px;

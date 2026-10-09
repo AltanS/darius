@@ -4,7 +4,7 @@ import { Link } from "react-router";
 
 import type { MdBlock } from "../../../src/web/api.ts";
 import type { NextLine } from "../lib/agenda.ts";
-import type { Card, NowRun, Piece, Segment } from "../lib/home.ts";
+import type { Ask, Card, NowRun, Piece, Segment } from "../lib/home.ts";
 import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
@@ -12,7 +12,7 @@ import { KindWord } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
-import { QuestionList } from "./result.tsx";
+import { AskForm, EarlierAsks } from "./ask-form.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
 import { Row, RowList } from "./row.tsx";
 import { Fold, Status } from "./ui.tsx";
@@ -154,16 +154,8 @@ interface CommandsProps {
   card: Card;
 }
 
-/** The commands of a card, closed under one line: a phone reads the question first and types the answer at a terminal. */
+/** The commands of a held card, closed under one line: a phone reads the question first and types the answer at a terminal. An "Asks you" card has the answer form instead (0.80.0). */
 function Commands({ card }: CommandsProps): React.ReactNode {
-  if (card.ask !== null) {
-    return (
-      <Fold summary="Answer from a terminal">
-        <p className="hc-cmd-label">Record your decision:</p>
-        <Command command={card.ask.command} />
-      </Fold>
-    );
-  }
   if (card.questions.length === 0) return null;
   return (
     <Fold summary="Answer from a terminal">
@@ -177,9 +169,32 @@ function Commands({ card }: CommandsProps): React.ReactNode {
   );
 }
 
+interface AskBodyProps {
+  ask: Ask;
+  title: string;
+  canWrite: boolean;
+}
+
+/** The body of an "Asks you" card: the answer form, the older open asks under it, and for a viewer who cannot write the command for a terminal. */
+function AskBody({ ask, title, canWrite }: AskBodyProps): React.ReactNode {
+  return (
+    <>
+      {ask.questions.length === 0 ? <p className="empty">Open the run to read its questions.</p> : null}
+      <AskForm key={ask.run} project={ask.project} run={ask.run} questions={ask.questions} canWrite={canWrite} subject={title} nextRun={ask.nextRun} canRunNow={ask.canRunNow} />
+      <EarlierAsks project={ask.project} run={ask.run} asks={ask.earlier} canWrite={canWrite} nextRun={ask.nextRun} />
+      {canWrite ? null : (
+        <Fold summary="Answer from a terminal">
+          <p className="hc-cmd-label">Record your answer:</p>
+          <Command command={ask.command} />
+        </Fold>
+      )}
+    </>
+  );
+}
+
 interface CardViewProps {
   card: Card;
-  /** False for the loopback viewer: the Acknowledge button does not draw. */
+  /** False for the loopback viewer: the Acknowledge button and the answer form do not draw. */
   canWrite: boolean;
 }
 
@@ -187,8 +202,9 @@ interface CardViewProps {
  * A Needs you card, or a plain Last night card when it has no edge. The head
  * (the status word, the age, the title and the meta line) is one tap target
  * to the run; the questions stay plain text and the commands wait in a
- * closed disclosure. A question card and a failed card carry the Acknowledge
- * button (0.68.0), which dismisses the card without acting on it.
+ * closed disclosure. A failed card carries the Acknowledge button (0.68.0). A
+ * question card carries the answer form (0.80.0): one box per question, send,
+ * send and run now, dismiss.
  */
 export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
   const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
@@ -228,7 +244,7 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
               ))}
             </ol>
           )}
-          {card.ask === null ? null : card.ask.questions.length === 0 ? <p className="empty">Open the run to read its questions.</p> : <QuestionList questions={card.ask.questions} />}
+          {card.ask === null ? null : <AskBody ask={card.ask} title={card.title} canWrite={canWrite} />}
           <Commands card={card} />
           {card.report === null ? null : <Report report={card.report} lines={card.edge === null ? 3 : 4} fades={card.fades} />}
           {card.error === null ? null : <pre className="code-block">{card.error}</pre>}

@@ -36,8 +36,9 @@ means no cap, so existing setups do not change when it ships.
 
 ## Web
 
-- An answer form on the run page. Needs a write path with its own security design (CSRF, who may
-  answer); the page is read-only today.
+- An answer form for a held run (a mid-run question): "Answer and resume" on the card. The form
+  for a finished run's questions, "Send and run now" and the earlier asks are built (0.80.0,
+  docs/concept.md, "Answer form").
 - A vigil detail page.
 
 ## Marker v3 follow-ups

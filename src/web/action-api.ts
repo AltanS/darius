@@ -49,6 +49,28 @@
  * run may be acknowledged as is the CLI's rule (a held, a running or an
  * already acknowledged run is refused): its sentence comes back as 409.
  *
+ * The answer form of an "Asks you" card (0.80.0; docs/concept.md, "Answers
+ * carried until used") widens the acknowledgement and adds one endpoint:
+ *
+ *   POST /api/run/ack         body { project, run, note?, answers?: [{n, text}], runNow?: bool }
+ *                             200 { ok: true }
+ *                             | 200 { ok: true, run, host }            (runNow: the run started)
+ *                             | 200 { ok: true, pending: true, message } (runNow: not started yet)
+ *                             | 200 { ok: true, runNow: { error } }    (the ack is written, the run did not start)
+ *                             | 400 or 409 { ok: false, error }        (nothing is written)
+ *   POST /api/run/ack-earlier body { project, run, runs: [ID, ...] }
+ *                             200 { ok: true, count } | 400 or 409 { ok: false, error }
+ *
+ * `answers` runs `darius run ack --answer N=TEXT ...`. With `runNow` the
+ * server then starts `darius run now <ritual>` detached, only after the ack
+ * worked, and waits up to OUTCOME_WAIT_MS for the CLI's "started run" line
+ * like the follow-up does. The ritual and the `--on` host come from the
+ * run's ledger item and the ritual's host, never from the body. The ack is
+ * never rolled back. `ack-earlier` dismisses, bare, the open asks of the
+ * same ritual that the page showed under the newest one: each id must be an
+ * open ask of the run's ritual that started before it, or the whole call is
+ * refused with 409.
+ *
  * The findings page has one action too (0.62.0; docs/concept.md,
  * "Findings"):
  *
@@ -69,10 +91,12 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } fr
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { JsonValue } from "../core/model.ts";
+import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
+import { answerProblem, type QuestionAnswer } from "../core/answers.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
-import { readLedger } from "../core/ledger.ts";
+import { hostId, readLedger } from "../core/ledger.ts";
 import { listProjects, openProject } from "../core/store.ts";
+import { ritualHost } from "../core/workdir.ts";
 import { ITEMS_MAX } from "../runner/follow-up.ts";
 import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
 import { viewRun } from "../runner/run-due.ts";
@@ -85,6 +109,7 @@ export const FINDING_API_PREFIX = "/api/finding/";
 const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
+const ACK_EARLIER_PATH = `${ACTION_API_PREFIX}ack-earlier`;
 
 /** The operator's note, at most this many characters. */
 export const NOTE_MAX = 500;
@@ -98,6 +123,8 @@ export const OUTCOME_WAIT_MS = 10_000;
 const OUTCOME_POLL_MS = 100;
 /** The stderr line of `darius run follow-up` once the run started (src/cli/run-due.ts, STARTED_PREFIX). */
 const STARTED_LINE = /^darius run follow-up: started run ([0-9A-Z]{26}) on (\S+)$/mu;
+/** The same line of `darius run now` (src/cli/run-due.ts, NOW_STARTED_PREFIX). */
+export const NOW_STARTED_LINE = /^darius run now: started run ([0-9A-Z]{26}) on (\S+)$/mu;
 /** ssh exits 255 when it cannot connect (src/core/ssh.ts). */
 const SSH_EXIT = 255;
 const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -186,6 +213,8 @@ export interface ActionDeps {
   run: CliRunner;
   /** How long the follow-up POST waits for the outcome; OUTCOME_WAIT_MS when absent. Tests shorten it. */
   waitMs?: number;
+  /** The host that must run `run now` for this ritual when it is not this one (0.80.0); undefined when this host is right. */
+  nowHost?: (project: string, slug: string) => string | undefined;
 }
 
 /** Who the access check let in: `local` is the loopback caller, "this host". */
@@ -294,6 +323,7 @@ function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: str
 export async function actionApi(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps = DEFAULT_DEPS): Promise<PushApiReply> {
   if (request.path === FOLLOW_UP_PATH) return startFollowUp(request, viewer, deps);
   if (request.path === ACK_PATH) return acknowledge(request, viewer, deps);
+  if (request.path === ACK_EARLIER_PATH) return acknowledgeEarlier(request, viewer, deps);
   return fail(404, "no such endpoint");
 }
 
@@ -359,13 +389,13 @@ function logSince(log: string, offset: number): string {
  * at most `waitMs`. A line that came before the end wins: a run that
  * started and ended fast still started.
  */
-export async function waitForOutcome(started: StartedFollowUp, at: { log: string; offset: number; waitMs: number }): Promise<FollowUpOutcome> {
+export async function waitForOutcome(started: StartedFollowUp, at: { log: string; offset: number; waitMs: number; line?: RegExp }): Promise<FollowUpOutcome> {
   const settled = started.exited.then((code) => ({ code }));
   const deadline = Date.now() + at.waitMs;
   let ended: { code: number | null } | null = null;
   for (;;) {
     const output = logSince(at.log, at.offset);
-    const line = STARTED_LINE.exec(output);
+    const line = (at.line ?? STARTED_LINE).exec(output);
     if (line !== null) return { started: line[1] ?? "", host: line[2] ?? "" };
     if (ended !== null) return { ended: ended.code, sentence: lastSentence(output) };
     if (Date.now() >= deadline) return { pending: true };
@@ -390,23 +420,67 @@ function outcomeReply(outcome: FollowUpOutcome, host: string): PushApiReply {
   return fail(409, sentence);
 }
 
-// --- acknowledge a run (0.68.0) ------------------------------------------------------------
+// --- acknowledge a run (0.68.0, answers and run now 0.80.0) -------------------------------
 
-const ACK_KEYS: ReadonlySet<string> = new Set(["project", "run", "note"]);
+const ACK_KEYS: ReadonlySet<string> = new Set(["project", "run", "note", "answers", "runNow"]);
+const ANSWER_KEYS: ReadonlySet<string> = new Set(["n", "text"]);
+const ITEM_RITUAL = "ritual/";
+/** A host name that is safe as one argv word after `--on`: no leading dash, no space. */
+const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
-type AckBody = { project: string; run: string; note?: string } | { error: string };
+type AckBody = { project: string; run: string; note?: string; answers: QuestionAnswer[]; runNow: boolean } | { error: string };
 
-/** Checks the body's shape: known keys only, a project name, a run id, a plain one-line note. */
+/** `answers` of the body: absent, or up to APPROVE_MAX entries { n, text }, n from 1 to APPROVE_MAX, each text one plain line. */
+function readAnswerList(value: JsonValue | undefined): QuestionAnswer[] | { error: string } {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > APPROVE_MAX) return { error: `answers must list at most ${String(APPROVE_MAX)} entries { n, text }` };
+  const answers: QuestionAnswer[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return { error: "answers: each entry is { n, text }" };
+    const extra = Object.keys(entry).find((key) => !ANSWER_KEYS.has(key));
+    if (extra !== undefined) return { error: `answers: unknown field ${extra.slice(0, 40)}` };
+    const { n, text } = entry;
+    if (n === undefined || !isCount(n)) return { error: `answers: n must be a question number, 1 to ${String(APPROVE_MAX)}` };
+    if (!isText(text)) return { error: `answers: the text of question ${String(n)} must be text` };
+    const line = text.replaceAll(/\s+/gu, " ").trim();
+    const problem = answerProblem(line);
+    if (problem !== null) return { error: `answers: the text of question ${String(n)} ${problem}` };
+    if (answers.some((answer) => answer.n === n)) return { error: `answers: question ${String(n)} is answered twice` };
+    answers.push({ n, text: line });
+  }
+  return answers;
+}
+
+/** Checks the body's shape: known keys only, a project name, a run id, a plain one-line note, the answers, a boolean runNow. */
 function readAckBody(parsed: JsonValue): AckBody {
-  if (!isRecord(parsed)) return { error: "send { project, run, note? }" };
+  if (!isRecord(parsed)) return { error: "send { project, run, note?, answers?, runNow? }" };
   const extra = Object.keys(parsed).find((key) => !ACK_KEYS.has(key));
   if (extra !== undefined) return { error: `unknown field ${extra.slice(0, 40)}` };
-  const { project, run } = parsed;
+  const { project, run, runNow } = parsed;
   if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
   if (!isText(run) || !RUN_ID.test(run)) return { error: "run must be a run id" };
   const note = readNote(parsed.note);
   if ("error" in note) return note;
-  return { project, run, ...note };
+  const answers = readAnswerList(parsed.answers);
+  if ("error" in answers) return answers;
+  if (runNow !== undefined && runNow !== true && runNow !== false) return { error: "runNow must be true or false" };
+  return { project, run, ...note, answers, runNow: runNow === true };
+}
+
+/** The ritual slug of a run's ledger item, or undefined for a run that is not a ritual run. */
+function ritualSlug(item: string): string | undefined {
+  if (!item.startsWith(ITEM_RITUAL)) return undefined;
+  const slug = item.slice(ITEM_RITUAL.length);
+  return RITUAL_SLUG.test(slug) ? slug : undefined;
+}
+
+/** The host `run now` must go to when the ritual belongs to another one (the CLI forwards it over ssh); undefined when this host is right. */
+function ritualNowHost(project: string, slug: string): string | undefined {
+  const store = openProject(project);
+  const doc = store.readItem<Ritual>("ritual", slug);
+  if (doc === null) return undefined;
+  const right = ritualHost(store, readLedger(store), doc);
+  return right === null || right.host === hostId() ? undefined : right.host;
 }
 
 /** Whether the run may be acknowledged is the CLI's rule (`ackable()` in src/runner/hold.ts); its sentence is the 409. */
@@ -416,13 +490,125 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
   const body = readAckBody(guarded.parsed);
   if ("error" in body) return fail(400, body.error);
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
-  if (viewRun(readLedger(openProject(body.project)), body.run).item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
+  const item = viewRun(readLedger(openProject(body.project)), body.run).item;
+  if (item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
+  const slug = ritualSlug(item);
+  if (body.runNow && slug === undefined) return fail(400, "runNow: only a run of a ritual can start the ritual again");
   const argv = ["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json"];
   if (body.note !== undefined) argv.push("--note", body.note);
+  for (const answer of body.answers) argv.push("--answer", `${String(answer.n)}=${answer.text}`);
   argv.push("--", body.run);
   const answer = await deps.run(argv);
   if (answer.code !== 0) return fail(409, answer.error);
-  return { status: 200, body: { ok: true } };
+  if (!body.runNow || slug === undefined) return { status: 200, body: { ok: true } };
+  return runNowReply(await startRunNow(body, slug, viewer, deps));
+}
+
+/** What "Send and run now" did after the ack: the run started, is still starting, or could not start. */
+type RunNowOutcome = Exclude<FollowUpOutcome, { ended: number | null }> | { ended: number | null; sentence: string; forwarded: boolean } | { failed: string };
+
+async function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps): Promise<RunNowOutcome> {
+  let started: StartedFollowUp;
+  let offset: number;
+  let log: string;
+  let on: string | undefined;
+  // The answer is already saved: anything that throws from here on is a sentence for the card, never a 500.
+  try {
+    on = (deps.nowHost ?? ritualNowHost)(body.project, slug);
+    if (on !== undefined && !HOST_NAME.test(on)) return { failed: "the ritual's host name is not valid" };
+    const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
+    if (on !== undefined) argv.push("--on", on);
+    const dir = join(openProject(body.project).root, "runs", body.run);
+    log = join(dir, "run-now.log");
+    mkdirSync(dir, { recursive: true });
+    offset = existsSync(log) ? statSync(log).size : 0;
+    started = deps.start(argv, log);
+  } catch (cause) {
+    return { failed: `the run could not be started: ${errorMessage(cause)}` };
+  }
+  const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS, line: NOW_STARTED_LINE });
+  return "ended" in outcome ? { ...outcome, forwarded: on !== undefined } : outcome;
+}
+
+/** The answer for "run now": the ack worked, so it is always 200; the run's own fate is in the body. */
+function runNowReply(outcome: RunNowOutcome): PushApiReply {
+  if ("failed" in outcome) return { status: 200, body: { ok: true, runNow: { error: outcome.failed } } };
+  if ("started" in outcome) return { status: 200, body: { ok: true, run: outcome.started, host: outcome.host } };
+  if ("pending" in outcome) {
+    const message = `Your answer is saved. The run did not start within ${String(OUTCOME_WAIT_MS / 1000)} s and may still start. Its output is in runs/<run>/run-now.log on this host.`;
+    return { status: 200, body: { ok: true, pending: true, message } };
+  }
+  const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
+  // ssh is only in play with --on; without it, exit 255 or a signal is the CLI's own.
+  const isSsh = outcome.forwarded && (outcome.ended === SSH_EXIT || outcome.ended === null);
+  const reason = isSsh ? `the ritual's host did not answer: ${sentence}` : outcome.ended === 0 ? `no run started: ${sentence}` : sentence;
+  return { status: 200, body: { ok: true, runNow: { error: reason } } };
+}
+
+// --- dismiss earlier asks (0.80.0) ---------------------------------------------------------
+
+const ACK_EARLIER_KEYS: ReadonlySet<string> = new Set(["project", "run", "runs"]);
+
+type AckEarlierBody = { project: string; run: string; runs: string[] } | { error: string };
+
+function readAckEarlierBody(parsed: JsonValue): AckEarlierBody {
+  if (!isRecord(parsed)) return { error: "send { project, run, runs: [ID] }" };
+  const extra = Object.keys(parsed).find((key) => !ACK_EARLIER_KEYS.has(key));
+  if (extra !== undefined) return { error: `unknown field ${extra.slice(0, 40)}` };
+  const { project, run, runs } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  if (!isText(run) || !RUN_ID.test(run)) return { error: "run must be a run id" };
+  if (!Array.isArray(runs) || runs.length === 0 || runs.length > APPROVE_MAX) return { error: `runs must list 1 to ${String(APPROVE_MAX)} run ids` };
+  const ids: string[] = [];
+  for (const id of runs) {
+    if (!isText(id) || !RUN_ID.test(id)) return { error: "runs: each entry must be a run id" };
+    if (ids.includes(id)) return { error: `runs: ${id} is given twice` };
+    ids.push(id);
+  }
+  return { project, run, runs: ids };
+}
+
+/** Why `id` is not an earlier open ask of the ritual of run `run`, or undefined when it is one. */
+function notEarlierAsk(ledger: readonly LedgerLine[], run: string, id: string): string | undefined {
+  const view = viewRun(ledger, run);
+  const other = viewRun(ledger, id);
+  if (other.item === undefined) return `no run ${id}`;
+  if (other.item !== view.item) return `run ${id} is not a run of the same ritual as ${run}`;
+  // Same order as the page: by start time, the ledger order breaking a tie.
+  const starts = ledger.flatMap((line) => (line.type === "run.started" && line.item === view.item && isText(line.run) ? [{ run: line.run, at: line.at }] : []));
+  const here = starts.findIndex((start) => start.run === run);
+  const there = starts.findIndex((start) => start.run === id);
+  const hereStart = starts[here];
+  const thereStart = starts[there];
+  if (hereStart === undefined || thereStart === undefined) return `run ${id} did not start before run ${run}`;
+  const gap = thereStart.at.localeCompare(hereStart.at);
+  if (gap > 0 || (gap === 0 && there >= here)) return `run ${id} did not start before run ${run}`;
+  if (other.phase !== "closed" || other.outcome !== "complete" || (other.result?.questions ?? 0) === 0) return `run ${id} is not a completed run with questions`;
+  if (other.acknowledged !== undefined) return `run ${id} is already acknowledged by ${other.acknowledged.who}`;
+  return undefined;
+}
+
+async function acknowledgeEarlier(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_ACK);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readAckEarlierBody(guarded.parsed);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  const ledger = readLedger(openProject(body.project));
+  if (viewRun(ledger, body.run).item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
+  for (const id of body.runs) {
+    const reason = notEarlierAsk(ledger, body.run, id);
+    if (reason !== undefined) return fail(409, `nothing dismissed: ${reason}`);
+  }
+  let count = 0;
+  let firstError = "";
+  for (const id of body.runs) {
+    const answer = await deps.run(["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json", "--", id]);
+    if (answer.code === 0) count += 1;
+    else if (firstError === "") firstError = answer.error;
+  }
+  if (count < body.runs.length) return fail(409, `${String(count)} of ${String(body.runs.length)} dismissed; ${firstError}`);
+  return { status: 200, body: { ok: true, count } };
 }
 
 // --- close a finding (0.62.0) --------------------------------------------------------------

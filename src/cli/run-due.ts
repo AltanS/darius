@@ -43,6 +43,8 @@ const DEFAULT_WHO = "timer";
 const RITUAL_PREFIX = "ritual/";
 /** The stderr line `run follow-up` prints when the run started (0.69.0); the web reads the run id after it. */
 export const STARTED_PREFIX = "darius run follow-up: started run ";
+/** The same line of `run now` (0.80.0); the web's "Send and run now" reads the run id after it. */
+export const NOW_STARTED_PREFIX = "darius run now: started run ";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -246,7 +248,9 @@ function byHandExitCode(report: BatchReport): number {
  * refuses with exit 1 and prints the ssh command for the right host, with
  * `--dry-run` too; a `no-workdir` skip exits 1 as well (0.50.0). `--on HOST`
  * runs the same verb on HOST over ssh instead. The same holds for `run
- * resume` and `run follow-up`.
+ * resume` and `run follow-up`. Right after the run starts, stderr gets one
+ * line, `darius run now: started run <id> on <host>` (0.80.0): the web page
+ * waits for it (src/web/action-api.ts).
  */
 export async function runNow(args: ParsedArgs): Promise<number> {
   const slug = args.positional[1];
@@ -269,6 +273,9 @@ export async function runNow(args: ParsedArgs): Promise<number> {
     who: stringFlag(args, "who") ?? defaultWho(),
     timeoutMs: timeoutFlag(args),
     now,
+    onStarted: (run) => {
+      console.error(`${NOW_STARTED_PREFIX}${run} on ${hostId()}`);
+    },
   };
   const { report, cfg } = await runDue(options);
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });

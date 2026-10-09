@@ -18,7 +18,8 @@ import { join } from "node:path";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
-import { actionApi, findingApi, followUpArgv, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { NOW_STARTED_PREFIX } from "../src/cli/run-due.ts";
+import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -462,8 +463,8 @@ test("ack: method 405, no or foreign Origin 403, other content 415, a large body
 test("ack: a body that is not project, run and a plain note is 400, and nothing runs", async () => {
   const stub = ackDeps();
   const cases: [JsonValue, RegExp][] = [
-    ["ack", /send \{ project, run, note\? \}/u],
-    [[ACK], /send \{ project, run, note\? \}/u],
+    ["ack", /send \{ project, run, note\?, answers\?, runNow\? \}/u],
+    [[ACK], /send \{ project, run, note\?, answers\?, runNow\? \}/u],
     [{ ...ACK, approve: [1] }, /unknown field approve/u],
     [{ ...ACK, grant: ["date"] }, /unknown field grant/u],
     [{ project: PROJECT }, /run must be a run id/u],
@@ -565,4 +566,347 @@ test("ack: against the real CLI, a failed run is acknowledged once, with the vie
 test("the web context lets a tailnet viewer write and refuses the loopback viewer (0.68.0)", () => {
   assert.equal(webContext("owner on phone").canWrite, true);
   assert.equal(webContext("this host", undefined, true).canWrite, false);
+});
+
+// --- answers, run now and earlier asks (0.80.0) --------------------------------------------
+
+const ASKED = { status: "attention", questions: 2, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
+
+/** Seeds a closed run of `item` that asked `questions` questions. */
+function seedAsk(run: string, item = "ritual/daily", questions = 2): string {
+  const project = openProject(PROJECT);
+  appendLine(project, { who: "timer", type: "run.started", item, run });
+  appendLine(project, { who: "timer", type: "run.completed", item, run, outcome: "complete", result: { ...ASKED, questions } });
+  return run;
+}
+
+const ASK_OLD = seedAsk("01JASKOLD00000000000000AAA");
+const ASK_MID = seedAsk("01JASKMID00000000000000AAA");
+const ASK_NEW = seedAsk("01JASKNEW00000000000000AAA");
+const OTHER_RITUAL = seedAsk("01JASKOTHER000000000000AAA", "ritual/weekly");
+const VIGIL_ASK = seedAsk("01JASKVIGIL000000000000AAA", "vigil/check");
+
+/** The follow-up stubs, a CLI that records its argv, and a started CLI that follows `script`. */
+function nowDeps(script: Script = { output: `${NOW_STARTED_PREFIX}${CHILD} on host-a\n` }, answer: CliAnswer = { code: 0, error: "" }): ActionDeps & { calls: string[][]; started: Started[] } {
+  const base = ackDeps(answer);
+  const started: Started[] = [];
+  return {
+    ...base,
+    started,
+    start: (argv, log) => {
+      started.push({ argv, log });
+      appendFileSync(log, script.output);
+      return { exited: script.code === undefined ? new Promise(() => undefined) : Promise.resolve(script.code) };
+    },
+  };
+}
+
+test("run now: the start line of the CLI is the one the server waits for", () => {
+  assert.equal(NOW_STARTED_LINE.exec(`${NOW_STARTED_PREFIX}${CHILD} on host-a`)?.[1], CHILD);
+  assert.equal(NOW_STARTED_LINE.exec("darius run follow-up: started run 01JCHILD000000000000000000 on host-a"), null);
+});
+
+test("ack answers: a bad answers list or runNow is 400 with a sentence, and nothing runs or starts", async () => {
+  const stub = nowDeps();
+  const answers = (list: JsonValue): JsonValue => ({ ...ACK_NEW_BODY, answers: list });
+  const cases: [JsonValue, RegExp][] = [
+    [answers("yes"), /answers must list at most 10 entries/u],
+    [answers(Array.from({ length: 11 }, (_, n) => ({ n: (n % 10) + 1, text: "x" }))), /answers must list at most 10 entries/u],
+    [answers(["yes"]), /each entry is \{ n, text \}/u],
+    [answers([{ n: 0, text: "x" }]), /n must be a question number, 1 to 10/u],
+    [answers([{ n: 11, text: "x" }]), /n must be a question number, 1 to 10/u],
+    [answers([{ n: 1.5, text: "x" }]), /n must be a question number/u],
+    [answers([{ n: "1", text: "x" }]), /n must be a question number/u],
+    [answers([{ text: "x" }]), /n must be a question number/u],
+    [answers([{ n: 1, text: 7 }]), /text of question 1 must be text/u],
+    [answers([{ n: 1, text: "  \n " }]), /text of question 1 is empty/u],
+    [answers([{ n: 1, text: "a\u0007b" }]), /text of question 1 must be one line with no control characters/u],
+    [answers([{ n: 1, text: "x".repeat(501) }]), /text of question 1 is 501 characters; at most 500 fit/u],
+    [answers([{ n: 1, text: "a" }, { n: 1, text: "b" }]), /question 1 is answered twice/u],
+    [answers([{ n: 1, text: "a", host: "x" }]), /unknown field host/u],
+    [{ ...ACK_NEW_BODY, runNow: "yes" }, /runNow must be true or false/u],
+    [{ ...ACK_NEW_BODY, runNow: true, host: "host-z" }, /unknown field host/u],
+    [{ ...ACK_NEW_BODY, runNow: true, ritual: "daily" }, /unknown field ritual/u],
+    [{ ...ACK_NEW_BODY, runNow: true, on: "host-z" }, /unknown field on/u],
+  ];
+  for (const [body, reason] of cases) {
+    const answer = await actionApi(ackRequest(body), { who: "owner" }, stub);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), reason, JSON.stringify(body));
+  }
+  const vigil = await actionApi(ackRequest({ project: PROJECT, run: VIGIL_ASK, runNow: true }), { who: "owner" }, stub);
+  assert.equal(vigil.status, 400);
+  assert.match(errorOf(vigil.body), /only a run of a ritual can start the ritual again/u);
+  assert.deepEqual([stub.calls, stub.started], [[], []], "a refused body writes no ack and starts nothing");
+});
+
+const ACK_NEW_BODY = { project: PROJECT, run: ASK_NEW };
+
+test("ack answers: they reach the CLI as --answer N=TEXT words, trimmed to one line, before the run after --; ten fit", async () => {
+  const stub = nowDeps();
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 2, text: " go\n ahead " }, { n: 1, text: "no=yes" }] }), { who: "owner on phone" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true } });
+  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--answer", "2=go ahead", "--answer", "1=no=yes", "--", ASK_NEW]);
+  assert.deepEqual(stub.started, [], "no runNow, no run");
+  const ten = Array.from({ length: 10 }, (_, index) => ({ n: index + 1, text: "ok" }));
+  assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: ten }), { who: "owner" }, stub)).status, 200);
+  assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [] }), { who: "owner" }, stub)).status, 200, "an empty list is a bare ack");
+  assert.ok(!(stub.calls[2] ?? []).includes("--answer"));
+  assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "x".repeat(500) }] }), { who: "owner" }, stub)).status, 200, "500 characters fit");
+});
+
+test("run now: after the ack the server starts run now for the ritual of the run, detached, and answers with the new run", async () => {
+  const stub = nowDeps();
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
+  assert.equal(stub.calls.length, 1, "the ack ran first");
+  assert.equal(stub.started.length, 1);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner"], "the slug comes from the run's item; this host is right, so no --on");
+  assert.ok(stub.started[0]?.log.endsWith(join("runs", ASK_NEW, "run-now.log")));
+  assert.deepEqual([stub.asked], [[]], "no follow-up readiness is asked");
+});
+
+test("run now: when the ritual belongs to another host, the argv ends with --on <host>, taken from the server, never from the body", async () => {
+  const asked: string[] = [];
+  const stub = { ...nowDeps(), nowHost: (project: string, slug: string) => (asked.push(`${project}/${slug}`), "host-b") };
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
+  assert.equal(sent.status, 200);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  assert.deepEqual(asked, [`${PROJECT}/daily`]);
+});
+
+test("run now: the default host rule reads the ritual; a ritual the store does not have gives no --on", async () => {
+  const stub = nowDeps();
+  await actionApi(ackRequest({ project: PROJECT, run: OTHER_RITUAL, runNow: true }), { who: "owner" }, stub);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "weekly", "--project", PROJECT, "--who", "web:owner"]);
+});
+
+test("run now: no ack, no run. A refused ack (also the second click on an acknowledged run) starts nothing", async () => {
+  const refused = nowDeps(undefined, { code: 1, error: `run '${ASK_NEW}' is already acknowledged by owner at 2026-10-09T08:00:00.000Z` });
+  const answer = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, refused);
+  assert.equal(answer.status, 409);
+  assert.match(errorOf(answer.body), /already acknowledged/u);
+  assert.deepEqual(refused.started, []);
+
+  // The real CLI: the first click acks and starts, the second is refused and starts nothing more.
+  const asked = seedAsk("01JASKDOUBLE0000000000AAAA");
+  const stub: ActionDeps & { started: Started[] } = { ...nowDeps(), run: runCli };
+  const first = await actionApi(ackRequest({ project: PROJECT, run: asked, runNow: true, answers: [{ n: 1, text: "yes" }, { n: 2, text: "later" }] }), { who: "owner on phone" }, stub);
+  assert.deepEqual(first, { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
+  const line = readLedger(openProject(PROJECT)).find((candidate) => candidate.type === "run.acknowledged" && candidate.run === asked);
+  assert.deepEqual(line?.answers, [{ n: 1, text: "yes" }, { n: 2, text: "later" }]);
+  assert.equal(line?.who, "web:owner on phone");
+  const second = await actionApi(ackRequest({ project: PROJECT, run: asked, runNow: true, answers: [{ n: 1, text: "yes" }] }), { who: "owner on phone" }, stub);
+  assert.equal(second.status, 409);
+  assert.match(errorOf(second.body), /already acknowledged by web:owner on phone/u);
+  assert.equal(stub.started.length, 1, "one start for two clicks");
+  const unfit = await actionApi(ackRequest({ project: PROJECT, run: ASK_MID, runNow: true, answers: [{ n: 3, text: "yes" }] }), { who: "owner" }, stub);
+  assert.equal(unfit.status, 409, "an answer to a question the run did not ask is refused by the CLI");
+  assert.match(errorOf(unfit.body), /there is no question 3/u);
+  assert.equal(stub.started.length, 1);
+});
+
+test("run now: an exit without a start line is reported as runNow.error, and the ack stays written", async () => {
+  const scripts: [Script, RegExp, string?][] = [
+    [{ output: "", code: 0 }, /^no run started: darius ended with exit code 0 and no message$/u],
+    [{ output: "! daily runs on host-b (pinned): ssh host-b darius run now daily\n", code: 1 }, /^daily runs on host-b \(pinned\)/u],
+    [{ output: "darius run now: lease-held: another host runs it\n", code: 0 }, /^no run started: lease-held: another host runs it$/u],
+    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, /^the ritual's host did not answer: ssh: connect/u, "host-b"],
+    [{ output: "", code: null }, /^the ritual's host did not answer/u, "host-b"],
+    [{ output: "darius: something broke\n", code: 255 }, /^something broke$/u],
+    [{ output: "", code: null }, /^darius ended with exit code null and no message$/u],
+  ];
+  for (const [script, reason, host] of scripts) {
+    const stub: ActionDeps & { calls: string[][] } = { ...nowDeps(script), nowHost: () => host };
+    const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, stub);
+    assert.equal(sent.status, 200, "the ack worked, so the status is 200");
+    assert.ok(isRecord(sent.body) && sent.body.ok === true);
+    const failure = isRecord(sent.body) && isRecord(sent.body.runNow) ? sent.body.runNow.error : undefined;
+    assert.match(String(failure), reason);
+    assert.equal(stub.calls.length, 1, "the ack ran once and was not rolled back");
+  }
+});
+
+test("run now: a start that throws is runNow.error; a CLI that neither starts nor ends in time is pending", async () => {
+  const broken: ActionDeps = {
+    ...nowDeps(),
+    start: () => {
+      throw new Error("disk full");
+    },
+  };
+  const failed = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, broken);
+  assert.equal(failed.status, 200);
+  assert.deepEqual(failed.body, { ok: true, runNow: { error: "the run could not be started: disk full" } });
+
+  const slow = nowDeps({ output: "" });
+  const pending = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, slow);
+  assert.equal(pending.status, 200);
+  assert.ok(isRecord(pending.body) && pending.body.ok === true && pending.body.pending === true);
+  assert.match(String(isRecord(pending.body) ? pending.body.message : ""), /Your answer is saved\. The run did not start within 10 s/u);
+});
+
+test("ack and ack-earlier: the loopback viewer 403, no or foreign Origin 403, other content 415, a large body 413; nothing runs", async () => {
+  const stub = nowDeps();
+  const earlier = (overrides: Partial<ActionRequest> = {}): ActionRequest => post({ project: PROJECT, run: ASK_NEW, runs: [ASK_OLD] }, { path: "/api/run/ack-earlier", ...overrides });
+  const requests = [
+    (overrides: Partial<ActionRequest>): ActionRequest => ackRequest({ ...ACK_NEW_BODY, runNow: true, answers: [{ n: 1, text: "yes" }] }, overrides),
+    earlier,
+  ];
+  for (const make of requests) {
+    const local = await actionApi(make({}), { who: "this host", local: true }, stub);
+    assert.equal(local.status, 403);
+    assert.equal(errorOf(local.body), LOOPBACK_ACK);
+    const noOrigin = await actionApi(make({ headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) }), { who: "owner" }, stub);
+    assert.equal(noOrigin.status, 403);
+    assert.match(errorOf(noOrigin.body), /must come from the darius page/u);
+    const foreign = await actionApi(make({ headers: new Headers({ origin: "http://evil.example", host: "127.0.0.1:4747", "content-type": "application/json" }) }), { who: "owner" }, stub);
+    assert.equal(foreign.status, 403);
+    const text = await actionApi(make({ headers: new Headers({ origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747", "content-type": "text/plain" }) }), { who: "owner" }, stub);
+    assert.equal(text.status, 415);
+    assert.equal((await actionApi(make({ method: "GET" }), { who: "owner" }, stub)).status, 405);
+    assert.equal((await actionApi(make({ body: "x".repeat(70_000) }), { who: "owner" }, stub)).status, 413);
+    assert.equal((await actionApi(make({ body: "{no" }), { who: "owner" }, stub)).status, 400);
+  }
+  assert.deepEqual([stub.calls, stub.started], [[], []]);
+});
+
+test("ack-earlier: a body that is not project, run and 1 to 10 run ids is 400, and nothing runs", async () => {
+  const stub = ackDeps();
+  const send = (body: JsonValue) => actionApi(post(body, { path: "/api/run/ack-earlier" }), { who: "owner" }, stub);
+  const base = { project: PROJECT, run: ASK_NEW };
+  const cases: [JsonValue, RegExp][] = [
+    ["x", /send \{ project, run, runs: \[ID\] \}/u],
+    [{ ...base }, /runs must list 1 to 10 run ids/u],
+    [{ ...base, runs: [] }, /runs must list 1 to 10 run ids/u],
+    [{ ...base, runs: Array.from({ length: 11 }, (_, n) => `01JX${String(n).padStart(22, "0")}`) }, /runs must list 1 to 10 run ids/u],
+    [{ ...base, runs: ["../x"] }, /each entry must be a run id/u],
+    [{ ...base, runs: [7] }, /each entry must be a run id/u],
+    [{ ...base, runs: [ASK_OLD, ASK_OLD] }, /is given twice/u],
+    [{ ...base, runs: [ASK_OLD], note: "x" }, /unknown field note/u],
+    [{ ...base, runs: [ASK_OLD], ritual: "weekly" }, /unknown field ritual/u],
+    [{ ...base, project: "nope", runs: [ASK_OLD] }, /no project nope/u],
+    [{ ...base, run: "01JNOSUCHRUN0000000000000A", runs: [ASK_OLD] }, /no run 01JNOSUCHRUN0000000000000A in demo/u],
+  ];
+  for (const [body, reason] of cases) {
+    const answer = await send(body);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), reason);
+  }
+  assert.deepEqual(stub.calls, []);
+});
+
+test("ack-earlier: an id that is not an earlier open ask of the same ritual refuses the whole call with 409, and nothing is dismissed", async () => {
+  const project = openProject(PROJECT);
+  const acked = seedAsk("01JASKACKED0000000000AAAAA");
+  appendLine(project, { who: "owner", type: "run.acknowledged", item: "ritual/daily", run: acked });
+  const silent = seedAsk("01JASKSILENT000000000AAAAA", "ritual/daily", 0);
+  const failed = "01JASKFAILED00000000AAAAAA";
+  appendLine(project, { who: "timer", type: "run.started", item: "ritual/daily", run: failed });
+  appendLine(project, { who: "timer", type: "run.completed", item: "ritual/daily", run: failed, outcome: "failed" });
+  const later = seedAsk("01JASKLATER0000000000AAAAA");
+  const stub = ackDeps();
+  const cases: [string, RegExp][] = [
+    [OTHER_RITUAL, /is not a run of the same ritual/u],
+    [VIGIL_ASK, /is not a run of the same ritual/u],
+    [ASK_NEW, /did not start before run/u],
+    [later, /did not start before run/u],
+    [acked, /is already acknowledged by owner/u],
+    [silent, /is not a completed run with questions/u],
+    [failed, /is not a completed run with questions/u],
+    ["01JNOSUCHRUN0000000000000A", /no run 01JNOSUCHRUN0000000000000A/u],
+  ];
+  for (const [id, reason] of cases) {
+    const answer = await actionApi(post({ project: PROJECT, run: id === ASK_NEW || id === later ? ASK_MID : later, runs: [ASK_OLD, id] }, { path: "/api/run/ack-earlier" }), { who: "owner" }, stub);
+    assert.equal(answer.status, 409, id);
+    assert.match(errorOf(answer.body), /^nothing dismissed: /u);
+    assert.match(errorOf(answer.body), reason, id);
+  }
+  assert.deepEqual(stub.calls, [], "one bad id stops the call before any ack");
+});
+
+test("ack-earlier: it acks each id bare, once, as the viewer, and counts them; a CLI refusal in the middle is 409 with the count", async () => {
+  const stub = ackDeps();
+  const sent = await actionApi(post({ project: PROJECT, run: ASK_NEW, runs: [ASK_MID, ASK_OLD] }, { path: "/api/run/ack-earlier" }), { who: "owner on phone" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, count: 2 } });
+  assert.deepEqual(stub.calls, [
+    ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", ASK_MID],
+    ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", ASK_OLD],
+  ]);
+  let n = 0;
+  const flaky: ActionDeps = { ...ackDeps(), run: () => Promise.resolve(++n === 1 ? { code: 1, error: "run is already acknowledged by owner" } : { code: 0, error: "" }) };
+  const partial = await actionApi(post({ project: PROJECT, run: ASK_NEW, runs: [ASK_MID, ASK_OLD] }, { path: "/api/run/ack-earlier" }), { who: "owner" }, flaky);
+  assert.equal(partial.status, 409);
+  assert.equal(errorOf(partial.body), "1 of 2 dismissed; run is already acknowledged by owner");
+});
+
+test("ack-earlier: against the real CLI the asks are acknowledged bare, and a second call refuses (they are no longer open)", async () => {
+  const one = seedAsk("01JASKREAL1000000000AAAAAA");
+  const two = seedAsk("01JASKREAL2000000000AAAAAA");
+  const head = seedAsk("01JASKREAL3000000000AAAAAA");
+  const real: ActionDeps = { ...ackDeps(), run: runCli };
+  const body = { project: PROJECT, run: head, runs: [one, two] };
+  const sent = await actionApi(post(body, { path: "/api/run/ack-earlier" }), { who: "owner" }, real);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, count: 2 } });
+  const lines = readLedger(openProject(PROJECT)).filter((line) => line.type === "run.acknowledged" && (line.run === one || line.run === two));
+  assert.equal(lines.length, 2);
+  assert.ok(lines.every((line) => line.who === "web:owner" && line.answers === undefined));
+  const again = await actionApi(post(body, { path: "/api/run/ack-earlier" }), { who: "owner" }, real);
+  assert.equal(again.status, 409);
+  assert.match(errorOf(again.body), /nothing dismissed: run .* is already acknowledged by web:owner/u);
+});
+
+test("run now: anything that throws after the ack (the host lookup, the store) is a runNow.error, never a 500", async () => {
+  const stub = { ...nowDeps(), nowHost: () => { throw new Error("links.toml is unreadable"); } };
+  const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the run could not be started: links.toml is unreadable" } } });
+  assert.equal(stub.calls.length, 1, "the ack ran and stays");
+  assert.deepEqual(stub.started, []);
+});
+
+test("run now: a host name that is not a plain host name is refused with a sentence, and nothing starts", async () => {
+  for (const host of ["-oProxyCommand=x", "host b", "host;rm", "", ".x"]) {
+    const stub = { ...nowDeps(), nowHost: () => host };
+    const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
+    assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the ritual's host name is not valid" } } }, JSON.stringify(host));
+    assert.deepEqual(stub.started, []);
+  }
+  const fine = { ...nowDeps(), nowHost: () => "host-b.tail1234.ts.net" };
+  await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, fine);
+  assert.deepEqual(fine.started[0]?.argv.slice(-2), ["--on", "host-b.tail1234.ts.net"]);
+});
+
+test("run now: the default host rule sends a ritual pinned to another host there with --on, and none for this host", async () => {
+  const store = openProject(PROJECT);
+  const now = new Date().toISOString();
+  const header = { id: "01JPINNED00000000000000000", kind: "ritual" as const, slug: "pinned", title: "Pinned", created: now, updated: now, tags: [], cadence: "1d", anchor: "due" as const, host: "host-b", policy: { mode: "report" as const, may: [], hold: [] } };
+  store.writeItem({ header, body: "Do it.\n" }, { who: "test" });
+  const pinned = seedAsk("01JASKPINNED0000000000AAAA", "ritual/pinned");
+  const stub = nowDeps();
+  const sent = await actionApi(ackRequest({ project: PROJECT, run: pinned, runNow: true }), { who: "owner" }, stub);
+  assert.equal(sent.status, 200);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "pinned", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"], "the server read the pin from the store; this host is host-a");
+  store.writeItem({ header: { ...header, host: "host-a", updated: new Date().toISOString() }, body: "Do it.\n" }, { who: "test" });
+  const here = seedAsk("01JASKPINNED2000000000AAAA", "ritual/pinned");
+  const local = nowDeps();
+  await actionApi(ackRequest({ project: PROJECT, run: here, runNow: true }), { who: "owner" }, local);
+  assert.deepEqual(local.started[0]?.argv, ["run", "now", "pinned", "--project", PROJECT, "--who", "web:owner"], "a ritual pinned to this host needs no --on");
+});
+
+test("ack-earlier: earlier means an earlier start time, like the page; the ledger order breaks a tie", async () => {
+  const project = openProject(PROJECT);
+  const item = "ritual/ordered";
+  const line = (run: string, at: string): void => {
+    appendLine(project, { who: "timer", type: "run.started", item, run, at });
+    appendLine(project, { who: "timer", type: "run.completed", item, run, outcome: "complete", result: ASKED });
+  };
+  // Appended newest first: the ledger order is the reverse of the start times.
+  line("01JORDERNEW00000000000AAAA", "2026-10-02T08:00:00.000Z");
+  line("01JORDEROLD00000000000AAAA", "2026-10-01T08:00:00.000Z");
+  line("01JORDERTIE00000000000AAAA", "2026-10-02T08:00:00.000Z");
+  const stub = ackDeps();
+  const send = (run: string, id: string) => actionApi(post({ project: PROJECT, run, runs: [id] }, { path: "/api/run/ack-earlier" }), { who: "owner" }, stub);
+  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDEROLD00000000000AAAA")).status, 200, "older by time, though later in the ledger");
+  assert.equal((await send("01JORDEROLD00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 409, "newer by time, though earlier in the ledger");
+  assert.equal((await send("01JORDERTIE00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 200, "same time: the earlier ledger line is earlier");
+  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDERTIE00000000000AAAA")).status, 409);
 });

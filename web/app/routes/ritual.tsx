@@ -17,7 +17,7 @@ import { isManual } from "../lib/kind.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
 import { summaryTags } from "../lib/result.ts";
-import { asksYou, atText, cadenceText, isImported, nextStep, reportExcerpt, ritualFailure, runState, sourceText } from "../lib/view.ts";
+import { asksYou, atText, cadenceText, isImported, nextRunText, nextStep, reportExcerpt, ritualFailure, runState, sourceText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -32,7 +32,7 @@ export function loader({ context, params }: Route.LoaderArgs) {
   const detail = finished === null ? null : context.run(ritual.project, finished.run);
   // The latest report asks the operator something nobody answered yet: its questions lead the page.
   const asks = finished !== null && asksYou(finished, ritual.runs) ? (detail?.result?.questions ?? []) : [];
-  return { ritual, held, finished, next, asks, report: reportExcerpt(detail), canWrite: context.canWrite };
+  return { ritual, held, finished, next, asks, report: reportExcerpt(detail), canWrite: context.canWrite, nextRun: nextRunText(ritual.row, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }) };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
@@ -64,7 +64,7 @@ function modeText(mode: string): string {
 }
 
 export default function Ritual({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { ritual, held, finished, next, asks, report, canWrite } = loaderData;
+  const { ritual, held, finished, next, asks, report, canWrite, nextRun } = loaderData;
   const { row, policy, project } = ritual;
   const manual = isManual(row);
   const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
@@ -144,7 +144,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
 
           {finished === null || asks.length === 0 ? null : (
             <Section title="Needs you" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Open the run</Link>}>
-              <ResultQuestions project={project} row={finished} questions={asks} canWrite={canWrite} />
+              <ResultQuestions project={project} row={finished} questions={asks} canWrite={canWrite} nextRun={nextRun} canRunNow />
             </Section>
           )}
 

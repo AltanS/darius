@@ -7,7 +7,7 @@
  */
 
 import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
-import { ackCommand, hostDate, momentText, relativeDate, relativeTime, roughDuration, runNowCommand, shortDate } from "./format.ts";
+import { ackCommand, hostDate, momentText, relativeDate, relativeTime, roughDuration, runNowCommand, shortDate, zonedMoment } from "./format.ts";
 import { isUnattended, itemKind, itemManual, type Kind } from "./kind.ts";
 import { runWord } from "./state-words.ts";
 import type { Badge, Tone } from "./tone.ts";
@@ -80,8 +80,64 @@ function supersededBy(run: SiblingRun, other: SiblingRun): boolean {
  * the runs to look through: the same project's, or any list that holds them.
  */
 export function asksYou(run: SiblingRun, runs: readonly SiblingRun[]): boolean {
-  const open = run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
-  return open && !runs.some((other) => supersededBy(run, other));
+  return isOpenAsk(run) && !runs.some((other) => supersededBy(run, other));
+}
+
+// --- open asks, newest card and the earlier ones (0.80.0) ------------------------------------
+
+/** A complete run that asked questions and nobody answered or dismissed. A newer run may have replaced it (`asksYou`), and it stays open until someone does. */
+export function isOpenAsk(run: RunRow): boolean {
+  return run.phase === "closed" && run.outcome === "complete" && (run.result?.questions ?? 0) > 0 && run.acknowledged === null;
+}
+
+/** At most this many earlier asks show under the main card; the bulk dismissal acts on those shown, never on more. */
+export const EARLIER_MAX = 10;
+
+/** The open asks of one ritual: the newest is the card, the older ones fold under it. */
+export interface AskStack<T extends SiblingRun> {
+  main: T;
+  /** Older open asks, newest first, at most EARLIER_MAX. */
+  earlier: T[];
+}
+
+/**
+ * The open asks per item, newest first. The main card is the newest open
+ * ask: the newest run when it asks, else the newest older run that still
+ * has an open ask, so nothing open is hidden. Runs of two projects never
+ * mix. The order of the stacks is the order of their main runs in `runs`.
+ */
+export function askStacks<T extends SiblingRun>(runs: readonly T[]): Array<AskStack<T>> {
+  const groups = new Map<string, T[]>();
+  for (const run of runs) {
+    if (!isOpenAsk(run)) continue;
+    const key = `${run.project ?? ""}\u0000${run.item}`;
+    groups.set(key, [...(groups.get(key) ?? []), run]);
+  }
+  return [...groups.values()].flatMap((group) => {
+    const [main, ...older] = group.toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+    return main === undefined ? [] : [{ main, earlier: older.slice(0, EARLIER_MAX) }];
+  });
+}
+
+/** What the confirm box of "Dismiss all earlier asks" says, with the number of asks the page shows. */
+export function dismissAllText(count: number): string {
+  return `Dismiss ${count} earlier ask${count === 1 ? "" : "s"}? This cannot be undone.`;
+}
+
+/** The fold's summary: "1 earlier ask", "4 earlier asks". */
+export function earlierText(count: number): string {
+  return `${count} earlier ask${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * When an answer takes effect: the next scheduled run of the ritual, in the
+ * ritual's zone; "on demand" for a ritual with no cadence or one darius
+ * never starts (mode off); "due now" when the time has passed.
+ */
+export function nextRunText(ritual: RitualRow | undefined, host: { now: number; today: string; offset: number }): string {
+  if (ritual === undefined || ritual.cadence === null || ritual.mode === "off" || ritual.nextDueAt === null) return "on demand";
+  if (Date.parse(ritual.nextDueAt) <= host.now) return "due now";
+  return zonedMoment(ritual.nextDueAt, ritual.zone, host);
 }
 
 /** How a run ended, in words and a tone (the table in `state-words.ts`). `runs` are as for `asksYou`. */

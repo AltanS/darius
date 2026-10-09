@@ -14,6 +14,11 @@
  *                            pair, bucket check, delete (src/web/snapshot-api.ts)
  *   POST /api/run/follow-up  the run page's follow-up button (0.48.0,
  *                            src/web/action-api.ts)
+ *   POST /api/run/ack        the answer form and the Acknowledge button
+ *                            (0.68.0; answers and "Send and run now" 0.80.0,
+ *                            src/web/action-api.ts)
+ *   POST /api/run/ack-earlier  "Dismiss all earlier asks" (0.80.0,
+ *                            src/web/action-api.ts)
  *   POST /api/finding/close  the findings page's close button (0.62.0,
  *                            src/web/action-api.ts)
  *   GET /api/workspace-icon/<project>

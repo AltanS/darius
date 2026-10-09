@@ -26,9 +26,10 @@
  * Coming up says "Failed, acknowledged" in grey.
  *
  * A complete run whose result asks the operator something (0.22.0) is an
- * "Asks you" card, like a held run, until someone records a decision with
- * `darius run ack --note`. Then it is a plain Last night card with the
- * decision.
+ * "Asks you" card, like a held run, until someone answers it in the card or
+ * with `darius run ack --answer`. Then it is a plain Last night card with the
+ * decision. Since 0.80.0 the card is the newest open ask of the ritual, and
+ * older open asks fold under it.
  */
 
 import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
@@ -38,7 +39,7 @@ import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { ASKS_YOU, datePhrase, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
-import { ackText, activity, asksYou, decisionText, excerpt, isDjinn, runState, stuckFor, type ActivityRun, type Excerpt } from "./view.ts";
+import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -82,13 +83,32 @@ export interface Question {
   command: string;
 }
 
-/** The questions of a result, and the one command that records the decision on all of them. */
+/** One older open ask of the same ritual, to fold under the main card (0.80.0). */
+export interface EarlierRun {
+  run: string;
+  /** "12 h ago" or "27 Sep". */
+  when: string;
+  summary: string | null;
+  questions: ResultQuestion[];
+}
+
+/**
+ * The questions of a result and what the answer form needs (0.80.0): the run
+ * to answer, when the answer takes effect, whether "Send and run now" is
+ * offered, the command for a terminal, and the older open asks of the ritual.
+ */
 export interface Ask {
   questions: ResultQuestion[];
   command: string;
+  project: string;
+  run: string;
+  /** "Fri 16 Oct 09:00 Europe/Berlin", "on demand" or "due now". */
+  nextRun: string;
+  canRunNow: boolean;
+  earlier: EarlierRun[];
 }
 
-/** The run an Acknowledge button names. */
+/** The run an Acknowledge button names (a failed or abandoned run). */
 export interface AckTarget {
   project: string;
   run: string;
@@ -117,7 +137,7 @@ export interface Card {
   questions: Question[];
   /** Set on an "Asks you" card. */
   ask: Ask | null;
-  /** The run the Acknowledge button acknowledges (0.68.0): an "Asks you" card and a failed card; null on any other card. */
+  /** The run the Acknowledge button acknowledges (0.68.0): a failed card; null on any other card. An "Asks you" card has the answer form in `ask` instead (0.80.0). */
   ack: AckTarget | null;
   report: Excerpt | null;
   /** True when the report excerpt runs past its lines, so its end fades out. */
@@ -276,10 +296,20 @@ function heldCard(clock: Clock, run: ActivityRun): Card {
   };
 }
 
-/** A complete run whose result asks the operator something: its questions, with the command that records the decision. */
-function asksCard(clock: Clock, readRun: ReadRun, run: ActivityRun): Card {
+/**
+ * A complete run whose result asks the operator something: its questions,
+ * the answer form's facts and the older open asks of the same ritual
+ * (0.80.0). The main run is the newest open ask, which is not always the
+ * newest run: a later run that asked nothing leaves the older ask open.
+ */
+function asksCard(clock: Clock, readRun: ReadRun, stack: AskStack<ActivityRun>, ritual: RitualRow | undefined): Card {
+  const run = stack.main;
   const count = run.result?.questions ?? 0;
   const result = readRun(run.project, run.run)?.result ?? null;
+  const earlier = stack.earlier.map((older): EarlierRun => {
+    const detail = readRun(older.project, older.run)?.result ?? null;
+    return { run: older.run, when: when(clock, older.endedAt ?? older.startedAt), summary: detail === null ? null : detail.summary, questions: detail === null ? [] : detail.questions };
+  });
   return {
     ...blank(`asks-${run.run}`, "asks", run.kind, run.manual),
     edge: "wait",
@@ -289,8 +319,7 @@ function asksCard(clock: Clock, readRun: ReadRun, run: ActivityRun): Card {
     href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [run.project, byText(run.who), plural(count, "question")],
     meta2: result === null ? null : result.summary,
-    ask: { questions: result === null ? [] : result.questions, command: decideCommand(run.run, run.project) },
-    ack: { project: run.project, run: run.run },
+    ask: { questions: result === null ? [] : result.questions, command: decideCommand(run.run, run.project), project: run.project, run: run.run, nextRun: nextRunText(ritual, clock), canRunNow: run.kind === "ritual", earlier },
     actions: [
       { text: "Open the run", href: href({ to: "run", ws: run.project, run: run.run }) },
       { text: "History", href: historyHref(run) },
@@ -447,7 +476,7 @@ interface ProjectNeeds {
   runs: ActivityRun[];
   states: DjinnState[];
   held: ActivityRun[];
-  asks: ActivityRun[];
+  asks: Array<AskStack<ActivityRun>>;
   failed: DjinnState[];
   stuck: Array<{ run: ActivityRun; size: string }>;
   flagged: VigilRow[];
@@ -469,7 +498,7 @@ function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus)
     runs,
     states,
     held: runs.filter((run) => run.phase === "held"),
-    asks: runs.filter((run) => asksYou(run, runs)),
+    asks: askStacks(runs),
     failed: states.filter((state) => state.last !== null && isOpenFailure(state.last)),
     stuck,
     flagged,
@@ -603,7 +632,10 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
 
   const needs: Card[] = [
     ...all.flatMap((entry) => entry.held).toSorted(newest).map((run) => heldCard(clock, run)),
-    ...all.flatMap((entry) => entry.asks).toSorted(newest).map((run) => asksCard(clock, readRun, run)),
+    ...all
+      .flatMap((entry) => entry.asks.map((stack) => ({ stack, ritual: entry.project.rituals.find((candidate) => `ritual/${candidate.slug}` === stack.main.item) })))
+      .toSorted((left, right) => newest(left.stack.main, right.stack.main))
+      .map(({ stack, ritual }) => asksCard(clock, readRun, stack, ritual)),
     ...all.flatMap((entry) => entry.failed).flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)])),
     ...all.flatMap((entry) => entry.stuck).toSorted((left, right) => newest(left.run, right.run)).map(({ run, size }) => stuckCard(clock, run, size)),
     ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),

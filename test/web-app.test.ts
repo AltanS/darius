@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RunDetail, RunResult, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -871,7 +871,7 @@ test("a run with a result: the banner, tiles, the question with the ack command,
   const asked = between(page, questions, found);
   assert.ok(asked.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?"));
   assert.ok(asked.includes("Recommended:") && asked.includes("Yes, delete them."));
-  assert.ok(asked.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`), "the command that records the decision");
+  assert.ok(asked.includes(`darius run ack ${ASKS} --answer 1=&quot;your answer&quot; --project demo`), "the command that records the decision");
   assert.ok(asked.includes("card card-accent next edge-wait"));
 
   const items = textOf(between(page, found, changed));
@@ -888,6 +888,204 @@ test("a run with a result: the banner, tiles, the question with the ack command,
 
   const calm = await readPage(`/w/demo/runs/${DONE}`, ctx);
   assert.equal(calm.includes('<h2 class="label">Result</h2>'), false, "no result, no panel");
+});
+
+// --- the answer form and the earlier asks (0.80.0) -----------------------------------------
+
+interface AskSeed {
+  id: string;
+  at: string;
+  questions: number;
+  acknowledged?: Acknowledgement | null;
+  item?: string;
+}
+
+const ASK_ID = (n: number): string => `01KA${String(n).padStart(2, "0")}AAAAAAAAAAAAAAAAAAAAAA`;
+
+/** The demo ritual with these complete runs (newest first by their times); the ritual row may be changed. */
+function stackContext(seeds: readonly AskSeed[], ritual: Partial<RitualRow> = {}): WebContext & { project: ProjectStatus } {
+  const base = STATUS.projects[0]!;
+  const rows = seeds.map((seed): RunRow => ({ ...runRow(seed.id, "closed", "complete"), item: seed.item ?? "ritual/daily-report", startedAt: seed.at, endedAt: seed.at, result: seed.questions === 0 ? null : { ...SUMMARY, questions: seed.questions }, acknowledged: seed.acknowledged ?? null }));
+  const ritualRow = { ...base.rituals[0]!, heldRun: null, overdueDays: 0, nextDue: "2026-09-29", ...ritual };
+  const project: ProjectStatus = { ...base, rituals: [ritualRow], runs: rows, vigils: [{ ...base.vigils[0]!, flagged: false }] };
+  return {
+    ...context,
+    project,
+    status: () => ({ ...STATUS, projects: [project] }),
+    ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: ritualRow, runs: rows } : null),
+    run: (name, run) => {
+      const found = rows.find((candidate) => candidate.run === run);
+      if (name !== "demo" || found === undefined) return null;
+      const seed = seeds.find((candidate) => candidate.id === run);
+      const questions: ResultQuestion[] = Array.from({ length: seed?.questions ?? 0 }, (_, index) => ({ text: `Question ${index + 1} of ${run.slice(-6)}?` }));
+      const first = questions[0];
+      if (first !== undefined) first.recommendation = "Take option 1.";
+      return runDetail(found, seed === undefined || seed.questions === 0 ? null : { ...RESULT, summary: `Summary of ${run.slice(-6)}`, questions });
+    },
+  };
+}
+
+const TWO_QUESTIONS: AskSeed[] = [{ id: ASK_ID(1), at: "2026-09-28T08:10:00.000Z", questions: 2 }];
+
+test("the card has a box per question, one Use recommendation for the question that has one, the next-run line and three actions", async () => {
+  const ctx = stackContext(TWO_QUESTIONS, { cadence: "7d", at: "09:00", zone: "Europe/Berlin", nextDueAt: "2026-10-05T07:00:00.000Z" });
+  const home = await readPage("/all", ctx);
+  const card = cardOf(home, `asks-${ASK_ID(1)}`);
+  assert.equal([...card.matchAll(/<input id="ask-[^"]+" class="st-input"/gu)].length, 2, "one box per question");
+  assert.ok(card.includes(`for="ask-${ASK_ID(1)}-1">Your answer to question 1</label>`) && card.includes(`for="ask-${ASK_ID(1)}-2">Your answer to question 2</label>`), "each box has its label");
+  assert.equal([...card.matchAll(/>Use recommendation</gu)].length, 1, "only question 1 has a recommendation");
+  assert.ok(card.includes('aria-label="Use recommendation, question 1"'));
+  assert.ok(card.indexOf("Take option 1.") < card.indexOf(">Use recommendation<") && card.indexOf(">Use recommendation<") < card.indexOf("Question 2 of"), "the button sits under its own question");
+  assert.ok(card.includes("Applies to the next run only. Next run: Mon 5 Oct 09:00 Europe/Berlin"), "the next run in the ritual's zone");
+  assert.match(card, /<button type="submit" class="st-btn st-btn-main"[^>]*disabled=""[^>]*>Send answer<\/button>/u, "Send answer is the primary action, off while every box is empty");
+  assert.match(card, /<button type="button" class="st-btn"[^>]*disabled=""[^>]*>Send and run now<\/button>/u);
+  assert.match(card, /<button type="button" class="st-link"[^>]*>Dismiss, no action<\/button>/u, "the quiet dismissal is enabled");
+  assert.ok(card.indexOf("Send answer") < card.indexOf("Send and run now") && card.indexOf("Send and run now") < card.indexOf("Dismiss, no action"));
+  assert.equal(card.includes("earlier ask"), false, "no fold without older asks");
+  assert.equal(card.includes("Acknowledge"), false);
+  assertScriptsCarryNonce(home, "home with the answer form");
+});
+
+test("the next-run line: on demand without a cadence, due now when the time passed, the host clock without a zone", async () => {
+  const onDemand = await readPage("/all", stackContext(TWO_QUESTIONS, { cadence: null, nextDueAt: null }));
+  assert.ok(onDemand.includes("Applies to the next run only. Next run: on demand"));
+  const off = await readPage("/all", stackContext(TWO_QUESTIONS, { mode: "off", cadence: "1d", nextDueAt: "2026-10-05T07:00:00.000Z" }));
+  assert.ok(off.includes("Next run: on demand"), "darius never starts a mode-off ritual");
+  const late = await readPage("/all", stackContext(TWO_QUESTIONS, { cadence: "1d", nextDueAt: "2026-09-28T07:00:00.000Z" }));
+  assert.ok(late.includes("Next run: due now"));
+  const noZone = await readPage("/all", stackContext(TWO_QUESTIONS, { cadence: "1d", nextDueAt: "2026-09-29T07:00:00.000Z", zone: null }));
+  assert.ok(noZone.includes("Next run: 29 Sep 09:00"), "the host clock (UTC+2), no zone name");
+  const badZone = await readPage("/all", stackContext(TWO_QUESTIONS, { cadence: "1d", nextDueAt: "2026-09-29T07:00:00.000Z", zone: "Mars/Olympus" }));
+  assert.ok(badZone.includes("Next run: 29 Sep 09:00"), "an unknown zone falls back to the host clock");
+  const runPage = await readPage(`/w/demo/runs/${ASK_ID(1)}`, stackContext(TWO_QUESTIONS, { cadence: "7d", zone: "Europe/Berlin", nextDueAt: "2026-10-05T07:00:00.000Z" }));
+  assert.ok(runPage.includes("Next run: Mon 5 Oct 09:00 Europe/Berlin"), "the run page says it too");
+});
+
+test("a run of a vigil has no Send and run now, and the loopback viewer sees no form at all", async () => {
+  const vigil = await readPage("/all", stackContext([{ ...TWO_QUESTIONS[0]!, item: "vigil/soak" }]));
+  const card = cardOf(vigil, `asks-${ASK_ID(1)}`);
+  assert.ok(card.includes("Send answer") && card.includes("Dismiss, no action"));
+  assert.equal(card.includes("Send and run now"), false, "only a ritual can run again");
+  const local = await readPage("/all", { ...stackContext(TWO_QUESTIONS), canWrite: false });
+  const bare = cardOf(local, `asks-${ASK_ID(1)}`);
+  assert.equal(bare.includes("<input"), false);
+  assert.equal(bare.includes("Send answer"), false);
+  assert.ok(bare.includes("this page was opened from this host") && bare.includes("Answer from a terminal"), "a line says why, and the command stays");
+});
+
+const EARLIER: AskSeed[] = [
+  { id: ASK_ID(9), at: "2026-09-28T08:10:00.000Z", questions: 1 },
+  { id: ASK_ID(8), at: "2026-09-27T08:10:00.000Z", questions: 1 },
+  { id: ASK_ID(7), at: "2026-09-26T08:10:00.000Z", questions: 2 },
+  { id: ASK_ID(6), at: "2026-09-25T08:10:00.000Z", questions: 1, acknowledged: { at: "2026-09-25T09:00:00.000Z", who: "owner", note: null } },
+  { id: ASK_ID(5), at: "2026-09-24T08:10:00.000Z", questions: 1 },
+  { id: ASK_ID(4), at: "2026-09-23T08:10:00.000Z", questions: 1, item: "ritual/other" },
+  { id: ASK_ID(3), at: "2026-09-22T08:10:00.000Z", questions: 0 },
+];
+
+test("older open asks of the same ritual fold under the newest card: a count, an answer form each, and one confirm with the real count", async () => {
+  const ctx = stackContext(EARLIER);
+  const home = await readPage("/all", ctx);
+  assert.equal(h1Of(home), "Two things need you.", "the ritual shows once, the other ritual's ask is its own card");
+  const card = cardOf(home, `asks-${ASK_ID(9)}`);
+  assert.ok(card.includes("<summary>3 earlier asks</summary>"), "the acknowledged, the other ritual's and the no-question runs do not count");
+  const fold = between(card, card.indexOf("<summary>3 earlier asks</summary>"), card.length);
+  for (const id of [ASK_ID(8), ASK_ID(7), ASK_ID(5)]) assert.ok(fold.includes(`href="/w/demo/runs/${id}"`), `an entry for ${id}`);
+  assert.equal(fold.includes(ASK_ID(6)), false, "an acknowledged ask is not open");
+  assert.equal(fold.includes(ASK_ID(4)), false, "another ritual's ask stays out");
+  assert.ok(fold.indexOf(ASK_ID(8)) < fold.indexOf(ASK_ID(7)) && fold.indexOf(ASK_ID(7)) < fold.indexOf(ASK_ID(5)), "newest first");
+  assert.equal([...fold.matchAll(/A newer run exists\. Your answer goes to the next run with its question\./gu)].length, 3, "every entry says so");
+  assert.equal([...fold.matchAll(/>Send answer<\/button>/gu)].length, 3, "each entry is answerable");
+  assert.equal([...fold.matchAll(/>Dismiss, no action<\/button>/gu)].length, 3);
+  assert.equal(fold.includes("Send and run now"), false, "an earlier ask has no run now");
+  assert.equal([...fold.matchAll(/Summary of AAAAAA/gu)].length, 3, "each entry carries its summary");
+  assert.ok(fold.includes("<summary>Dismiss all earlier asks</summary>"));
+  assert.ok(fold.includes("Dismiss 3 earlier asks? This cannot be undone."), "the confirm shows the real count");
+  assert.ok(fold.includes("Yes, dismiss 3"));
+  assert.equal(home.includes(`id="asks-${ASK_ID(8)}"`), false, "an older ask has no card of its own");
+  assertScriptsCarryNonce(home, "home with earlier asks");
+
+  const one = await readPage("/all", stackContext(EARLIER.slice(0, 2)));
+  assert.ok(one.includes("<summary>1 earlier ask</summary>") && one.includes("Dismiss 1 earlier ask? This cannot be undone."), "the singular");
+  const none = await readPage("/all", stackContext(EARLIER.slice(0, 1)));
+  assert.equal(none.includes("earlier ask"), false);
+});
+
+test("at most 10 earlier asks show, and the count in the confirm is the number shown", async () => {
+  const many: AskSeed[] = Array.from({ length: 14 }, (_, index) => ({ id: ASK_ID(40 - index), at: `2026-09-${String(28 - index).padStart(2, "0")}T08:10:00.000Z`, questions: 1 }));
+  const home = await readPage("/all", stackContext(many));
+  assert.ok(home.includes("<summary>10 earlier asks</summary>") && home.includes("Dismiss 10 earlier asks? This cannot be undone."));
+  assert.equal(home.includes(`/w/demo/runs/${ASK_ID(40 - 11)}"`), false, "the 12th is not shown");
+});
+
+test("when the newest run asks nothing, the newest older open ask is the card, so nothing open is hidden", async () => {
+  const seeds: AskSeed[] = [
+    { id: ASK_ID(12), at: "2026-09-28T08:30:00.000Z", questions: 0 },
+    { id: ASK_ID(11), at: "2026-09-27T08:10:00.000Z", questions: 1 },
+    { id: ASK_ID(10), at: "2026-09-26T08:10:00.000Z", questions: 1 },
+  ];
+  const home = await readPage("/all", stackContext(seeds));
+  assert.equal(h1Of(home), "One thing needs you.");
+  const card = cardOf(home, `asks-${ASK_ID(11)}`);
+  assert.ok(card.includes("Send answer") && card.includes("<summary>1 earlier ask</summary>") && card.includes(`href="/w/demo/runs/${ASK_ID(10)}"`));
+  assert.equal(home.includes(`id="asks-${ASK_ID(10)}"`), false);
+  assert.ok(home.includes('id="done-demo-daily-report"'), "the newest run, which asked nothing, is still last night's card");
+});
+
+test("view helpers: open asks, the stack order and cap, the confirm words, the next run", () => {
+  const row = (run: string, at: string, over: Partial<RunRow> = {}): RunRow => ({ ...runRow(run, "closed", "complete"), startedAt: at, result: SUMMARY, ...over });
+  const stacks = view.askStacks([
+    row("a", "2026-09-01T00:00:00.000Z"),
+    row("b", "2026-09-03T00:00:00.000Z"),
+    row("c", "2026-09-02T00:00:00.000Z", { acknowledged: { at: "2026-09-02T01:00:00.000Z", who: "x", note: null } }),
+    row("d", "2026-09-04T00:00:00.000Z", { result: null }),
+    row("e", "2026-09-05T00:00:00.000Z", { item: "ritual/other" }),
+    row("f", "2026-09-06T00:00:00.000Z", { phase: "held", outcome: null }),
+  ]);
+  assert.deepEqual(stacks.map((stack) => [stack.main.run, stack.earlier.map((run) => run.run)]), [["b", ["a"]], ["e", []]]);
+  const crowd = view.askStacks(Array.from({ length: 15 }, (_, index) => row(`r${index}`, `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`)));
+  assert.equal(crowd[0]?.main.run, "r14");
+  assert.equal(crowd[0]?.earlier.length, view.EARLIER_MAX);
+  assert.equal(view.askStacks([{ ...row("p", "2026-09-01T00:00:00.000Z"), project: "one" }, { ...row("q", "2026-09-02T00:00:00.000Z"), project: "two" }]).length, 2, "two projects never stack");
+  assert.deepEqual([view.dismissAllText(4), view.dismissAllText(1), view.earlierText(4), view.earlierText(1)], ["Dismiss 4 earlier asks? This cannot be undone.", "Dismiss 1 earlier ask? This cannot be undone.", "4 earlier asks", "1 earlier ask"]);
+  const host = { now: Date.parse("2026-09-28T09:00:00.000Z"), today: "2026-09-28", offset: 120 };
+  assert.equal(view.nextRunText(undefined, host), "on demand");
+  const ritual = (over: Partial<RitualRow>): RitualRow => ({ ...STATUS.projects[0]!.rituals[0]!, cadence: "1d", mode: "report", zone: "Europe/Berlin", nextDueAt: "2026-09-29T07:00:00.000Z", ...over });
+  assert.equal(view.nextRunText(ritual({}), host), "Tue 29 Sep 09:00 Europe/Berlin");
+  assert.equal(view.nextRunText(ritual({ zone: "America/New_York" }), host), "Tue 29 Sep 03:00 America/New_York");
+  assert.equal(view.nextRunText(ritual({ cadence: null }), host), "on demand");
+  assert.equal(view.nextRunText(ritual({ mode: "off" }), host), "on demand");
+  assert.equal(view.nextRunText(ritual({ nextDueAt: null }), host), "on demand");
+  assert.equal(view.nextRunText(ritual({ nextDueAt: "2026-09-28T09:00:00.000Z" }), host), "due now");
+});
+
+test("the form's rules: Use recommendation fills one box, each button posts its own body, the notice tells what the run did", () => {
+  const rules = askRules;
+  const questions = [{ text: "One?", recommendation: " Yes,\n do it. " }, { text: "Two?" }, { text: "Three?", recommendation: "x".repeat(600) }];
+  assert.equal(rules.recommendedText(questions[0]!), "Yes, do it.", "one line, trimmed");
+  assert.equal(rules.recommendedText(questions[1]!), "", "no recommendation, no fill");
+  assert.equal(rules.recommendedText(questions[2]!).length, 500, "never longer than the server takes");
+
+  const boxes = ["", "typed", ""];
+  const filled = rules.withText(boxes, 0, rules.recommendedText(questions[0]!));
+  assert.deepEqual(filled, ["Yes, do it.", "typed", ""], "only box 1 changed");
+  assert.deepEqual(boxes, ["", "typed", ""], "the old boxes are not touched");
+
+  assert.deepEqual(rules.answersOf(["  a ", "   ", "c"]), [{ n: 1, text: "a" }, { n: 3, text: "c" }], "empty boxes send nothing, numbers follow the questions");
+  const at = { project: "demo", run: "01KAAAAAAAAAAAAAAAAAAAAAAA" };
+  assert.deepEqual(rules.askBody("send", at, ["a", ""]), { ...at, answers: [{ n: 1, text: "a" }] });
+  assert.deepEqual(rules.askBody("now", at, ["a", ""]), { ...at, answers: [{ n: 1, text: "a" }], runNow: true });
+  assert.deepEqual(rules.askBody("dismiss", at, ["a", "b"]), at, "Dismiss sends no answers, whatever is typed");
+  assert.deepEqual(rules.earlierBody(at, ["r1", "r2"]), { ...at, runs: ["r1", "r2"] }, "the ids shown, nothing else");
+
+  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null };
+  assert.match(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).text, /^Your answer is saved\. Started run /u);
+  assert.equal(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).child, "01KQQQQQQQQQQQQQQQQQQQQQQQ");
+  const refused = rules.runNowNotice({ ...ok, runNowError: "run 01KX is held" });
+  assert.equal(refused.tone, "bad");
+  assert.equal(refused.text, "Your answer is saved, but the run did not start: run 01KX is held. The next run reads it.");
+  assert.equal(rules.runNowNotice({ ...ok, message: "Your answer is saved. The run did not start within 10 s." }).text, "Your answer is saved. The run did not start within 10 s.");
+  assert.equal(rules.runNowNotice(ok).tone, "ok");
 });
 
 // --- follow-up (0.48.0) -----------------------------------------------------------------
@@ -1015,7 +1213,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes("Daily &lt;script&gt;alert(1)&lt;/script&gt; report"), "the ritual label");
   assert.ok(card.includes("demo, by timer, 1 question"), "the question count");
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
-  assert.ok(card.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
+  assert.equal(card.includes("darius run ack"), false, "the terminal command moved to the run page");
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
   assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
   assert.match(home, /<span class="places-need">1 needs you<\/span>/u, "Places counts the thing that needs you");
@@ -1027,7 +1225,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
 
   const ritual = await readPage("/w/demo/rituals/daily-report", ctx);
   assert.ok(ritual.includes('<h2 class="label">Needs you</h2>'), "the ritual page leads with the question");
-  assert.ok(ritual.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`));
+  assert.ok(ritual.includes(`darius run ack ${ASKS} --answer 1=&quot;your answer&quot; --project demo`));
   assert.ok(ritual.includes('<div class="card card-accent edge-wait">'), "the latest report card waits");
 
   const project = await readPage("/w/demo", ctx);
@@ -1064,16 +1262,13 @@ function cardOf(home: string, id: string): string {
 
 const ACK_BUTTON = /<button type="submit" class="st-btn st-btn-small" aria-label="Acknowledge: [^"]*">Acknowledge<\/button>/u;
 
-test("a question card and a failed card carry an Acknowledge button, with a note behind a fold; the commands stay", async () => {
+test("a question card carries the answer form and a failed card the Acknowledge button; a held card neither", async () => {
   const asks = await readPage("/all", asksContext(null));
   const asksCard = cardOf(asks, `asks-${ASKS}`);
-  assert.match(asksCard, ACK_BUTTON, "the question card");
-  assert.ok(asksCard.includes("aria-label=\"Acknowledge: Daily &lt;script&gt;alert(1)&lt;/script&gt; report\""), "named after the card, as text");
-  assert.match(textOf(asksCard), /Add a noteNote \(optional\)/u, "the note waits behind a fold");
-  assert.match(asksCard, /<details class="fold scroll-mt-20"><summary>Add a note<\/summary>/u, "closed by default");
-  assert.match(asksCard, /<input id="[^"]+" class="st-input" type="text" maxLength="500" value=""|<input id="[^"]+" class="st-input" type="text" maxlength="500" value=""/u, "the note is empty by default");
-  assert.ok(asksCard.includes(`darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`), "the terminal command stays");
-  assert.ok(asksCard.indexOf("Answer from a terminal") < asksCard.search(ACK_BUTTON), "the button comes after the command fold");
+  assert.equal(asksCard.includes("Acknowledge"), false, "a question card has Dismiss, no action, not Acknowledge");
+  assert.equal(asksCard.includes("Add a note"), false, "the note fold is gone");
+  assert.equal(asksCard.includes("Answer from a terminal"), false, "so is the terminal fold, for a viewer who can write");
+  assert.ok(asksCard.includes("Dismiss, no action"));
 
   const failed = await readPage("/all", failedContext("failed", null));
   assert.match(cardOf(failed, "failed-demo-daily-report"), ACK_BUTTON, "the failed card");
@@ -1089,15 +1284,16 @@ test("a failed card whose outcome the CLI would refuse (a refused start) has no 
   assert.equal(cardOf(home, "failed-demo-daily-report").includes("Acknowledge"), false);
 });
 
-test("the run page and the ritual page carry the button where the command is: the decision card and the failure card", async () => {
+test("the run page and the ritual page carry the answer form with the command under it, and the failure card the button", async () => {
   const ask = await readPage(`/w/demo/runs/${ASKS}`, asksContext(null));
   const questions = between(ask, ask.indexOf('<h2 class="label">Questions for you</h2>'), ask.indexOf('<h2 class="label">What it found</h2>'));
-  assert.ok(questions.includes("Record your decision:"), "the command stays");
-  assert.match(questions, ACK_BUTTON);
-  assert.ok(questions.includes("Or dismiss the questions without acting. The next run is told you chose not to act on them."), "the line that says what it does");
-  assert.ok(questions.indexOf("Record your decision:") < questions.search(ACK_BUTTON), "the decision command first, then the dismissal");
+  assert.ok(questions.includes("Or answer from a terminal:"), "the command stays");
+  assert.ok(questions.includes("Send answer") && questions.includes("Send and run now") && questions.includes("Dismiss, no action"), "the three actions");
+  assert.equal(questions.includes("Acknowledge"), false);
+  assert.ok(questions.indexOf("Send answer") < questions.indexOf("Or answer from a terminal:"), "the form first, then the command");
   const ritual = await readPage("/w/demo/rituals/daily-report", asksContext(null));
-  assert.match(between(ritual, ritual.indexOf('<h2 class="label">Needs you</h2>'), ritual.length), ACK_BUTTON, "the ritual page's question card");
+  const needs = between(ritual, ritual.indexOf('<h2 class="label">Needs you</h2>'), ritual.length);
+  assert.ok(needs.includes("Send answer") && needs.includes("Send and run now"), "the ritual page's question card");
 
   for (const path of [`/w/demo/runs/${FAILED}`, "/w/demo/rituals/daily-report"]) {
     const page = await readPage(path, failedContext("failed", null));
@@ -1113,9 +1309,9 @@ test("the loopback viewer sees no Acknowledge button, a line that says why, and 
   const asks: WebContext = { ...asksContext(null), canWrite: false };
   const failed: WebContext = { ...failedContext("failed", null), canWrite: false };
   const pages: [string, WebContext, string][] = [
-    ["/all", asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
-    [`/w/demo/runs/${ASKS}`, asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
-    ["/w/demo/rituals/daily-report", asks, `darius run ack ${ASKS} --note &quot;your decision&quot; --project demo`],
+    ["/all", asks, `darius run ack ${ASKS} --answer 1=&quot;your answer&quot; --project demo`],
+    [`/w/demo/runs/${ASKS}`, asks, `darius run ack ${ASKS} --answer 1=&quot;your answer&quot; --project demo`],
+    ["/w/demo/rituals/daily-report", asks, `darius run ack ${ASKS} --answer 1=&quot;your answer&quot; --project demo`],
     [`/w/demo/runs/${FAILED}`, failed, `darius run ack ${FAILED} --project demo`],
     ["/w/demo/rituals/daily-report", failed, `darius run ack ${FAILED} --project demo`],
   ];
@@ -1590,6 +1786,8 @@ test("the run page shows an item's key and the needs-code state", async () => {
 });
 
 const lib = await import("../web/app/lib/findings.ts");
+const view = await import("../web/app/lib/view.ts");
+const askRules = await import("../web/app/lib/ask.ts");
 
 test("findings filter logic: views, narrowing, facet options, addresses and words", () => {
   const read = (search: string) => lib.readQuery(new URLSearchParams(search));

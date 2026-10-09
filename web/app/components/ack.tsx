@@ -1,15 +1,14 @@
 /**
  * The Acknowledge button (0.68.0; `darius run ack`). One click marks the run
- * as seen: a failed run, or a complete run whose questions the operator will
- * not act on. There is no confirm step. An empty note is a plain
- * acknowledgement, a dismissal of the questions; a note behind the small
- * "Add a note" fold is the operator's decision, as with the terminal command.
- * The button posts to `/api/run/ack` and then reloads the page data, so the
- * card moves to Last night as an acknowledged card. A refusal of the server
- * (the run is held, already acknowledged, and so on) shows as its own
- * sentence and the card stays. The button does not draw for a viewer who
- * cannot write: the server would refuse it. A line says why, and the terminal
- * command stays.
+ * as seen: a failed or abandoned run. There is no confirm step. An empty note
+ * is a plain acknowledgement; a note behind the small "Add a note" fold says
+ * why the failure is fine. A complete run that asks questions has its own
+ * answer form since 0.80.0 (`ask-form.tsx`), not this button. The button
+ * posts to `/api/run/ack` and then reloads the page data, so the card moves
+ * to Last night as an acknowledged card. A refusal of the server (the run is
+ * held, already acknowledged, and so on) shows as its own sentence and the
+ * card stays. The button does not draw for a viewer who cannot write: the
+ * server would refuse it. A line says why, and the terminal command stays.
  */
 
 import { useId, useState } from "react";
@@ -28,11 +27,9 @@ interface AckButtonProps {
   canWrite: boolean;
   /** What the run is called, for the button's accessible name. */
   subject: string;
-  /** A line under the button that says what it does. */
-  hint?: string;
 }
 
-export function AckButton({ project, run, canWrite, subject, hint }: AckButtonProps): React.ReactNode {
+export function AckButton({ project, run, canWrite, subject }: AckButtonProps): React.ReactNode {
   const { revalidate } = useRevalidator();
   const id = useId();
   const [note, setNote] = useState("");
@@ -63,7 +60,6 @@ export function AckButton({ project, run, canWrite, subject, hint }: AckButtonPr
           {busy ? "Acknowledging…" : isDone ? "Acknowledged" : "Acknowledge"}
         </button>
       </div>
-      {hint === undefined ? null : <p className="fu-off">{hint}</p>}
       <Fold summary="Add a note">
         <label className="fu-label" htmlFor={id}>
           Note (optional)

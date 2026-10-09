@@ -135,6 +135,26 @@ export function momentText(iso: string, today: string, offset: number): string {
   return date === today ? time : `${shortDate(date)} ${time}`;
 }
 
+/**
+ * A moment on the clock of an IANA zone: "Fri 16 Oct 09:00 Europe/Berlin".
+ * Without a zone, or with one the runtime does not know, the host's clock:
+ * `momentText`. The same text on the server and in the browser, since the
+ * zone is explicit.
+ */
+export function zonedMoment(iso: string, zone: string | null, host: { today: string; offset: number }): string {
+  const at = Date.parse(iso);
+  if (zone === null || Number.isNaN(at)) return momentText(iso, host.today, host.offset);
+  try {
+    // Numbers only from Intl: month and weekday names differ between ICU versions ("Sep" or "Sept"), and the server and the browser must print the same text.
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(new Date(at));
+    const part = (type: string): number => Number(parts.find((candidate) => candidate.type === type)?.value);
+    const local = new Date(Date.UTC(part("year"), part("month") - 1, part("day"), part("hour") % 24, part("minute"))).toISOString();
+    return `${dayName(local, 0)} ${clockTime(local, 0)} ${zone}`;
+  } catch {
+    return momentText(iso, host.today, host.offset);
+  }
+}
+
 /** A past moment: "12 h ago" within a day, otherwise its date, "27 Sep". */
 export function whenText(iso: string, now: number, offset: number): string {
   const at = Date.parse(iso);
@@ -162,7 +182,7 @@ export function ackCommand(run: string, project: string): string {
   return `darius run ack ${run} --project ${project}`;
 }
 
-/** The command that records the operator's decision on the questions of a run's result. */
+/** The command that records the operator's answer to question 1 of a run's result (0.80.0; `--answer N=TEXT` repeats for more questions). */
 export function decideCommand(run: string, project: string): string {
-  return `darius run ack ${run} --note "your decision" --project ${project}`;
+  return `darius run ack ${run} --answer 1="your answer" --project ${project}`;
 }

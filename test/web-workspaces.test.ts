@@ -147,8 +147,27 @@ test("a question card shows for a complete run with open questions", () => {
   assert.deepEqual(asksOf([OLD]), { cards: 1, tile: 1, needs: 1 });
 });
 
-test("a newer complete run of the same ritual takes the card away, in the cards, the tile and the count", () => {
-  assert.deepEqual(asksOf([NEWER(), OLD]), { cards: 0, tile: null, needs: 0 });
+test("a newer complete run that asks nothing no longer takes the card away: the older open ask stays the card (0.80.0)", () => {
+  assert.deepEqual(asksOf([NEWER(), OLD]), { cards: 1, tile: 1, needs: 1 });
+  const home = homeView(status([project("shop", [REPORT, OTHER], [], { runs: [NEWER(), OLD] })]), () => null);
+  const card = home.needs.find((entry) => entry.kind === "asks");
+  assert.equal(card?.ask?.run, "01OLD", "the card answers the older run");
+  assert.deepEqual(card?.ask?.earlier, [], "nothing else is open");
+});
+
+test("a newer complete run that asks too is the card, and the older open ask folds under it; one card, one count", () => {
+  const asking = NEWER({ result: RESULT });
+  assert.deepEqual(asksOf([asking, OLD]), { cards: 1, tile: 1, needs: 1 });
+  const home = homeView(status([project("shop", [REPORT, OTHER], [], { runs: [asking, OLD] })]), () => null);
+  const card = home.needs.find((entry) => entry.kind === "asks");
+  assert.equal(card?.ask?.run, "01NEW");
+  assert.deepEqual(card?.ask?.earlier.map((older) => older.run), ["01OLD"]);
+  assert.equal(card?.ask?.canRunNow, true);
+});
+
+test("an acknowledged older ask is not open: a newer run that asks nothing leaves no card", () => {
+  const answered = run("01OLD", "ritual/report", "2026-09-28T05:00:00.000Z", { acknowledged: { who: "owner", at: "2026-09-28T06:00:00.000Z", note: null } });
+  assert.deepEqual(asksOf([NEWER(), answered]), { cards: 0, tile: null, needs: 0 });
 });
 
 test("a newer run that failed, is held or is of another ritual leaves the question card", () => {

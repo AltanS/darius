@@ -108,7 +108,7 @@ export function lastSentence(output: string): string {
     .split("\n")
     .map((candidate) => candidate.trim())
     .findLast((candidate) => candidate !== "" && !candidate.startsWith("{"));
-  return (line ?? "").replace(/^darius run follow-up: /u, "").replace(/^darius: /u, "").replace(/^! /u, "");
+  return (line ?? "").replace(/^darius run (?:follow-up|now): /u, "").replace(/^darius: /u, "").replace(/^! /u, "");
 }
 
 /** The one ritual entry of a `--json` batch report, when the output holds one. */

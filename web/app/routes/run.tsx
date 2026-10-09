@@ -14,7 +14,7 @@ import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
 import { statusOf } from "../lib/status.ts";
 import { resultTone, resultWord } from "../lib/result.ts";
-import { excerpt, itemLabel, itemSlug, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
+import { excerpt, itemLabel, itemSlug, nextRunText, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -39,13 +39,13 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const followUp = checked !== null && (hasCommands || (hasProposals && isFollowable) || checked.ready) ? checked : null;
   // Each follow-up with its state word against the runs of the project (0.69.0).
   const children = run.children.map((child) => ({ ...child, state: runState(child.row, project?.runs ?? []) }));
-  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite };
+  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite, nextRun: nextRunText(ritual, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }), canRunNow: run.row.item.startsWith("ritual/") };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite } = loaderData;
+  const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
   const { row, project } = run;
   const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -109,6 +109,8 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
               row={row}
               result={run.result}
               canWrite={canWrite}
+              nextRun={nextRun}
+              canRunNow={canRunNow}
               afterQuestions={
                 followUp === null ? null : (
                   <Section title="Follow-up">

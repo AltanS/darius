@@ -1502,6 +1502,10 @@ test("run now starts a ritual that is not due and one that failed today; a held 
   assert.equal(now.code, 0, now.stdout);
   assert.equal(JSON.parse(now.stdout).projects[0].rituals[0].end, "complete");
   assert.equal(linesOf(project, "run.started").length, 2);
+  const startedRun = linesOf(project, "run.started")[1]?.run;
+  assert.match(now.stderr, new RegExp(`^darius run now: started run ${startedRun} on ${hostId()}$`, "mu"), "the web reads the run id from this line");
+  const dry = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--dry-run", "--json"]);
+  assert.equal(dry.stderr.includes("started run"), false, "a dry run starts nothing and prints no start line");
   assert.notEqual(linesOf(project, "run.started")[1]?.who, "timer", "a person started it");
 
   process.env.FAKE_CLAUDE_MODE = "silent";

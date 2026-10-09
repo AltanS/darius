@@ -13,6 +13,11 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - The handoff prompt gains "Already decided in the last 14 days" (the newest five delivered answers), "Still open, not answered" (questions of the last three complete runs that nobody acknowledged) and a rule line: answers are claims as of their date. The prompt lists the newest ten dismissals and sums the older ones, so a pile of dismissals never hides an answer.
 - `ritual show` lists answers that lapsed unread (older than 30 days). `--json` adds `lapsed_answers`. The handoff JSON adds `answers`, `recent`, `openAsks`, `answerIds` and `lapsed`.
 - `bun run test -- <file>...` runs only the named test files.
+- The "Asks you" card has one answer box per question, "Use recommendation" for a question that has one, the line "Applies to the next run only. Next run: ...", and the buttons "Send answer", "Send and run now" and "Dismiss, no action". "Acknowledge", "Add a note" and "Answer from a terminal" are gone from that card. A failed or abandoned run keeps Acknowledge with a note.
+- `POST /api/run/ack` takes `answers: [{n, text}]` and `runNow: true`. With `runNow` the server starts `darius run now <ritual>` after the ack, waits up to 10 s for the start line and replies 200 with the new run, `pending`, or `runNow: {error}` when the answer is saved and the run could not start. The ritual and the `--on` host come from the server. A body key `host` or `ritual` is refused.
+- `POST /api/run/ack-earlier` dismisses, bare, the older open asks the page shows. The server refuses the call (409) when an id is not an earlier open ask of the same ritual.
+- Older open asks of a ritual fold under its newest open ask as "N earlier asks" (at most 10), each answerable, with "Dismiss all earlier asks" and a confirm that shows the real count. When the newest run asks nothing and an older one still has an open ask, that ask is the card.
+- `darius run now` prints `darius run now: started run <id> on <host>` to stderr when the run starts, like `run follow-up`.
 
 ### Changed
 

@@ -20,6 +20,8 @@ export interface PostOk {
   host: string | null;
   /** `message` of an answer that is ok but not done yet, such as a follow-up still starting. */
   message: string | null;
+  /** `runNow.error` of an acknowledgement (0.80.0): the answer is saved, the run did not start. Null when the answer has none. */
+  runNowError: string | null;
 }
 
 export interface PostFailed {
@@ -33,8 +35,18 @@ export type PostResult = PostOk | PostFailed;
 
 /** What the endpoints take as a body: JSON values only. */
 export type PostBody = {
-  readonly [key: string]: string | number | boolean | null | readonly number[] | readonly string[] | { readonly [key: string]: string | number | boolean | null };
+  readonly [key: string]:
+    | string
+    | number
+    | boolean
+    | null
+    | readonly number[]
+    | readonly string[]
+    | { readonly [key: string]: string | number | boolean | null }
+    | readonly { readonly [key: string]: string | number | boolean | null }[];
 };
+
+type Scalar = string | number | boolean | null;
 
 function failed(status: number, error: string): PostFailed {
   return { ok: false, status, error };
@@ -42,7 +54,7 @@ function failed(status: number, error: string): PostFailed {
 
 /** Read an answer: the endpoints send one JSON object, anything else is a failure. */
 function parse(status: number, text: string): PostResult {
-  let reply: Map<string, string | number | boolean | null>;
+  let reply: Map<string, Scalar | { readonly [key: string]: Scalar }>;
   try {
     reply = new Map(Object.entries(Object(JSON.parse(text))));
   } catch {
@@ -55,6 +67,7 @@ function parse(status: number, text: string): PostResult {
     const value = reply.get(key);
     return value === undefined || value === null || value === "" ? null : String(value);
   };
+  const nestedError: Scalar | undefined = new Map<string, Scalar>(Object.entries(Object(reply.get("runNow")))).get("error");
   return {
     ok: true,
     status,
@@ -63,6 +76,7 @@ function parse(status: number, text: string): PostResult {
     run: textOf("run"),
     host: textOf("host"),
     message: textOf("message"),
+    runNowError: nestedError === undefined || nestedError === null || nestedError === "" ? null : String(nestedError),
   };
 }
 
