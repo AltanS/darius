@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.80.1] - 2026-10-09
+
+### Fixed
+
+- `darius update` no longer fails when the new setup removes a timer that `[setup] units` does not list. It restarts only the timers that are still installed. Before, it tried to restart the removed timer, failed, and rolled back.
+
 ## [0.80.0] - 2026-10-09
 
 ### Added

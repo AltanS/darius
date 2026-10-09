@@ -91,6 +91,7 @@ case "\${1:-}" in
   --version) echo "darius $version (node)" ;;
   setup)
     if [ "\${FAKE_SETUP_FAILS:-}" = "$version" ]; then echo "! systemd  it broke"; exit 1; fi
+    if [ -n "\${FAKE_SETUP_REMOVES:-}" ]; then rm -f "$HOME/.config/systemd/user/$FAKE_SETUP_REMOVES"; fi
     app="\${DARIUS_APP_DIR:-$HOME/.local/opt/darius}"
     mkdir -p "$HOME/.local/bin"
     ln -sfn "$app/current/bin/darius" "$HOME/.local/bin/darius"
@@ -396,6 +397,33 @@ test("an explicit older version is allowed, and says it is a rollback by hand", 
   assert.match(back.report.detail, /older than 0\.2\.0: a rollback by hand/);
   assert.equal(currentTag(h.app), "v0.1.1");
   assert.equal(updateRecord(h.app).outcome, "updated");
+});
+
+test("a timer the new setup removed is not restarted, so the update does not fail on it (0.80.1)", async () => {
+  const h = host(MINORS, "v0.1.0");
+  const unitDir = join(h.home, ".config", "systemd", "user");
+  mkdirSync(unitDir, { recursive: true });
+  for (const unit of ["darius-sync.timer", "darius-snapshot.timer"]) writeFileSync(join(unitDir, unit), "# fake\n");
+  const calls: string[][] = [];
+  const systemctl = (args: string[]): void => {
+    calls.push(args);
+    if (args[0] === "restart" && (args[1] ?? "").endsWith(".timer") && !existsSync(join(unitDir, args[1] ?? ""))) throw new Error(`Unit ${args[1] ?? ""} not found.`);
+  };
+  process.env.FAKE_SETUP_REMOVES = "darius-snapshot.timer";
+  try {
+    const done = await runUpdate(request(), deps(h, true, { systemctl }));
+    assert.equal(done.code, 0, done.report.detail);
+    assert.equal(done.report.outcome, "updated");
+    assert.deepEqual(
+      calls.filter((call) => call[0] === "restart"),
+      [
+        ["restart", "darius-sync.timer"],
+        ["restart", "darius-web.service"],
+      ],
+    );
+  } finally {
+    delete process.env.FAKE_SETUP_REMOVES;
+  }
 });
 
 test("a failed health check rolls back once: the old version, its setup and a web restart come back", async () => {

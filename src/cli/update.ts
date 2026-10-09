@@ -49,7 +49,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -307,16 +307,21 @@ export function webHealthUrl(home: string): string {
 /**
  * Keeps each timer as the operator left it (timerPlan): a stopped one is
  * stopped again (a no-op unless an older setup started it), an active one
- * is restarted. Returns the timers left stopped, or why it failed.
+ * is restarted. A timer the new setup removed (it is not in `[setup] units`
+ * any more) is left alone: restarting it would fail (0.80.1). Returns the
+ * timers left stopped, or why it failed.
  */
 function keepTimerStates(plan: TimerPlan, deps: UpdateDeps): { leftStopped: string[] } | { failure: string } {
+  const unitDir = userUnitDir(deps.home);
+  const isInstalled = (unit: string): boolean => lstatSync(join(unitDir, unit), { throwIfNoEntry: false }) !== undefined;
+  const keepStopped = plan.keepStopped.filter(isInstalled);
   try {
-    for (const unit of plan.keepStopped) deps.systemctl(["stop", unit]);
-    for (const unit of plan.restart) deps.systemctl(["restart", unit]);
+    for (const unit of keepStopped) deps.systemctl(["stop", unit]);
+    for (const unit of plan.restart.filter(isInstalled)) deps.systemctl(["restart", unit]);
   } catch (cause) {
     return { failure: `could not keep the timer states: ${errorMessage(cause)}` };
   }
-  return { leftStopped: plan.keepStopped };
+  return { leftStopped: keepStopped };
 }
 
 /** What `activate` found: why it failed (undefined when it did not), and the timers it left stopped. */
