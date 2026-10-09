@@ -10,6 +10,9 @@
  *                  the ritual (src/core/finding-index.ts, 0.62.0)
  *   run hold <run> --question Q [--question Q ...] [--who W] [--banner]
  *   run answer <run> <n> <text...>
+ *   run answer <run> --answer N=TEXT [--answer N=TEXT ...] [--on HOST]
+ *                  all answers or none, under one lock; each N must be a
+ *                  question of the current hold (an earlier hold is exit 2)
  *   run complete <run> --outcome complete|failed|abandoned [--findings-stdin] [--who W] [--banner]
  *                  Both print the ghost sign-off (src/core/signoff.ts, 0.52.0)
  *                  after their output when DARIUS_RUN is the run, or with
@@ -73,9 +76,9 @@ import { getBlobText, itemRef, openProject, putBlob, type Project } from "../cor
 import { ulid } from "../core/ulid.ts";
 import { followUpOf } from "../runner/follow-up.ts";
 import { parseAnswerFlags } from "../core/answers.ts";
-import { acknowledgeEarlier, acknowledgeRun, answerRun } from "../runner/hold.ts";
+import { acknowledgeEarlier, acknowledgeRun, answerRun, answerRunMany } from "../runner/hold.ts";
 import { readStdin } from "./args.ts";
-import { runFollowUp, runNow, runResume } from "./run-due.ts";
+import { forwardOn, runFollowUp, runNow, runResume } from "./run-due.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const VERBS = "start | hold | answer | resume | complete | ack | ack-earlier | list | show | proposal | now | follow-up";
@@ -220,6 +223,9 @@ function runHold(args: ParsedArgs): number {
 
 function runAnswer(args: ParsedArgs): number {
   const runId = requirePositional(args, 1, "<run> id");
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const flagged = args.repeated.answer ?? [];
+  if (flagged.length > 0) return runAnswerMany(args, runId, flagged, who);
   const nText = requirePositional(args, 2, "<n>");
   const n = Number.parseInt(nText, 10);
   if (!Number.isInteger(n) || n < 1 || String(n) !== nText) {
@@ -227,11 +233,24 @@ function runAnswer(args: ParsedArgs): number {
   }
   const text = args.positional.slice(3).join(" ");
   if (text.length === 0) throw new UsageError("run answer needs <text>");
-  const who = stringFlag(args, "who") ?? defaultWho();
   const refused = answerRun(currentProject(args), { run: runId, n, text, who });
   if (refused !== undefined) throw new UsageError(refused);
   if (args.json) printJson({ ok: true, run: runId, n, text });
   else console.log(`✓ answered question ${String(n)} on run ${runId}`);
+  return 0;
+}
+
+/** `run answer <run> --answer N=TEXT ...`: every answer or none; `--on HOST` runs it there over ssh (0.80.0). */
+function runAnswerMany(args: ParsedArgs, runId: string, flagged: readonly string[], who: string): number {
+  if (args.positional.length > 2) throw new UsageError("run answer: give the answers as --answer N=TEXT, or one <n> <text...>, not both");
+  const answers = parseAnswerFlags(flagged);
+  const project = resolveProject(stringFlag(args, "project"));
+  const forwarded = forwardOn(args, project, "answer");
+  if (forwarded !== undefined) return forwarded;
+  const refused = answerRunMany(openProject(project), { run: runId, who, answers });
+  if (refused !== undefined) throw new UsageError(refused);
+  if (args.json) printJson({ ok: true, run: runId, answers });
+  else console.log(`✓ answered ${String(answers.length)} question(s) on run ${runId}`);
   return 0;
 }
 

@@ -135,6 +135,8 @@ export interface Card {
   meta: string[];
   meta2: string | null;
   questions: Question[];
+  /** Set on a held card (0.80.0): the run whose current hold the answer form asks. */
+  held: { project: string; row: RunRow } | null;
   /** Set on an "Asks you" card. */
   ask: Ask | null;
   /** The run the Acknowledge button acknowledges (0.68.0): a failed card; null on any other card. An "Asks you" card has the answer form in `ask` instead (0.80.0). */
@@ -275,7 +277,7 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
 // --- cards ---------------------------------------------------------------------------------
 
 function blank(id: string, kind: CardKind, item: Kind | null, manual = false): Card {
-  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], ask: null, ack: null, report: null, fades: false, error: null, actions: [] };
+  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], held: null, ask: null, ack: null, report: null, fades: false, error: null, actions: [] };
 }
 
 function historyHref(run: ActivityRun): string {
@@ -292,6 +294,7 @@ function heldCard(clock: Clock, run: ActivityRun): Card {
     href: href({ to: "run", ws: run.project, run: run.run }),
     meta: [run.project, byText(run.who), run.questions.length === 0 ? null : plural(run.questions.length, "question")].filter((part) => part !== null),
     questions: run.questions.map((text, index) => ({ text, command: answerCommand(run.run, index + 1, run.project) })),
+    held: run.questions.length > (run.holdFrom ?? 0) ? { project: run.project, row: run } : null,
     actions: [{ text: "History", href: historyHref(run) }],
   };
 }

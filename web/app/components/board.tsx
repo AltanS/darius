@@ -12,7 +12,8 @@ import { KindWord } from "./chip.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
-import { AskForm, EarlierAsks } from "./ask-form.tsx";
+import { heldKey } from "../lib/ask.ts";
+import { AskForm, EarlierAsks, HeldForm } from "./ask-form.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
 import { Row, RowList } from "./row.tsx";
 import { Fold, Status } from "./ui.tsx";
@@ -235,7 +236,9 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
       {hasBody ? (
         <div className="hc-body">
           {card.kind === "held" && card.questions.length === 0 ? <p className="empty">The run is held without a question. Resume or close it from the command line.</p> : null}
-          {card.questions.length === 0 ? null : (
+          {card.questions.length === 0 ? null : canWrite && card.held !== null ? (
+            <HeldForm key={heldKey(card.held.row)} project={card.held.project} row={card.held.row} />
+          ) : (
             <ol className="qs">
               {card.questions.map((question, index) => (
                 <li key={`${index}`}>

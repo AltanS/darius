@@ -124,9 +124,10 @@ export interface RunDueOptions {
    */
   followUp?: FollowUp;
   /**
-   * Called with the run id right after `run.started` is written (0.69.0).
-   * `darius run follow-up` prints it, so the web page that started it, here
-   * or over ssh, learns the run id without waiting for the run to end.
+   * Called with the run id right after `run.started` is written (0.69.0), or
+   * `run.resumed` (0.80.0). `darius run follow-up`, `run now` and `run resume`
+   * print it, so the web page that started it, here or over ssh, learns the
+   * run id without waiting for the run to end.
    */
   onStarted?: (run: string) => void;
 }
@@ -148,6 +149,8 @@ export interface RunView {
   outcome?: string;
   /** Every question of every hold, in order. `run answer <run> <n>` numbers them from 1. */
   questions: string[];
+  /** How many questions came before the newest `run.held` line (0.80.0). The current hold is `questions.slice(holdFrom)`, numbered from `holdFrom + 1`. */
+  holdFrom: number;
   /** The latest answer per question number. */
   answers: Map<number, string>;
   /** Held since the latest start or resume. */
@@ -175,7 +178,7 @@ function isJsonCount(value: JsonValue | undefined): value is number {
 
 /** Phase, outcome, questions and answers of run `runId`, from every ledger line carrying it. */
 export function viewRun(ledger: readonly LedgerLine[], runId: string): RunView {
-  const view: RunView = { questions: [], answers: new Map(), hasHeld: false, isAnswered: false };
+  const view: RunView = { questions: [], holdFrom: 0, answers: new Map(), hasHeld: false, isAnswered: false };
   for (const line of ledger) {
     if (line.run !== runId) continue;
     view.item ??= line.item;
@@ -187,6 +190,7 @@ export function viewRun(ledger: readonly LedgerLine[], runId: string): RunView {
       view.phase = "held";
       view.hasHeld = true;
       view.isAnswered = false;
+      view.holdFrom = view.questions.length;
       if (isJsonTextList(line.questions)) view.questions.push(...line.questions);
     }
     if (line.type === "run.answered" && isJsonCount(line.n) && isJsonText(line.text)) {
@@ -838,7 +842,7 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
       return skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`);
     }
     if (ctx.options.followUp !== undefined) ackParent(ctx, ctx.options.followUp, started.run);
-    if (resume === undefined) ctx.options.onStarted?.(started.run);
+    ctx.options.onStarted?.(started.run);
     return await launchRun(ctx, { ...target, run: started.run }, prepared);
   } finally {
     await lease.handle.release();

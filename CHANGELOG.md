@@ -18,6 +18,9 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `POST /api/run/ack-earlier` dismisses, bare, the older open asks the page shows. The server refuses the call (409) when an id is not an earlier open ask of the same ritual.
 - Older open asks of a ritual fold under its newest open ask as "N earlier asks" (at most 10), each answerable, with "Dismiss all earlier asks" and a confirm that shows the real count. When the newest run asks nothing and an older one still has an open ask, that ask is the card.
 - `darius run now` prints `darius run now: started run <id> on <host>` to stderr when the run starts, like `run follow-up`.
+- `darius run answer <run> --answer N=TEXT` (repeatable) checks every answer, then writes them under one lock: a bad answer writes nothing. Each N must be a question of the current hold; a number of an earlier hold is a usage error (exit 2). A hold that is answered but not yet resumed takes answers again, so an operator can retry after a refused resume. `--on HOST` runs it there over ssh. The positional `<n> <text...>` form is unchanged.
+- `darius run resume` prints `darius run resume: started run <id> on <host>` to stderr when the run goes on.
+- A held run's card has one box for each question of the current hold and one button, "Answer and resume". `POST /api/run/answer` writes the answers, then resumes the run on the ritual's host, and waits up to 10 s for the start line. A run that is not held is 409 and nothing is written. A refused resume is 200 with `resume: { error }`; the answers stay saved and the form stays open for a retry. An answer call that ssh or a signal ended is 502.
 
 ### Changed
 

@@ -3,6 +3,7 @@
 import { Link } from "react-router";
 
 import type { Acknowledgement, RitualRow, RunRow } from "../../../src/web/api.ts";
+import { currentHold, heldKey } from "../lib/ask.ts";
 import { useClock } from "../lib/clock.tsx";
 import { answerCommand, clockTime, duration, hostDate, shortDate } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
@@ -11,12 +12,13 @@ import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, decisionText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
+import { HeldForm } from "./ask-form.tsx";
 import { Command } from "./command.tsx";
 import { Chip, KindWord } from "./chip.tsx";
 import { Report } from "./board.tsx";
 import { ResultChips } from "./result.tsx";
 import { Row, RowList } from "./row.tsx";
-import { Empty, Time } from "./ui.tsx";
+import { Empty, Fold, Time } from "./ui.tsx";
 
 interface RunListProps {
   runs: readonly ActivityRun[];
@@ -74,12 +76,35 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
 interface QuestionsProps {
   project: string;
   run: RunRow;
+  /** False for the loopback viewer: the answer form does not draw, the commands stay. */
+  canWrite: boolean;
 }
 
-/** The questions of a held run, each with the command that answers it. */
-export function Questions({ project, run }: QuestionsProps): React.ReactNode {
+/**
+ * The questions of a held run. A viewer who can write gets the answer form
+ * for the current hold (0.80.0), with the commands behind a fold; the
+ * loopback viewer gets each question with the command that answers it.
+ */
+export function Questions({ project, run, canWrite }: QuestionsProps): React.ReactNode {
   if (run.questions.length === 0) {
     return <Empty>The run is held without a question. Resume or close it from the command line.</Empty>;
+  }
+  if (canWrite && run.questions.length > (run.holdFrom ?? 0)) {
+    return (
+      <>
+        <HeldForm key={heldKey(run)} project={project} row={run} />
+        <Fold summary="Answer from a terminal">
+          <ol className="qs">
+            {currentHold(run).map((question) => (
+              <li key={question.n}>
+                <p>{question.text}</p>
+                <Command command={answerCommand(run.run, question.n, project)} />
+              </li>
+            ))}
+          </ol>
+        </Fold>
+      </>
+    );
   }
   return (
     <ol className="qs">

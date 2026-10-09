@@ -272,6 +272,8 @@ export interface RunRow {
   endedAt: string | null;
   who: string;
   questions: string[];
+  /** How many of `questions` came before the newest hold (0.80.0): the held card asks `questions.slice(holdFrom)`, numbered from `holdFrom + 1`. Absent counts as 0. */
+  holdFrom?: number;
   findingsSha: string | null;
   /** Null for a run without a result block (older runs, by-hand runs, failed runs). */
   result: RunResultSummary | null;

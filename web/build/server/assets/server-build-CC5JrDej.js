@@ -10671,6 +10671,7 @@ function blank(id, kind, item, manual = false) {
 		meta: [],
 		meta2: null,
 		questions: [],
+		held: null,
 		ask: null,
 		ack: null,
 		report: null,
@@ -10717,6 +10718,10 @@ function heldCard(clock, run) {
 			text,
 			command: answerCommand(run.run, index + 1, run.project)
 		})),
+		held: run.questions.length > (run.holdFrom ?? 0) ? {
+			project: run.project,
+			row: run
+		} : null,
 		actions: [{
 			text: "History",
 			href: historyHref(run)
@@ -11927,6 +11932,7 @@ function parse(status, text) {
 		return value === void 0 || value === null || value === "" ? null : String(value);
 	};
 	const nestedError = new Map(Object.entries(Object(reply.get("runNow")))).get("error");
+	const resumeError = new Map(Object.entries(Object(reply.get("resume")))).get("error");
 	return {
 		ok: true,
 		status,
@@ -11935,6 +11941,8 @@ function parse(status, text) {
 		run: textOf("run"),
 		host: textOf("host"),
 		message: textOf("message"),
+		resumed: reply.get("resumed") === true,
+		resumeError: resumeError === void 0 || resumeError === null || resumeError === "" ? null : String(resumeError),
 		runNowError: nestedError === void 0 || nestedError === null || nestedError === "" ? null : String(nestedError)
 	};
 }
@@ -12422,6 +12430,53 @@ function runNowNotice(result) {
 		child: result.run
 	};
 }
+/** The questions of a held run's current hold, with their numbers: the held card asks these, not the questions of earlier holds. */
+function currentHold(row) {
+	const from = row.holdFrom ?? 0;
+	return row.questions.slice(from).map((text, index) => ({
+		n: from + index + 1,
+		text
+	}));
+}
+/** The body of "Answer and resume": the filled boxes, each numbered by its question, and `resume: true`. */
+function heldBody(at, hold, texts) {
+	const answers = texts.flatMap((text, index) => {
+		const n = hold[index]?.n;
+		return n === void 0 || text.trim() === "" ? [] : [{
+			n,
+			text: text.trim()
+		}];
+	});
+	return {
+		project: at.project,
+		run: at.run,
+		answers,
+		resume: true
+	};
+}
+/** What to tell the operator after "Answer and resume" was accepted: the answers are saved in every case. */
+function resumeNotice(result) {
+	if (result.resumeError !== null) return {
+		tone: "bad",
+		text: `Your answers are saved, but the run did not go on: ${result.resumeError}.`
+	};
+	if (result.resumed) {
+		const notice = {
+			tone: "ok",
+			text: "Your answers are saved. The run goes on."
+		};
+		if (result.run !== null) notice.child = result.run;
+		return notice;
+	}
+	return {
+		tone: "ok",
+		text: result.message ?? "Your answers are saved. The run is starting."
+	};
+}
+/** The React key of a held run's form: a second hold of the same run gets a fresh form, with empty boxes. */
+function heldKey(row) {
+	return `${row.run}:${row.holdFrom ?? 0}`;
+}
 //#endregion
 //#region app/components/questions.tsx
 function QuestionList({ questions, after }) {
@@ -12701,6 +12756,105 @@ function EarlierAsks({ project, run, asks, canWrite, nextRun }) {
 				})
 			]
 		}) : null]
+	});
+}
+/**
+* The answer form of a held run (0.80.0; `darius run answer --answer`, then
+* `darius run resume`). One box for each question of the current hold, no
+* recommendation (a held question has none), one button, "Answer and
+* resume". The server writes the answers, then resumes the run. If the
+* resume is refused, the answers stay saved and the card says why. A box may
+* stay empty, but at least one must be filled.
+*/
+function HeldForm({ project, row }) {
+	const { revalidate } = useRevalidator();
+	const hold = currentHold(row);
+	const [texts, setTexts] = (0, import_react.useState)(() => hold.map(() => ""));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [isDone, setDone] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)(null);
+	const [notice, setNotice] = (0, import_react.useState)(null);
+	const isLocked = busy || isDone;
+	const filled = texts.some((text) => text.trim() !== "");
+	const send = async () => {
+		setBusy(true);
+		setError(null);
+		const result = await postJson("/api/run/answer", heldBody({
+			project,
+			run: row.run
+		}, hold, texts));
+		setBusy(false);
+		if (!result.ok) {
+			setError(result.error);
+			await revalidate();
+			return;
+		}
+		const told = resumeNotice(result);
+		setNotice(told);
+		if (told.tone === "bad") return;
+		setDone(true);
+		setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "ask",
+		onSubmit: (event) => {
+			event.preventDefault();
+			if (filled && !isLocked) send();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, {
+				questions: hold.map((question) => ({ text: question.text })),
+				after: (index) => {
+					const id = `held-${row.run}-${hold[index]?.n ?? index + 1}`;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ask-answer",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fu-label",
+							htmlFor: id,
+							children: ["Your answer", hold.length === 1 ? "" : ` to question ${index + 1}`]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "ask-row",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								id,
+								className: "st-input",
+								type: "text",
+								maxLength: 500,
+								value: texts[index] ?? "",
+								disabled: isLocked,
+								onChange: (event) => setTexts(withText(texts, index, event.currentTarget.value))
+							})
+						})]
+					});
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fu-acts",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-main",
+					"aria-label": "Answer and resume: this held run",
+					disabled: isLocked || !filled,
+					children: busy ? "Sending…" : "Answer and resume"
+				})
+			}),
+			notice === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: `bk-note tone-${notice.tone}`,
+				role: notice.tone === "bad" ? "alert" : "status",
+				children: [notice.text, notice.child === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: href({
+						to: "run",
+						ws: project,
+						run: notice.child
+					}),
+					children: "Open the run"
+				})] })]
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
 	});
 }
 //#endregion
@@ -13114,7 +13268,10 @@ function CardView({ card, canWrite }) {
 						className: "empty",
 						children: "The run is held without a question. Resume or close it from the command line."
 					}) : null,
-					card.questions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+					card.questions.length === 0 ? null : canWrite && card.held !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeldForm, {
+						project: card.held.project,
+						row: card.held.row
+					}, heldKey(card.held.row)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 						className: "qs",
 						children: card.questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }) }, `${index}`))
 					}),
@@ -13621,9 +13778,23 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 		})
 	});
 }
-/** The questions of a held run, each with the command that answers it. */
-function Questions({ project, run }) {
+/**
+* The questions of a held run. A viewer who can write gets the answer form
+* for the current hold (0.80.0), with the commands behind a fold; the
+* loopback viewer gets each question with the command that answers it.
+*/
+function Questions({ project, run, canWrite }) {
 	if (run.questions.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "The run is held without a question. Resume or close it from the command line." });
+	if (canWrite && run.questions.length > (run.holdFrom ?? 0)) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeldForm, {
+		project,
+		row: run
+	}, heldKey(run)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+		summary: "Answer from a terminal",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+			className: "qs",
+			children: currentHold(run).map((question) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: answerCommand(run.run, question.n, project) })] }, question.n))
+		})
+	})] });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 		className: "qs",
 		children: run.questions.map((question, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: question }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Command, { command: answerCommand(run.run, index + 1, project) })] }, `${index}`))
@@ -15814,7 +15985,8 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 						className: "card card-accent edge-wait",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Questions, {
 							project,
-							run: held
+							run: held,
+							canWrite
 						})
 					})
 				}),
@@ -16452,7 +16624,8 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 						className: "card card-accent edge-wait",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Questions, {
 							project,
-							run: row
+							run: row,
+							canWrite
 						})
 					})
 				}) : null,
@@ -19059,14 +19232,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BnMrRkoM.js",
+			"module": "/assets/overview-200KyhvS.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19075,8 +19248,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js"
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19097,14 +19270,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BnMrRkoM.js",
+			"module": "/assets/overview-200KyhvS.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19113,8 +19286,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js"
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19205,13 +19378,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-Cklyrq89.js",
+			"module": "/assets/rituals--xpKy5x8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-CQiek752.js",
@@ -19220,8 +19393,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-B5ZEY4MZ.js"
 			],
@@ -19244,13 +19417,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-Cklyrq89.js",
+			"module": "/assets/rituals--xpKy5x8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/section-CQiek752.js",
@@ -19259,8 +19432,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-B5ZEY4MZ.js"
 			],
@@ -19283,16 +19456,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CLRyYwZn.js",
+			"module": "/assets/findings-DvSb8E95.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-aSWFRnzI.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/post-Be4aAzqP.js",
+				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -19319,16 +19492,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CLRyYwZn.js",
+			"module": "/assets/findings-DvSb8E95.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-aSWFRnzI.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/post-Be4aAzqP.js",
+				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -19417,13 +19590,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BRSyPoQg.js",
+			"module": "/assets/runs-DaRGo8KK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -19432,8 +19605,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -19456,7 +19629,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CvLLXZb3.js",
+			"module": "/assets/ritual-Dstu9Vla.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19466,14 +19639,14 @@ var server_manifest_default = {
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/runs-D2Mq__4d.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/crumbs-D1W8LZ6x.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/post-Be4aAzqP.js"
+				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19494,7 +19667,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DXbyVP-h.js",
+			"module": "/assets/run-BrYbn4k0.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19502,10 +19675,10 @@ var server_manifest_default = {
 				"/assets/paths-BupYQEYF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
+				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/runs-D2Mq__4d.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-ClXTN74F.js",
@@ -19646,13 +19819,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-m1LHIwUY.js",
+			"module": "/assets/settings-backups-DF-Mzg-2.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/nav-icons-CyBWLN6t.js",
 				"/assets/clock-aSWFRnzI.js",
-				"/assets/post-Be4aAzqP.js",
+				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-Cv5eRzdc.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/settings-ui-ChNT_lIl.js",
@@ -19733,13 +19906,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BRSyPoQg.js",
+			"module": "/assets/runs-DaRGo8KK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BupYQEYF.js",
 				"/assets/ui-Cv5eRzdc.js",
-				"/assets/runs-lBjV-ZbJ.js",
+				"/assets/runs-D2Mq__4d.js",
 				"/assets/route-error-ClXTN74F.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-D1W8LZ6x.js",
@@ -19748,8 +19921,8 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-bo1Dp-Ui.js",
 				"/assets/view-B0jOWsTU.js",
-				"/assets/post-Be4aAzqP.js",
-				"/assets/result-CklUMbs0.js",
+				"/assets/post-DvwTzYpm.js",
+				"/assets/result-CeCa9sw1.js",
 				"/assets/pulse-Cn6nuZRF.js",
 				"/assets/row-CgOYoUJa.js"
 			],
@@ -19898,8 +20071,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-2371c7f4.js",
-	"version": "2371c7f4",
+	"url": "/assets/manifest-4509f6ed.js",
+	"version": "4509f6ed",
 	"sri": void 0
 };
 //#endregion

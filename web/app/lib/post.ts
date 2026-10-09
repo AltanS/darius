@@ -22,6 +22,10 @@ export interface PostOk {
   message: string | null;
   /** `runNow.error` of an acknowledgement (0.80.0): the answer is saved, the run did not start. Null when the answer has none. */
   runNowError: string | null;
+  /** `resumed` of an answer to a held run (0.80.0): the run went on. */
+  resumed: boolean;
+  /** `resume.error` of an answer to a held run: the answers are saved, the resume was refused. Null when the answer has none. */
+  resumeError: string | null;
 }
 
 export interface PostFailed {
@@ -68,6 +72,7 @@ function parse(status: number, text: string): PostResult {
     return value === undefined || value === null || value === "" ? null : String(value);
   };
   const nestedError: Scalar | undefined = new Map<string, Scalar>(Object.entries(Object(reply.get("runNow")))).get("error");
+  const resumeError: Scalar | undefined = new Map<string, Scalar>(Object.entries(Object(reply.get("resume")))).get("error");
   return {
     ok: true,
     status,
@@ -76,6 +81,8 @@ function parse(status: number, text: string): PostResult {
     run: textOf("run"),
     host: textOf("host"),
     message: textOf("message"),
+    resumed: reply.get("resumed") === true,
+    resumeError: resumeError === undefined || resumeError === null || resumeError === "" ? null : String(resumeError),
     runNowError: nestedError === undefined || nestedError === null || nestedError === "" ? null : String(nestedError),
   };
 }

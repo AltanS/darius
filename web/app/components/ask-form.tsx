@@ -19,8 +19,8 @@
 import { useState } from "react";
 import { Link, useRevalidator } from "react-router";
 
-import type { ResultQuestion } from "../../../src/web/api.ts";
-import { answersOf, askBody, earlierBody, recommendedText, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
+import type { ResultQuestion, RunRow } from "../../../src/web/api.ts";
+import { answersOf, askBody, currentHold, earlierBody, heldBody, recommendedText, resumeNotice, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { dismissAllText, earlierText } from "../lib/view.ts";
@@ -246,5 +246,98 @@ export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAs
         </Fold>
       ) : null}
     </Fold>
+  );
+}
+
+interface HeldFormProps {
+  project: string;
+  row: RunRow;
+}
+
+/**
+ * The answer form of a held run (0.80.0; `darius run answer --answer`, then
+ * `darius run resume`). One box for each question of the current hold, no
+ * recommendation (a held question has none), one button, "Answer and
+ * resume". The server writes the answers, then resumes the run. If the
+ * resume is refused, the answers stay saved and the card says why. A box may
+ * stay empty, but at least one must be filled.
+ */
+export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
+  const { revalidate } = useRevalidator();
+  const hold = currentHold(row);
+  const [texts, setTexts] = useState<readonly string[]>(() => hold.map(() => ""));
+  const [busy, setBusy] = useState(false);
+  const [isDone, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<RunNowNotice | null>(null);
+  const isLocked = busy || isDone;
+  const filled = texts.some((text) => text.trim() !== "");
+
+  const send = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    const result = await postJson("/api/run/answer", heldBody({ project, run: row.run }, hold, texts));
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      // A refusal (the run was answered or went on meanwhile) means the card is stale: load it again.
+      await revalidate();
+      return;
+    }
+    const told = resumeNotice(result);
+    setNotice(told);
+    // A refused resume keeps the answers saved and the form open: the operator can retry (the server takes answers again while the run is held).
+    if (told.tone === "bad") return;
+    setDone(true);
+    // A run that went on leaves Needs you within seconds.
+    setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
+  };
+
+  return (
+    <form
+      className="ask"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (filled && !isLocked) void send();
+      }}
+    >
+      <QuestionList
+        questions={hold.map((question) => ({ text: question.text }))}
+        after={(index) => {
+          const id = `held-${row.run}-${hold[index]?.n ?? index + 1}`;
+          return (
+            <div className="ask-answer">
+              <label className="fu-label" htmlFor={id}>
+                Your answer{hold.length === 1 ? "" : ` to question ${index + 1}`}
+              </label>
+              <div className="ask-row">
+                <input id={id} className="st-input" type="text" maxLength={500} value={texts[index] ?? ""} disabled={isLocked} onChange={(event) => setTexts(withText(texts, index, event.currentTarget.value))} />
+              </div>
+            </div>
+          );
+        }}
+      />
+      <div className="fu-acts">
+        <button type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || !filled}>
+          {busy ? "Sending…" : "Answer and resume"}
+        </button>
+      </div>
+      {notice === null ? null : (
+        <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
+          {notice.text}
+          {notice.child === undefined ? null : (
+            <>
+              {" "}
+              <Link to={href({ to: "run", ws: project, run: notice.child })}>Open the run</Link>
+            </>
+          )}
+        </p>
+      )}
+      {error === null ? null : (
+        <p className="bk-note tone-bad" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }

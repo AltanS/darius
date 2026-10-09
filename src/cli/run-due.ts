@@ -45,6 +45,8 @@ const RITUAL_PREFIX = "ritual/";
 export const STARTED_PREFIX = "darius run follow-up: started run ";
 /** The same line of `run now` (0.80.0); the web's "Send and run now" reads the run id after it. */
 export const NOW_STARTED_PREFIX = "darius run now: started run ";
+/** The same line of `run resume` (0.80.0): the web's "Answer and resume" reads the run id after it. */
+export const RESUME_STARTED_PREFIX = "darius run resume: started run ";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -195,7 +197,7 @@ function forwardedWho(): string {
  * verb runs here. Refused inside a run: ssh would drop DARIUS_RUN, and the
  * other host would not know it is a run's call.
  */
-function forwardOn(args: ParsedArgs, project: string, verb: string): number | undefined {
+export function forwardOn(args: ParsedArgs, project: string, verb: string): number | undefined {
   const on = stringFlag(args, "on");
   if (on === undefined) return undefined;
   if (isSet("DARIUS_RUN") || isSet("DARIUS_RUN_POLICY")) {
@@ -297,7 +299,9 @@ function refuseResume(args: ParsedArgs, run: string, reason: string): number {
  * its harness session when this host still has it, else in a new session
  * that gets the questions and the answers. The same checks as `run now`
  * apply. Refuses (exit 1) a run that is not held, or held with no answer
- * since the hold. The report goes to the webhook, as for `run now`.
+ * since the hold. The report goes to the webhook, as for `run now`. Right
+ * after the run goes on, stderr gets one line, `darius run resume: started
+ * run <id> on <host>` (0.80.0): the web page waits for it.
  */
 export async function runResume(args: ParsedArgs): Promise<number> {
   const run = args.positional[1];
@@ -326,6 +330,9 @@ export async function runResume(args: ParsedArgs): Promise<number> {
     who: stringFlag(args, "who") ?? defaultWho(),
     timeoutMs: timeoutFlag(args),
     resume: { run },
+    onStarted: (resumed) => {
+      console.error(`${RESUME_STARTED_PREFIX}${resumed} on ${hostId()}`);
+    },
   };
   const { report, cfg } = await runDue(options);
   await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });

@@ -1594,6 +1594,7 @@ test("run resume goes on with the session: answers in the message, --resume, run
   assert.equal(entry.resumed, true);
   assert.equal(entry.end, "complete");
   assert.equal(entry.run, run, "the same run id");
+  assert.match(resumed.stderr, new RegExp(`^darius run resume: started run ${run} on ${hostId()}$`, "mu"), "the web reads the run id from this line (0.80.0)");
   assert.deepEqual(flagValues(fakeArgv(run), "--resume"), ["fake-session"]);
   assert.match(fakeMessage(run), /answered the questions of run .*\n\n1\. may I push\?\n   Answer: yes, push it\n/su);
   assert.match(fakeMessage(run), /hold list still applies/u);
@@ -1857,6 +1858,17 @@ test("run now by hand with no checkout here and no known right host exits 1 (no-
   const now = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--dry-run"]);
   assert.equal(now.code, 1, now.stdout);
   assert.match(now.stdout, /heartbeat: skipped, no-workdir, /u);
+});
+
+test("the timer path prints no start line: run-due starts the same runs with no onStarted", async () => {
+  const project = "rd-no-start-line";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const result = await runCli(runDueCommand, ["--unattended", "--json", "--project", project]);
+  assert.equal(result.code, 0, result.stdout);
+  assert.equal(ritualsOf(JSON.parse(result.stdout))[0]?.end, "complete");
+  assert.equal(/started run/u.test(result.stderr), false, "only run now, follow-up and resume print the line the web reads");
+  assert.equal(/started run/u.test(result.stdout), false);
 });
 
 test("run resume on the wrong host refuses with the ssh command for the held run", async () => {

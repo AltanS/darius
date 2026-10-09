@@ -239,6 +239,19 @@ test("the app's data: ritual and run details with events and findings blocks; un
   assert.equal(context.ritual("ghost", "daily-report"), null);
 });
 
+test("a held run: runRows says where the current hold starts, so the card asks only its questions (0.80.0)", () => {
+  const project = openProject("web-hold", { create: true });
+  const heldRun = ulid();
+  appendLine(project, { who: "timer", type: "run.started", item: "ritual/nightly", run: heldRun });
+  assert.equal(runRows(readLedger(project))[0]?.holdFrom, undefined, "a run that never held has no hold");
+  appendLine(project, { who: "claude:1", type: "run.held", item: "ritual/nightly", run: heldRun, questions: ["a?", "b?"] });
+  assert.deepEqual([runRows(readLedger(project))[0]?.holdFrom, runRows(readLedger(project))[0]?.questions], [0, ["a?", "b?"]]);
+  appendLine(project, { who: "timer", type: "run.resumed", item: "ritual/nightly", run: heldRun, fresh: true });
+  appendLine(project, { who: "claude:1", type: "run.held", item: "ritual/nightly", run: heldRun, questions: ["c?"] });
+  const [row] = runRows(readLedger(project));
+  assert.deepEqual([row?.holdFrom, row?.questions, row?.phase], [2, ["a?", "b?", "c?"], "held"]);
+});
+
 test("a failed run: runRows and RitualRow.failedToday carry who acknowledged it; the run's events show the note", () => {
   const project = openProject("web-ack", { create: true });
   const now = new Date().toISOString();

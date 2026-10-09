@@ -92,7 +92,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           {row.phase === "held" ? (
             <Section title="Needs you">
               <div className="card card-accent edge-wait">
-                <Questions project={project} run={row} />
+                <Questions project={project} run={row} canWrite={canWrite} />
               </div>
             </Section>
           ) : null}

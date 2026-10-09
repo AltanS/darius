@@ -98,6 +98,7 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
       row.acknowledged ??= { at: line.at, who: line.who, note: text(line.note) };
     } else if (line.type === "run.held") {
       row.phase = "held";
+      row.holdFrom = row.questions.length;
       row.questions.push(...textList(line.questions));
     } else if (line.type === "run.resumed") {
       row.phase = "running";

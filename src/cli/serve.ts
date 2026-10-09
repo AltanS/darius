@@ -19,6 +19,8 @@
  *                            src/web/action-api.ts)
  *   POST /api/run/ack-earlier  "Dismiss all earlier asks" (0.80.0,
  *                            src/web/action-api.ts)
+ *   POST /api/run/answer     "Answer and resume" of a held run (0.80.0,
+ *                            src/web/action-api.ts)
  *   POST /api/finding/close  the findings page's close button (0.62.0,
  *                            src/web/action-api.ts)
  *   GET /api/workspace-icon/<project>

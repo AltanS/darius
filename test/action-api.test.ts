@@ -16,10 +16,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendLine, readLedger } from "../src/core/ledger.ts";
-import type { JsonValue } from "../src/core/model.ts";
+import type { JsonValue, LedgerLine } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
-import { NOW_STARTED_PREFIX } from "../src/cli/run-due.ts";
-import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, LOOPBACK_CLOSE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { NOW_STARTED_PREFIX, RESUME_STARTED_PREFIX } from "../src/cli/run-due.ts";
+import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, LOOPBACK_ANSWER, LOOPBACK_CLOSE, RESUME_STARTED_LINE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -118,7 +118,7 @@ const VALID = { project: PROJECT, run: RUN, approve: [1] };
 
 test("the guards: path 404, method 405, no or foreign Origin 403, other content 415, a large body 413, bad JSON 400", async () => {
   const stub = deps(READY);
-  assert.equal((await actionApi(post(VALID, { path: "/api/run/answer" }), { who: "owner" }, stub)).status, 404);
+  assert.equal((await actionApi(post(VALID, { path: "/api/run/nothing" }), { who: "owner" }, stub)).status, 404);
   assert.equal((await actionApi(post(VALID, { method: "GET" }), { who: "owner" }, stub)).status, 405);
   const noOrigin = post(VALID, { headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) });
   const refused = await actionApi(noOrigin, { who: "owner" }, stub);
@@ -892,21 +892,312 @@ test("run now: the default host rule sends a ritual pinned to another host there
   assert.deepEqual(local.started[0]?.argv, ["run", "now", "pinned", "--project", PROJECT, "--who", "web:owner"], "a ritual pinned to this host needs no --on");
 });
 
-test("ack-earlier: earlier means an earlier start time, like the page; the ledger order breaks a tie", async () => {
+test("ack-earlier: earlier means an earlier start time, like the page", async () => {
   const project = openProject(PROJECT);
   const item = "ritual/ordered";
   const line = (run: string, at: string): void => {
     appendLine(project, { who: "timer", type: "run.started", item, run, at });
     appendLine(project, { who: "timer", type: "run.completed", item, run, outcome: "complete", result: ASKED });
   };
-  // Appended newest first: the ledger order is the reverse of the start times.
+  // A backdated line gets an id that encodes its time, so ledger order follows start time. Appended newest first.
   line("01JORDERNEW00000000000AAAA", "2026-10-02T08:00:00.000Z");
   line("01JORDEROLD00000000000AAAA", "2026-10-01T08:00:00.000Z");
-  line("01JORDERTIE00000000000AAAA", "2026-10-02T08:00:00.000Z");
   const stub = ackDeps();
   const send = (run: string, id: string) => actionApi(post({ project: PROJECT, run, runs: [id] }, { path: "/api/run/ack-earlier" }), { who: "owner" }, stub);
-  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDEROLD00000000000AAAA")).status, 200, "older by time, though later in the ledger");
-  assert.equal((await send("01JORDEROLD00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 409, "newer by time, though earlier in the ledger");
-  assert.equal((await send("01JORDERTIE00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 200, "same time: the earlier ledger line is earlier");
-  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDERTIE00000000000AAAA")).status, 409);
+  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDEROLD00000000000AAAA")).status, 200, "older by time, though appended later");
+  assert.equal((await send("01JORDEROLD00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 409, "newer by time");
+  assert.equal((await send("01JORDERNEW00000000000AAAA", "01JORDERNEW00000000000AAAA")).status, 409, "a run is not earlier than itself");
+});
+
+test("held: the start line of the CLI is the one the server waits for", () => {
+  assert.equal(RESUME_STARTED_LINE.exec(`${RESUME_STARTED_PREFIX}${CHILD} on host-a`)?.[1], CHILD);
+  assert.equal(RESUME_STARTED_LINE.exec(`${NOW_STARTED_PREFIX}${CHILD} on host-a`), null);
+});
+
+// --- answer and resume a held run (0.80.0) -------------------------------------------------
+
+let heldCount = 0;
+
+/** Seeds a held run of `item` with these holds' questions; `holds` after the first resume the run in between. */
+function seedHeld(holds: string[][] = [["Push it?", "Which branch?"]], item = "ritual/daily"): string {
+  const project = openProject(PROJECT);
+  heldCount += 1;
+  const run = `01JHELD${String(heldCount).padStart(2, "0")}000000000000000AA`;
+  appendLine(project, { who: "timer", type: "run.started", item, run });
+  holds.forEach((questions, index) => {
+    if (index > 0) appendLine(project, { who: "timer", type: "run.resumed", item, run, fresh: true });
+    appendLine(project, { who: "claude:1", type: "run.held", item, run, questions });
+  });
+  return run;
+}
+
+const RESUMES: Script = { output: `${RESUME_STARTED_PREFIX}01JHELD00000000000000000AA on host-a\n` };
+
+function answerRequest(body: JsonValue, overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return post(body, { path: "/api/run/answer", ...overrides });
+}
+
+function answeredLines(run: string): LedgerLine[] {
+  return readLedger(openProject(PROJECT)).filter((line) => line.type === "run.answered" && line.run === run);
+}
+
+test("held: the start line of the CLI is the one the server waits for", () => {
+  assert.equal(RESUME_STARTED_LINE.exec(`${RESUME_STARTED_PREFIX}${CHILD} on host-a`)?.[1], CHILD);
+  assert.equal(RESUME_STARTED_LINE.exec(`${NOW_STARTED_PREFIX}${CHILD} on host-a`), null);
+});
+
+test("held: method 405, no or foreign Origin 403, other content 415, a large body 413, bad JSON 400, the loopback viewer 403; nothing runs", async () => {
+  const run = seedHeld();
+  const stub = nowDeps(RESUMES);
+  const body = { project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true };
+  const make = (overrides: Partial<ActionRequest> = {}): ActionRequest => answerRequest(body, overrides);
+  assert.equal((await actionApi(make({ method: "GET" }), { who: "owner" }, stub)).status, 405);
+  assert.equal((await actionApi(make({ headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) }), { who: "owner" }, stub)).status, 403);
+  assert.equal((await actionApi(make({ headers: new Headers({ origin: "http://evil.example", host: "127.0.0.1:4747", "content-type": "application/json" }) }), { who: "owner" }, stub)).status, 403);
+  assert.equal((await actionApi(make({ headers: new Headers({ origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747", "content-type": "text/plain" }) }), { who: "owner" }, stub)).status, 415);
+  assert.equal((await actionApi(make({ body: "x".repeat(70_000) }), { who: "owner" }, stub)).status, 413);
+  assert.equal((await actionApi(make({ body: "{no" }), { who: "owner" }, stub)).status, 400);
+  const local = await actionApi(make(), { who: "this host", local: true }, stub);
+  assert.equal(local.status, 403);
+  assert.equal(errorOf(local.body), LOOPBACK_ANSWER);
+  assert.match(LOOPBACK_ANSWER, /tailnet identity/u);
+  assert.deepEqual([stub.calls, stub.started, answeredLines(run)], [[], [], []]);
+});
+
+test("held: a body that is not project, run, 1+ answers and resume:true is 400, and nothing runs", async () => {
+  const run = seedHeld();
+  const stub = nowDeps(RESUMES);
+  const base = { project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true };
+  const cases: [JsonValue, RegExp][] = [
+    ["x", /send \{ project, run, answers/u],
+    [{ ...base, host: "host-z" }, /unknown field host/u],
+    [{ ...base, ritual: "daily" }, /unknown field ritual/u],
+    [{ ...base, on: "host-z" }, /unknown field on/u],
+    [{ ...base, note: "x" }, /unknown field note/u],
+    [{ ...base, resume: false }, /resume must be true/u],
+    [{ project: PROJECT, run, answers: base.answers }, /resume must be true/u],
+    [{ ...base, answers: [] }, /give at least one answer/u],
+    [{ project: PROJECT, run, resume: true }, /give at least one answer/u],
+    [{ ...base, answers: "yes" }, /answers must list at most 50 entries/u],
+    [{ ...base, answers: [{ n: 0, text: "x" }] }, /n must be a question number, 1 to 1000/u],
+    [{ ...base, answers: [{ n: 1001, text: "x" }] }, /n must be a question number, 1 to 1000/u],
+    [{ ...base, answers: [{ n: "1", text: "x" }] }, /n must be a question number/u],
+    [{ ...base, answers: [{ n: 1, text: " " }] }, /text of question 1 is empty/u],
+    [{ ...base, answers: [{ n: 1, text: "a\u0007b" }] }, /one line with no control characters/u],
+    [{ ...base, answers: [{ n: 1, text: "x".repeat(501) }] }, /501 characters; at most 500 fit/u],
+    [{ ...base, answers: [{ n: 1, text: "a" }, { n: 1, text: "b" }] }, /answered twice/u],
+    [{ ...base, answers: [{ n: 1, text: "a", host: "x" }] }, /unknown field host/u],
+    [{ ...base, project: "nope" }, /no project nope/u],
+    [{ ...base, run: "01JNOSUCHRUN0000000000000A" }, /no run 01JNOSUCHRUN0000000000000A in demo/u],
+    [{ ...base, run: "../x" }, /run must be a run id/u],
+    [{ ...base, answers: [{ n: 3, text: "x" }] }, /question 3 is not a question of the current hold \(1 to 2\)/u],
+  ];
+  for (const [body, reason] of cases) {
+    const answer = await actionApi(answerRequest(body), { who: "owner" }, stub);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), reason, JSON.stringify(body));
+  }
+  const vigil = await actionApi(answerRequest({ ...base, run: seedHeld([["Look?"]], "vigil/soak") }), { who: "owner" }, stub);
+  assert.equal(vigil.status, 400);
+  assert.match(errorOf(vigil.body), /only a run of a ritual can be resumed/u);
+  assert.deepEqual([stub.calls, stub.started, answeredLines(run)], [[], [], []]);
+});
+
+test("held: a run that is not held is 409 and nothing is written or started", async () => {
+  const stub = nowDeps(RESUMES);
+  const send = (run: string) => actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, stub);
+  const running = "01JRUNNING0000000000000AAA";
+  appendLine(openProject(PROJECT), { who: "timer", type: "run.started", item: "ritual/daily", run: running });
+  const refusedRunning = await send(running);
+  assert.equal(refusedRunning.status, 409);
+  assert.match(errorOf(refusedRunning.body), /is not held \(phase: running\)/u);
+  const closed = seedAsk("01JCLOSED00000000000000AAA");
+  const refusedClosed = await send(closed);
+  assert.equal(refusedClosed.status, 409);
+  assert.match(errorOf(refusedClosed.body), /is not held \(phase: closed\)/u);
+  assert.deepEqual([stub.calls, stub.started, answeredLines(running), answeredLines(closed)], [[], [], [], []]);
+});
+
+test("held: it writes the answers with one CLI call, run id after --, each answer one word, then starts the resume detached and answers resumed", async () => {
+  const run = seedHeld();
+  const stub = nowDeps(RESUMES);
+  const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 2, text: " main\n now " }, { n: 1, text: "--force, yes" }], resume: true }), { who: "owner on phone" }, stub);
+  assert.deepEqual(sent, { status: 200, body: { ok: true, resumed: true, run: "01JHELD00000000000000000AA", host: "host-a" } });
+  assert.deepEqual(stub.calls, [["run", "answer", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--answer", "2=main now", "--answer", "1=--force, yes", "--", run]]);
+  assert.equal(stub.started.length, 1);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", run, "--project", PROJECT, "--who", "web:owner on phone"], "this host is right, so no --on");
+  assert.ok(stub.started[0]?.log.endsWith(join("runs", run, "resume.log")));
+});
+
+test("held: the text goes to the real CLI as data, also when it starts with --; all answers are written, in order", async () => {
+  const run = seedHeld([["Which flag?", "And then?"]]);
+  const stub: ActionDeps & { started: Started[] } = { ...nowDeps(RESUMES), run: runCli };
+  const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "--force --no-verify" }, { n: 2, text: "--" }], resume: true }), { who: "owner" }, stub);
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.deepEqual(answeredLines(run).map((line) => [line.n, line.text, line.who]), [[1, "--force --no-verify", "web:owner"], [2, "--", "web:owner"]]);
+  assert.equal(stub.started.length, 1);
+});
+
+test("held: when the ritual belongs to another host, the answer and the resume both go there with --on; a bad host name writes nothing", async () => {
+  const run = seedHeld();
+  const stub = { ...nowDeps(RESUMES), nowHost: () => "host-b" };
+  await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, stub);
+  assert.deepEqual(stub.calls[0], ["run", "answer", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--on", "host-b", "--", run]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", run, "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  for (const host of ["-oProxyCommand=x", "host b", ""]) {
+    const bad = { ...nowDeps(RESUMES), nowHost: () => host };
+    const refused = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, bad);
+    assert.equal(refused.status, 409, JSON.stringify(host));
+    assert.match(errorOf(refused.body), /^nothing written: the ritual's host name is not valid$/u);
+    assert.deepEqual([bad.calls, bad.started], [[], []]);
+  }
+  const broken = { ...nowDeps(RESUMES), nowHost: () => { throw new Error("links.toml is unreadable"); } };
+  const failed = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, broken);
+  assert.equal(failed.status, 500);
+  assert.deepEqual(broken.calls, []);
+});
+
+test("held: only the current hold's numbers are taken; an earlier hold's number is 400, and the CLI refuses it too", async () => {
+  const run = seedHeld([["Old one?", "Old two?"], ["New one?"]]);
+  const stub: ActionDeps & { started: Started[] } = { ...nowDeps(RESUMES), run: runCli };
+  const old = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "stale" }], resume: true }), { who: "owner" }, stub);
+  assert.equal(old.status, 400);
+  assert.match(errorOf(old.body), /question 1 is not a question of the current hold \(3 to 3\)/u);
+  const direct = await runCli(["run", "answer", "--project", PROJECT, "--json", "--answer", "1=stale", "--", run]);
+  assert.equal(direct.code, 2, "exit 2: a caller mistake");
+  assert.match(direct.error, /there is no question 1 to answer now/u);
+  assert.deepEqual([answeredLines(run), stub.started], [[], []]);
+  const fresh = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 3, text: "fine" }], resume: true }), { who: "owner" }, stub);
+  assert.equal(fresh.status, 200);
+  assert.deepEqual(answeredLines(run).map((line) => line.n), [3]);
+});
+
+test("held: when the CLI writes none (a refusal in the answer call), the reply is 409, nothing is resumed and nothing is half written", async () => {
+  const run = seedHeld();
+  const refusing = nowDeps(RESUMES, { code: 2, error: "run answer: question 9 is outside the hold" });
+  const refused = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }, { n: 2, text: "no" }], resume: true }), { who: "owner" }, refusing);
+  assert.equal(refused.status, 409);
+  assert.equal(errorOf(refused.body), "run answer: question 9 is outside the hold");
+  assert.deepEqual(refusing.started, [], "no resume after a failed answer");
+  // The real CLI under the lock: a hold that changed after the page checked turns a number into a refusal, and none is written.
+  const real: ActionDeps & { started: Started[] } = {
+    ...nowDeps(RESUMES),
+    run: (argv) => {
+      appendLine(openProject(PROJECT), { who: "timer", type: "run.resumed", item: "ritual/daily", run, fresh: true });
+      appendLine(openProject(PROJECT), { who: "claude:1", type: "run.held", item: "ritual/daily", run, questions: ["A new one?"] });
+      return runCli(argv);
+    },
+  };
+  const raced = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }, { n: 2, text: "no" }], resume: true }), { who: "owner" }, real);
+  assert.equal(raced.status, 409);
+  assert.match(errorOf(raced.body), /there is no question 1 to answer now/u);
+  assert.deepEqual([answeredLines(run), real.started], [[], []], "all or none: not even question 1");
+});
+
+test("held: a refused resume still returns ok with the reason, and the answers stay written", async () => {
+  const cases: [Script, string | undefined, RegExp][] = [
+    [{ output: "! run 'R' has no answer since it was held: darius run answer R <n> <text>\n", code: 1 }, undefined, /^run 'R' has no answer since it was held/u],
+    [{ output: "", code: 0 }, undefined, /^no run started: darius ended with exit code 0 and no message$/u],
+    [{ output: "! heartbeat runs on host-b (pinned): ssh host-b darius run resume R\n", code: 1 }, undefined, /^heartbeat runs on host-b \(pinned\)/u],
+    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, "host-b", /^the ritual's host did not answer: ssh: connect/u],
+    [{ output: "darius: something broke\n", code: 255 }, undefined, /^something broke$/u],
+  ];
+  for (const [script, host, reason] of cases) {
+    const run = seedHeld();
+    // With a host the answer goes over ssh, which a test must not do: that call is a stub, and the answers are checked only on this host.
+    const stub: ActionDeps & { started: Started[] } = { ...nowDeps(script), nowHost: () => host };
+    if (host === undefined) stub.run = runCli;
+    const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, stub);
+    assert.equal(sent.status, 200);
+    assert.ok(isRecord(sent.body) && sent.body.ok === true && sent.body.resumed === undefined);
+    const failure = isRecord(sent.body) && isRecord(sent.body.resume) ? sent.body.resume.error : undefined;
+    assert.match(String(failure), reason);
+    if (host === undefined) assert.equal(answeredLines(run).length, 1, "the answers are not rolled back");
+  }
+  const run = seedHeld();
+  const broken: ActionDeps = {
+    ...nowDeps(RESUMES),
+    run: runCli,
+    start: () => {
+      throw new Error("disk full");
+    },
+  };
+  const failed = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, broken);
+  assert.deepEqual(failed, { status: 200, body: { ok: true, resume: { error: "the run could not be started: disk full" } } });
+  assert.equal(answeredLines(run).length, 1);
+});
+
+test("held: a resume that neither starts nor ends in time is pending, with the answers saved", async () => {
+  const run = seedHeld();
+  const slow = nowDeps({ output: "" });
+  const pending = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, slow);
+  assert.equal(pending.status, 200);
+  assert.ok(isRecord(pending.body) && pending.body.ok === true && pending.body.pending === true);
+  assert.match(String(isRecord(pending.body) ? pending.body.message : ""), /Your answers are saved\. The run did not go on within 10 s/u);
+});
+
+test("held: a double POST is refused. The first answers and resumes, the second finds the run no longer held and writes nothing", async () => {
+  const run = seedHeld();
+  const stub: ActionDeps & { started: Started[] } = {
+    ...nowDeps(RESUMES),
+    run: runCli,
+    start: (argv, log) => {
+      // What the real resume does under its lock before the run goes on.
+      appendLine(openProject(PROJECT), { who: "web:owner", type: "run.resumed", item: "ritual/daily", run, fresh: true });
+      appendFileSync(log, RESUMES.output);
+      return { exited: new Promise(() => undefined) };
+    },
+  };
+  const body = { project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true };
+  const first = await actionApi(answerRequest(body), { who: "owner" }, stub);
+  assert.equal(first.status, 200);
+  assert.ok(isRecord(first.body) && first.body.resumed === true);
+  const second = await actionApi(answerRequest({ ...body, answers: [{ n: 1, text: "again" }] }), { who: "owner" }, stub);
+  assert.equal(second.status, 409);
+  assert.match(errorOf(second.body), /is not held \(phase: running\)/u);
+  assert.deepEqual(answeredLines(run).map((line) => line.text), ["yes"], "the second click wrote nothing");
+});
+
+test("held: the real resume refuses a second resume under its lock; a stale second POST whose page check passed is the CLI's 409", async () => {
+  const run = seedHeld();
+  const stale: ActionDeps = {
+    ...nowDeps(RESUMES),
+    run: (argv) => {
+      // The run went on between the page check and the answer call.
+      appendLine(openProject(PROJECT), { who: "web:owner", type: "run.resumed", item: "ritual/daily", run, fresh: true });
+      return runCli(argv);
+    },
+  };
+  const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "late" }], resume: true }), { who: "owner" }, stale);
+  assert.equal(sent.status, 409);
+  assert.match(errorOf(sent.body), /is not held \(phase: running\)/u);
+  assert.deepEqual(answeredLines(run), []);
+});
+
+test("held: ssh exit 255 or a signal on the answer call is 502 with a plain sentence; a usage or not-held refusal stays 409; nothing is resumed", async () => {
+  const run = seedHeld();
+  const body = { project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true };
+  const viaSsh = { ...nowDeps(RESUMES, { code: 255, error: "ssh: connect to host host-b port 22: no route" }), nowHost: () => "host-b" };
+  const down = await actionApi(answerRequest(body), { who: "owner" }, viaSsh);
+  assert.deepEqual(down, { status: 502, body: { ok: false, error: "host-b did not answer: ssh: connect to host host-b port 22: no route" } });
+  const killed = nowDeps(RESUMES, { code: 1, error: "the command failed", killed: true });
+  const stopped = await actionApi(answerRequest(body), { who: "owner" }, killed);
+  assert.equal(stopped.status, 502);
+  assert.equal(errorOf(stopped.body), "darius did not finish: the command failed");
+  const local255 = nowDeps(RESUMES, { code: 255, error: "darius: odd" });
+  assert.equal((await actionApi(answerRequest(body), { who: "owner" }, local255)).status, 409, "without --on, 255 is the CLI's own code");
+  const usage = nowDeps(RESUMES, { code: 2, error: "there is no question 1 to answer now" });
+  assert.equal((await actionApi(answerRequest(body), { who: "owner" }, usage)).status, 409);
+  assert.deepEqual([viaSsh.started, killed.started, local255.started, usage.started], [[], [], [], []]);
+});
+
+test("held: a refused resume leaves the hold answered, and a second POST may answer again and resume (the retry path)", async () => {
+  const run = seedHeld();
+  const first: ActionDeps & { started: Started[] } = { ...nowDeps({ output: "! run has no answer\n", code: 1 }), run: runCli };
+  const refused = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "first try" }], resume: true }), { who: "owner" }, first);
+  assert.ok(isRecord(refused.body) && isRecord(refused.body.resume));
+  const retry: ActionDeps & { started: Started[] } = { ...nowDeps(RESUMES), run: runCli };
+  const again = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "second try" }], resume: true }), { who: "owner" }, retry);
+  assert.ok(isRecord(again.body) && again.body.resumed === true);
+  assert.deepEqual(answeredLines(run).map((line) => line.text), ["first try", "second try"]);
 });

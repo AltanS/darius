@@ -56,3 +56,34 @@ export function runNowNotice(result: PostOk): RunNowNotice {
   if (result.run === null) return { tone: "ok", text: result.message ?? "Your answer is saved. The run is starting." };
   return { tone: "ok", text: `Your answer is saved. Started run ${shortRun(result.run)}.`, child: result.run };
 }
+
+/** The questions of a held run's current hold, with their numbers: the held card asks these, not the questions of earlier holds. */
+export function currentHold(row: { questions: readonly string[]; holdFrom?: number | undefined }): Array<{ n: number; text: string }> {
+  const from = row.holdFrom ?? 0;
+  return row.questions.slice(from).map((text, index) => ({ n: from + index + 1, text }));
+}
+
+/** The body of "Answer and resume": the filled boxes, each numbered by its question, and `resume: true`. */
+export function heldBody(at: { project: string; run: string }, hold: ReadonlyArray<{ n: number }>, texts: readonly string[]): PostBody {
+  const answers = texts.flatMap((text, index) => {
+    const n = hold[index]?.n;
+    return n === undefined || text.trim() === "" ? [] : [{ n, text: text.trim() }];
+  });
+  return { project: at.project, run: at.run, answers, resume: true };
+}
+
+/** What to tell the operator after "Answer and resume" was accepted: the answers are saved in every case. */
+export function resumeNotice(result: PostOk): RunNowNotice {
+  if (result.resumeError !== null) return { tone: "bad", text: `Your answers are saved, but the run did not go on: ${result.resumeError}.` };
+  if (result.resumed) {
+    const notice: RunNowNotice = { tone: "ok", text: "Your answers are saved. The run goes on." };
+    if (result.run !== null) notice.child = result.run;
+    return notice;
+  }
+  return { tone: "ok", text: result.message ?? "Your answers are saved. The run is starting." };
+}
+
+/** The React key of a held run's form: a second hold of the same run gets a fresh form, with empty boxes. */
+export function heldKey(row: { run: string; holdFrom?: number | undefined }): string {
+  return `${row.run}:${row.holdFrom ?? 0}`;
+}

@@ -1078,7 +1078,7 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   assert.deepEqual(rules.askBody("dismiss", at, ["a", "b"]), at, "Dismiss sends no answers, whatever is typed");
   assert.deepEqual(rules.earlierBody(at, ["r1", "r2"]), { ...at, runs: ["r1", "r2"] }, "the ids shown, nothing else");
 
-  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null };
+  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null };
   assert.match(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).text, /^Your answer is saved\. Started run /u);
   assert.equal(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).child, "01KQQQQQQQQQQQQQQQQQQQQQQQ");
   const refused = rules.runNowNotice({ ...ok, runNowError: "run 01KX is held" });
@@ -1086,6 +1086,96 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   assert.equal(refused.text, "Your answer is saved, but the run did not start: run 01KX is held. The next run reads it.");
   assert.equal(rules.runNowNotice({ ...ok, message: "Your answer is saved. The run did not start within 10 s." }).text, "Your answer is saved. The run did not start within 10 s.");
   assert.equal(rules.runNowNotice(ok).tone, "ok");
+});
+
+// --- the held run's answer form (0.80.0) ----------------------------------------------------
+
+/** The demo project with the held run changed: more holds, or other questions. */
+function heldContext(over: Partial<RunRow>): WebContext {
+  const project = STATUS.projects[0]!;
+  const runs = RUNS.map((row) => (row.run === HELD ? { ...row, ...over } : row));
+  return {
+    ...context,
+    status: () => ({ ...STATUS, projects: [{ ...project, runs }] }),
+    run: (name, run) => {
+      const found = runs.find((candidate) => candidate.run === run);
+      return name === "demo" && found !== undefined ? runDetail(found) : null;
+    },
+  };
+}
+
+test("a held card has a box per question of the hold, one Answer and resume button, no recommendation, and the commands behind a fold", async () => {
+  const home = await readPage("/all", context);
+  const card = cardOf(home, `held-${HELD}`);
+  assert.equal([...card.matchAll(/<input id="held-[^"]+" class="st-input"/gu)].length, 2, "one box per question");
+  assert.ok(card.includes(`for="held-${HELD}-1">Your answer to question 1</label>`) && card.includes(`for="held-${HELD}-2">Your answer to question 2</label>`));
+  assert.match(card, /<button type="submit" class="st-btn st-btn-main"[^>]*disabled=""[^>]*>Answer and resume<\/button>/u, "off while every box is empty");
+  assert.equal([...card.matchAll(/class="st-btn st-btn-main"/gu)].length, 1, "one button");
+  for (const absent of ["Use recommendation", "Send answer", "Send and run now", "Dismiss", "Acknowledge", "Applies to the next run only"]) assert.equal(card.includes(absent), false, absent);
+  assert.ok(card.includes("may I push &lt;script&gt;alert(1)&lt;/script&gt;?"), "the question as text");
+  assert.ok(card.includes("Answer from a terminal") && card.includes(`darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`), "the command fold stays");
+  assertScriptsCarryNonce(home, "home with a held form");
+});
+
+test("the run page and the ritual page of a held run carry the form with the commands behind a fold; the loopback viewer gets the commands only", async () => {
+  for (const path of [`/w/demo/runs/${HELD}`, "/w/demo/rituals/daily-report"]) {
+    const page = await readPage(path, context);
+    const needs = between(page, page.indexOf('<h2 class="label">Needs you</h2>'), page.length);
+    assert.ok(needs.includes("Answer and resume"), path);
+    assert.match(needs, /<summary>Answer from a terminal<\/summary>.*darius run answer \S+ 2 &quot;your answer&quot;/su, `${path}: the commands wait in a fold`);
+    assert.ok(needs.indexOf("Answer and resume") < needs.indexOf("Answer from a terminal"), path);
+    const local = await readPage(path, { ...context, canWrite: false });
+    assert.equal(local.includes("Answer and resume"), false, `${path}: no form for the loopback viewer`);
+    assert.equal(local.includes("<input"), false, path);
+    assert.ok(local.includes(`darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`), `${path}: the command stays`);
+  }
+  const homeLocal = await readPage("/all", { ...context, canWrite: false });
+  assert.equal(cardOf(homeLocal, `held-${HELD}`).includes("Answer and resume"), false);
+  assert.ok(cardOf(homeLocal, `held-${HELD}`).includes("which branch?"), "the questions still show");
+});
+
+test("after a second hold the form asks only the questions of the newest hold, numbered on", async () => {
+  const ctx = heldContext({ questions: ["old one?", "old two?", "new one?", "new two?"], holdFrom: 2 });
+  const home = await readPage("/all", ctx);
+  const card = cardOf(home, `held-${HELD}`);
+  const form = between(card, card.indexOf("<form"), card.indexOf("</form>"));
+  assert.ok(form.includes("new one?") && form.includes("new two?"));
+  assert.equal(form.includes("old one?"), false, "an earlier hold is not asked again");
+  assert.ok(form.includes(`id="held-${HELD}-3"`) && form.includes(`id="held-${HELD}-4"`) && !form.includes(`id="held-${HELD}-1"`), "the boxes carry the real question numbers");
+  const run = await readPage(`/w/demo/runs/${HELD}`, ctx);
+  assert.equal(between(run, run.indexOf("<form"), run.indexOf("</form>")).includes("old one?"), false);
+  const foldAt = run.indexOf("<summary>Answer from a terminal</summary>");
+  const fold = between(run, foldAt, run.indexOf("</details>", foldAt));
+  assert.ok(fold.includes(`darius run answer ${HELD} 3 &quot;your answer&quot;`) && fold.includes(`darius run answer ${HELD} 4 `), "the fold lists the current hold, with the real numbers");
+  assert.equal(fold.includes("old one?") || fold.includes("old two?"), false, "not the earlier hold");
+  const single = await readPage("/all", heldContext({ questions: ["only one?"], holdFrom: 0 }));
+  assert.ok(cardOf(single, `held-${HELD}`).includes(">Your answer</label>"), "one question: no number in the label");
+});
+
+test("a held run without a question shows no form", async () => {
+  const home = await readPage("/all", heldContext({ questions: [], holdFrom: 0 }));
+  const card = cardOf(home, `held-${HELD}`);
+  assert.equal(card.includes("<form"), false);
+  assert.ok(card.includes("The run is held without a question"));
+});
+
+test("the held form's rules: the current hold, the body Answer and resume posts, the notice", () => {
+  const rules = askRules;
+  assert.notEqual(rules.heldKey({ run: HELD, holdFrom: 0 }), rules.heldKey({ run: HELD, holdFrom: 2 }), "a second hold of the same run gets a fresh form");
+  assert.equal(rules.heldKey({ run: HELD }), rules.heldKey({ run: HELD, holdFrom: 0 }), "no holdFrom is the first hold");
+  assert.notEqual(rules.heldKey({ run: HELD, holdFrom: 2 }), rules.heldKey({ run: ASKS, holdFrom: 2 }));
+  assert.deepEqual(rules.currentHold({ questions: ["a", "b", "c", "d"], holdFrom: 2 }), [{ n: 3, text: "c" }, { n: 4, text: "d" }]);
+  assert.deepEqual(rules.currentHold({ questions: ["a", "b"] }), [{ n: 1, text: "a" }, { n: 2, text: "b" }], "no holdFrom: the first hold");
+  const hold = rules.currentHold({ questions: ["a", "b", "c"], holdFrom: 1 });
+  const at = { project: "demo", run: HELD };
+  assert.deepEqual(rules.heldBody(at, hold, [" yes ", ""]), { ...at, answers: [{ n: 2, text: "yes" }], resume: true }, "numbers are the real ones; an empty box sends nothing");
+  assert.deepEqual(rules.heldBody(at, hold, ["x", "y"]), { ...at, answers: [{ n: 2, text: "x" }, { n: 3, text: "y" }], resume: true });
+  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null };
+  const went = rules.resumeNotice({ ...ok, resumed: true, run: HELD });
+  assert.deepEqual([went.tone, went.text, went.child], ["ok", "Your answers are saved. The run goes on.", HELD]);
+  const refused = rules.resumeNotice({ ...ok, resumeError: "run is not held" });
+  assert.deepEqual([refused.tone, refused.text], ["bad", "Your answers are saved, but the run did not go on: run is not held."]);
+  assert.equal(rules.resumeNotice({ ...ok, message: "Your answers are saved. Slow." }).text, "Your answers are saved. Slow.");
 });
 
 // --- follow-up (0.48.0) -----------------------------------------------------------------
@@ -1352,7 +1442,7 @@ test("the ritual page says when the operator chose not to act on the questions (
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, handoff } : null) };
   const page = textOf(await readPage("/w/demo/rituals/daily-report", ctx));
   assert.ok(page.includes("web:owner saw the questions and chose not to act on them. The next run is told not to act on them or ask them again."));
-  assert.equal(page.includes("Your answer"), false);
+  assert.equal(page.includes("Your answer,"), false, "the handoff shows no operator answer (the held form's label has no comma)");
 });
 
 test("an answered result: the decision replaces the command, home is quiet, the tag says answered", async () => {

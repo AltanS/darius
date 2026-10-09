@@ -57,6 +57,49 @@ export function answerRun(project: Project, answer: Answer): string | undefined 
   });
 }
 
+export interface AnswerMany {
+  run: string;
+  who: string;
+  answers: readonly QuestionAnswer[];
+}
+
+/**
+ * Appends one `run.answered` line per answer while the run is held, under
+ * one project lock (0.80.0, `run answer --answer N=TEXT`). Every check runs
+ * before the first line is written, so a bad answer writes nothing; the
+ * lines are then appended in one loop inside the same lock. Each `n` must be
+ * a question of the current hold, the questions of the newest `run.held`
+ * line: a number of an earlier hold is refused. A hold that is already
+ * answered but not yet resumed takes answers again, on purpose: that is the
+ * retry path after a refused resume, and the latest answer per question wins.
+ * Returns why not, or undefined when it wrote.
+ */
+export function answerRunMany(project: Project, request: AnswerMany): string | undefined {
+  return project.withLock((): string | undefined => {
+    const view = viewRun(readLedger(project), request.run);
+    if (view.item === undefined) return `no run '${request.run}' in ${project.name}`;
+    if (view.phase !== "held") return `run '${request.run}' is not held (phase: ${view.phase ?? "unknown"})`;
+    if (request.answers.length === 0) return "run answer needs at least one answer";
+    const first = view.holdFrom + 1;
+    const last = view.questions.length;
+    if (last < first) return `run '${request.run}' is held with no open question`;
+    const seen = new Set<number>();
+    for (const answer of request.answers) {
+      if (!Number.isInteger(answer.n) || answer.n < first || answer.n > last) {
+        return `run '${request.run}' is held with question ${String(first)}${last > first ? ` to ${String(last)}` : ""}; there is no question ${String(answer.n)} to answer now`;
+      }
+      if (seen.has(answer.n)) return `question ${String(answer.n)} is answered twice`;
+      seen.add(answer.n);
+      const problem = answerProblem(answer.text);
+      if (problem !== null) return `answer ${String(answer.n)} ${problem}`;
+    }
+    for (const answer of request.answers) {
+      appendLine(project, { who: request.who, type: "run.answered", item: view.item, run: request.run, n: answer.n, text: answer.text });
+    }
+    return undefined;
+  });
+}
+
 export interface Acknowledge {
   run: string;
   who: string;

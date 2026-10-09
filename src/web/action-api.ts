@@ -71,6 +71,25 @@
  * open ask of the run's ritual that started before it, or the whole call is
  * refused with 409.
  *
+ * A held run is answered and resumed from its card (0.80.0):
+ *
+ *   POST /api/run/answer      body { project, run, answers: [{n, text}], resume: true }
+ *                             200 { ok: true, resumed: true, run, host }
+ *                             | 200 { ok: true, pending: true, message }
+ *                             | 200 { ok: true, resume: { error } }  (answers written, resume refused)
+ *                             | 400 or 409 { ok: false, error }      (nothing is written)
+ *
+ * It runs `darius run answer <run> --answer N=TEXT ...` once (all answers or
+ * none, each a question of the current hold; the run id after `--`, each
+ * answer one argv word, so a text that starts with `--` is data), then starts
+ * `darius run resume <run>` detached and waits up to OUTCOME_WAIT_MS for its
+ * "started run" line. When the ritual belongs to another host, both calls go
+ * there with `--on HOST`, so the resume never runs where the answers are
+ * not. A run that is not held is a 409 and nothing is written; a second POST
+ * finds it so. An answer call that ssh or a signal ended is a 502: the host
+ * did not answer. A hold that is answered but not yet resumed takes answers
+ * again, so the operator can retry after a refused resume.
+ *
  * The findings page has one action too (0.62.0; docs/concept.md,
  * "Findings"):
  *
@@ -110,6 +129,7 @@ const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 const ACK_EARLIER_PATH = `${ACTION_API_PREFIX}ack-earlier`;
+const ANSWER_PATH = `${ACTION_API_PREFIX}answer`;
 
 /** The operator's note, at most this many characters. */
 export const NOTE_MAX = 500;
@@ -125,6 +145,8 @@ const OUTCOME_POLL_MS = 100;
 const STARTED_LINE = /^darius run follow-up: started run ([0-9A-Z]{26}) on (\S+)$/mu;
 /** The same line of `darius run now` (src/cli/run-due.ts, NOW_STARTED_PREFIX). */
 export const NOW_STARTED_LINE = /^darius run now: started run ([0-9A-Z]{26}) on (\S+)$/mu;
+/** The same line of `darius run resume` (src/cli/run-due.ts, RESUME_STARTED_PREFIX). */
+export const RESUME_STARTED_LINE = /^darius run resume: started run ([0-9A-Z]{26}) on (\S+)$/mu;
 /** ssh exits 255 when it cannot connect (src/core/ssh.ts). */
 const SSH_EXIT = 255;
 const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -138,6 +160,8 @@ const CLI_TIMEOUT_MS = 15_000;
 /** What running the CLI gave back. */
 export interface CliAnswer {
   code: number;
+  /** A signal ended the CLI, such as the timeout (the code is then 1). */
+  killed?: boolean;
   /** One plain line that says why it failed; empty on success. */
   error: string;
 }
@@ -172,7 +196,9 @@ export const runCli: CliRunner = (argv) =>
       resolve({ code: 1, error: `could not start darius: ${errorMessage(cause)}` });
     });
     child.on("close", (code) => {
-      resolve({ code: code ?? 1, error: code === 0 ? "" : cliError(stdout, stderr) });
+      const answer: CliAnswer = { code: code ?? 1, error: code === 0 ? "" : cliError(stdout, stderr) };
+      if (code === null) answer.killed = true;
+      resolve(answer);
     });
   });
 
@@ -232,6 +258,9 @@ export const LOOPBACK_CLOSE = "closing a finding needs a tailnet identity; open 
 /** Why the loopback viewer cannot acknowledge a run; the same reason as the follow-up, and the page hides the button for it (src/web/context.ts). */
 export const LOOPBACK_ACK = "acknowledging a run needs a tailnet identity; open the page by its tailnet address";
 
+/** Why the loopback viewer cannot answer a held run; the same reason as the acknowledgement. */
+export const LOOPBACK_ANSWER = "answering a held run needs a tailnet identity; open the page by its tailnet address";
+
 const DEFAULT_DEPS: ActionDeps = { readiness: followUpReadiness, start: startDetachedFollowUp, run: runCli };
 
 export interface ActionRequest {
@@ -253,8 +282,8 @@ function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
 }
 
-function isCount(value: JsonValue): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= APPROVE_MAX;
+function isCount(value: JsonValue, max = APPROVE_MAX): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max;
 }
 
 /** A request the endpoint can act on, or why not. */
@@ -324,6 +353,7 @@ export async function actionApi(request: ActionRequest, viewer: ActionViewer, de
   if (request.path === FOLLOW_UP_PATH) return startFollowUp(request, viewer, deps);
   if (request.path === ACK_PATH) return acknowledge(request, viewer, deps);
   if (request.path === ACK_EARLIER_PATH) return acknowledgeEarlier(request, viewer, deps);
+  if (request.path === ANSWER_PATH) return answerHeld(request, viewer, deps);
   return fail(404, "no such endpoint");
 }
 
@@ -430,17 +460,26 @@ const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 type AckBody = { project: string; run: string; note?: string; answers: QuestionAnswer[]; runNow: boolean } | { error: string };
 
-/** `answers` of the body: absent, or up to APPROVE_MAX entries { n, text }, n from 1 to APPROVE_MAX, each text one plain line. */
-function readAnswerList(value: JsonValue | undefined): QuestionAnswer[] | { error: string } {
+/** The limits of an answer list: a result has at most 10 questions; a held run numbers its questions on across holds. */
+interface AnswerLimits {
+  entries: number;
+  maxN: number;
+}
+
+const RESULT_ANSWERS: AnswerLimits = { entries: APPROVE_MAX, maxN: APPROVE_MAX };
+const HELD_ANSWERS: AnswerLimits = { entries: 50, maxN: 1000 };
+
+/** `answers` of the body: absent, or up to `limits.entries` entries { n, text }, n from 1 to `limits.maxN`, each text one plain line. */
+function readAnswerList(value: JsonValue | undefined, limits: AnswerLimits = RESULT_ANSWERS): QuestionAnswer[] | { error: string } {
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value) || value.length > APPROVE_MAX) return { error: `answers must list at most ${String(APPROVE_MAX)} entries { n, text }` };
+  if (!Array.isArray(value) || value.length > limits.entries) return { error: `answers must list at most ${String(limits.entries)} entries { n, text }` };
   const answers: QuestionAnswer[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) return { error: "answers: each entry is { n, text }" };
     const extra = Object.keys(entry).find((key) => !ANSWER_KEYS.has(key));
     if (extra !== undefined) return { error: `answers: unknown field ${extra.slice(0, 40)}` };
     const { n, text } = entry;
-    if (n === undefined || !isCount(n)) return { error: `answers: n must be a question number, 1 to ${String(APPROVE_MAX)}` };
+    if (n === undefined || !isCount(n, limits.maxN)) return { error: `answers: n must be a question number, 1 to ${String(limits.maxN)}` };
     if (!isText(text)) return { error: `answers: the text of question ${String(n)} must be text` };
     const line = text.replaceAll(/\s+/gu, " ").trim();
     const problem = answerProblem(line);
@@ -504,30 +543,62 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
   return runNowReply(await startRunNow(body, slug, viewer, deps));
 }
 
-/** What "Send and run now" did after the ack: the run started, is still starting, or could not start. */
+/** What a detached run verb did within the wait: the run started, is still starting, or could not start. */
 type RunNowOutcome = Exclude<FollowUpOutcome, { ended: number | null }> | { ended: number | null; sentence: string; forwarded: boolean } | { failed: string };
 
-async function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps): Promise<RunNowOutcome> {
+/**
+ * Starts the CLI detached with the argv `build` makes, its output in
+ * `runs/<run>/<logName>`, and waits for `line`. `build` runs inside the try,
+ * so anything that throws is a sentence for the card, never a 500: the
+ * answer is already saved when this runs. `build` returns the host it
+ * forwards to, if any.
+ */
+async function spawnWatched(deps: ActionDeps, at: { project: string; run: string; logName: string; line: RegExp }, build: () => { argv: string[]; on: string | undefined } | { failed: string }): Promise<RunNowOutcome> {
   let started: StartedFollowUp;
   let offset: number;
   let log: string;
   let on: string | undefined;
-  // The answer is already saved: anything that throws from here on is a sentence for the card, never a 500.
   try {
-    on = (deps.nowHost ?? ritualNowHost)(body.project, slug);
-    if (on !== undefined && !HOST_NAME.test(on)) return { failed: "the ritual's host name is not valid" };
-    const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
-    if (on !== undefined) argv.push("--on", on);
-    const dir = join(openProject(body.project).root, "runs", body.run);
-    log = join(dir, "run-now.log");
+    const made = build();
+    if ("failed" in made) return made;
+    on = made.on;
+    const dir = join(openProject(at.project).root, "runs", at.run);
+    log = join(dir, at.logName);
     mkdirSync(dir, { recursive: true });
     offset = existsSync(log) ? statSync(log).size : 0;
-    started = deps.start(argv, log);
+    started = deps.start(made.argv, log);
   } catch (cause) {
     return { failed: `the run could not be started: ${errorMessage(cause)}` };
   }
-  const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS, line: NOW_STARTED_LINE });
+  const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS, line: at.line });
   return "ended" in outcome ? { ...outcome, forwarded: on !== undefined } : outcome;
+}
+
+/** The host a ritual's verb goes to with `--on`, or why it cannot go. Undefined when this host is right. */
+function targetHost(deps: ActionDeps, project: string, slug: string): { on: string | undefined } | { failed: string } {
+  const on = (deps.nowHost ?? ritualNowHost)(project, slug);
+  if (on !== undefined && !HOST_NAME.test(on)) return { failed: "the ritual's host name is not valid" };
+  return { on };
+}
+
+function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps): Promise<RunNowOutcome> {
+  return spawnWatched(deps, { project: body.project, run: body.run, logName: "run-now.log", line: NOW_STARTED_LINE }, () => {
+    // The answer is already saved: anything that throws from here on is a sentence for the card.
+    const host = targetHost(deps, body.project, slug);
+    if ("failed" in host) return host;
+    const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
+    if (host.on !== undefined) argv.push("--on", host.on);
+    return { argv, on: host.on };
+  });
+}
+
+/** The reason a verb that did not start a run gives: its sentence, or the ssh failure when it went over ssh. */
+function endedReason(outcome: { ended: number | null; sentence: string; forwarded: boolean }): string {
+  const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
+  // ssh is only in play with --on; without it, exit 255 or a signal is the CLI's own.
+  const isSsh = outcome.forwarded && (outcome.ended === SSH_EXIT || outcome.ended === null);
+  if (isSsh) return `the ritual's host did not answer: ${sentence}`;
+  return outcome.ended === 0 ? `no run started: ${sentence}` : sentence;
 }
 
 /** The answer for "run now": the ack worked, so it is always 200; the run's own fate is in the body. */
@@ -538,11 +609,76 @@ function runNowReply(outcome: RunNowOutcome): PushApiReply {
     const message = `Your answer is saved. The run did not start within ${String(OUTCOME_WAIT_MS / 1000)} s and may still start. Its output is in runs/<run>/run-now.log on this host.`;
     return { status: 200, body: { ok: true, pending: true, message } };
   }
-  const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
-  // ssh is only in play with --on; without it, exit 255 or a signal is the CLI's own.
-  const isSsh = outcome.forwarded && (outcome.ended === SSH_EXIT || outcome.ended === null);
-  const reason = isSsh ? `the ritual's host did not answer: ${sentence}` : outcome.ended === 0 ? `no run started: ${sentence}` : sentence;
-  return { status: 200, body: { ok: true, runNow: { error: reason } } };
+  return { status: 200, body: { ok: true, runNow: { error: endedReason(outcome) } } };
+}
+
+// --- answer and resume a held run (0.80.0) -------------------------------------------------
+
+const HELD_KEYS: ReadonlySet<string> = new Set(["project", "run", "answers", "resume"]);
+
+type AnswerBody = { project: string; run: string; answers: QuestionAnswer[] } | { error: string };
+
+function readAnswerBody(parsed: JsonValue): AnswerBody {
+  if (!isRecord(parsed)) return { error: "send { project, run, answers: [{ n, text }], resume: true }" };
+  const extra = Object.keys(parsed).find((key) => !HELD_KEYS.has(key));
+  if (extra !== undefined) return { error: `unknown field ${extra.slice(0, 40)}` };
+  const { project, run, resume } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  if (!isText(run) || !RUN_ID.test(run)) return { error: "run must be a run id" };
+  if (resume !== true) return { error: "resume must be true: this endpoint answers and resumes" };
+  const answers = readAnswerList(parsed.answers, HELD_ANSWERS);
+  if ("error" in answers) return answers;
+  if (answers.length === 0) return { error: "answers: give at least one answer" };
+  return { project, run, answers };
+}
+
+async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_ANSWER);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readAnswerBody(guarded.parsed);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  const view = viewRun(readLedger(openProject(body.project)), body.run);
+  if (view.item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
+  const slug = ritualSlug(view.item);
+  if (slug === undefined) return fail(400, "only a run of a ritual can be resumed");
+  if (view.phase !== "held") return fail(409, `run ${body.run} is not held (phase: ${view.phase ?? "unknown"})`);
+  const first = view.holdFrom + 1;
+  const last = view.questions.length;
+  const stray = body.answers.find((answer) => answer.n < first || answer.n > last);
+  if (stray !== undefined) return fail(400, `question ${String(stray.n)} is not a question of the current hold (${String(first)} to ${String(last)})`);
+  let host: { on: string | undefined } | { failed: string };
+  try {
+    host = targetHost(deps, body.project, slug);
+  } catch (cause) {
+    return fail(500, `the ritual's host could not be read: ${errorMessage(cause)}`);
+  }
+  if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
+  const who = `web:${viewer.who}`;
+  const argv = ["run", "answer", "--project", body.project, "--who", who, "--json"];
+  for (const answer of body.answers) argv.push("--answer", `${String(answer.n)}=${answer.text}`);
+  if (host.on !== undefined) argv.push("--on", host.on);
+  argv.push("--", body.run);
+  const written = await deps.run(argv);
+  // ssh failed or a signal ended the CLI: the host did not answer, which is not the run's refusal.
+  if (written.killed === true || (host.on !== undefined && written.code === SSH_EXIT)) {
+    return fail(502, host.on === undefined ? `darius did not finish: ${written.error}` : `${host.on} did not answer: ${written.error}`);
+  }
+  if (written.code !== 0) return fail(409, written.error);
+  const resumeArgv = ["resume", body.run, "--project", body.project, "--who", who];
+  if (host.on !== undefined) resumeArgv.push("--on", host.on);
+  return resumeReply(await spawnWatched(deps, { project: body.project, run: body.run, logName: "resume.log", line: RESUME_STARTED_LINE }, () => ({ argv: ["run", ...resumeArgv], on: host.on })));
+}
+
+/** The answer after the answers were written: the run went on, is still starting, or the resume was refused. The answers are never rolled back. */
+function resumeReply(outcome: RunNowOutcome): PushApiReply {
+  if ("failed" in outcome) return { status: 200, body: { ok: true, resume: { error: outcome.failed } } };
+  if ("started" in outcome) return { status: 200, body: { ok: true, resumed: true, run: outcome.started, host: outcome.host } };
+  if ("pending" in outcome) {
+    const message = `Your answers are saved. The run did not go on within ${String(OUTCOME_WAIT_MS / 1000)} s and may still resume. Its output is in runs/<run>/resume.log on this host.`;
+    return { status: 200, body: { ok: true, pending: true, message } };
+  }
+  return { status: 200, body: { ok: true, resume: { error: endedReason(outcome) } } };
 }
 
 // --- dismiss earlier asks (0.80.0) ---------------------------------------------------------

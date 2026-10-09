@@ -23,7 +23,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-DI6O-XfQ.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-CC5JrDej.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

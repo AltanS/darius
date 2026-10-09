@@ -137,7 +137,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
           {held === null ? null : (
             <Section title="Needs you">
               <div className="card card-accent edge-wait">
-                <Questions project={project} run={held} />
+                <Questions project={project} run={held} canWrite={canWrite} />
               </div>
             </Section>
           )}

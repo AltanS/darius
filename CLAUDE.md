@@ -6,7 +6,7 @@ checks passed. It replaces the legacy `tracker` plugin, and must stay backwards 
 during migration. Bun + TypeScript, no build step, zero runtime dependencies.
 
 **Deferred features live in [`docs/backlog.md`](docs/backlog.md)** (spend caps, more harness adapters,
-the held-run answer form, the central server). Do not build them before the migration is done; when one is
+the central server). Do not build them before the migration is done; when one is
 picked up, it moves into the concept.
 
 **Read [`docs/concept.md`](docs/concept.md) before any design change.** It is the decision record:
