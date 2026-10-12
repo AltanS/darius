@@ -2,6 +2,15 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.80.2] - 2026-10-12
+
+### Fixed
+
+- A projected vigil file (`vigils/<slug>.md` in a store tracker tree) now opens its body with an HTML comment: the file is generated, the next darius command overwrites an edit, and `darius vigil` changes it. Before, nothing in the file said so, and a hand edit was lost without notice.
+- The generated skill no longer says "never edit darius store files" without an exception. In store mode the tracker tree is under the state dir, and spec text there is written by hand. The rule now names that exception and lists what takes verbs: task marks, statuses, the index, worklogs and vigils.
+- `docs/concept.md` no longer says a `PreToolUse` hook denies edits under the state dir. That hook was never built.
+- `darius update` under Node 24 no longer fails when an interrupted update left a `current.new` link: Node refuses a plain `rmSync` on a link to a folder. Two tests that removed a `.tracker` link the same way now unlink it.
+
 ## [0.80.1] - 2026-10-09
 
 ### Fixed

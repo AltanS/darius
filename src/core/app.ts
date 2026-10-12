@@ -163,7 +163,8 @@ export function currentTag(app: string): string | undefined {
 /** Points `<app>/current` at `versions/<tag>` in one rename, so no reader ever sees it missing. */
 export function flipCurrent(app: string, tag: string): void {
   const next = join(app, "current.new");
-  rmSync(next, { force: true });
+  // recursive: Node 24 refuses a plain rmSync on a link to a folder. It removes the link, not its target.
+  rmSync(next, { force: true, recursive: true });
   symlinkSync(join("versions", tag), next);
   renameSync(next, join(app, "current"));
 }

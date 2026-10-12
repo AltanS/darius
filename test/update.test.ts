@@ -744,3 +744,15 @@ test("the probe answer and the push exit codes", () => {
   assert.equal(pushExitCode([hostWith("unreachable"), hostWith("refused")]), 1);
   assert.equal(hostLine(hostWith("refused")), "! h: why");
 });
+
+test("flipCurrent replaces a leftover current.new link to a folder and keeps the folder", () => {
+  const app = tempDir("flip");
+  mkdirSync(join(app, "versions", "v1.0.0"), { recursive: true });
+  mkdirSync(join(app, "versions", "v1.1.0"), { recursive: true });
+  writeFileSync(join(app, "versions", "v1.0.0", "keep"), "keep\n");
+  symlinkSync(join("versions", "v1.0.0"), join(app, "current.new"));
+  flipCurrent(app, "v1.1.0");
+  assert.equal(readlinkSync(join(app, "current")), join("versions", "v1.1.0"));
+  assert.equal(existsSync(join(app, "current.new")), false);
+  assert.equal(readFileSync(join(app, "versions", "v1.0.0", "keep"), "utf8"), "keep\n");
+});

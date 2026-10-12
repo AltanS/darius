@@ -11,7 +11,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -217,7 +217,7 @@ test("the next verb removes an own link with one stderr line; --json stdout stay
   symlinkSync(elsewhere, join(dir, ".tracker"));
   ok(at, ["status"], dir);
   assert.equal(readlinkSync(join(dir, ".tracker")), elsewhere);
-  rmSync(join(dir, ".tracker"));
+  unlinkSync(join(dir, ".tracker"));
   mkdirSync(join(dir, ".tracker"));
   writeFileSync(join(dir, ".tracker", "keep.md"), "keep\n");
   ok(at, ["list", "specs", "--json"], dir);

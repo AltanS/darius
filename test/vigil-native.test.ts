@@ -20,7 +20,7 @@ import type { JsonValue, Vigil } from "../src/core/model.ts";
 import { itemRef, openProject, readItemText } from "../src/core/store.ts";
 import { importLegacyVigils } from "../src/core/vigil-import.ts";
 import { treeDir as treeDirOf } from "../src/core/tree.ts";
-import { projectedVigilPath, projectVigils } from "../src/core/vigil-projection.ts";
+import { GENERATED_NOTE, projectedVigilPath, projectVigils } from "../src/core/vigil-projection.ts";
 import { localToday } from "../src/core/sweep.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
@@ -469,7 +469,7 @@ test("projection: files in the legacy format, a stale file removed, an unchanged
   const text = readFileSync(projectedVigilPath(tree, "guard-soak"), "utf8");
   assert.ok(
     text.startsWith(
-      "---\ntype: vigil\nname: Guard soak\nslug: guard-soak\ndue: 2026-10-05\nuntil: first real batch\nfrom: M1/S02\nagent: host-a\nopened: 2026-09-28\nresolved:\nverdict:\n---\n\n## Verification Checklist\n",
+      `---\ntype: vigil\nname: Guard soak\nslug: guard-soak\ndue: 2026-10-05\nuntil: first real batch\nfrom: M1/S02\nagent: host-a\nopened: 2026-09-28\nresolved:\nverdict:\n---\n\n${GENERATED_NOTE}\n\n## Verification Checklist\n`,
     ),
     text,
   );
@@ -511,6 +511,7 @@ test("projection: the legacy vigil parser and the legacy list read the files", a
   assert.equal(parsed.input.until, "it's # not a comment");
   assert.equal(parsed.input.opened, "2026-09-28");
   assert.match(parsed.content, /## Verification Checklist/u);
+  assert.ok(parsed.content.startsWith(`\n${GENERATED_NOTE}\n`), "the body opens with the generated note");
 
   // The whole legacy CLI reads the projection as a tracker tree.
   const repo = join(SANDBOX, "legacy-read-repo");

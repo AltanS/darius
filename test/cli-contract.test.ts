@@ -12,7 +12,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -296,7 +296,7 @@ test("root --json reports git, none and store mode and changes nothing on disk",
   symlinkSync(tree, join(store, ".tracker"));
   assert.deepEqual(JSON.parse(darius(at, ["root", "--json"], store).stdout), { mode: "store", trackerRoot: tree, project: "storemode", linked: true });
   assert.equal(lstatSync(join(store, ".tracker")).isSymbolicLink(), true, "root never migrates");
-  rmSync(join(store, ".tracker"));
+  unlinkSync(join(store, ".tracker"));
 
   // A new worktree has the marker and no link. root reports that and makes nothing.
   const worktree = join(at.home, "storemode-wt");
