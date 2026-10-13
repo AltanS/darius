@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { decodeLease, isLeaseStale, takeLease, type LeaseSpec } from "../src/core/lease.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
 import { openProject } from "../src/core/store.ts";
-import { pruneSweepLeases, takeSweepLease } from "../src/core/sweep-lease.ts";
+import { pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../src/core/sweep-lease.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-lease-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -150,4 +150,53 @@ test("the sweep lease is per project and per day, and old days are pruned", asyn
   await pruneSweepLeases(local, { s3: null, today });
   assert.deepEqual(readdirSync(join(local.root, "leases")), ["sweep-2026-09-28.lock"]);
   assert.equal(existsSync(join(local.root, "leases", "sweep-2026-09-01.lock")), false);
+});
+
+test("a one-vigil lease stands aside for a held daily lease, never writes it, and is released at the end", async () => {
+  const project = openProject("lease-vigil", { create: true });
+  const s3 = memoryS3();
+  const today = "2026-09-28";
+  const target = { s3, host: "hostA", today, slug: "soak", ttlMs: vigilLeaseTtlMs(2, 120_000) };
+  assert.equal(vigilLeaseTtlMs(2, 120_000), 300_000, "checks x timeout + 60 s");
+  assert.equal(vigilLeaseTtlMs(0, 120_000), 180_000, "at least one Command");
+
+  const daily = await takeSweepLease(project, { s3, host: "hostB", today });
+  assert.ok("handle" in daily);
+  const refused = await takeVigilSweepLease(project, target);
+  assert.ok("blocked" in refused && refused.blocked === "lease-held");
+  assert.equal(refused.detail, "the daily sweep runs on hostB");
+  assert.equal(s3.objects.has("lease-vigil/leases/vigil-soak.json"), false, "nothing was taken");
+
+  await daily.handle.finish();
+  const doneDaily = decodeLease(s3.objects.get("lease-vigil/leases/sweep-2026-09-28.json") ?? "");
+  const mine = await takeVigilSweepLease(project, target);
+  assert.ok("handle" in mine, "allowed once the daily sweep is done");
+  assert.deepEqual(decodeLease(s3.objects.get("lease-vigil/leases/sweep-2026-09-28.json") ?? ""), doneDaily, "the daily lease is untouched");
+  const body = decodeLease(s3.objects.get("lease-vigil/leases/vigil-soak.json") ?? "");
+  assert.ok(Date.parse(body?.expires ?? "") - Date.now() > 290_000 && Date.parse(body?.expires ?? "") - Date.now() <= 300_000);
+
+  const second = await takeVigilSweepLease(project, { ...target, host: "hostC" });
+  assert.ok("blocked" in second && second.blocked === "lease-held");
+  assert.match(second.detail, /a check of 'soak' is already running \(held by hostA:/u);
+  const other = await takeVigilSweepLease(project, { ...target, slug: "other" });
+  assert.ok("handle" in other, "another vigil is not blocked");
+
+  await mine.handle.release();
+  assert.equal(s3.objects.has("lease-vigil/leases/vigil-soak.json"), false);
+  assert.ok("handle" in (await takeVigilSweepLease(project, { ...target, host: "hostC" })));
+});
+
+test("a one-vigil lease works on a local lock file and reads an offline bucket as lease-offline", async () => {
+  const local = openProject("lease-vigil-local", { create: true });
+  const target = { s3: null, host: "hostA", today: "2026-09-28", slug: "soak", ttlMs: 60_000 };
+  const first = await takeVigilSweepLease(local, target);
+  assert.ok("handle" in first);
+  assert.ok(existsSync(join(local.root, "leases", "vigil-soak.lock")));
+  assert.ok("blocked" in (await takeVigilSweepLease(local, target)));
+  await first.handle.release();
+  assert.equal(existsSync(join(local.root, "leases", "vigil-soak.lock")), false);
+  assert.equal(existsSync(join(local.root, "leases", "sweep-2026-09-28.lock")), false, "the daily lock file was never written");
+
+  const offline = await takeVigilSweepLease(local, { ...target, s3: memoryS3({ isOffline: true }) });
+  assert.ok("blocked" in offline && offline.blocked === "lease-offline");
 });

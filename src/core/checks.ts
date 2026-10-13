@@ -31,6 +31,8 @@ export interface Check {
   command?: string;
   /** The raw `Expected:` value with its backticks removed. */
   expected?: string;
+  /** The raw `Pending:` value: the result that means "not yet", not "broken". Same grammar as `expected`. */
+  pending?: string;
   /**
    * Set when `expected` is the `manual (owner: X, expires: YYYY-MM-DD)` form.
    * A field the author left out is an empty string, never a guess.
@@ -44,10 +46,19 @@ export type Expectation =
   | { kind: "stdout-matches"; pattern: RegExp }
   | { kind: "file-exists"; path: string };
 
+/**
+ * Why a check failed. `pending`: the result matched the `Pending:` clause.
+ * `broken`: the check itself did not work (a timeout, a missing tool, a signal,
+ * or a result that is not the `Pending:` one). `unknown`: nothing says which.
+ */
+export type FailKind = "pending" | "broken" | "unknown";
+
 export interface CheckRun {
   /** The process exit code, or null when a signal ended it (always null on timeout). */
   exit: number | null;
   outcome: "pass" | "fail" | "timeout";
+  /** Set when `outcome` is not `pass`. */
+  failKind?: FailKind;
   /** The last 4 KB of stdout followed by stderr. */
   output: string;
   durationMs: number;
@@ -70,6 +81,7 @@ export interface RunCheckOptions {
 const ITEM_RE = /^(\s*)- \[([ xX~!-])\] (.*)$/;
 const COMMAND_RE = /^\s*- Command:\s*(`+)(.*?)\1\s*$|^\s*- Command:\s*(.+)$/;
 const EXPECTED_RE = /^\s*- Expected:\s*(`+)(.*?)\1\s*$|^\s*- Expected:\s*(.+)$/;
+const PENDING_RE = /^\s*- Pending:\s*(`+)(.*?)\1\s*$|^\s*- Pending:\s*(.+)$/;
 
 /**
  * `Expected: manual (owner: …, expires: …)`. Anything that starts with the
@@ -108,6 +120,11 @@ export function parseChecklist(body: string): Check[] {
     const expected = EXPECTED_RE.exec(line);
     if (expected) {
       attachExpected(current, (expected[2] ?? expected[3] ?? "").trim());
+      continue;
+    }
+    const pending = PENDING_RE.exec(line);
+    if (pending) {
+      current.pending = (pending[2] ?? pending[3] ?? "").trim();
       continue;
     }
     if (line.startsWith("#") || line.startsWith("---")) {
@@ -398,9 +415,34 @@ export async function runCheck(check: Check, o: RunCheckOptions): Promise<CheckR
   const durationMs = Math.round(performance.now() - started);
   const combined = run.stdout + run.stderr;
   const output = tailBytes(combined);
-  if (run.isTimedOut) return { exit: null, outcome: "timeout", output, durationMs };
+  if (run.isTimedOut) return { exit: null, outcome: "timeout", failKind: "broken", output, durationMs };
   const isPass = evaluate({ expectation, combined, cwd: o.cwd, exit: run.exit });
-  return { exit: run.exit, outcome: isPass ? "pass" : "fail", output, durationMs };
+  if (isPass) return { exit: run.exit, outcome: "pass", output, durationMs };
+  const failKind = classifyFail({ exit: run.exit, pending: check.pending, combined, cwd: o.cwd });
+  return { exit: run.exit, outcome: "fail", failKind, output, durationMs };
+}
+
+/** Exit codes that mean the shell could not run the Command: 124 timeout, 126 not executable, 127 not found. */
+const BROKEN_EXITS: ReadonlySet<number> = new Set([124, 126, 127]);
+
+/** The first exit code that a signal sets: 128 + the signal number. */
+const SIGNAL_EXIT_FLOOR = 128;
+
+/**
+ * Why a check that ran and did not pass failed.
+ *
+ * With a `Pending:` clause the clause decides: a result that matches it is
+ * `pending`, any other is `broken`. Without one, a signal, exit 124, 126, 127
+ * or 128 and above is `broken`; anything else is `unknown`. A `Pending:` value
+ * the grammar rejects counts as no clause. A timeout is `broken` in `runCheck`.
+ */
+export function classifyFail(input: { exit: number | null; pending?: string; combined: string; cwd: string }): FailKind {
+  const parsed = input.pending === undefined ? null : parseExpectation(input.pending);
+  if (parsed !== null && !("error" in parsed)) {
+    return evaluate({ expectation: parsed, combined: input.combined, cwd: input.cwd, exit: input.exit }) ? "pending" : "broken";
+  }
+  if (input.exit === null || BROKEN_EXITS.has(input.exit) || input.exit >= SIGNAL_EXIT_FLOOR) return "broken";
+  return "unknown";
 }
 
 function executableExpectation(check: Check): Expectation {

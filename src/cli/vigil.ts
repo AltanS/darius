@@ -1,5 +1,5 @@
 /**
- * `darius vigil <verb>`: add, set-body, list, show, close and sweep vigils.
+ * `darius vigil <verb>`: add, set-body, list, show, close, pause, resume and sweep vigils.
  *
  *   vigil add <slug> [--name N | --title N] (--due YYYY-MM-DD | --until TEXT)
  *             [--from REF] [--agent A] [--opened YYYY-MM-DD]
@@ -7,10 +7,19 @@
  *   vigil set-body <slug> (--stdin | --content TEXT)
  *   vigil set <slug> [--heavy | --no-heavy] [--due YYYY-MM-DD] [--until TEXT] [--gate-command CMD]
  *   vigil list [--all] [--json]
- *   vigil show <slug>
- *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD]
- *   vigil sweep [--all-projects] [--only SLUG] [--include-heavy] [--daily]
- *               [--classify-only] [--dry-run] [--timeout SECONDS] [--who W]
+ *   vigil show <slug> [--json]
+ *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD] [--reason TEXT]
+ *   vigil pause <slug> [--until YYYY-MM-DD] --reason TEXT
+ *   vigil resume <slug>
+ *   vigil sweep [SLUG] [--all-projects] [--only SLUG] [--include-heavy] [--daily]
+ *               [--classify-only] [--dry-run] [--timeout SECONDS] [--force] [--who W]
+ *
+ * `vigil sweep SLUG` is `--only SLUG`; it takes no --daily or --all-projects.
+ * A one-vigil sweep never takes the daily lease. It refuses (exit 1) while the
+ * daily sweep of the project runs, while another check of the vigil runs, and
+ * for 2 minutes after the vigil's last sweep; --force lifts that last wait only.
+ * `vigil pause` stops the sweep from running a vigil; with --until the pause ends
+ * after that local date, without it `vigil resume` ends it.
  *
  * `add`, `set-body`, `list` and `close` take the command-line forms of the
  * legacy tracker's verbs, so skills and existing vigil
@@ -54,19 +63,27 @@ import type { Document, Vigil } from "../core/model.ts";
 import { projectDir, resolveProject } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { itemRef, listProjects, openProject, type Project } from "../core/store.ts";
-import { pruneSweepLeases, takeSweepLease } from "../core/sweep-lease.ts";
+import { pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../core/sweep-lease.ts";
 import { projectWorkdir } from "../core/workdir.ts";
 import {
   addVigil,
   assertNotNested,
   closeVigil,
   commandsOf,
+  cooldownLeftMs,
+  DEFAULT_SWEEP_TIMEOUT_MS,
   invokesSweep,
   isBashAvailable,
+  lastFailure,
   latestEvidence,
   localToday,
+  OUTPUT_TAIL_LINES,
+  outputTail,
   sweepProject,
   vigilStatus,
+  pauseVigil,
+  resumeVigil,
+  type LastFailure,
   type SweepOptions,
   type SweepResult,
   type SweptVigil,
@@ -79,7 +96,7 @@ import { isCalendarDate, localNoonIso, readVigilViews, type VigilView } from "..
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
-const VERBS = "add | set-body | set | list | show | close | sweep";
+const VERBS = "add | set-body | set | list | show | close | pause | resume | sweep";
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -321,6 +338,9 @@ function listRecord(view: VigilView, treeDir: string | null): JsonRecord {
     flagged: view.flagged,
     heavy: view.heavy,
     lastOutcome: view.lastOutcome,
+    failKind: view.failKind,
+    paused: view.paused,
+    pausedUntil: view.pausedUntil,
   };
 }
 
@@ -339,6 +359,9 @@ interface JsonRecord {
   flagged: boolean;
   heavy: boolean;
   lastOutcome: string | null;
+  failKind: string | null;
+  paused: boolean;
+  pausedUntil: string | null;
 }
 
 function runList(args: ParsedArgs): number {
@@ -359,8 +382,8 @@ function runList(args: ParsedArgs): number {
 
 function stateLabel(status: VigilStatus): string {
   if (status.state === "closed") return `closed ${status.verdict ?? ""}`.trimEnd();
-  if (status.flagged) return "open, FLAGGED";
-  return "open";
+  const paused = status.paused ? `, PAUSED${status.pausedUntil === undefined ? "" : ` until ${status.pausedUntil}`}` : "";
+  return `${status.flagged ? "open, FLAGGED" : "open"}${paused}`;
 }
 
 function runShow(args: ParsedArgs): number {
@@ -371,12 +394,17 @@ function runShow(args: ParsedArgs): number {
   const lines = linesFor(readLedger(project), itemRef("vigil", slug));
   const status = vigilStatus(slug, lines);
   const evidence = [...latestEvidence(slug, lines).values()];
+  const failure = status.flagged ? lastFailure(slug, lines, doc.body) : null;
+  const tail = failure?.output_sha === undefined ? null : outputTail(project, failure.output_sha);
   if (args.json) {
-    printJson({ project: project.name, header: doc.header, body: doc.body, status, evidence });
+    const lastFailureJson = failure === null ? null : { ...failure, outputTail: tail };
+    printJson({ project: project.name, header: doc.header, body: doc.body, status, evidence, lastFailure: lastFailureJson });
     return 0;
   }
   console.log(`${doc.header.title} (${slug})`);
   console.log(`state: ${stateLabel(status)}`);
+  if (status.closedReason !== undefined) console.log(`reason: ${status.closedReason}`);
+  if (status.pausedReason !== undefined) console.log(`paused: ${status.pausedReason}`);
   if (doc.header.due !== undefined) console.log(`due: ${doc.header.due}`);
   if (doc.header.until !== undefined) console.log(`until: ${doc.header.until}`);
   if (doc.header.gate_command !== undefined) console.log(`gate: ${doc.header.gate_command} (fired: ${status.gateFired ? "yes" : "no"})`);
@@ -386,8 +414,29 @@ function runShow(args: ParsedArgs): number {
   for (const line of evidence) {
     console.log(`  ${String(line.check)}  ${String(line.outcome)}  exit ${String(line.exit)}  ${String(line.duration_ms)} ms  ${line.at}`);
   }
+  if (failure !== null) printWhyFlagged(failure, tail);
   console.log(`\n${doc.body}`);
   return 0;
+}
+
+/** Output is untrusted text: drop the control characters (escape included) so it cannot steer a terminal. */
+function plainOutput(text: string): string {
+  return Array.from(text)
+    .filter((char) => char === "\n" || char === "\t" || (char >= " " && char !== "\u007f"))
+    .join("");
+}
+
+function printWhyFlagged(failure: LastFailure, tail: string | null): void {
+  const fromBody = failure.source === "body" ? " (from the current body, not recorded by the sweep)" : "";
+  console.log("\nWhy flagged");
+  console.log(`  step ${failure.index}: ${failure.text}`);
+  if (failure.command !== undefined) console.log(`  Command: ${failure.command}${fromBody}`);
+  if (failure.expected !== undefined) console.log(`  Expected: ${failure.expected}${fromBody}`);
+  console.log(`  ${failure.outcome}, exit ${String(failure.exit)}, ${failure.at} on ${failure.host}`);
+  console.log(`  kind: ${failure.failKind}`);
+  if (tail === null) console.log("  output: not stored on this host");
+  else if (tail === "") console.log("  output: none");
+  else console.log(`  output, last ${OUTPUT_TAIL_LINES} lines at most:\n${plainOutput(tail).replace(/^/gmu, "    ")}`);
 }
 
 // --- close ----------------------------------------------------------------------
@@ -406,7 +455,9 @@ function runClose(args: ParsedArgs): number {
     else console.log(`already closed: ${slug} (${verdict}), not overwritten`);
     return 0;
   }
-  const line = closeVigil(project, { slug, verdict, by: who, who, at: date === undefined ? undefined : localNoonIso(date) });
+  const reason = textFlag(args, "reason");
+  if (reason === undefined) console.error("darius: warning: vigil close without --reason; say why it closes (a later major release will require it)");
+  const line = closeVigil(project, { slug, verdict, by: who, who, reason, at: date === undefined ? undefined : localNoonIso(date) });
   refreshProjection(project);
   if (args.json) {
     printJson({ project: project.name, closed: line });
@@ -414,6 +465,31 @@ function runClose(args: ParsedArgs): number {
   }
   console.log(`closed vigil ${slug} in ${project.name} (verdict ${verdict}, resolved ${date ?? localToday()})`);
   if (verdict === "failed") console.log("  Remediation goes to a new spec via darius add. Never bolt it onto the vigil.");
+  return 0;
+}
+
+// --- pause and resume ----------------------------------------------------------
+
+function runPause(args: ParsedArgs): number {
+  const slug = requireSlug(args, "pause");
+  const reason = textFlag(args, "reason");
+  if (reason === undefined) throw new UsageError("vigil pause needs --reason TEXT");
+  const until = dateFlag(args, "until");
+  const project = currentProject(args);
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const line = pauseVigil(project, { slug, reason, until, who });
+  if (args.json) printJson({ project: project.name, paused: line });
+  else console.log(`paused vigil ${slug} in ${project.name} (${until === undefined ? "until resumed" : `through ${until}`}): ${reason}`);
+  return 0;
+}
+
+function runResume(args: ParsedArgs): number {
+  const slug = requireSlug(args, "resume");
+  const project = currentProject(args);
+  const who = stringFlag(args, "who") ?? defaultWho();
+  const line = resumeVigil(project, { slug, who });
+  if (args.json) printJson(line === null ? { project: project.name, slug, notPaused: true } : { project: project.name, resumed: line });
+  else console.log(line === null ? `not paused: ${slug}` : `resumed vigil ${slug} in ${project.name}`);
   return 0;
 }
 
@@ -429,6 +505,15 @@ function sweepOptions(args: ParsedArgs): SweepOptions {
   };
   const only = stringFlag(args, "only");
   if (only !== undefined) opts.only = only;
+  // `vigil sweep <slug>` is `--only <slug>`. Before 0.80.3 the slug was ignored and every vigil ran.
+  const slug = args.positional[1];
+  if (slug !== undefined) {
+    if (only !== undefined && only !== slug) throw new UsageError(`vigil sweep <slug> and --only name different vigils ('${slug}', '${only}')`);
+    if (isFlagSet(args, "daily") || isFlagSet(args, "all-projects")) {
+      throw new UsageError("vigil sweep <slug> sweeps one vigil; it takes no --daily or --all-projects");
+    }
+    opts.only = slug;
+  }
   const timeout = stringFlag(args, "timeout");
   if (timeout !== undefined) {
     if (!/^[1-9]\d*$/u.test(timeout)) throw new UsageError(`--timeout takes whole seconds, got '${timeout}'`);
@@ -463,7 +548,7 @@ function printSweep(result: SweepResult): void {
 }
 
 /** Why a project was not swept on this host. */
-type SkipReason = "no-workdir" | "swept-today" | "sweep-held" | "lease-offline";
+type SkipReason = "no-workdir" | "swept-today" | "sweep-held" | "lease-offline" | "cooldown";
 
 interface ProjectSkip {
   project: string;
@@ -482,6 +567,8 @@ interface SweepPlan {
   opts: SweepOptions;
   /** The daily lease target; null without --daily. */
   daily: { s3: S3 | null; host: string } | null;
+  /** The lease target of a one-vigil sweep; null for any other sweep. `force` lifts the cooldown. */
+  single: { s3: S3 | null; host: string; force: boolean } | null;
 }
 
 const LEASE_SKIPS = {
@@ -490,18 +577,48 @@ const LEASE_SKIPS = {
   "lease-offline": "lease-offline",
 } as const satisfies Record<LeaseBlock, SkipReason>;
 
-function dailyTarget(args: ParsedArgs, opts: SweepOptions): SweepPlan["daily"] {
-  if (!isFlagSet(args, "daily")) return null;
-  if (opts.dryRun || opts.classifyOnly || opts.only !== undefined) {
-    throw new UsageError("--daily is the timer's whole sweep; it takes no --dry-run, --classify-only or --only");
-  }
+function leaseTarget() {
   const cfg = loadConfigIfPresent();
   const s3 = cfg?.remote === undefined ? null : createS3(cfg.remote, loadCredentials(cfg.remote.credentials));
   return { s3, host: hostId() };
 }
 
+function dailyTarget(args: ParsedArgs, opts: SweepOptions): SweepPlan["daily"] {
+  if (!isFlagSet(args, "daily")) return null;
+  if (opts.dryRun || opts.classifyOnly || opts.only !== undefined) {
+    throw new UsageError("--daily is the timer's whole sweep; it takes no --dry-run, --classify-only or --only");
+  }
+  return leaseTarget();
+}
+
+function singleTarget(args: ParsedArgs, opts: SweepOptions): SweepPlan["single"] {
+  const force = isFlagSet(args, "force");
+  if (force && opts.only === undefined) throw new UsageError("--force lifts the cooldown of a one-vigil sweep; name the vigil");
+  if (opts.only === undefined || opts.classifyOnly) return null;
+  return { ...leaseTarget(), force };
+}
+
+/** One vigil: waits out the cooldown, stands aside for the daily sweep, and holds its own lease while the checks run. */
+async function sweepSingle(project: Project, run: SweepOptions, single: NonNullable<SweepPlan["single"]>, slug: string): Promise<ProjectSweep> {
+  const left = single.force ? 0 : cooldownLeftMs(linesFor(readLedger(project), itemRef("vigil", slug)));
+  if (left > 0) {
+    const detail = `vigil '${slug}' was swept less than 2 minutes ago; wait ${String(Math.ceil(left / 1000))} s or pass --force`;
+    return { skip: { project: project.name, reason: "cooldown", detail } };
+  }
+  const doc = project.readItem<Vigil>("vigil", slug);
+  const commands = doc === null ? 0 : commandsOf(doc.body, doc.header.gate_command).length;
+  const ttlMs = vigilLeaseTtlMs(commands, run.timeoutMs ?? DEFAULT_SWEEP_TIMEOUT_MS);
+  const lease = await takeVigilSweepLease(project, { ...single, today: run.today, slug, ttlMs });
+  if ("blocked" in lease) return { skip: { project: project.name, reason: LEASE_SKIPS[lease.blocked], detail: lease.detail } };
+  try {
+    return { result: await sweepProject(project, run) };
+  } finally {
+    await lease.handle.release();
+  }
+}
+
 async function sweepOne(project: Project, plan: SweepPlan): Promise<ProjectSweep> {
-  const { opts, daily } = plan;
+  const { opts, daily, single } = plan;
   const run: SweepOptions = { ...opts };
   // Nothing to run: no working dir and no lease needed.
   if (project.listItems("vigil").length === 0) return { result: await sweepProject(project, run) };
@@ -510,7 +627,12 @@ async function sweepOne(project: Project, plan: SweepPlan): Promise<ProjectSweep
     if ("missing" in where) return { skip: { project: project.name, reason: "no-workdir", detail: where.detail } };
     run.cwd = where.dir;
   }
-  if (daily === null) return { result: await sweepProject(project, run) };
+  if (daily === null) {
+    if (single === null || opts.only === undefined || !project.listItems("vigil").includes(opts.only)) {
+      return { result: await sweepProject(project, run) };
+    }
+    return sweepSingle(project, run, single, opts.only);
+  }
   const lease = await takeSweepLease(project, { ...daily, today: opts.today });
   if ("blocked" in lease) return { skip: { project: project.name, reason: LEASE_SKIPS[lease.blocked], detail: lease.detail } };
   let result: SweepResult;
@@ -563,7 +685,7 @@ async function runSweep(args: ParsedArgs): Promise<number> {
     return 1;
   }
   const opts = sweepOptions(args);
-  const plan: SweepPlan = { opts, daily: dailyTarget(args, opts) };
+  const plan: SweepPlan = { opts, daily: dailyTarget(args, opts), single: singleTarget(args, opts) };
   if (!opts.classifyOnly && !isBashAvailable()) {
     console.error("darius: cannot start bash, so no check can run; the environment is inconclusive");
     return 3;
@@ -581,7 +703,8 @@ async function runSweep(args: ParsedArgs): Promise<number> {
   const swept = await sweepOne(currentProject(args), plan);
   if ("skip" in swept) {
     const { skip } = swept;
-    if (skip.reason === "no-workdir" && plan.daily === null) {
+    // Without --daily the only skips are a refusal (no working dir, a held sweep, the cooldown) and an unreachable bucket.
+    if (skip.reason !== "lease-offline" && plan.daily === null) {
       console.error(`darius: ${skip.detail}`);
       return 1;
     }
@@ -598,8 +721,8 @@ async function runSweep(args: ParsedArgs): Promise<number> {
 
 export const vigilCommand: Command = {
   name: "vigil",
-  summary: "add, set-body, set, list, show, close and sweep vigils",
-  usage: "vigil add|set-body|set|list|show|close|sweep <slug> ...",
+  summary: "add, set-body, set, list, show, close, pause, resume and sweep vigils",
+  usage: "vigil add|set-body|set|list|show|close|pause|resume|sweep <slug> ...",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {
@@ -615,6 +738,10 @@ export const vigilCommand: Command = {
         return runShow(args);
       case "close":
         return runClose(args);
+      case "pause":
+        return runPause(args);
+      case "resume":
+        return runResume(args);
       case "sweep":
         return runSweep(args);
       default:

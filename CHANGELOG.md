@@ -2,6 +2,45 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.84.0] - 2026-10-13
+
+### Added
+
+- A one-vigil sweep (`darius vigil sweep <slug>` or `--only`) never takes the daily lease. It refuses (exit 1) while today's daily sweep is held and not done, and while another check of the same vigil holds `leases/vigil-<slug>.json` (TTL: Commands x timeout + 60 s, released at the end).
+- A one-vigil sweep refuses (exit 1) when the vigil's last sweep that ran something is under 2 minutes old. `darius vigil sweep <slug> --force` lifts the wait. `--force` without a vigil is a usage error.
+
+## [0.83.0] - 2026-10-13
+
+### Added
+
+- `darius vigil pause <slug> [--until YYYY-MM-DD] --reason TEXT` and `darius vigil resume <slug>` write `vigil.paused` and `vigil.resumed`. A paused vigil lands in the new `paused` sweep bucket: nothing runs, and the daily `skipped` line names the reason. A pause with `--until` ends on its own after that local date.
+- `darius vigil list --json` and `darius due --json` rows add `paused` and `pausedUntil`. A paused vigil stays in `darius due`. `vigil show` prints the pause and the close reason.
+- `darius vigil close --reason TEXT` stores the reason on `vigil.closed`. Without it the close still works and warns on stderr.
+- The sweep `counts` object gains `paused`.
+
+## [0.82.0] - 2026-10-13
+
+### Added
+
+- A check may carry a `- Pending: exit N` clause (same forms as `Expected`). A failing check that matches it is `pending`; one that does not is `broken`. Without the clause, a timeout, a signal, exit 124, 126, 127 or 128 and above is `broken`, and any other failure is `unknown`.
+- A `vigil.swept` line with outcome `failed` carries `fail_kind` (the worst kind of its failing checks), and each failing entry in its `checks` carries one too. `outcome` stays `failed` and `flagged` stays true. A line from before 0.82.0 reads `unknown`.
+- `darius vigil list --json` adds `failKind` (null unless the vigil is flagged). `darius due --json` rows carry it too. `vigil show` adds `failKind` to `lastFailure` and a `kind:` line to "Why flagged".
+
+## [0.81.0] - 2026-10-13
+
+### Added
+
+- New `evidence` lines of a vigil sweep also carry `command` and `expected`, the text as the check ran. Older lines stay as they are.
+- `darius vigil show` prints a "Why flagged" block for a flagged vigil: the last failing check of the newest judged sweep with its step, Command, Expected, exit, time, host and the last 20 lines of its output. For an older evidence line, Command and Expected come from the current body and the block says so. Control characters in the output are dropped in the text view.
+- `darius vigil show --json` adds `lastFailure` (null when the vigil is not flagged), with `outputTail`.
+
+## [0.80.3] - 2026-10-13
+
+### Fixed
+
+- `darius vigil sweep <slug>` now sweeps that one vigil, like `--only <slug>`. Before, the slug was ignored and every vigil of the project ran and wrote evidence. A slug that names a different vigil than `--only`, or comes with `--daily` or `--all-projects`, is a usage error (exit 2). A script that passed a slug and relied on the full sweep must drop the slug.
+- The sweep re-reads the vigil status under the project lock before it writes `vigil.closed`, so two parallel sweeps write one close line. The sweep that did not write it reports `closed: false`.
+
 ## [0.80.2] - 2026-10-12
 
 ### Fixed

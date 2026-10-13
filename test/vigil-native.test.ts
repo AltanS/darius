@@ -180,12 +180,12 @@ test("list --json is a bare pretty array with the legacy fields in order, then t
   assert.ok(run.stdout.endsWith("}\n]\n"));
   const records: Row[] = JSON.parse(run.stdout);
   assert.equal(records.length, 2);
-  const order = ["slug", "name", "due", "until", "from", "agent", "opened", "resolved", "verdict", "path", "state", "flagged", "heavy", "lastOutcome"];
+  const order = ["slug", "name", "due", "until", "from", "agent", "opened", "resolved", "verdict", "path", "state", "flagged", "heavy", "lastOutcome", "failKind", "paused", "pausedUntil"];
   for (const record of records) assert.deepEqual(Object.keys(record), order);
   const [bare, soak] = records;
   assert.deepEqual(
     { ...bare, opened: null },
-    { slug: "bare", name: "bare", due: "2026-10-05", until: null, from: null, agent: null, opened: null, resolved: null, verdict: null, path: bare?.path, state: "open", flagged: false, heavy: false, lastOutcome: null },
+    { slug: "bare", name: "bare", due: "2026-10-05", until: null, from: null, agent: null, opened: null, resolved: null, verdict: null, path: bare?.path, state: "open", flagged: false, heavy: false, lastOutcome: null, failKind: null, paused: false, pausedUntil: null },
   );
   assert.equal(bare?.opened, localToday());
   assert.deepEqual(soak, {
@@ -203,6 +203,9 @@ test("list --json is a bare pretty array with the legacy fields in order, then t
     flagged: false,
     heavy: false,
     lastOutcome: null,
+    failKind: null,
+    paused: false,
+    pausedUntil: null,
   });
   assert.equal(soak?.path, projectedVigilPath(treeDirOf(openProject("nv-json")), "guard-soak"), "path is the projected file");
   assert.ok(existsSync(String(soak?.path)));
@@ -560,6 +563,16 @@ test("due lists the vigils of a project that owns vigil: due ones and armed ones
     text.stdout,
     `Vigils due:\n  nv-due/date-due  (overdue 2d, due ${yesterday})  ${DASH} Date due  [from M1/S01]\nVigils armed (event-gated):\n  nv-due/waiting  ${DASH} waiting on: first batch  (opened 2026-09-28)\n`,
   );
+});
+
+test("due --json keeps a paused vigil, with the paused fields", () => {
+  const repo = ownedRepo("nv-due-paused");
+  const yesterday = localToday(new Date(Date.now() - 86_400_000));
+  darius(["vigil", "add", "snoozed", "--name", "Snoozed", "--due", yesterday, "--stdin"], repo, BODY);
+  darius(["vigil", "add", "active", "--name", "Active", "--due", yesterday, "--stdin"], repo, BODY);
+  assert.equal(darius(["vigil", "pause", "snoozed", "--until", "2999-01-01", "--reason", "waiting on the vendor"], repo).status, 0);
+  const parsed: { vigils: { due: Row[] } } = JSON.parse(darius(["due", "--json"], repo).stdout);
+  assert.deepEqual(parsed.vigils.due.map((row) => [row.slug, row.paused, row.pausedUntil]), [["active", false, null], ["snoozed", true, "2999-01-01"]]);
 });
 
 test("due lists no vigils for a project that does not own vigil, and keeps the ritual-only text", () => {

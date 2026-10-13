@@ -13,8 +13,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkVigilBody } from "../src/core/vigil-body.ts";
 import {
   classifyCommand,
+  classifyFail,
   parseChecklist,
   parseExpectation,
   runCheck,
@@ -85,6 +87,32 @@ test("a heading ends the current item, so a later Command never attaches to it",
 test("an Expected that only says manual is still manual, with empty fields", () => {
   const [only] = parseChecklist("- [ ] eyeball it\n  - Expected: manual\n");
   assert.deepEqual(only?.manual, { owner: "", expires: "" });
+});
+
+test("parseChecklist reads a Pending clause, quoted or not, and leaves Expected alone", () => {
+  const body = [
+    "- [ ] line is gone",
+    "  - Command: `check-line`",
+    "  - Expected: `exit 0`",
+    "  - Pending: `exit 1`",
+    "- [ ] bare form",
+    "  - Command: check-other",
+    "  - Expected: exit 0",
+    "  - Pending: stdout contains waiting",
+  ].join("\n");
+  const [quoted, bare] = parseChecklist(body);
+  assert.deepEqual(quoted, { index: 0, text: "line is gone", command: "check-line", expected: "exit 0", pending: "exit 1" });
+  assert.equal(bare?.pending, "stdout contains waiting");
+});
+
+test("the legacy checklist parser and body check still accept a body with a Pending clause", async () => {
+  const body = "# V\n\n## Verification Checklist\n\n- [ ] gone\n  - Command: `test -f /nonexistent`\n  - Expected: `exit 0`\n  - Pending: `exit 1`\n";
+  const legacy = await import("../src/legacy/lib/markdown/checklist.ts");
+  const [item] = legacy.parseChecklist(body);
+  assert.equal(item?.command, "test -f /nonexistent");
+  assert.equal(item?.expected, "exit 0");
+  const checked = await checkVigilBody({ body, title: "V", slug: "v", context: "test" });
+  assert.equal(checked.executableCommands, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -196,6 +224,41 @@ test("runCheck refuses a check that is not executable", async () => {
     runCheck({ ...check("true", "manual (owner: a, expires: 2027-01-01)"), manual: { owner: "a", expires: "2027-01-01" } }, options),
     /no executable Expected/,
   );
+});
+
+test("classifyFail: Pending decides when present, the exit code decides when not", () => {
+  const cwd = scratchDir();
+  const rows: { exit: number | null; pending?: string; combined?: string; want: string }[] = [
+    { exit: 1, pending: "exit 1", want: "pending" },
+    { exit: 2, pending: "exit 1", want: "broken" },
+    { exit: 127, pending: "exit 127", want: "pending" },
+    { exit: null, pending: "exit 1", want: "broken" },
+    { exit: 0, pending: "stdout contains waiting", combined: "still waiting\n", want: "pending" },
+    { exit: 0, pending: "stdout contains waiting", combined: "error\n", want: "broken" },
+    { exit: 1, pending: "looks like prose", want: "unknown" },
+    { exit: 1, want: "unknown" },
+    { exit: 2, want: "unknown" },
+    { exit: 124, want: "broken" },
+    { exit: 126, want: "broken" },
+    { exit: 127, want: "broken" },
+    { exit: 137, want: "broken" },
+    { exit: null, want: "broken" },
+  ];
+  for (const row of rows) {
+    assert.equal(classifyFail({ exit: row.exit, pending: row.pending, combined: row.combined ?? "", cwd }), row.want, JSON.stringify(row));
+  }
+});
+
+test("runCheck sets failKind on a fail or a timeout and none on a pass", async () => {
+  const options = { cwd: scratchDir(), timeoutMs: 20_000 };
+  const kind = async (command: string, pending?: string) => (await runCheck({ ...check(command, "exit 0"), pending }, options)).failKind;
+  assert.equal(await kind("exit 1"), "unknown");
+  assert.equal(await kind("exit 1", "exit 1"), "pending");
+  assert.equal(await kind("exit 2", "exit 1"), "broken");
+  assert.equal(await kind("no-such-tool-darius-probe"), "broken");
+  assert.equal(await kind("true"), undefined);
+  const timeout = await runCheck(check("sleep 30", "exit 0"), { cwd: scratchDir(), timeoutMs: 300 });
+  assert.equal(timeout.failKind, "broken");
 });
 
 /**

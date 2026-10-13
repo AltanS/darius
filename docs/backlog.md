@@ -34,10 +34,6 @@ means no cap, so existing setups do not change when it ships.
   start line for every run, not only for a run with grants (0.47.1). Needs an answer for runs
   started before 0.47.1, which have no sha.
 
-## Web
-
-- A vigil detail page.
-
 ## Marker v3 follow-ups
 
 Left out of the v3 design on purpose (design section 14).

@@ -56,6 +56,11 @@ export interface VigilView {
   flagged: boolean;
   heavy: boolean;
   lastOutcome: string | null;
+  /** Why the newest judged sweep failed; null unless the vigil is flagged. */
+  failKind: string | null;
+  paused: boolean;
+  /** The last day of a snooze; null for a pause with no end date or no pause. */
+  pausedUntil: string | null;
   /** The item body, for the projected file. */
   body: string;
 }
@@ -88,6 +93,9 @@ export function readVigilViews(project: Project): VigilView[] {
         flagged: status.flagged,
         heavy: header.heavy,
         lastOutcome: textOrNull(status.lastOutcome),
+        failKind: status.failKind ?? null,
+        paused: status.paused,
+        pausedUntil: textOrNull(status.pausedUntil),
         body: doc.body,
       },
     ];

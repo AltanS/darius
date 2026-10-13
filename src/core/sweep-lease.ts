@@ -7,6 +7,11 @@
  * sweep timer. A lease whose holder died expires after SWEEP_LEASE_TTL_MS and
  * can then be taken over (src/core/lease.ts).
  *
+ * A one-vigil sweep (`vigil sweep <slug>`) never takes that lease: finishing it
+ * would mark the day done and stop the daily sweep. It reads the daily lease and
+ * stands aside while another sweep holds it, then takes
+ * `<project>/leases/vigil-<slug>.json` for its own run and releases it at the end.
+ *
  * The date is the host's local date, like the sweep's own `today`. Hosts in
  * different time zones use different keys around midnight and can then both
  * sweep; the same-zone hosts this runs on today never do.
@@ -15,8 +20,9 @@
 import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
-import { takeLease, type LeaseOutcome } from "./lease.ts";
-import type { S3 } from "./s3.ts";
+import { errorMessage } from "../runtime.ts";
+import { isLeaseStale, readLease, takeLease, type LeaseOutcome } from "./lease.ts";
+import { S3NetworkError, type S3 } from "./s3.ts";
 import type { Project } from "./store.ts";
 import { localToday } from "./sweep.ts";
 
@@ -30,14 +36,51 @@ function leaseDir(project: Project): string {
   return join(project.root, "leases");
 }
 
+function dailyLease(project: Project, today: string) {
+  return { key: `${project.name}/leases/sweep-${today}.json`, file: join(leaseDir(project), `sweep-${today}.lock`) };
+}
+
 export function takeSweepLease(project: Project, target: { s3: S3 | null; host: string; today: string }): Promise<LeaseOutcome> {
   return takeLease({
-    key: `${project.name}/leases/sweep-${target.today}.json`,
-    file: join(leaseDir(project), `sweep-${target.today}.lock`),
+    ...dailyLease(project, target.today),
     s3: target.s3,
     host: target.host,
     ttlMs: SWEEP_LEASE_TTL_MS,
   });
+}
+
+/** The TTL of a one-vigil sweep: every Command may run to its timeout, plus a minute for the kills and the writes. */
+export function vigilLeaseTtlMs(commands: number, timeoutMs: number): number {
+  return Math.max(1, commands) * timeoutMs + 60_000;
+}
+
+/**
+ * The lease of a one-vigil sweep. Blocked while today's daily sweep is held and
+ * not done, or while another one-vigil sweep of the same vigil runs. Never
+ * writes the daily lease. The caller releases the handle.
+ */
+export async function takeVigilSweepLease(
+  project: Project,
+  target: { s3: S3 | null; host: string; today: string; slug: string; ttlMs: number },
+): Promise<LeaseOutcome> {
+  try {
+    const daily = await readLease({ ...dailyLease(project, target.today), s3: target.s3 });
+    if (daily !== null && daily.done !== true && !isLeaseStale(daily, target.host)) {
+      return { blocked: "lease-held", detail: `the daily sweep runs on ${daily.host}` };
+    }
+  } catch (cause) {
+    if (cause instanceof S3NetworkError) return { blocked: "lease-offline", detail: errorMessage(cause) };
+    throw cause;
+  }
+  const taken = await takeLease({
+    key: `${project.name}/leases/vigil-${target.slug}.json`,
+    file: join(leaseDir(project), `vigil-${target.slug}.lock`),
+    s3: target.s3,
+    host: target.host,
+    ttlMs: target.ttlMs,
+  });
+  if ("handle" in taken || taken.blocked !== "lease-held") return taken;
+  return { blocked: "lease-held", detail: `a check of '${target.slug}' is already running (${taken.detail})` };
 }
 
 function isOld(name: string, cutoff: string): boolean {

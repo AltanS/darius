@@ -29,7 +29,9 @@
  * Evidence and outcomes are ledger lines, never edits of the vigil file:
  * `evidence{check,exit,outcome,output_sha,duration_ms}` per executed check
  * (output tail stored as a blob), `vigil.swept{outcome,checks[],gate}` per
- * vigil, `vigil.closed{verdict,by}` on a close.
+ * vigil, `vigil.closed{verdict,by,reason?}` on a close. A pause is
+ * `vigil.paused{reason,until?}` and `vigil.resumed`: a paused vigil lands in the
+ * `paused` bucket and nothing runs. A snooze (`until`) ends after that local date.
  *
  * One guard beyond djinn: the old tracker's trailing-pipe rule (tracker
  * `lib/verification/runner.ts`, M347/04). A Command whose last stage is a
@@ -49,10 +51,11 @@ import {
   splitShellStages,
   stageFirstToken,
   type Check,
+  type FailKind,
 } from "./checks.ts";
 import { appendLine, linesFor, readLedger } from "./ledger.ts";
 import { UsageError, type Document, type JsonValue, type LedgerLine, type Vigil } from "./model.ts";
-import { itemRef, putBlob, type Project } from "./store.ts";
+import { getBlobText, itemRef, putBlob, type Project } from "./store.ts";
 import { ulid } from "./ulid.ts";
 
 // ---------------------------------------------------------------------------
@@ -65,6 +68,7 @@ export type SweepBucket =
   | "manual-only"
   | "mixed"
   | "heavy"
+  | "paused"
   | "event-gated"
   | "date-gated"
   | "runnable";
@@ -96,6 +100,8 @@ export interface SweptCheck {
   reason?: string;
   output_sha?: string;
   duration_ms?: number;
+  /** Set when the check failed or timed out. */
+  fail_kind?: FailKind;
 }
 
 export interface SweptVigil {
@@ -106,6 +112,8 @@ export interface SweptVigil {
   closed: boolean;
   /** Swept `failed` and left armed: the operator must look. */
   flagged: boolean;
+  /** Set when `outcome` is `failed`: the worst kind among the failing checks. */
+  fail_kind?: FailKind;
   reason?: string;
   checks: SweptCheck[];
 }
@@ -122,6 +130,7 @@ export interface BucketCounts {
   "manual-only": number;
   mixed: number;
   heavy: number;
+  paused: number;
   "event-gated": number;
   "date-gated": number;
   runnable: number;
@@ -213,6 +222,14 @@ export function localToday(now: Date = new Date()): string {
 
 function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
+}
+
+function isNumber(value: JsonValue | undefined): value is number {
+  return typeof value === "number";
+}
+
+function isRecord(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** True when a Command would start another sweep. */
@@ -342,18 +359,37 @@ export interface VigilStatus {
   verdict?: string;
   closedBy?: string;
   closedAt?: string;
+  closedReason?: string;
+  /** Under a pause that has not ended. A closed vigil is never paused. */
+  paused: boolean;
+  /** The last day of a snooze; set while `paused` and the pause has an end date. */
+  pausedUntil?: string;
+  pausedReason?: string;
   /** The latest `vigil.swept` line. */
   lastSwept?: LedgerLine;
   /** The latest sweep that reached a verdict-like outcome. */
   lastOutcome?: string;
   flagged: boolean;
+  /** Why the newest judged sweep failed; set while `flagged`. A sweep from before 0.82.0 reads `unknown`. */
+  failKind?: FailKind;
   gateFired: boolean;
 }
 
 const JUDGED_OUTCOMES: ReadonlySet<string> = new Set(["held", "failed", "awaiting-manual", "finding", "pending"]);
 
-/** Status computed from the ledger lines of one vigil (`linesFor(ledger, "vigil/<slug>")`). */
-export function vigilStatus(slug: string, lines: readonly LedgerLine[]): VigilStatus {
+/** The kind a ledger value names; undefined for a line from before the field existed. */
+function readFailKind(value: JsonValue | undefined): FailKind | undefined {
+  return value === "pending" || value === "broken" || value === "unknown" ? value : undefined;
+}
+
+/** The worst kind wins: one broken check makes the sweep broken, an unknown one beats pending. */
+function worstFailKind(kinds: readonly FailKind[]): FailKind {
+  if (kinds.includes("broken")) return "broken";
+  return kinds.length > 0 && !kinds.includes("unknown") ? "pending" : "unknown";
+}
+
+/** Status computed from the ledger lines of one vigil (`linesFor(ledger, "vigil/<slug>")`). `today` is the local date a snooze is judged on. */
+export function vigilStatus(slug: string, lines: readonly LedgerLine[], today: string = localToday()): VigilStatus {
   const closedLine = lines.findLast((line) => line.type === "vigil.closed");
   const swept = lines.filter((line) => line.type === "vigil.swept");
   const judged = swept.findLast((line) => isText(line.outcome) && JUDGED_OUTCOMES.has(line.outcome));
@@ -362,12 +398,22 @@ export function vigilStatus(slug: string, lines: readonly LedgerLine[]): VigilSt
     slug,
     state: closedLine === undefined ? "open" : "closed",
     flagged: closedLine === undefined && lastOutcome === "failed",
+    paused: false,
     gateFired: swept.some((line) => line.gate === "fired"),
   };
+  if (status.flagged) status.failKind = readFailKind(judged?.fail_kind) ?? "unknown";
   if (closedLine !== undefined) {
     if (isText(closedLine.verdict)) status.verdict = closedLine.verdict;
     if (isText(closedLine.by)) status.closedBy = closedLine.by;
     status.closedAt = closedLine.at;
+    if (isText(closedLine.reason)) status.closedReason = closedLine.reason;
+  }
+  const pause = lines.findLast((line) => line.type === "vigil.paused" || line.type === "vigil.resumed");
+  // A snooze covers its last day: it is over once `today` is past `until`.
+  if (closedLine === undefined && pause?.type === "vigil.paused" && !(isText(pause.until) && pause.until < today)) {
+    status.paused = true;
+    if (isText(pause.until)) status.pausedUntil = pause.until;
+    if (isText(pause.reason)) status.pausedReason = pause.reason;
   }
   const lastSwept = swept.at(-1);
   if (lastSwept !== undefined) status.lastSwept = lastSwept;
@@ -384,6 +430,80 @@ export function latestEvidence(slug: string, lines: readonly LedgerLine[]): Map<
     latest.set(Number(line.check.slice(prefix.length)), line);
   }
   return latest;
+}
+
+/** Why a vigil is flagged: the newest failing check of its newest judged sweep. */
+export interface LastFailure {
+  index: number;
+  /** The label of check `index` in the current body; the body can have changed since the sweep. */
+  text: string;
+  /** The Command and Expected as the check ran. From the current body when `source` is `body`. */
+  command?: string;
+  expected?: string;
+  /** `evidence` for a line that carries `command`; `body` for an older line, read from the current body. */
+  source: "evidence" | "body";
+  exit: number | null;
+  outcome: string;
+  at: string;
+  host: string;
+  failKind: FailKind;
+  duration_ms?: number;
+  output_sha?: string;
+}
+
+/** The last failing check of the newest judged sweep, or null when that sweep did not fail. */
+export function lastFailure(slug: string, lines: readonly LedgerLine[], body: string): LastFailure | null {
+  const sweptAt = lines.findLastIndex((line) => line.type === "vigil.swept" && isText(line.outcome) && JUDGED_OUTCOMES.has(line.outcome));
+  const swept = lines[sweptAt];
+  if (swept === undefined || swept.outcome !== "failed" || !Array.isArray(swept.checks)) return null;
+  const bad = swept.checks.findLast((check) => isRecord(check) && (check.outcome === "fail" || check.outcome === "timeout"));
+  if (!isRecord(bad) || !isNumber(bad.index)) return null;
+  const index = bad.index;
+  const ref = `${itemRef("vigil", slug)}#${index}`;
+  const evidence = lines.slice(0, sweptAt).findLast((line) => line.type === "evidence" && line.check === ref);
+  if (evidence === undefined) return null;
+  const check = parseChecklist(body).find((one) => one.index === index);
+  const isRecorded = isText(evidence.command);
+  const failure: LastFailure = {
+    index,
+    text: check?.text ?? `check ${index}`,
+    source: isRecorded ? "evidence" : "body",
+    exit: isNumber(evidence.exit) ? evidence.exit : null,
+    outcome: isText(evidence.outcome) ? evidence.outcome : "fail",
+    at: evidence.at,
+    host: evidence.host,
+    failKind: readFailKind(bad.fail_kind) ?? readFailKind(swept.fail_kind) ?? "unknown",
+  };
+  const command = isRecorded ? evidence.command : check?.command;
+  const expected = isText(evidence.expected) ? evidence.expected : check?.expected;
+  if (isText(command)) failure.command = command;
+  if (isText(expected)) failure.expected = expected;
+  if (isNumber(evidence.duration_ms)) failure.duration_ms = evidence.duration_ms;
+  if (isText(evidence.output_sha)) failure.output_sha = evidence.output_sha;
+  return failure;
+}
+
+/** Lines of output `vigil show` prints for a failing check. */
+export const OUTPUT_TAIL_LINES = 20;
+
+/** The last `OUTPUT_TAIL_LINES` lines of a stored check output; null when the blob is not here. */
+export function outputTail(project: Project, sha: string): string | null {
+  const text = getBlobText(project, sha);
+  if (text === null) return null;
+  return text.replace(/\n+$/u, "").split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
+}
+
+/** A one-vigil sweep repeats a live check, so it waits this long after the last sweep that ran one. */
+export const SWEEP_COOLDOWN_MS = 2 * 60_000;
+
+/**
+ * Milliseconds left of the cooldown, 0 when it is over. It counts from the newest
+ * `vigil.swept` line that ran something: a `skipped` line (heavy, paused) ran nothing.
+ */
+export function cooldownLeftMs(lines: readonly LedgerLine[], now: number = Date.now()): number {
+  const last = lines.findLast((line) => line.type === "vigil.swept" && line.outcome !== "skipped");
+  if (last === undefined) return 0;
+  return Math.max(0, Date.parse(last.at) + SWEEP_COOLDOWN_MS - now);
 }
 
 function localDateOf(iso: string): string {
@@ -463,6 +583,8 @@ export interface CloseInput {
   who: string;
   /** The instant of the `vigil.closed` line, ISO. Default now. */
   at?: string;
+  /** Why the vigil is closed. Optional for the legacy callers. */
+  reason?: string;
 }
 
 /** Appends `vigil.closed`. Refuses (throws) a missing or already closed vigil. */
@@ -481,8 +603,51 @@ export function closeVigil(project: Project, input: CloseInput): LedgerLine {
       item: itemRef("vigil", input.slug),
       verdict: input.verdict,
       by: input.by,
+      reason: input.reason,
       at: input.at,
     });
+  });
+}
+
+export interface PauseInput {
+  slug: string;
+  reason: string;
+  /** The last day of the snooze, local `YYYY-MM-DD`. Without it the pause lasts until `vigil resume`. */
+  until?: string;
+  who: string;
+}
+
+/** Appends `vigil.paused`. Refuses (throws) a missing or closed vigil; a second pause replaces the first. */
+export function pauseVigil(project: Project, input: PauseInput): LedgerLine {
+  if (input.reason.trim() === "") throw new UsageError("a pause needs a --reason");
+  assertIsoDate(input.until, "--until");
+  if (project.readItem("vigil", input.slug) === null) {
+    throw new Error(`no vigil '${input.slug}' in ${project.name}`);
+  }
+  return project.withLock(() => {
+    const status = vigilStatus(input.slug, linesFor(readLedger(project), itemRef("vigil", input.slug)));
+    if (status.state === "closed") {
+      throw new Error(`vigil '${input.slug}' is closed, so there is nothing to pause`);
+    }
+    return appendLine(project, {
+      who: input.who,
+      type: "vigil.paused",
+      item: itemRef("vigil", input.slug),
+      reason: input.reason,
+      until: input.until,
+    });
+  });
+}
+
+/** Appends `vigil.resumed`. Returns null when the vigil is not paused. Refuses (throws) a missing vigil. */
+export function resumeVigil(project: Project, input: { slug: string; who: string }): LedgerLine | null {
+  if (project.readItem("vigil", input.slug) === null) {
+    throw new Error(`no vigil '${input.slug}' in ${project.name}`);
+  }
+  return project.withLock(() => {
+    const status = vigilStatus(input.slug, linesFor(readLedger(project), itemRef("vigil", input.slug)));
+    if (!status.paused) return null;
+    return appendLine(project, { who: input.who, type: "vigil.resumed", item: itemRef("vigil", input.slug) });
   });
 }
 
@@ -522,6 +687,7 @@ function emptyCounts(): BucketCounts {
     "manual-only": 0,
     mixed: 0,
     heavy: 0,
+    paused: 0,
     "event-gated": 0,
     "date-gated": 0,
     runnable: 0,
@@ -588,8 +754,9 @@ function report(plan: VigilPlan, fields: Omit<SweptVigil, "slug" | "checks" | "f
 
 async function sweepVigil(ctx: SweepContext, slug: string): Promise<SweptVigil> {
   const plan = planVigil(ctx, slug);
-  const status = vigilStatus(slug, plan.lines);
+  const status = vigilStatus(slug, plan.lines, ctx.opts.today);
   if (status.state === "closed") return report(plan, { bucket: "closed", gate: "n/a", closed: true, checks: [] });
+  if (status.paused) return skip(ctx, plan, "paused", pausedReason(status));
 
   const header = plan.doc.header;
   const selfInvoking = commandsOf(plan.doc.body, header.gate_command).find(invokesSweep);
@@ -609,6 +776,11 @@ async function sweepVigil(ctx: SweepContext, slug: string): Promise<SweptVigil> 
   if (status.gateFired) return sweepDue(ctx, plan, "fired");
   if (header.gate_command === undefined) return sweepEvent(ctx, plan, kind === "event" ? "event-gated" : "date-gated");
   return sweepGate(ctx, plan, kind === "event" ? "event-gated" : "date-gated");
+}
+
+function pausedReason(status: VigilStatus): string {
+  const until = status.pausedUntil === undefined ? "" : ` until ${status.pausedUntil}`;
+  return `paused${until}: ${status.pausedReason ?? "no reason given"}`;
 }
 
 function heavyReason(header: Vigil, execs: readonly Check[]): string | null {
@@ -677,12 +849,22 @@ async function sweepDue(
   if (isAnyBad) outcome = "failed";
   else if (plan.unanswered > 0) outcome = "awaiting-manual";
   const willClose = outcome === "held" && !ctx.opts.dryRun;
-  const swept = report(plan, { bucket, gate, outcome, closed: willClose, checks });
+  const failed = checks.filter((check) => check.outcome === "fail" || check.outcome === "timeout");
+  const failKind = outcome === "failed" ? worstFailKind(failed.map((check) => check.fail_kind ?? "unknown")) : undefined;
+  const swept = report(plan, { bucket, gate, outcome, closed: willClose, checks, fail_kind: failKind });
   writeSwept(ctx, plan, swept, gateFields);
-  if (willClose) {
-    appendLine(ctx.project, { who: ctx.who, type: "vigil.closed", item: plan.ref, verdict: "held", by: "sweep" });
-  }
+  if (willClose) swept.closed = closeHeld(ctx, plan);
   return swept;
+}
+
+/** Appends `vigil.closed` unless another sweep closed the vigil while the checks ran. Returns whether it closed. */
+function closeHeld(ctx: SweepContext, plan: VigilPlan): boolean {
+  return ctx.project.withLock(() => {
+    const status = vigilStatus(plan.doc.header.slug, linesFor(readLedger(ctx.project), plan.ref));
+    if (status.state === "closed") return false;
+    appendLine(ctx.project, { who: ctx.who, type: "vigil.closed", item: plan.ref, verdict: "held", by: "sweep" });
+    return true;
+  });
 }
 
 /** Runs every executable check in order and writes one `evidence` line each. Unanswered items ride along unrun. */
@@ -700,6 +882,8 @@ async function executeChecks(ctx: SweepContext, plan: VigilPlan): Promise<SweptC
       type: "evidence",
       item: plan.ref,
       check: `${plan.ref}#${one.check.index}`,
+      command: one.check.command,
+      expected: one.check.expected,
       exit: run.exit,
       outcome: run.outcome,
       output_sha: outputSha,
@@ -712,10 +896,14 @@ async function executeChecks(ctx: SweepContext, plan: VigilPlan): Promise<SweptC
       exit: run.exit,
       output_sha: outputSha,
       duration_ms: run.durationMs,
+      fail_kind: run.failKind,
     });
   }
   return results;
 }
+
+/** One entry of the `checks` array on a `vigil.swept` line. */
+type LedgerCheck = { index: number; outcome: string; exit: number | null; fail_kind?: string };
 
 function writeSwept(
   ctx: SweepContext,
@@ -723,7 +911,15 @@ function writeSwept(
   swept: SweptVigil,
   gateFields?: GateFields,
 ): void {
-  const checks = swept.checks.map((check) => ({ index: check.index, outcome: check.outcome, exit: check.exit }));
+  const checks = swept.checks.map((check) => {
+    const entry: LedgerCheck = {
+      index: check.index,
+      outcome: check.outcome,
+      exit: check.exit,
+    };
+    if (check.fail_kind !== undefined) entry.fail_kind = check.fail_kind;
+    return entry;
+  });
   appendLine(ctx.project, {
     gate_exit: gateFields?.gate_exit,
     gate_duration_ms: gateFields?.gate_duration_ms,
@@ -732,6 +928,7 @@ function writeSwept(
     type: "vigil.swept",
     item: plan.ref,
     outcome: swept.outcome,
+    fail_kind: swept.fail_kind,
     gate: swept.gate,
     checks,
     reason: swept.reason,

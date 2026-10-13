@@ -10,6 +10,8 @@
  *   sweep     `<project>/leases/sweep-<YYYY-MM-DD>.json`, FINISHED when the
  *             sweep ends: the body gets `done: true` and stays, so every other
  *             host sees that the project was swept today and skips it.
+ *   vigil     `<project>/leases/vigil-<slug>.json`, RELEASED when a one-vigil
+ *             sweep ends (src/core/sweep-lease.ts).
  *
  * Take: PUT with If-None-Match: * (or an O_EXCL create). When the key exists,
  * a lease that is expired, unreadable, or held by a dead process of this host
@@ -237,6 +239,12 @@ async function takeFrom(slot: LeaseSlot, spec: LeaseSpec): Promise<LeaseOutcome>
     await slot.remove();
   }
   return { blocked: "lease-held", detail: "lost the takeover race" };
+}
+
+/** The lease as it stands, or null when there is none. Takes nothing. A bucket error reaches the caller. */
+export async function readLease(spec: Pick<LeaseSpec, "key" | "file" | "s3">): Promise<LeaseBody | null> {
+  const text = await (spec.s3 === null ? fileSlot(spec.file) : bucketSlot(spec.s3, spec.key)).read();
+  return text === null ? null : decodeLease(text);
 }
 
 /** Takes the lease in the bucket when `spec.s3` is set, else as a local file. */
