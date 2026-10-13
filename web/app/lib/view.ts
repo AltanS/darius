@@ -6,7 +6,7 @@
  * do the runs `darius import` copied over.
  */
 
-import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../../../src/web/api.ts";
+import type { Acknowledgement, MdBlock, MdLine, MdSpan, ProjectStatus, RitualRow, RunDetail, RunRow, VigilFailKind, VigilRow } from "../../../src/web/api.ts";
 import { ackCommand, hostDate, momentText, relativeDate, relativeTime, roughDuration, runNowCommand, shortDate, zonedMoment } from "./format.ts";
 import { isUnattended, itemKind, itemManual, type Kind } from "./kind.ts";
 import { runWord } from "./state-words.ts";
@@ -175,6 +175,21 @@ export function stuckText(runningFor: string): string {
 /** What a vigil waits for, in words: "due in 3 d", "waits for: the first batch", or both. */
 export function vigilWaits(vigil: VigilRow, today: string): string[] {
   return [vigil.due === null ? null : `due ${relativeDate(vigil.due, today)}`, vigil.until === null ? null : `waits for: ${vigil.until}`].filter((part) => part !== null);
+}
+
+/** Why a vigil is flagged, in one line: "step 1 failed, exit 1, 06:31". Without the evidence on this host it is "last check failed"; null when no check was judged. */
+export function vigilFailureText(vigil: VigilRow, today: string, offset: number): string | null {
+  const { lastFailure } = vigil;
+  if (lastFailure === null) return vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`;
+  const step = `step ${lastFailure.index} ${lastFailure.outcome === "timeout" ? "timed out" : "failed"}`;
+  return [step, lastFailure.exit === null ? null : `exit ${lastFailure.exit}`, momentText(lastFailure.at, today, offset)].filter((part) => part !== null).join(", ");
+}
+
+/** What a failure kind means, for the failure block of the vigil page. */
+export function failKindText(kind: VigilFailKind): string {
+  if (kind === "pending") return "Pending: the check failed the way it does while the event is still ahead.";
+  if (kind === "broken") return "Check broken: the check itself failed, or gave a result it does not expect.";
+  return "Not known: darius cannot tell a wait from a broken check.";
 }
 
 /** The questions that wait for the operator: a held run's (one without a question counts as one), and a result's nobody answered. */

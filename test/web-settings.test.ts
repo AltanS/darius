@@ -36,6 +36,7 @@ const context: WebContext = {
   nonce: "bm9uY2Utb2YtdGhlLXRlc3Q=",
   status: () => STATUS,
   ritual: () => null,
+  vigil: () => null,
   run: () => null,
   milestone: () => null,
 };

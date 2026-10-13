@@ -7,6 +7,7 @@ function loadContext(context) {
 		canWrite: context.canWrite,
 		status: () => context.status(),
 		ritual: (project, slug) => context.ritual(project, slug),
+		vigil: (project, slug) => context.vigil(project, slug),
 		run: (project, run) => context.run(project, run),
 		milestone: (project, milestone) => context.milestone(project, milestone),
 		system: () => context.system(),
@@ -23,7 +24,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-k007IP9h.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-D0_lm2GW.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

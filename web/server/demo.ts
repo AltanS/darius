@@ -79,7 +79,7 @@ function ritual(slug: string, title: string, extra: Partial<RitualRow> = {}): Ri
 }
 
 function vigil(slug: string, title: string, extra: Partial<VigilRow> = {}): VigilRow {
-  return { slug, title, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, ...extra };
+  return { slug, title, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null, ...extra };
 }
 
 function spec(milestoneId: string, number: number, title: string, done: number, total: number, extra: Partial<SpecRow> = {}): SpecRow {
@@ -233,7 +233,7 @@ function project(now: number): ProjectStatus {
     ],
     vigils: [
       vigil("guard-soak", "Guard soak after the checkout release", { due: day(now, 0, 3), until: "the first real order batch" }),
-      vigil("cache-flip", "Cache flip is stable", { flagged: true, lastOutcome: "failed", due: day(now, 0, -1) }),
+      vigil("cache-flip", "Cache flip is stable", { flagged: true, lastOutcome: "failed", failKind: "broken", lastFailure: { index: 1, text: "The cache answers", exit: 127, outcome: "fail", at: ago(now, 5 * 60 * MINUTE), failKind: "broken" }, due: day(now, 0, -1) }),
       vigil("coupon-sync", "Coupon export stays in sync with the shop", { due: day(now, 0, 0), until: "the next full catalogue import finishes" }),
       vigil("cert-window", "Certificate renewal went through", { due: day(now, 0, 60) }),
       vigil("checkout-latency", "Checkout latency stays under the budget after the payment provider change", { until: "the first Monday peak after the new payment provider is live, or 14 days of traffic logs, whichever comes first" }),
@@ -242,7 +242,8 @@ function project(now: number): ProjectStatus {
       vigil("search-synonyms", "Search synonyms do not hide products", { until: "one week of search logs after the synonym list was replaced, checked against zero-result queries" }),
       vigil("image-cdn", "Image CDN serves the new WebP variants", { until: "the next cache purge of the product image path completes and the edge hit rate settles above 90 percent" }),
       vigil("returns-form", "Returns form sends its confirmation mail", { until: "the first customer return that uses the new form, with the confirmation mail found in the outbound log" }),
-      vigil("bot-rules", "Bot filter does not block the payment webhook", { flagged: true, lastOutcome: "failed", until: "the next scheduled webhook delivery from the payment provider after the firewall rule update" }),
+      vigil("bot-rules", "Bot filter does not block the payment webhook", { flagged: true, lastOutcome: "failed", failKind: "pending", lastFailure: { index: 2, text: "The webhook was delivered", exit: 1, outcome: "fail", at: ago(now, 7 * 60 * MINUTE), failKind: "pending" }, until: "the next scheduled webhook delivery from the payment provider after the firewall rule update" }),
+      vigil("checkout-copy", "Checkout copy review", { paused: true, pausedUntil: day(now, 0, 7), until: "the copy review" }),
       vigil("old-soak", "Search index soak", { state: "closed", verdict: "held", lastOutcome: "held" }),
     ],
     milestones: milestones(),
@@ -499,6 +500,7 @@ export function demoContext(base: WebContext): WebContext {
     canWrite: true,
     status: () => demoStatus(),
     ritual: () => null,
+    vigil: () => null,
     run: () => null,
     milestone: (name, milestone) => (name === "demo-shop" && milestone.toUpperCase() === "M12" ? demoMilestone(Date.now()) : null),
     system: () => demoSystem(Date.now()),

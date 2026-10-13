@@ -15,6 +15,7 @@ export function loadContext(context: WebContext): AppLoadContext {
     canWrite: context.canWrite,
     status: () => context.status(),
     ritual: (project, slug) => context.ritual(project, slug),
+    vigil: (project, slug) => context.vigil(project, slug),
     run: (project, run) => context.run(project, run),
     milestone: (project, milestone) => context.milestone(project, milestone),
     system: () => context.system(),

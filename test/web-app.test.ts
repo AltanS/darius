@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -46,6 +46,10 @@ function runRow(run: string, phase: RunRow["phase"], outcome: string | null): Ru
 }
 
 const RUNS: RunRow[] = [runRow(HELD, "held", null), runRow(FAILED, "closed", "failed"), runRow(DONE, "closed", "complete")];
+
+const SOAK_FAILURE = { index: 1, text: `the page ${EVIL} loads`, exit: 1, outcome: "fail", at: "2026-09-28T04:31:00.000Z", failKind: "broken" } as const;
+
+const SOAK: VigilRow = { slug: "soak", title: "Guard soak", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-10-01", until: null, lastFailure: SOAK_FAILURE, failKind: "broken", paused: false, pausedUntil: null };
 
 const STATUS: HostStatus = {
   host: "testhost",
@@ -92,7 +96,7 @@ const STATUS: HostStatus = {
         },
       ],
       runs: RUNS,
-      vigils: [{ slug: "soak", title: "Guard soak", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-10-01", until: null }],
+      vigils: [SOAK],
       milestones: [
         {
           source: "legacy",
@@ -301,11 +305,27 @@ const BACKUPS: BackupsStatus = {
   envFile: "/home/test/.config/darius/web.env",
 };
 
+const OUTPUT = `curl: (22) the page said <b>bold</b> & "more"\n<script>alert(1)</script>`;
+
+const VIGIL: VigilDetail = {
+  project: "demo",
+  row: SOAK,
+  closedReason: null,
+  pausedReason: null,
+  failure: { ...SOAK_FAILURE, command: `curl -sf http://localhost/${EVIL}`, expected: "exit 0", source: "evidence", host: "host-a", outputTail: OUTPUT },
+  sweeps: [
+    { at: "2026-09-28T04:31:00.000Z", who: "timer", outcome: "failed", failKind: "broken", reason: null, checks: [{ index: 1, outcome: "fail", exit: 1 }] },
+    { at: "2026-09-27T04:31:00.000Z", who: "timer", outcome: "held", failKind: null, reason: null, checks: [{ index: 1, outcome: "pass", exit: 0 }] },
+  ],
+  body: [{ kind: "paragraph", lines: [[{ kind: "text", text: `Check the page ${EVIL}` }]] }],
+};
+
 const context: WebContext = {
   viewer: "owner on phone",
   nonce: NONCE,
   status: () => STATUS,
   ritual: (project, slug) => (project === "demo" && slug === "daily-report" ? RITUAL : null),
+  vigil: (project, slug) => (project === "demo" && slug === "soak" ? VIGIL : null),
   run: (project, run) => {
     const row = project === "demo" ? RUNS.find((candidate) => candidate.run === run) : undefined;
     return row === undefined ? null : runDetail(row);
@@ -371,8 +391,8 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/profiles", ["careful", "opus", "headless"]],
   ["/all", ["Two things need you.", "Needs you", "Guard soak"]],
   ["/w/demo", ["/home/test/demo", "/w/demo/rituals/daily-report", "Latest reports", "Recent runs", "synced"]],
-  ["/vigils", ["Vigils", "Coming up", "Guard soak", "last check failed", "/w/demo/vigils#vigil-soak"]],
-  ["/w/demo/vigils", ["Vigils", "Guard soak", "last check failed"]],
+  ["/vigils", ["Vigils", "Coming up", "Guard soak", "step 1 failed, exit 1, 06:31", "/w/demo/vigils/soak"]],
+  ["/w/demo/vigils", ["Vigils", "Guard soak", "Check broken"]],
   ["/rituals", ["Rituals", "Coming up", "/w/demo/rituals/daily-report", "Recent runs", "All runs"]],
   ["/w/demo/rituals", ["Rituals", "/w/demo/rituals/daily-report", "/w/demo/runs"]],
   ["/milestones", ["Milestones"]],
@@ -643,7 +663,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
     checkout: null,
     rituals: [{ ...demo.rituals[0]!, slug: "heartbeat", title: "Heartbeat", skill: null, heldRun: null, overdueDays: 0, nextDue: "2026-09-29" }],
     runs: [{ ...RUNS[2]!, run: "01KGGGGGGGGGGGGGGGGGGGGGGG", item: "ritual/heartbeat" }],
-    vigils: [{ slug: "date-failed", title: "date failed", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-09-27", until: null }],
+    vigils: [{ slug: "date-failed", title: "date failed", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-09-27", until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null }],
   };
   const quiet: HostStatus = {
     ...STATUS,
@@ -1541,8 +1561,8 @@ test("the app can be installed and get push notices: manifest, icons, service wo
 
 test("Coming up and Waiting on an event: dated vigils join the agenda, event vigils wait apart, the same on both pages", async () => {
   const project = STATUS.projects[0]!;
-  const dated = { slug: "dated", title: "Dated soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-28", until: "the next batch" };
-  const event = { slug: "event", title: "Event soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: `the first deploy ${EVIL}` };
+  const dated = { slug: "dated", title: "Dated soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-28", until: "the next batch", lastFailure: null, failKind: null, paused: false, pausedUntil: null };
+  const event = { slug: "event", title: "Event soak", state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: `the first deploy ${EVIL}`, lastFailure: null, failKind: null, paused: false, pausedUntil: null };
   const busy: HostStatus = { ...STATUS, projects: [{ ...project, vigils: [dated, event] }] };
   const read = async (path: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
   for (const path of ["/vigils", "/w/demo/vigils"]) {
@@ -1555,6 +1575,51 @@ test("Coming up and Waiting on an event: dated vigils join the agenda, event vig
     assert.equal(waiting.includes(EVIL), false, `${path}: store text stays text`);
   }
   assert.match(await read("/all"), /<a [^>]*href="\/vigils#coming-up"[^>]*>.*?<span class="pill-n">1<\/span><span class="pill-l">vigils due<\/span>/su, "the strip counts the vigils that are late or due today, not the one that waits on an event");
+});
+
+test("a flagged vigil row names the failed step and why, and links to the vigil page (0.85.0)", async () => {
+  const body = (await get("/w/demo/vigils")).body.replaceAll("<!-- -->", "");
+  const row = between(body, body.indexOf('id="vigil-soak"'), body.indexOf("</li>", body.indexOf('id="vigil-soak"')));
+  assert.ok(row.includes('href="/w/demo/vigils/soak"'), "the row links to the vigil page");
+  assert.ok(row.includes("Check broken") && row.includes("step 1 failed, exit 1, 06:31"), "the word and the note, on the host clock");
+  assert.equal(row.includes("last check failed"), false);
+  const waiting = { ...SOAK, slug: "pending", title: "Pending soak", due: null, until: "the batch", failKind: "pending", lastFailure: { ...SOAK_FAILURE, failKind: "pending" } } as const;
+  const paused = { ...SOAK, slug: "snoozed", title: "Snoozed soak", flagged: false, due: null, until: "the batch", lastFailure: null, failKind: null, paused: true, pausedUntil: "2026-10-20" };
+  const busy: HostStatus = { ...STATUS, projects: [{ ...STATUS.projects[0]!, vigils: [waiting, paused] }] };
+  const read = (await (await handler(new Request("http://darius.test/w/demo/vigils"), { ...context, status: () => busy })).text()).replaceAll("<!-- -->", "");
+  const rail = between(read, read.indexOf('id="waiting"'), read.length);
+  assert.ok(rail.includes("Pending") && rail.includes("step 1 failed, exit 1, 06:31"), "an event vigil that waits says Pending");
+  assert.ok(rail.includes("Paused until 20 Oct"), "a paused vigil says until when");
+});
+
+test("the vigil page: the failure block, the output as text in a pre, the last sweeps and the checklist (0.85.0)", async () => {
+  const page = await get("/w/demo/vigils/soak");
+  assert.equal(page.status, 200);
+  assertScriptsCarryNonce(page.body, "/w/demo/vigils/soak");
+  const text = page.body.replaceAll("<!-- -->", "");
+  assert.deepEqual(crumbsOf(page.body).map((step) => step.text), ["demo", "Vigils", "Guard soak"]);
+  assert.ok(text.includes("Why flagged") && text.includes("Last sweeps"));
+  const plain = text.replaceAll(/<[^>]+>/gu, "");
+  for (const part of ["Step1: the page", "Commandcurl -sf http://localhost/", "Expectedexit 0", "Resultfail, exit 1", "Hosthost-a", "Check broken: the check itself failed"]) assert.ok(plain.includes(part), part);
+  const pre = /<pre class="code-block">(.*?)<\/pre>/su.exec(text)?.[1] ?? "";
+  assert.ok(pre.includes("curl: (22) the page said &lt;b&gt;bold&lt;/b&gt; &amp; &quot;more&quot;"), "the output is text in a pre");
+  assert.ok(pre.includes("&lt;script&gt;alert(1)&lt;/script&gt;"), "HTML-looking output is escaped");
+  assert.equal(text.includes(EVIL), false, "no store text becomes markup");
+  assert.equal(text.includes("<b>bold</b>"), false);
+  assert.ok(plain.includes("failed, broken") && plain.includes("held"), "the sweeps list their outcome and kind");
+  assert.ok(plain.includes("Check the page"), "the checklist is there");
+});
+
+test("the vigil page of a vigil that is not flagged has no failure block; an older sweep says the Command comes from the body; unknown vigils answer 404 (0.85.0)", async () => {
+  const quiet: WebContext = { ...context, vigil: () => ({ ...VIGIL, row: { ...SOAK, flagged: false, lastFailure: null, failKind: null }, failure: null, sweeps: [], closedReason: "done" }) };
+  const calm = (await (await handler(new Request("http://darius.test/w/demo/vigils/soak"), quiet)).text()).replaceAll("<!-- -->", "");
+  assert.equal(calm.includes("Why flagged"), false);
+  assert.ok(calm.includes("This vigil has not been swept yet.") && calm.includes("Closed because: done"));
+  const old: WebContext = { ...context, vigil: () => ({ ...VIGIL, failure: { ...VIGIL.failure!, source: "body", outputTail: null } }) };
+  const text = (await (await handler(new Request("http://darius.test/w/demo/vigils/soak"), old)).text()).replaceAll("<!-- -->", "");
+  assert.ok(text.includes("did not record Command and Expected") && text.includes("The output is not stored on this host."));
+  assert.equal((await get("/w/demo/vigils/ghost")).status, 404);
+  assert.equal((await get("/w/ghost/vigils/soak")).status, 404);
 });
 
 // --- the information architecture (0.39.0, reworked 0.63.0): scopes, Places, tabs, settings -------------
@@ -1572,7 +1637,7 @@ async function readWith(path: string, settings: Record<string, string>, status: 
 function threeWorkspaces(): HostStatus {
   const demo = STATUS.projects[0]!;
   const other = { ...demo, name: "atlas", rituals: [], runs: [], vigils: [], checkout: null };
-  const selftest = { ...demo, name: "darius-selftest", rituals: [], runs: [], vigils: [{ slug: "st", title: "Self-test vigil", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-09-27", until: null }], checkout: null };
+  const selftest = { ...demo, name: "darius-selftest", rituals: [], runs: [], vigils: [{ slug: "st", title: "Self-test vigil", state: "open", verdict: null, flagged: true, lastOutcome: "failed", due: "2026-09-27", until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null }], checkout: null };
   return { ...STATUS, projects: [demo, other, selftest] };
 }
 
@@ -1735,7 +1800,7 @@ test("an error page offers a way back to the last scope", async () => {
 
 test("a section page covers one scope: a workspace, or all of them", async () => {
   const status = threeWorkspaces();
-  const extra = { ...status.projects[1]!, rituals: [{ ...status.projects[0]!.rituals[0]!, slug: "atlas-ritual", title: "Atlas ritual", heldRun: null }], vigils: [{ slug: "av", title: "Atlas vigil", state: "open", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-29", until: null }] };
+  const extra = { ...status.projects[1]!, rituals: [{ ...status.projects[0]!.rituals[0]!, slug: "atlas-ritual", title: "Atlas ritual", heldRun: null }], vigils: [{ slug: "av", title: "Atlas vigil", state: "open", verdict: null, flagged: false, lastOutcome: null, due: "2026-09-29", until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null }] };
   const two: HostStatus = { ...status, projects: [status.projects[0]!, extra, status.projects[2]!] };
   const one = await readWith("/w/demo/rituals", {}, two);
   assert.ok(one.body.includes("Daily &lt;script&gt;") && !one.body.includes("Atlas ritual"), "one workspace: only its rituals");

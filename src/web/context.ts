@@ -15,7 +15,7 @@ import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { collectBackups } from "./backups.ts";
 import { collectSystem } from "./system.ts";
-import { collectStatus, milestoneDetail, ritualDetail, runDetail } from "./status.ts";
+import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
 
 /** A finding the web shows: every status but `lapsed` (0.66.0), which the CLI shows only under `--all`. */
 function isShown(finding: Finding): finding is Finding & { status: FindingRow["status"] } {
@@ -52,6 +52,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     canWrite: !local,
     status: () => collectStatus(),
     ritual: (project, slug) => ritualDetail(project, slug),
+    vigil: (project, slug) => vigilDetail(project, slug),
     run: (project, run) => runDetail(project, run),
     milestone: (project, milestone) => milestoneDetail(project, milestone),
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),

@@ -14,9 +14,10 @@ export default [
   route("w/:ws/findings", "routes/findings.tsx", { id: "findings-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
-  // The runs of one workspace, and the detail pages of a workspace: a ritual, a run, a milestone (README, spec texts, worklogs).
+  // The runs of one workspace, and the detail pages of a workspace: a ritual, a vigil, a run, a milestone (README, spec texts, worklogs).
   route("w/:ws/runs", "routes/runs.tsx", { id: "runs-workspace" }),
   route("w/:ws/rituals/:slug", "routes/ritual.tsx"),
+  route("w/:ws/vigils/:slug", "routes/vigil.tsx"),
   route("w/:ws/runs/:run", "routes/run.tsx"),
   route("w/:ws/milestones/:milestone", "routes/milestone.tsx"),
   // Settings is a layout with tabs: General, Notifications, Backups, About.

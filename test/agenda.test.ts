@@ -47,7 +47,7 @@ function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
 }
 
 function vigil(slug: string, extra: Partial<VigilRow> = {}): VigilRow {
-  return { slug, title: slug, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, ...extra };
+  return { slug, title: slug, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null, ...extra };
 }
 
 function project(name: string, rituals: RitualRow[], vigils: VigilRow[] = [], runs: RunRow[] = []): ProjectStatus {
@@ -120,6 +120,29 @@ test("vigils: dated ones join the agenda, event ones wait apart, closed ones van
   assert.equal(late?.state?.label, "Flagged");
   assert.equal(late?.rail, "bad");
   assert.equal(late?.overdueDays, 1);
+});
+
+function failure(extra: Partial<NonNullable<VigilRow["lastFailure"]>>): NonNullable<VigilRow["lastFailure"]> {
+  return { index: 1, text: "the page loads", exit: 1, outcome: "fail", at: "2026-09-30T04:31:00.000Z", failKind: "unknown", ...extra };
+}
+
+test("a flagged vigil says which step failed, when, and why; a paused one says until when", () => {
+  const vigils = [
+    vigil("pending", { due: "2026-09-29", flagged: true, lastOutcome: "failed", failKind: "pending", lastFailure: failure({ failKind: "pending" }) }),
+    vigil("broken", { due: TODAY, flagged: true, lastOutcome: "failed", failKind: "broken", lastFailure: failure({ outcome: "timeout", exit: null, failKind: "broken" }) }),
+    vigil("unknown", { due: TODAY, flagged: true, lastOutcome: "failed", failKind: "unknown", lastFailure: failure({ at: "2026-09-29T04:31:00.000Z" }) }),
+    vigil("snoozed", { due: "2026-09-29", flagged: true, lastOutcome: "failed", failKind: "broken", paused: true, pausedUntil: "2026-10-20", lastFailure: failure({ failKind: "broken" }) }),
+    vigil("waiting", { flagged: true, lastOutcome: "failed", failKind: "pending", until: "the batch", lastFailure: failure({ failKind: "pending" }) }),
+  ];
+  const agenda = buildAgenda({ projects: [project("shop", [], vigils)], today: TODAY, offset: 120 });
+  const rows = new Map(agenda.groups.flatMap((group) => group.rows).map((row) => [row.slug, row]));
+  assert.deepEqual([rows.get("pending")?.state, rows.get("pending")?.rail, rows.get("pending")?.note], [{ tone: "wait", label: "Pending" }, "wait", "step 1 failed, exit 1, 06:31, 1 day late"]);
+  assert.deepEqual([rows.get("broken")?.state, rows.get("broken")?.rail, rows.get("broken")?.note], [{ tone: "bad", label: "Check broken" }, "bad", "step 1 timed out, 06:31"]);
+  assert.deepEqual([rows.get("unknown")?.state, rows.get("unknown")?.note], [{ tone: "bad", label: "Flagged" }, "step 1 failed, exit 1, 29 Sep 06:31"]);
+  assert.deepEqual([rows.get("snoozed")?.state, rows.get("snoozed")?.rail], [{ tone: "idle", label: "Paused until 20 Oct" }, null]);
+  assert.equal(rows.get("snoozed")?.note, "step 1 failed, exit 1, 06:31, 1 day late", "the days late and the failure stay in the note");
+  assert.deepEqual([agenda.waiting[0]?.state, agenda.waiting[0]?.note, agenda.waiting[0]?.href], [{ tone: "wait", label: "Pending" }, "step 1 failed, exit 1, 06:31", "/w/shop/vigils/waiting"]);
+  assert.equal(rows.get("pending")?.href, "/w/shop/vigils/pending", "a row links to the vigil page");
 });
 
 test("the counts and the Next line: overdue first, then the first thing that is not overdue", () => {

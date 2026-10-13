@@ -38,7 +38,7 @@ const CASES: { target: Target; place: Place }[] = [
   { target: { to: "run", ws: PERCENT, run: "01KAAAAAAAAAAAAAAAAAAAAAAA" }, place: { scope: PERCENT, kind: "detail", section: "runs" } },
   { target: { to: "milestone", ws: "demo", ref: "M7" }, place: { scope: "demo", kind: "detail", section: "milestones" } },
   { target: { to: "milestone", ws: SPACED, ref: "M12-cart shop" }, place: { scope: SPACED, kind: "detail", section: "milestones" } },
-  { target: { to: "vigil", ws: "demo", slug: "guard-soak" }, place: { scope: "demo", kind: "section", section: "vigils" } },
+  { target: { to: "vigil", ws: "demo", slug: "guard-soak" }, place: { scope: "demo", kind: "detail", section: "vigils" } },
   { target: { to: "host", page: "status" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "profiles", hash: "profile-fast" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "settings" }, place: { scope: null, kind: "host", section: null } },
@@ -66,7 +66,7 @@ test("href() encodes names, and keeps a query and a hash apart from the path", (
   assert.equal(paths.href({ to: "ritual", ws: "demo", slug: "daily-report" }), "/w/demo/rituals/daily-report");
   assert.equal(paths.href({ to: "run", ws: "demo", run: "01K" }), "/w/demo/runs/01K");
   assert.equal(paths.href({ to: "milestone", ws: "demo", ref: "M12-cart" }), "/w/demo/milestones/M12-cart");
-  assert.equal(paths.href({ to: "vigil", ws: "demo", slug: "guard soak" }), "/w/demo/vigils#vigil-guard%20soak");
+  assert.equal(paths.href({ to: "vigil", ws: "demo", slug: "guard soak" }), "/w/demo/vigils/guard%20soak");
   assert.equal(paths.href({ to: "host", page: "settings/about" }), "/settings/about");
   assert.equal(paths.href({ to: "host", page: "profiles", hash: "profile-fast" }), "/profiles#profile-fast");
 });
@@ -122,6 +122,7 @@ test("crumbsOf() lists the scope, the section, the parent and the title; only th
 test("litSection() lights the section of the page; a run page lights the section of its item", () => {
   assert.equal(paths.litSection(paths.placeOf("/w/demo/rituals/daily-report")), "rituals");
   assert.equal(paths.litSection(paths.placeOf("/w/demo/milestones/M7")), "milestones");
+  assert.equal(paths.litSection(paths.placeOf("/w/demo/vigils/guard-soak")), "vigils");
   assert.equal(paths.litSection(paths.placeOf("/w/demo/findings")), "findings");
   assert.equal(paths.litSection(paths.placeOf("/w/demo/runs")), "runs");
   assert.equal(paths.litSection(paths.placeOf("/runs")), "runs");

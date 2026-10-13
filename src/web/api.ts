@@ -281,6 +281,23 @@ export interface RunRow {
   acknowledged: Acknowledgement | null;
 }
 
+/** Why a sweep failed: a wait that is expected, a check that is broken, or neither known (0.82.0). */
+export type VigilFailKind = "pending" | "broken" | "unknown";
+
+/** The check that flagged a vigil: the newest failing check of its newest judged sweep (0.85.0). */
+export interface VigilFailure {
+  /** The check number in the body. */
+  index: number;
+  /** The label of the check in the current body. */
+  text: string;
+  exit: number | null;
+  /** `fail` or `timeout`. */
+  outcome: string;
+  /** When the check ran. */
+  at: string;
+  failKind: VigilFailKind;
+}
+
 export interface VigilRow {
   slug: string;
   title: string;
@@ -290,6 +307,49 @@ export interface VigilRow {
   lastOutcome: string | null;
   due: string | null;
   until: string | null;
+  /** Set while flagged and the evidence is on this host. */
+  lastFailure: VigilFailure | null;
+  /** Null unless flagged. */
+  failKind: VigilFailKind | null;
+  /** Under a pause that has not ended. */
+  paused: boolean;
+  /** The last day of a snooze; null for a pause without an end date. */
+  pausedUntil: string | null;
+}
+
+/** The failure block of the vigil page. Every text is untrusted: the page shows it as text. */
+export interface VigilFailureDetail extends VigilFailure {
+  command: string | null;
+  expected: string | null;
+  /** `body` when the sweep did not record Command and Expected, so they come from the current body. */
+  source: "evidence" | "body";
+  host: string;
+  /** The last lines of the check output, control characters dropped; null when the blob is not on this host. */
+  outputTail: string | null;
+}
+
+/** One `vigil.swept` line. */
+export interface VigilSweep {
+  at: string;
+  who: string;
+  outcome: string | null;
+  failKind: VigilFailKind | null;
+  /** Why a sweep skipped the vigil. */
+  reason: string | null;
+  checks: { index: number; outcome: string; exit: number | null }[];
+}
+
+/** One vigil with its failure and its last sweeps; null from `WebContext.vigil` when unknown. */
+export interface VigilDetail {
+  project: string;
+  row: VigilRow;
+  /** The reason given at the close; null when none or not closed. */
+  closedReason: string | null;
+  pausedReason: string | null;
+  failure: VigilFailureDetail | null;
+  /** The newest first, at most 10. */
+  sweeps: VigilSweep[];
+  body: MdBlock[];
 }
 
 /**
@@ -816,6 +876,8 @@ export interface WebContext {
   status(): HostStatus;
   /** Null when the project or the ritual is unknown. */
   ritual(project: string, slug: string): RitualDetail | null;
+  /** Null when the project or the vigil is unknown (0.85.0). Reads only. */
+  vigil(project: string, slug: string): VigilDetail | null;
   /** Null when the project or the run is unknown. */
   run(project: string, run: string): RunDetail | null;
   /** A milestone by id (`M12`) or directory name (`M12-cart`); null when the project or the milestone is unknown. */

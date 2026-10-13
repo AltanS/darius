@@ -21,8 +21,8 @@ import { ritualWarnings } from "../core/reconcile.ts";
 import type { Document, JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { parseResult, readSummary } from "../core/result.ts";
-import { GLOBAL_PROJECT, getBlobText, listProjects, openProject, type Project } from "../core/store.ts";
-import { localToday, vigilStatus } from "../core/sweep.ts";
+import { GLOBAL_PROJECT, getBlobText, itemRef, listProjects, openProject, type Project } from "../core/store.ts";
+import { lastFailure, localToday, outputTail, plainOutput, readFailKind, vigilStatus } from "../core/sweep.ts";
 import { treeDir } from "../core/tree.ts";
 import { followUpOf, followUpsOf } from "../runner/follow-up.ts";
 import { failedToday, viewRun } from "../runner/run-due.ts";
@@ -43,7 +43,9 @@ import type {
   RunEvent,
   RunResult,
   RunRow,
+  VigilDetail,
   VigilRow,
+  VigilSweep,
 } from "./api.ts";
 import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
@@ -61,6 +63,10 @@ function isRecord(value: JsonValue): value is { readonly [key: string]: JsonValu
 
 function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
+}
+
+function isNumber(value: JsonValue | undefined): value is number {
+  return typeof value === "number";
 }
 
 function text(value: JsonValue | undefined): string | null {
@@ -180,23 +186,29 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout:
   });
 }
 
+function vigilRowOf(slug: string, doc: Document<Vigil>, lines: readonly LedgerLine[]): VigilRow {
+  const status = vigilStatus(slug, lines);
+  const failure = status.flagged ? lastFailure(slug, lines, doc.body) : null;
+  return {
+    slug,
+    title: doc.header.title,
+    state: status.state,
+    verdict: status.verdict ?? null,
+    flagged: status.flagged,
+    lastOutcome: status.lastOutcome ?? null,
+    due: doc.header.due ?? null,
+    until: doc.header.until ?? null,
+    lastFailure: failure === null ? null : { index: failure.index, text: failure.text, exit: failure.exit, outcome: failure.outcome, at: failure.at, failKind: failure.failKind },
+    failKind: status.failKind ?? null,
+    paused: status.paused,
+    pausedUntil: status.pausedUntil ?? null,
+  };
+}
+
 function vigilRows(project: Project, ledger: LedgerLine[]): VigilRow[] {
   return project.listItems("vigil").flatMap((slug) => {
     const doc = project.readItem<Vigil>("vigil", slug);
-    if (doc === null) return [];
-    const status = vigilStatus(slug, linesFor(ledger, `vigil/${slug}`));
-    return [
-      {
-        slug,
-        title: doc.header.title,
-        state: status.state,
-        verdict: status.verdict ?? null,
-        flagged: status.flagged,
-        lastOutcome: status.lastOutcome ?? null,
-        due: doc.header.due ?? null,
-        until: doc.header.until ?? null,
-      },
-    ];
+    return doc === null ? [] : [vigilRowOf(slug, doc, linesFor(ledger, `vigil/${slug}`))];
   });
 }
 
@@ -220,6 +232,10 @@ function legacyVigilRows(trackerDir: string | null, known: readonly VigilRow[]):
         lastOutcome: null,
         due: vigil.due,
         until: vigil.until,
+        lastFailure: null,
+        failKind: null,
+        paused: false,
+        pausedUntil: null,
       };
     });
 }
@@ -452,5 +468,52 @@ export function ritualDetail(projectName: string, slug: string, now: Date = new 
     body: parseMarkdown(doc.body),
     runs: runRows(ledger).filter((candidate) => candidate.item === item).slice(0, RITUAL_RUNS),
     handoff: latestHandoff(project, ledger, slug),
+  };
+}
+
+/** Sweeps the vigil page lists. */
+const VIGIL_SWEEPS = 10;
+
+function sweepRow(line: LedgerLine): VigilSweep {
+  const checks = Array.isArray(line.checks) ? line.checks : [];
+  return {
+    at: line.at,
+    who: line.who,
+    outcome: text(line.outcome),
+    failKind: readFailKind(line.fail_kind) ?? null,
+    reason: text(line.reason),
+    checks: checks.flatMap((check) => (isRecord(check) && isNumber(check.index) && isText(check.outcome) ? [{ index: check.index, outcome: check.outcome, exit: isNumber(check.exit) ? check.exit : null }] : [])),
+  };
+}
+
+/**
+ * One vigil with the check that flagged it and its last sweeps; null when the
+ * project or the vigil is unknown. A vigil only the legacy tracker holds has a
+ * row and nothing more.
+ */
+export function vigilDetail(projectName: string, slug: string): VigilDetail | null {
+  if (!listProjects().includes(projectName)) return null;
+  const project = openProject(projectName);
+  const doc = project.readItem<Vigil>("vigil", slug);
+  if (doc === null) {
+    const legacy = legacyVigilRows(trackerDirOf(projectName, linkedDir(projectName) ?? null), []).find((candidate) => candidate.slug === slug);
+    return legacy === undefined ? null : { project: projectName, row: legacy, closedReason: null, pausedReason: null, failure: null, sweeps: [], body: [] };
+  }
+  const lines = linesFor(readLedger(project), itemRef("vigil", slug));
+  const row = vigilRowOf(slug, doc, lines);
+  const status = vigilStatus(slug, lines);
+  const found = status.flagged ? lastFailure(slug, lines, doc.body) : null;
+  const tail = found?.output_sha === undefined ? null : outputTail(project, found.output_sha);
+  return {
+    project: projectName,
+    row,
+    closedReason: status.closedReason ?? null,
+    pausedReason: status.pausedReason ?? null,
+    failure:
+      found === null || row.lastFailure === null
+        ? null
+        : { ...row.lastFailure, command: found.command ?? null, expected: found.expected ?? null, source: found.source, host: found.host, outputTail: tail === null ? null : plainOutput(tail) },
+    sweeps: lines.filter((line) => line.type === "vigil.swept").map(sweepRow).slice(-VIGIL_SWEEPS).toReversed(),
+    body: parseMarkdown(doc.body),
   };
 }

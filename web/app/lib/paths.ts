@@ -24,7 +24,7 @@ function enc(text: string): string {
   return encodeURIComponent(text);
 }
 
-/** The id of a vigil row on the Vigils page. */
+/** The id of a vigil row on the Vigils page, for a link that points at the row. */
 export function vigilAnchor(slug: string): string {
   return `vigil-${slug}`;
 }
@@ -53,7 +53,7 @@ export function href(target: Target): string {
     case "milestone":
       return `/w/${enc(target.ws)}/milestones/${enc(target.ref)}`;
     case "vigil":
-      return `${sectionHref(target.ws, "vigils", undefined)}#${enc(vigilAnchor(target.slug))}`;
+      return `/w/${enc(target.ws)}/vigils/${enc(target.slug)}`;
     case "host":
       return `/${target.page}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
   }
@@ -97,7 +97,7 @@ function placeOfWorkspace(scope: string, rest: readonly string[]): Place {
   if (first === undefined) return { scope, kind: "overview", section: null };
   if (!isSection(first)) return { scope, kind: "unknown", section: null };
   if (second === undefined) return { scope, kind: "section", section: first };
-  const hasDetail = first === "rituals" || first === "runs" || first === "milestones";
+  const hasDetail = first === "rituals" || first === "runs" || first === "milestones" || first === "vigils";
   return { scope, kind: hasDetail && rest.length === 2 ? "detail" : "unknown", section: hasDetail ? first : null };
 }
 

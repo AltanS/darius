@@ -46,7 +46,7 @@ function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
 }
 
 function vigil(slug: string, extra: Partial<VigilRow> = {}): VigilRow {
-  return { slug, title: slug, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, ...extra };
+  return { slug, title: slug, state: "armed", verdict: null, flagged: false, lastOutcome: null, due: null, until: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null, ...extra };
 }
 
 function project(name: string, rituals: RitualRow[] = [], vigils: VigilRow[] = [], extra: Partial<ProjectStatus> = {}): ProjectStatus {

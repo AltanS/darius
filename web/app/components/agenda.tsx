@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
 import { shortDate } from "../lib/format.ts";
 import { vigilAnchor } from "../lib/paths.ts";
-import { FLAGGED, railOf } from "../lib/state-words.ts";
+import { railOf } from "../lib/state-words.ts";
 import { KindWord } from "./chip.tsx";
 import { Row, RowList } from "./row.tsx";
 import { Fold, SectHead } from "./ui.tsx";
@@ -113,8 +113,8 @@ interface WaitingItemProps {
 function WaitingItem({ row, showProject, anchors, target }: WaitingItemProps): React.ReactNode {
   const id = anchors ? vigilAnchor(row.slug) : undefined;
   const cls = id === undefined ? "" : target === id ? "target-row is-target" : "target-row";
-  const state = row.flagged ? FLAGGED : null;
-  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(state)} chips={<KindWord kind="vigil" />} state={state} meta={showProject ? [row.project] : []} detail={row.until} className={cls} />;
+  const meta = [showProject ? row.project : null, row.note].filter((part) => part !== null);
+  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(row.state)} chips={<KindWord kind="vigil" />} state={row.state} meta={meta} detail={row.until} className={cls} />;
 }
 
 interface WaitingProps {

@@ -22,9 +22,9 @@ import type { ProjectStatus, RitualRow, RunRow, VigilRow } from "../../../src/we
 import { dayGap, dayName, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
 import { type Kind, isManual } from "./kind.ts";
-import { ASKS_YOU, datePhrase, FAILED, FAILED_SEEN, FLAGGED, lateWord, railOf, type Rail, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
+import { ASKS_YOU, datePhrase, FAILED, FAILED_SEEN, lateWord, railOf, type Rail, RUNNING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
 import type { Badge } from "./tone.ts";
-import { asksYou, atText, cadenceText } from "./view.ts";
+import { asksYou, atText, cadenceText, vigilFailureText } from "./view.ts";
 
 const DAY = 24 * 60 * 60_000;
 
@@ -33,7 +33,7 @@ export const HORIZON_DAYS = 14;
 
 export type GroupKind = "overdue" | "today" | "tomorrow" | "day" | "later" | "none" | "off";
 
-/** A state word that is not plain: "13 days late", "Running", "Waiting for you", "Failed", "Asks you", "Flagged". */
+/** A state word that is not plain: "13 days late", "Running", "Waiting for you", "Failed", "Asks you", "Pending", "Check broken", "Flagged", "Paused until 20 Oct". */
 export type AgendaState = Badge;
 
 export interface AgendaRow {
@@ -54,7 +54,7 @@ export interface AgendaRow {
   facts: string;
   /** A vigil: the event it also waits for. */
   until: string | null;
-  /** A flagged vigil: "last check failed, 1 day late". */
+  /** A flagged vigil: "step 1 failed, exit 1, 06:31, 1 day late". A paused vigil: why it is flagged, if it is. */
   note: string | null;
   /** Days past due; 0 when not overdue. */
   overdueDays: number;
@@ -79,6 +79,10 @@ export interface WaitingRow {
   href: string;
   until: string | null;
   flagged: boolean;
+  /** "Pending", "Check broken", "Flagged" or "Paused until 20 Oct"; null for a plain armed vigil. */
+  state: AgendaState | null;
+  /** A flagged vigil: "step 1 failed, exit 1, 06:31". */
+  note: string | null;
 }
 
 export interface Agenda {
@@ -101,6 +105,8 @@ export interface AgendaInput {
   projects: readonly ProjectStatus[];
   /** The host's YYYY-MM-DD today. */
   today: string;
+  /** The host's offset from UTC in minutes, for the time of a vigil's failure; 0 by default. */
+  offset?: number;
   /** Keep only the rituals or only the vigils, for the Rituals and Vigils sections; all of them by default. */
   only?: Kind;
 }
@@ -212,10 +218,11 @@ function isArmed(vigil: VigilRow): boolean {
 
 function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, due: string): AgendaRow {
   const late = Math.max(0, dayGap(due, input.today));
-  // A flagged vigil is "Flagged"; how late it is moves to the note, so the days are not lost.
-  const noted = vigil.flagged ? [vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`, late > 0 ? lateWord(late).label : null].filter((part) => part !== null) : [];
+  // A flagged or paused vigil has its own word; how late it is moves to the note, so the days are not lost.
+  const word = vigilWord(vigil);
+  const noted = word === null ? [] : [vigil.flagged ? vigilFailureText(vigil, input.today, input.offset ?? 0) : null, late > 0 ? lateWord(late).label : null].filter((part) => part !== null);
   const note = noted.length === 0 ? null : noted.join(", ");
-  const state: AgendaState | null = vigil.flagged ? FLAGGED : late > 0 ? lateWord(late) : null;
+  const state: AgendaState | null = word ?? (late > 0 ? lateWord(late) : null);
   return {
     key: `${project.name}/vigil/${vigil.slug}`,
     kind: "vigil",
@@ -235,8 +242,9 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
   };
 }
 
-function waitingRow(project: ProjectStatus, vigil: VigilRow): WaitingRow {
-  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: href({ to: "vigil", ws: project.name, slug: vigil.slug }), until: vigil.until, flagged: vigil.flagged };
+function waitingRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow): WaitingRow {
+  const note = vigil.flagged ? vigilFailureText(vigil, input.today, input.offset ?? 0) : null;
+  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: href({ to: "vigil", ws: project.name, slug: vigil.slug }), until: vigil.until, flagged: vigil.flagged, state: vigilWord(vigil), note };
 }
 
 // --- the agenda ----------------------------------------------------------------------------
@@ -267,7 +275,7 @@ export function buildAgenda(input: AgendaInput): Agenda {
     }
     for (const vigil of (input.only === "ritual" ? [] : project.vigils).filter((candidate) => isArmed(candidate))) {
       armed += 1;
-      if (vigil.due === null) waiting.push(waitingRow(project, vigil));
+      if (vigil.due === null) waiting.push(waitingRow(input, project, vigil));
       else rows.push(vigilRow(input, project, vigil, vigil.due));
     }
   }

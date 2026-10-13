@@ -5,7 +5,7 @@ import { Row, RowList } from "../components/row.tsx";
 import { SectionPageHead } from "../components/section.tsx";
 import { Fold } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
-import { vigilAnchor } from "../lib/paths.ts";
+import { href, vigilAnchor } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { vigilWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
@@ -27,7 +27,7 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
   const closed = closedVigils(projects);
   return {
     workspace: scope.workspace,
-    agenda: buildAgenda({ projects, today: status.today, only: "vigil" }),
+    agenda: buildAgenda({ projects, today: status.today, offset: status.utcOffset, only: "vigil" }),
     closed: closed.slice(0, CLOSED_SHOWN),
     closedCount: closed.length,
     showProject: projects.length > 1,
@@ -57,7 +57,7 @@ export default function Vigils({ loaderData }: Route.ComponentProps): React.Reac
                   <RowList bare>
                     {closed.map(({ project, vigil }) => {
                       const id = vigilAnchor(vigil.slug);
-                      return <Row key={`${project}/${vigil.slug}`} id={id} kind="vigil" title={vigil.title} chips={<KindWord kind="vigil" />} state={vigilWord(vigil)} meta={[showProject ? project : null, vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`].filter((part) => part !== null)} className={`target-row${target === id ? " is-target" : ""}`} />;
+                      return <Row key={`${project}/${vigil.slug}`} id={id} kind="vigil" href={href({ to: "vigil", ws: project, slug: vigil.slug })} title={vigil.title} chips={<KindWord kind="vigil" />} state={vigilWord(vigil)} meta={[showProject ? project : null, vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`].filter((part) => part !== null)} className={`target-row${target === id ? " is-target" : ""}`} />;
                     })}
                   </RowList>
                   {closedCount > CLOSED_SHOWN ? <p className="rail-note mt-3">{closedCount - CLOSED_SHOWN} older ones are not shown.</p> : null}

@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.85.0] - 2026-10-13
+
+### Added
+
+- The web vigil list says why a vigil is flagged: "step 1 failed, exit 1, 06:31" in place of "last check failed". The word follows the failure kind: "Pending", "Check broken", "Flagged" when the kind is not known, and "Paused until 20 Oct" for a paused vigil. A vigil row in the web status gains `lastFailure`, `failKind`, `paused` and `pausedUntil`.
+- A vigil page at `/w/<workspace>/vigils/<slug>` (read only): the state, the failure block (step, Command, Expected, exit, time, host, kind), the last 10 sweeps, the checklist and the check output as plain text in a `<pre>`. The output is text, never HTML, with control characters dropped. `WebContext` gains `vigil(project, slug)`.
+
+### Changed
+
+- A vigil in the web lists, the agenda and the home cards links to its page, not to a row anchor on the Vigils list.
+- A paused vigil no longer shows as a needs-you card on the home page, even while it stays flagged.
+
 ## [0.84.0] - 2026-10-13
 
 ### Added

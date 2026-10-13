@@ -37,9 +37,9 @@ import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
-import { ASKS_YOU, datePhrase, FLAGGED, RUNNING, WAITING_FOR_YOU } from "./state-words.ts";
+import { ASKS_YOU, datePhrase, FLAGGED, RUNNING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Tone } from "./tone.ts";
-import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
+import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -409,12 +409,13 @@ function vigilWaitText(vigil: VigilRow, today: string): string[] {
 
 function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs: readonly ActivityRun[], generatedAt: string): Card {
   const check = runs.find((run) => run.project === project.name && run.item === `vigil/${vigil.slug}` && run.phase === "running");
-  const meta = [project.name, vigil.lastOutcome === null ? null : `last check ${vigil.lastOutcome}`, ...vigilWaitText(vigil, clock.today)].filter((part) => part !== null);
+  const meta = [project.name, vigilFailureText(vigil, clock.today, clock.offset), ...vigilWaitText(vigil, clock.today)].filter((part) => part !== null);
   const size = check === undefined ? 0 : clock.now - Date.parse(check.startedAt);
+  const word = vigilWord(vigil) ?? FLAGGED;
   return {
     ...blank(`flagged-${project.name}-${vigil.slug}`, "flagged", "vigil"),
-    edge: "bad",
-    word: { text: FLAGGED.label, ink: FLAGGED.tone },
+    edge: word.tone,
+    word: { text: word.label, ink: word.tone },
     title: vigil.title,
     href: href({ to: "vigil", ws: project.name, slug: vigil.slug }),
     meta,
@@ -489,7 +490,8 @@ interface ProjectNeeds {
 function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus): ProjectNeeds {
   const runs = activity([project], { withImported: false }).filter((run) => !isNoise(run));
   const states = project.rituals.filter((ritual) => isDjinn(ritual)).map((ritual) => djinnState(clock, project.name, ritual, runs));
-  const flagged = project.vigils.filter((vigil) => vigil.flagged);
+  // A paused vigil is snoozed on purpose: it keeps its flag but asks nothing of the operator until it resumes.
+  const flagged = project.vigils.filter((vigil) => vigil.flagged && !vigil.paused);
   // A stuck check of a flagged vigil shows on the vigil's card, so the run shows once.
   const flaggedChecks = new Set(flagged.map((vigil) => `vigil/${vigil.slug}`));
   const stuck = runs.flatMap((run) => {
@@ -648,7 +650,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     .filter((state) => state.last !== null && isDone(state.last, state.own) && clock.now - Date.parse(state.last.startedAt) < DAY)
     .toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? ""))
     .flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]));
-  const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today });
+  const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today, offset: clock.offset });
   const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
 
   return {
@@ -703,7 +705,7 @@ export function workspaceRows(status: HostStatus, scope: HomeScope = ALL_WORKSPA
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
   const rows = scopeProjects(status, scope).map((project): WorkspaceRow => {
     const needs = projectNeeds(clock, status.generatedAt, project);
-    const row = project.error === null ? buildAgenda({ projects: [project], today: clock.today }).next : null;
+    const row = project.error === null ? buildAgenda({ projects: [project], today: clock.today, offset: clock.offset }).next : null;
     const next = row === null || row.date === null ? null : { title: row.title, date: row.date, when: datePhrase(clock.today, row.date) };
     return { name: project.name, needs: needsSize(needs), unreadable: needs.unreadable, next, href: href({ to: "overview", ws: project.name }), icon: workspaceIcon(project) };
   });

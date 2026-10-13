@@ -55,9 +55,14 @@ test("a ritual reads as waiting, running, late, due today or its next date", () 
 });
 
 test("a vigil is flagged, or shows its verdict once closed; an armed one has no word", () => {
-  const vigil: VigilRow = { slug: "v", title: "V", state: "armed", verdict: null, due: null, until: null, flagged: false, lastOutcome: null };
+  const vigil: VigilRow = { slug: "v", title: "V", state: "armed", verdict: null, due: null, until: null, flagged: false, lastOutcome: null, lastFailure: null, failKind: null, paused: false, pausedUntil: null };
   assert.equal(vigilWord(vigil), null);
   assert.deepEqual(vigilWord({ ...vigil, flagged: true }), { tone: "bad", label: "Flagged" });
+  assert.deepEqual(vigilWord({ ...vigil, flagged: true, failKind: "pending" }), { tone: "wait", label: "Pending" });
+  assert.deepEqual(vigilWord({ ...vigil, flagged: true, failKind: "broken" }), { tone: "bad", label: "Check broken" });
+  assert.deepEqual(vigilWord({ ...vigil, flagged: true, failKind: "unknown" }), { tone: "bad", label: "Flagged" });
+  assert.deepEqual(vigilWord({ ...vigil, flagged: true, failKind: "broken", paused: true, pausedUntil: "2026-10-20" }), { tone: "idle", label: "Paused until 20 Oct" });
+  assert.deepEqual(vigilWord({ ...vigil, paused: true }), { tone: "idle", label: "Paused" });
   assert.deepEqual(vigilWord({ ...vigil, state: "closed", verdict: "held" }), { tone: "ok", label: "Held" });
   assert.deepEqual(vigilWord({ ...vigil, state: "closed", verdict: "failed" }), { tone: "bad", label: "Failed" });
 });

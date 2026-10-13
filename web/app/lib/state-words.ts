@@ -21,6 +21,10 @@ export const ABANDONED: Badge = { tone: "idle", label: "Abandoned" };
 export const COMPLETE: Badge = { tone: "ok", label: "Complete" };
 export const DUE_TODAY: Badge = { tone: "gold", label: "Due today" };
 export const FLAGGED: Badge = { tone: "bad", label: "Flagged" };
+/** A flagged vigil whose check failed the way it is expected to while the event is still ahead. */
+export const PENDING: Badge = { tone: "wait", label: "Pending" };
+/** A flagged vigil whose check itself failed: a timeout, a missing tool, or a result its Pending clause does not expect. */
+export const BROKEN: Badge = { tone: "bad", label: "Check broken" };
 
 /** "1 day late", "13 days late". */
 export function lateWord(days: number): Badge {
@@ -76,10 +80,17 @@ export function ritualWord(ritual: RitualRow, today: string): Badge {
   return dateState(today, ritual.nextDue) ?? { tone: "idle", label: "No schedule" };
 }
 
-/** The state of a vigil: its verdict when closed, flagged, or nothing (an armed vigil is just armed). */
+/** The word of a flagged vigil by why its check failed: waiting, broken, or not known. */
+function flaggedWord(vigil: VigilRow): Badge {
+  if (vigil.failKind === "pending") return PENDING;
+  return vigil.failKind === "broken" ? BROKEN : FLAGGED;
+}
+
+/** The state of a vigil: its verdict when closed, "Paused until 20 Oct", why its check failed, or nothing (an armed vigil is just armed). */
 export function vigilWord(vigil: VigilRow): Badge | null {
   if (vigil.state === "closed") return vigil.verdict === "failed" ? FAILED : { tone: "ok", label: vigil.verdict === null ? "Closed" : vigil.verdict.charAt(0).toUpperCase() + vigil.verdict.slice(1) };
-  return vigil.flagged ? FLAGGED : null;
+  if (vigil.paused) return { tone: "idle", label: vigil.pausedUntil === null ? "Paused" : `Paused until ${shortDate(vigil.pausedUntil)}` };
+  return vigil.flagged ? flaggedWord(vigil) : null;
 }
 
 /**

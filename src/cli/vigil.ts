@@ -79,6 +79,7 @@ import {
   localToday,
   OUTPUT_TAIL_LINES,
   outputTail,
+  plainOutput,
   sweepProject,
   vigilStatus,
   pauseVigil,
@@ -417,13 +418,6 @@ function runShow(args: ParsedArgs): number {
   if (failure !== null) printWhyFlagged(failure, tail);
   console.log(`\n${doc.body}`);
   return 0;
-}
-
-/** Output is untrusted text: drop the control characters (escape included) so it cannot steer a terminal. */
-function plainOutput(text: string): string {
-  return Array.from(text)
-    .filter((char) => char === "\n" || char === "\t" || (char >= " " && char !== "\u007f"))
-    .join("");
 }
 
 function printWhyFlagged(failure: LastFailure, tail: string | null): void {

@@ -378,7 +378,7 @@ export interface VigilStatus {
 const JUDGED_OUTCOMES: ReadonlySet<string> = new Set(["held", "failed", "awaiting-manual", "finding", "pending"]);
 
 /** The kind a ledger value names; undefined for a line from before the field existed. */
-function readFailKind(value: JsonValue | undefined): FailKind | undefined {
+export function readFailKind(value: JsonValue | undefined): FailKind | undefined {
   return value === "pending" || value === "broken" || value === "unknown" ? value : undefined;
 }
 
@@ -491,6 +491,13 @@ export function outputTail(project: Project, sha: string): string | null {
   const text = getBlobText(project, sha);
   if (text === null) return null;
   return text.replace(/\n+$/u, "").split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
+}
+
+/** Output is untrusted text: drop the control characters (escape included) so it cannot steer a terminal. */
+export function plainOutput(text: string): string {
+  return Array.from(text)
+    .filter((char) => char === "\n" || char === "\t" || (char >= " " && char !== "\u007f"))
+    .join("");
 }
 
 /** A one-vigil sweep repeats a live check, so it waits this long after the last sweep that ran one. */
