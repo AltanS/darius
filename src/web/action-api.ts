@@ -106,18 +106,39 @@
  * for the same reason: a run could close its own findings), a known project,
  * and a finding that exists and is neither fixed nor closed. The key goes
  * after `--`, so a key that looks like a flag stays a key.
+ *
+ * The vigil page has one action (0.86.0; docs/concept.md, "Failure
+ * reason, dispatch, one-vigil check, separate states"):
+ *
+ *   POST /api/vigil/check     body { project, slug }
+ *                             202 { ok: true, started: true, host }
+ *                             | 202 { ok: true, pending: true, host, message }
+ *                             | 400, 404, 409 or 500 { ok: false, error }
+ *
+ * It starts `darius vigil sweep <slug> --project P --json --who "web:<who>"`
+ * detached, with its output in `<project>/sweeps/<slug>.log`, and does not
+ * wait for the sweep. It waits at most CHECK_WAIT_MS for what the CLI prints
+ * at once: the "started" line once the vigil's lease is taken (202 names the
+ * host), or a refusal (the daily sweep runs, another check runs, the 2 minute
+ * cooldown), which comes back as 409 with the CLI's own sentence. The CLI
+ * releases the lease itself when it ends, so a client that went away leaves
+ * nothing held. A paused or closed vigil is a 409 before anything starts.
+ * The guards are the follow-up's (`guard()`): the Origin, JSON, MAX_BODY and a
+ * tailnet identity, and the loopback viewer is refused for the same reason: a
+ * check runs the vigil's Commands.
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { answerProblem, type QuestionAnswer } from "../core/answers.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
-import { hostId, readLedger } from "../core/ledger.ts";
-import { listProjects, openProject } from "../core/store.ts";
+import { hostId, linesFor, readLedger } from "../core/ledger.ts";
+import { isSlug, itemRef, listProjects, openProject } from "../core/store.ts";
+import { vigilStatus } from "../core/sweep.ts";
 import { ritualHost } from "../core/workdir.ts";
 import { ITEMS_MAX } from "../runner/follow-up.ts";
 import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
@@ -128,6 +149,7 @@ import { MAX_BODY, isSameOrigin, type PushApiReply } from "./push-api.ts";
 
 export const ACTION_API_PREFIX = "/api/run/";
 export const FINDING_API_PREFIX = "/api/finding/";
+export const VIGIL_API_PREFIX = "/api/vigil/";
 const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
@@ -266,6 +288,9 @@ export const LOOPBACK_ACK = "acknowledging a run needs a tailnet identity; open 
 
 /** Why the loopback viewer cannot answer a held run; the same reason as the acknowledgement. */
 export const LOOPBACK_ANSWER = "answering a held run needs a tailnet identity; open the page by its tailnet address";
+
+/** Why the loopback viewer cannot check a vigil; the same reason as the others, and the page hides the button for it. */
+export const LOOPBACK_CHECK = "checking a vigil needs a tailnet identity; open the page by its tailnet address";
 
 const DEFAULT_DEPS: ActionDeps = { readiness: followUpReadiness, start: startDetachedFollowUp, run: runCli };
 
@@ -842,4 +867,96 @@ export async function findingApi(request: ActionRequest, viewer: ActionViewer, d
   const answer = await deps.run(argv);
   if (answer.code !== 0) return fail(409, answer.error);
   return { status: 200, body: { ok: true } };
+}
+
+// --- check one vigil now (0.86.0) ----------------------------------------------------------
+
+const CHECK_KEYS: ReadonlySet<string> = new Set(["project", "slug"]);
+/** How long the POST waits for the CLI's "started" line or its refusal. A lease on a bucket takes a round trip or two. */
+export const CHECK_WAIT_MS = 5_000;
+/** The stderr line of `darius vigil sweep <slug>` once its lease is held (src/cli/vigil.ts, SWEEP_STARTED_PREFIX). */
+export const SWEEP_STARTED_LINE = /^darius vigil sweep: started (\S+) on (\S+)$/mu;
+/** A sweep log grows with each check; past this size the next check starts it afresh. */
+const SWEEP_LOG_MAX = 256 * 1024;
+
+/** What the check endpoint needs from the host; tests stub the spawn. */
+export interface VigilCheckDeps {
+  start: FollowUpStarter;
+  /** How long the POST waits; CHECK_WAIT_MS when absent. Tests shorten it. */
+  waitMs?: number;
+}
+
+const DEFAULT_CHECK_DEPS: VigilCheckDeps = { start: startDetachedFollowUp };
+
+type CheckBody = { project: string; slug: string } | { error: string };
+
+function readCheckBody(parsed: JsonValue): CheckBody {
+  if (!isRecord(parsed)) return { error: "send { project, slug }" };
+  const extra = Object.keys(parsed).find((key) => !CHECK_KEYS.has(key));
+  if (extra !== undefined) return { error: `unknown field ${extra.slice(0, 40)}` };
+  const { project, slug } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  if (!isText(slug) || !isSlug(slug)) return { error: "slug must be a vigil slug" };
+  return { project, slug };
+}
+
+/** The argv of the check. Every value is one argv word, never a shell string. */
+export function vigilCheckArgv(body: { project: string; slug: string }, viewer: ActionViewer): string[] {
+  return ["vigil", "sweep", body.slug, "--project", body.project, "--json", "--who", `web:${viewer.who}`];
+}
+
+/** The sentence of a sweep that ended without a "started" line: its stderr refusal, or the reason of a `--json` skip. */
+function checkSentence(output: string): string {
+  for (const line of output.split("\n").toReversed()) {
+    if (!line.startsWith("{")) continue;
+    try {
+      const parsed: JsonValue = JSON.parse(line);
+      const skipped = isRecord(parsed) ? parsed.skipped : undefined;
+      if (skipped !== undefined && isRecord(skipped) && isText(skipped.detail)) return skipped.detail;
+    } catch {
+      // Not a skip: the stderr sentence is the answer.
+    }
+  }
+  return lastSentence(output);
+}
+
+/** The answer for a check: 202 once it started, 409 with the CLI's refusal, or 202 pending when nothing came in time. */
+function checkReply(outcome: FollowUpOutcome, output: () => string): PushApiReply {
+  if ("started" in outcome) return { status: 202, body: { ok: true, started: true, host: outcome.host } };
+  if ("pending" in outcome) {
+    const message = `The check did not report within ${String(CHECK_WAIT_MS / 1000)} s and may still start on ${hostId()}. Reload in a moment.`;
+    return { status: 202, body: { ok: true, pending: true, host: hostId(), message } };
+  }
+  if (outcome.ended === null) return fail(500, "the check could not be started");
+  const sentence = checkSentence(output());
+  return fail(409, sentence === "" ? `the check ended with exit code ${String(outcome.ended)} and no message` : sentence);
+}
+
+/** One request under VIGIL_API_PREFIX, already past the access check. */
+export async function vigilApi(request: ActionRequest, viewer: ActionViewer, deps: VigilCheckDeps = DEFAULT_CHECK_DEPS): Promise<PushApiReply> {
+  if (request.path !== `${VIGIL_API_PREFIX}check`) return fail(404, "no such endpoint");
+  const guarded = guard(request, viewer, LOOPBACK_CHECK);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readCheckBody(guarded.parsed);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  const project = openProject(body.project);
+  if (project.readItem("vigil", body.slug) === null) return fail(404, `no vigil ${body.slug} in ${body.project}`);
+  const status = vigilStatus(body.slug, linesFor(readLedger(project), itemRef("vigil", body.slug)));
+  if (status.state === "closed") return fail(409, `vigil '${body.slug}' is closed; there is nothing to check`);
+  if (status.paused) return fail(409, `vigil '${body.slug}' is paused${status.pausedUntil === undefined ? "" : ` until ${status.pausedUntil}`}; resume it to check it`);
+  const dir = join(project.root, "sweeps");
+  const log = join(dir, `${body.slug}.log`);
+  let started: StartedFollowUp;
+  let offset: number;
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (existsSync(log) && statSync(log).size > SWEEP_LOG_MAX) rmSync(log);
+    offset = existsSync(log) ? statSync(log).size : 0;
+    started = deps.start(vigilCheckArgv(body, viewer), log);
+  } catch (cause) {
+    return fail(500, `the check could not be started: ${errorMessage(cause)}`);
+  }
+  const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? CHECK_WAIT_MS, line: SWEEP_STARTED_LINE });
+  return checkReply(outcome, () => logSince(log, offset));
 }

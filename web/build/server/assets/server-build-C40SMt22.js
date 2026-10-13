@@ -10119,6 +10119,12 @@ function vigilFailureText(vigil, today, offset) {
 		momentText(lastFailure.at, today, offset)
 	].filter((part) => part !== null).join(", ");
 }
+/** Why "Check now" is off for a vigil: it is closed or paused. Null when a check can start. */
+function checkBlocked(vigil) {
+	if (vigil.state === "closed") return "This vigil is closed. There is nothing to check.";
+	if (vigil.paused) return "This vigil is paused. Resume it to check it.";
+	return null;
+}
 /** What a failure kind means, for the failure block of the vigil page. */
 function failKindText(kind) {
 	if (kind === "pending") return "Pending: the check failed the way it does while the event is still ahead.";
@@ -10434,6 +10440,8 @@ function ritualRow(input, project, ritual) {
 		facts: factsText(ritual),
 		until: null,
 		note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
+		flagged: false,
+		paused: false,
 		overdueDays: at.overdueDays,
 		off: at.off === true
 	};
@@ -10465,6 +10473,8 @@ function vigilRow(input, project, vigil, due) {
 		facts: "",
 		until: vigil.until,
 		note,
+		flagged: vigil.flagged,
+		paused: vigil.paused,
 		overdueDays: late,
 		off: false
 	};
@@ -10483,6 +10493,7 @@ function waitingRow(input, project, vigil) {
 		}),
 		until: vigil.until,
 		flagged: vigil.flagged,
+		paused: vigil.paused,
 		state: vigilWord(vigil),
 		note
 	};
@@ -12135,7 +12146,7 @@ function Facts({ facts }) {
 * server would refuse it. A line says why, and the terminal command stays.
 */
 /** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
-var NO_WRITE_HINT$1 = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
+var NO_WRITE_HINT$2 = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
 function AckButton({ project, run, canWrite, subject }) {
 	const { revalidate } = useRevalidator();
 	const id = (0, import_react.useId)();
@@ -12145,7 +12156,7 @@ function AckButton({ project, run, canWrite, subject }) {
 	const [error, setError] = (0, import_react.useState)(null);
 	if (!canWrite) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "fu-off",
-		children: NO_WRITE_HINT$1
+		children: NO_WRITE_HINT$2
 	});
 	const submit = async (event) => {
 		event.preventDefault();
@@ -12580,7 +12591,7 @@ function QuestionList({ questions, after }) {
 * state only: nothing is written to the ledger to close an old card.
 */
 /** What the loopback viewer reads where the form would be. */
-var NO_WRITE_HINT = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
+var NO_WRITE_HINT$1 = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
 /** After a run starts it shows within seconds: look again after this long. */
 var RELOAD_AFTER_RUN_MS = 6e3;
 function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNow, isEarlier = false }) {
@@ -12592,7 +12603,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 	const [notice, setNotice] = (0, import_react.useState)(null);
 	if (!canWrite) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, { questions }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "fu-off",
-		children: NO_WRITE_HINT
+		children: NO_WRITE_HINT$1
 	})] });
 	const answers = answersOf(texts);
 	const isLocked = busy !== null || isDone;
@@ -14337,6 +14348,81 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 	});
 });
 //#endregion
+//#region app/components/check-now.tsx
+/**
+* The "Check now" button of a vigil (0.86.0; `darius vigil sweep <slug>`).
+* One click posts to `/api/vigil/check`. The server starts the sweep detached
+* and answers at once, so the page does not wait for the checks: it says on
+* which host the check started and offers a reload. A refusal of the server
+* (the daily sweep runs, another check runs, the 2 minute wait) shows as its
+* own sentence. The button is off for a paused or a closed vigil, with the
+* reason beside it. For the loopback viewer the server would refuse the POST:
+* the detail page says why there is no button, a list row draws nothing.
+*/
+/** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
+var NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
+function CheckNow({ project, slug, subject, canWrite, blocked, explain }) {
+	const { revalidate, state } = useRevalidator();
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [started, setStarted] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)(null);
+	if (!canWrite) return explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fu-off",
+		children: NO_WRITE_HINT
+	}) : null;
+	const submit = async (event) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		const result = await postJson("/api/vigil/check", {
+			project,
+			slug
+		});
+		setBusy(false);
+		if (!result.ok) {
+			setError(result.error);
+			return;
+		}
+		setStarted(result.started ? `Check started on ${result.host ?? "this host"}. Reload to see the result.` : result.message ?? "Check requested. Reload to see the result.");
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "ack",
+		onSubmit: (event) => void submit(event),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fu-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-small",
+					"aria-label": `Check now: ${subject}`,
+					disabled: busy || blocked !== null || started !== null,
+					children: busy ? "Starting…" : started === null ? "Check now" : "Check started"
+				}), started === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-btn st-btn-small",
+					disabled: state === "loading",
+					onClick: () => void revalidate(),
+					children: "Reload"
+				})]
+			}),
+			blocked !== null && explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				children: blocked
+			}) : null,
+			started === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				role: "status",
+				children: started
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
+	});
+}
+//#endregion
 //#region app/components/agenda.tsx
 /**
 * Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
@@ -14345,7 +14431,9 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 * full, and a second line of chips, state word and facts. A rail marks the
 * rows that need attention.
 */
-function AgendaItem({ row, group, showProject, anchors, target, extra }) {
+/** Why a paused row's "Check now" is off; the row's state word already says "Paused". */
+var PAUSED = "This vigil is paused. Resume it to check it.";
+function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck }) {
 	const id = anchors && row.kind === "vigil" ? vigilAnchor(row.slug) : void 0;
 	const classes = [extra ? "phone-extra" : "", id !== void 0 && target === id ? "target-row is-target" : id === void 0 ? "" : "target-row"].filter((part) => part !== "");
 	const state = row.state ?? (group.kind === "later" && row.date !== null ? {
@@ -14371,6 +14459,14 @@ function AgendaItem({ row, group, showProject, anchors, target, extra }) {
 		state,
 		meta,
 		detail: row.until === null ? void 0 : `waits for: ${row.until}`,
+		foot: canCheck && row.kind === "vigil" && row.flagged ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckNow, {
+			project: row.project,
+			slug: row.slug,
+			subject: row.title,
+			canWrite: true,
+			blocked: row.paused ? PAUSED : null,
+			explain: false
+		}) : void 0,
 		className: classes.join(" ")
 	});
 }
@@ -14383,7 +14479,7 @@ function groupLabel(group) {
 * a few more rows, then one button. A desktop shows every day and keeps Later
 * and No schedule in a fold under the list.
 */
-function ComingUp({ agenda, anchors, target }) {
+function ComingUp({ agenda, anchors, target, canCheck = false }) {
 	const hidden = phoneHidden(agenda);
 	const foldedCount = agenda.groups.filter((group) => isFolded(group)).reduce((sum, group) => sum + group.rows.length, 0);
 	const pointed = anchors && agenda.groups.some((group) => group.rows.some((row) => row.kind === "vigil" && vigilAnchor(row.slug) === target && (hidden.has(row.key) || isFolded(group))));
@@ -14416,7 +14512,8 @@ function ComingUp({ agenda, anchors, target }) {
 								showProject: agenda.showProject,
 								anchors,
 								target,
-								extra: hidden.has(row.key)
+								extra: hidden.has(row.key),
+								canCheck
 							}, row.key))
 						})]
 					}, group.key);
@@ -14439,7 +14536,7 @@ function ComingUp({ agenda, anchors, target }) {
 		})]
 	});
 }
-function WaitingItem({ row, showProject, anchors, target }) {
+function WaitingItem({ row, showProject, anchors, target, canCheck }) {
 	const id = anchors ? vigilAnchor(row.slug) : void 0;
 	const cls = id === void 0 ? "" : target === id ? "target-row is-target" : "target-row";
 	const meta = [showProject ? row.project : null, row.note].filter((part) => part !== null);
@@ -14453,11 +14550,19 @@ function WaitingItem({ row, showProject, anchors, target }) {
 		state: row.state,
 		meta,
 		detail: row.until,
+		foot: canCheck && row.flagged ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckNow, {
+			project: row.project,
+			slug: row.slug,
+			subject: row.title,
+			canWrite: true,
+			blocked: row.paused ? PAUSED : null,
+			explain: false
+		}) : void 0,
 		className: cls
 	});
 }
 /** The armed vigils without a due date: flagged first, a few in view, the rest in a fold. */
-function Waiting({ rows, shown, showProject, anchors, target }) {
+function Waiting({ rows, shown, showProject, anchors, target, canCheck = false }) {
 	if (rows.length === 0) return null;
 	const head = rows.slice(0, shown);
 	const rest = rows.slice(shown);
@@ -14473,7 +14578,8 @@ function Waiting({ rows, shown, showProject, anchors, target }) {
 					row,
 					showProject,
 					anchors,
-					target
+					target,
+					canCheck
 				}, row.key))
 			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
 				open: pointed,
@@ -14484,7 +14590,8 @@ function Waiting({ rows, shown, showProject, anchors, target }) {
 						row,
 						showProject,
 						anchors,
-						target
+						target,
+						canCheck
 					}, row.key))
 				})
 			})]
@@ -14561,13 +14668,14 @@ function loader$17({ context, request, params }) {
 		}),
 		closed: closed.slice(0, CLOSED_SHOWN),
 		closedCount: closed.length,
-		showProject: projects.length > 1
+		showProject: projects.length > 1,
+		canWrite: context.canWrite
 	};
 }
 var meta$15 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 var vigils_default = withComponentProps(function Vigils({ loaderData }) {
-	const { workspace, agenda, closed, closedCount, showProject } = loaderData;
+	const { workspace, agenda, closed, closedCount, showProject, canWrite } = loaderData;
 	const target = useHashTarget();
 	const closedTarget = closed.some(({ vigil }) => vigilAnchor(vigil.slug) === target);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -14585,7 +14693,8 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ComingUp, {
 						agenda,
 						anchors: true,
-						target
+						target,
+						canCheck: canWrite
 					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 					className: "board-rail",
@@ -14594,7 +14703,8 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 						shown: WAITING_SHOWN,
 						showProject,
 						anchors: true,
-						target
+						target,
+						canCheck: canWrite
 					}), closed.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "folds proj-closed",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
@@ -16389,7 +16499,10 @@ var vigil_exports = /* @__PURE__ */ __exportAll({
 function loader$11({ context, params }) {
 	const vigil = context.vigil(params.ws, params.slug);
 	if (vigil === null) throw data(`No vigil ${params.slug} in workspace ${params.ws}.`, { status: 404 });
-	return { vigil };
+	return {
+		vigil,
+		canWrite: context.canWrite
+	};
 }
 var meta$9 = ({ data: loaded, params }) => [{ title: `${loaded?.vigil.row.title ?? params.slug} · ${params.ws} | darius` }];
 /** "1 fail (exit 1), 2 pass": what each check of a sweep said. */
@@ -16402,7 +16515,7 @@ function outcomeText(sweep) {
 	return sweep.failKind === null ? outcome : `${outcome}, ${sweep.failKind}`;
 }
 var vigil_default = withComponentProps(function Vigil({ loaderData }) {
-	const { vigil } = loaderData;
+	const { vigil, canWrite } = loaderData;
 	const { row, failure, sweeps } = vigil;
 	const { today, offset } = useClock();
 	const when = (at) => momentText(at, today, offset);
@@ -16441,7 +16554,15 @@ var vigil_default = withComponentProps(function Vigil({ loaderData }) {
 			vigil.pausedReason === null || !row.paused ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "lede lede-tight",
 				children: ["Paused because: ", vigil.pausedReason]
-			})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckNow, {
+				project: vigil.project,
+				slug: row.slug,
+				subject: row.title,
+				canWrite,
+				blocked: checkBlocked(row),
+				explain: true
+			}, row.slug)
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "board",
@@ -19547,7 +19668,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-Rkph7Mef.js",
+			"module": "/assets/root-jrJaAzWB.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19557,8 +19678,8 @@ var server_manifest_default = {
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
-				"/assets/agenda-B1SqDigs.js",
+				"/assets/view-D9K-fUST.js",
+				"/assets/agenda-CSeD06zZ.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
 			"css": ["/assets/root-DvCBngdi.css"],
@@ -19601,14 +19722,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CudJHrZ5.js",
+			"module": "/assets/overview-54ckfWdE.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -19616,9 +19737,9 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -19640,14 +19761,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CudJHrZ5.js",
+			"module": "/assets/overview-54ckfWdE.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -19655,9 +19776,9 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -19679,7 +19800,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CeKvbmQS.js",
+			"module": "/assets/vigils-DcFcpV0s.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19689,11 +19810,13 @@ var server_manifest_default = {
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CNHh4LjI.js",
+				"/assets/section-C6oTgjOG.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/agenda-B1SqDigs.js",
-				"/assets/view-C9IfezjJ.js"
+				"/assets/agenda-CSeD06zZ.js",
+				"/assets/check-now-CuifQQEE.js",
+				"/assets/view-D9K-fUST.js",
+				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19714,7 +19837,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CeKvbmQS.js",
+			"module": "/assets/vigils-DcFcpV0s.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19724,11 +19847,13 @@ var server_manifest_default = {
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CNHh4LjI.js",
+				"/assets/section-C6oTgjOG.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/agenda-B1SqDigs.js",
-				"/assets/view-C9IfezjJ.js"
+				"/assets/agenda-CSeD06zZ.js",
+				"/assets/check-now-CuifQQEE.js",
+				"/assets/view-D9K-fUST.js",
+				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19749,26 +19874,27 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CICUariZ.js",
+			"module": "/assets/rituals-CKXQ2XNg.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CNHh4LjI.js",
+				"/assets/section-C6oTgjOG.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/agenda-B1SqDigs.js"
+				"/assets/agenda-CSeD06zZ.js",
+				"/assets/check-now-CuifQQEE.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19789,26 +19915,27 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CICUariZ.js",
+			"module": "/assets/rituals-CKXQ2XNg.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CNHh4LjI.js",
+				"/assets/section-C6oTgjOG.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/agenda-B1SqDigs.js"
+				"/assets/agenda-CSeD06zZ.js",
+				"/assets/check-now-CuifQQEE.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19829,7 +19956,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-D2RyJVX1.js",
+			"module": "/assets/findings-Cy7B1GS4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19838,12 +19965,12 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/state-words-CdJGMvfT.js"
 			],
 			"css": [],
@@ -19865,7 +19992,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-D2RyJVX1.js",
+			"module": "/assets/findings-Cy7B1GS4.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -19874,12 +20001,12 @@ var server_manifest_default = {
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/state-words-CdJGMvfT.js"
 			],
 			"css": [],
@@ -19963,13 +20090,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BSwICU9e.js",
+			"module": "/assets/runs-BVwcmJ28.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -19977,9 +20104,9 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -20003,7 +20130,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CYpfRkHg.js",
+			"module": "/assets/ritual-BfeGk0EX.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20011,10 +20138,10 @@ var server_manifest_default = {
 				"/assets/paths-BIsmk22N.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/runs-DxfueWWE.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20042,21 +20169,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigil-BNnb7Jdc.js",
+			"module": "/assets/vigil-C9aLIBui.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
+				"/assets/check-now-CuifQQEE.js",
 				"/assets/crumbs-CkJOExHf.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-BIsmk22N.js",
+				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -20077,18 +20206,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-BculKKNr.js",
+			"module": "/assets/run-NUfYeFPG.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/chip-DMBwRjCd.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/runs-DxfueWWE.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20318,13 +20447,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BSwICU9e.js",
+			"module": "/assets/runs-BVwcmJ28.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-CkCc5PgZ.js",
+				"/assets/runs-DxfueWWE.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -20332,9 +20461,9 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-DMBwRjCd.js",
 				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-C9IfezjJ.js",
+				"/assets/view-D9K-fUST.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-DByU6Wa6.js",
+				"/assets/result-BvEfGd4f.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -20484,8 +20613,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-24b281cb.js",
-	"version": "24b281cb",
+	"url": "/assets/manifest-6c76c234.js",
+	"version": "6c76c234",
 	"sri": void 0
 };
 //#endregion

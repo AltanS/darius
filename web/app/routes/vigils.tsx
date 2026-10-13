@@ -31,6 +31,7 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
     closed: closed.slice(0, CLOSED_SHOWN),
     closedCount: closed.length,
     showProject: projects.length > 1,
+    canWrite: context.canWrite,
   };
 }
 
@@ -38,7 +39,7 @@ export const meta: Route.MetaFunction = ({ data }) => [{ title: data?.workspace 
 
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 export default function Vigils({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { workspace, agenda, closed, closedCount, showProject } = loaderData;
+  const { workspace, agenda, closed, closedCount, showProject, canWrite } = loaderData;
   const target = useHashTarget();
   const closedTarget = closed.some(({ vigil }) => vigilAnchor(vigil.slug) === target);
   return (
@@ -47,10 +48,10 @@ export default function Vigils({ loaderData }: Route.ComponentProps): React.Reac
       <div className="proj-body">
         <div className="board">
           <div className="board-main">
-            <ComingUp agenda={agenda} anchors target={target} />
+            <ComingUp agenda={agenda} anchors target={target} canCheck={canWrite} />
           </div>
           <aside className="board-rail">
-            <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={showProject} anchors target={target} />
+            <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={showProject} anchors target={target} canCheck={canWrite} />
             {closed.length === 0 ? null : (
               <div className="folds proj-closed">
                 <Fold open={closedTarget} summary={`Closed vigils (${closedCount})`}>

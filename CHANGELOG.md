@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.86.0] - 2026-10-13
+
+### Added
+
+- "Check now" on the web vigil page and on a flagged row of the Vigils list. It posts `POST /api/vigil/check {project, slug}`, which starts `darius vigil sweep <slug> --json --who web:<viewer>` detached and does not wait for the sweep. It waits at most 5 s for the CLI to say it started (202 `{started, host}`) or to refuse (409 with the CLI's sentence: the daily sweep runs, another check runs, the 2 minute wait). The page says "Check started on <host>" and offers a reload. The button is off for a paused or closed vigil. It has the follow-up's guards: the page's Origin, JSON, a size cap and a tailnet identity; the loopback viewer is refused.
+- A one-vigil sweep prints `darius vigil sweep: started <slug> on <host>` on stderr once it holds its lease, before the checks run.
+
 ## [0.85.0] - 2026-10-13
 
 ### Added

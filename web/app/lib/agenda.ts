@@ -56,6 +56,10 @@ export interface AgendaRow {
   until: string | null;
   /** A flagged vigil: "step 1 failed, exit 1, 06:31, 1 day late". A paused vigil: why it is flagged, if it is. */
   note: string | null;
+  /** A vigil whose newest judged check failed. */
+  flagged: boolean;
+  /** A vigil under a pause that has not ended. */
+  paused: boolean;
   /** Days past due; 0 when not overdue. */
   overdueDays: number;
   /** A ritual with mode off whose date is past: it goes to the Off group, not to Overdue. */
@@ -79,6 +83,8 @@ export interface WaitingRow {
   href: string;
   until: string | null;
   flagged: boolean;
+  /** Under a pause that has not ended. */
+  paused: boolean;
   /** "Pending", "Check broken", "Flagged" or "Paused until 20 Oct"; null for a plain armed vigil. */
   state: AgendaState | null;
   /** A flagged vigil: "step 1 failed, exit 1, 06:31". */
@@ -205,6 +211,8 @@ function ritualRow(input: AgendaInput, project: ProjectStatus, ritual: RitualRow
     facts: factsText(ritual),
     until: null,
     note: ritual.source === "repo" ? "git" : ritual.source === "unmanaged" ? "not in .darius.toml" : null,
+    flagged: false,
+    paused: false,
     overdueDays: at.overdueDays,
     off: at.off === true,
   };
@@ -237,6 +245,8 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
     facts: "",
     until: vigil.until,
     note,
+    flagged: vigil.flagged,
+    paused: vigil.paused,
     overdueDays: late,
     off: false,
   };
@@ -244,7 +254,7 @@ function vigilRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow, d
 
 function waitingRow(input: AgendaInput, project: ProjectStatus, vigil: VigilRow): WaitingRow {
   const note = vigil.flagged ? vigilFailureText(vigil, input.today, input.offset ?? 0) : null;
-  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: href({ to: "vigil", ws: project.name, slug: vigil.slug }), until: vigil.until, flagged: vigil.flagged, state: vigilWord(vigil), note };
+  return { key: `${project.name}/vigil/${vigil.slug}`, project: project.name, slug: vigil.slug, title: vigil.title, href: href({ to: "vigil", ws: project.name, slug: vigil.slug }), until: vigil.until, flagged: vigil.flagged, paused: vigil.paused, state: vigilWord(vigil), note };
 }
 
 // --- the agenda ----------------------------------------------------------------------------

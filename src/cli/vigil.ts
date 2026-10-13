@@ -18,6 +18,8 @@
  * A one-vigil sweep never takes the daily lease. It refuses (exit 1) while the
  * daily sweep of the project runs, while another check of the vigil runs, and
  * for 2 minutes after the vigil's last sweep; --force lifts that last wait only.
+ * Once it holds its lease it prints `darius vigil sweep: started SLUG on HOST`
+ * on stderr (0.86.0), before the checks run; the web's "Check now" waits for it.
  * `vigil pause` stops the sweep from running a vigil; with --until the pause ends
  * after that local date, without it `vigil resume` ends it.
  *
@@ -592,6 +594,9 @@ function singleTarget(args: ParsedArgs, opts: SweepOptions): SweepPlan["single"]
   return { ...leaseTarget(), force };
 }
 
+/** The stderr line of a one-vigil sweep once it holds its lease (0.86.0); the web's "Check now" waits for it. */
+export const SWEEP_STARTED_PREFIX = "darius vigil sweep: started ";
+
 /** One vigil: waits out the cooldown, stands aside for the daily sweep, and holds its own lease while the checks run. */
 async function sweepSingle(project: Project, run: SweepOptions, single: NonNullable<SweepPlan["single"]>, slug: string): Promise<ProjectSweep> {
   const left = single.force ? 0 : cooldownLeftMs(linesFor(readLedger(project), itemRef("vigil", slug)));
@@ -604,6 +609,7 @@ async function sweepSingle(project: Project, run: SweepOptions, single: NonNulla
   const ttlMs = vigilLeaseTtlMs(commands, run.timeoutMs ?? DEFAULT_SWEEP_TIMEOUT_MS);
   const lease = await takeVigilSweepLease(project, { ...single, today: run.today, slug, ttlMs });
   if ("blocked" in lease) return { skip: { project: project.name, reason: LEASE_SKIPS[lease.blocked], detail: lease.detail } };
+  console.error(`${SWEEP_STARTED_PREFIX}${slug} on ${single.host}`);
   try {
     return { result: await sweepProject(project, run) };
   } finally {

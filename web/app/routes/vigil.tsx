@@ -3,6 +3,7 @@ import { data } from "react-router";
 import type { Route } from "./+types/vigil";
 import type { VigilSweep } from "../../../src/web/api.ts";
 import { KindWord } from "../components/chip.tsx";
+import { CheckNow } from "../components/check-now.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { StateWord } from "../components/row.tsx";
@@ -10,14 +11,14 @@ import { Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
 import { momentText } from "../lib/format.ts";
 import { vigilWord } from "../lib/state-words.ts";
-import { failKindText, vigilWaits } from "../lib/view.ts";
+import { checkBlocked, failKindText, vigilWaits } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
 export function loader({ context, params }: Route.LoaderArgs) {
   const vigil = context.vigil(params.ws, params.slug);
   if (vigil === null) throw data(`No vigil ${params.slug} in workspace ${params.ws}.`, { status: 404 });
-  return { vigil };
+  return { vigil, canWrite: context.canWrite };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.vigil.row.title ?? params.slug} · ${params.ws} | darius` }];
@@ -34,7 +35,7 @@ function outcomeText(sweep: VigilSweep): string {
 }
 
 export default function Vigil({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { vigil } = loaderData;
+  const { vigil, canWrite } = loaderData;
   const { row, failure, sweeps } = vigil;
   const { today, offset } = useClock();
   const when = (at: string): string => momentText(at, today, offset);
@@ -59,6 +60,7 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
         </p>
         {vigil.closedReason === null ? null : <p className="lede lede-tight">Closed because: {vigil.closedReason}</p>}
         {vigil.pausedReason === null || !row.paused ? null : <p className="lede lede-tight">Paused because: {vigil.pausedReason}</p>}
+        <CheckNow key={row.slug} project={vigil.project} slug={row.slug} subject={row.title} canWrite={canWrite} blocked={checkBlocked(row)} explain />
       </header>
 
       <div className="board">

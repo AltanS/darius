@@ -18,8 +18,10 @@ import { join } from "node:path";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue, LedgerLine } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
+import { addVigil, closeVigil, pauseVigil } from "../src/core/sweep.ts";
 import { NOW_STARTED_PREFIX, RESUME_STARTED_PREFIX } from "../src/cli/run-due.ts";
-import { actionApi, findingApi, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, ANSWERS_TOO_LONG, LOOPBACK_ANSWER, LOOPBACK_CLOSE, RESUME_STARTED_LINE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
+import { SWEEP_STARTED_PREFIX } from "../src/cli/vigil.ts";
+import { actionApi, findingApi, vigilApi, vigilCheckArgv, LOOPBACK_CHECK, SWEEP_STARTED_LINE, type VigilCheckDeps, NOW_STARTED_LINE, followUpArgv, LOOPBACK_ACK, ANSWERS_TOO_LONG, LOOPBACK_ANSWER, LOOPBACK_CLOSE, RESUME_STARTED_LINE, runCli, startDetachedFollowUp, waitForOutcome, type ActionDeps, type ActionRequest, type CliAnswer, type FindingDeps, LOOPBACK_FOLLOW_UP } from "../src/web/action-api.ts";
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
@@ -1262,4 +1264,139 @@ test("answers too long together: a 413 with a plain sentence on the ack and the 
   const follow = await actionApi(postRaw(JSON.stringify({ ...VALID, note: "x".repeat(5000) })), { who: "owner" }, deps(READY));
   assert.equal(errorOf(follow.body), "too large", "the follow-up keeps its own word");
   assert.deepEqual([stub.calls, stub.started], [[], []]);
+});
+
+// --- check one vigil now (0.86.0) ----------------------------------------------------------
+
+const CHECK_BODY = "# checks\n\n## Verification Checklist\n\n- [ ] the page loads\n  - Command: `curl -sf http://localhost/`\n  - Expected: `exit 0`\n";
+for (const slug of ["armed", "snoozed", "paused-open", "shut"]) {
+  addVigil(openProject(PROJECT), { slug, title: `Title of ${slug}`, body: CHECK_BODY, due: "2026-10-01", heavy: false, who: "test" });
+}
+pauseVigil(openProject(PROJECT), { slug: "snoozed", reason: "waiting for the vendor", until: "2999-01-01", who: "test" });
+pauseVigil(openProject(PROJECT), { slug: "paused-open", reason: "on hold", who: "test" });
+closeVigil(openProject(PROJECT), { slug: "shut", verdict: "held", by: "test", who: "test", reason: "done" });
+
+const CHECK = { project: PROJECT, slug: "armed" };
+
+function checkRequest(body: JsonValue, overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return post(body, { path: "/api/vigil/check", ...overrides });
+}
+
+/** Stubs the spawn and records it; the started CLI follows `script`. */
+function checkDeps(script: Script = { output: `${SWEEP_STARTED_PREFIX}armed on host-a\n` }): VigilCheckDeps & { started: Started[] } {
+  const started: Started[] = [];
+  return {
+    started,
+    waitMs: 300,
+    start: (argv, log) => {
+      started.push({ argv, log });
+      appendFileSync(log, script.output);
+      return { exited: script.code === undefined ? new Promise(() => undefined) : Promise.resolve(script.code) };
+    },
+  };
+}
+
+test("check: the start line of the CLI is the one the server waits for", () => {
+  assert.equal(SWEEP_STARTED_LINE.exec(`${SWEEP_STARTED_PREFIX}armed on host-a`)?.[2], "host-a");
+  assert.equal(SWEEP_STARTED_LINE.exec("darius run now: started run 01JCHILD000000000000000000 on host-a"), null);
+});
+
+test("check: path 404, method 405, no or foreign Origin 403, other content 415, a large body 413, bad JSON 400, the loopback viewer 403", async () => {
+  const stub = checkDeps();
+  const who = { who: "owner" };
+  assert.equal((await vigilApi(checkRequest(CHECK, { path: "/api/vigil/other" }), who, stub)).status, 404);
+  assert.equal((await vigilApi(checkRequest(CHECK, { method: "GET" }), who, stub)).status, 405);
+  const noOrigin = checkRequest(CHECK, { headers: new Headers({ host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  assert.equal((await vigilApi(noOrigin, who, stub)).status, 403);
+  const foreign = checkRequest(CHECK, { headers: new Headers({ origin: "http://evil.example", host: "127.0.0.1:4747", "content-type": "application/json" }) });
+  const refused = await vigilApi(foreign, who, stub);
+  assert.equal(refused.status, 403);
+  assert.match(errorOf(refused.body), /must come from the darius page/u);
+  const text = checkRequest(CHECK, { headers: new Headers({ origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747", "content-type": "text/plain" }) });
+  assert.equal((await vigilApi(text, who, stub)).status, 415);
+  assert.equal((await vigilApi(checkRequest({ ...CHECK, slug: "x".repeat(70_000) }), who, stub)).status, 413);
+  assert.equal((await vigilApi(postRaw("{not json", { path: "/api/vigil/check" }), who, stub)).status, 400);
+  const local = await vigilApi(checkRequest(CHECK), { who: "this host", local: true }, stub);
+  assert.equal(local.status, 403);
+  assert.equal(errorOf(local.body), LOOPBACK_CHECK);
+  assert.match(LOOPBACK_CHECK, /tailnet identity/u);
+  assert.deepEqual(stub.started, [], "nothing started");
+});
+
+test("check: a body that is not project and slug is 400, an unknown project is 400, an unknown vigil is 404, and nothing starts", async () => {
+  const stub = checkDeps();
+  const cases: [JsonValue, RegExp][] = [
+    [{ ...CHECK, project: "../etc" }, /project must be a project name/u],
+    [{ ...CHECK, slug: "A b" }, /slug must be a vigil slug/u],
+    [{ ...CHECK, slug: "--force" }, /slug must be a vigil slug/u],
+    [{ ...CHECK, slug: 5 }, /slug must be a vigil slug/u],
+    [{ project: PROJECT }, /slug must be a vigil slug/u],
+    [{ ...CHECK, force: true }, /unknown field force/u],
+    [{ ...CHECK, who: "admin" }, /unknown field who/u],
+    [[1], /send \{ project, slug \}/u],
+    [{ ...CHECK, project: "nope" }, /no project nope/u],
+  ];
+  for (const [body, reason] of cases) {
+    const answer = await vigilApi(checkRequest(body), { who: "owner" }, stub);
+    assert.equal(answer.status, 400, JSON.stringify(body));
+    assert.match(errorOf(answer.body), reason, JSON.stringify(body));
+  }
+  const unknown = await vigilApi(checkRequest({ ...CHECK, slug: "ghost" }), { who: "owner" }, stub);
+  assert.equal(unknown.status, 404);
+  assert.match(errorOf(unknown.body), /no vigil ghost in demo/u);
+  assert.deepEqual(stub.started, []);
+});
+
+test("check: a paused or a closed vigil is 409 and nothing starts", async () => {
+  const stub = checkDeps();
+  const snoozed = await vigilApi(checkRequest({ ...CHECK, slug: "snoozed" }), { who: "owner" }, stub);
+  assert.equal(snoozed.status, 409);
+  assert.match(errorOf(snoozed.body), /vigil 'snoozed' is paused until 2999-01-01/u);
+  const paused = await vigilApi(checkRequest({ ...CHECK, slug: "paused-open" }), { who: "owner" }, stub);
+  assert.equal(paused.status, 409);
+  assert.match(errorOf(paused.body), /vigil 'paused-open' is paused; resume it/u);
+  const shut = await vigilApi(checkRequest({ ...CHECK, slug: "shut" }), { who: "owner" }, stub);
+  assert.equal(shut.status, 409);
+  assert.match(errorOf(shut.body), /vigil 'shut' is closed/u);
+  assert.deepEqual(stub.started, []);
+});
+
+test("check: it starts the sweep of that vigil with the project, --json and the viewer, and answers 202 with the host as soon as the CLI says started", async () => {
+  const stub = checkDeps({ output: `${SWEEP_STARTED_PREFIX}armed on host-a\n` });
+  const began = Date.now();
+  const answer = await vigilApi(checkRequest(CHECK), { who: "owner on phone" }, stub);
+  assert.equal(answer.status, 202);
+  assert.deepEqual(answer.body, { ok: true, started: true, host: "host-a" });
+  assert.ok(Date.now() - began < 250, "the sweep is still running; the POST did not wait for it");
+  assert.equal(stub.started.length, 1);
+  assert.deepEqual(stub.started[0]?.argv, ["vigil", "sweep", "armed", "--project", PROJECT, "--json", "--who", "web:owner on phone"]);
+  assert.deepEqual(vigilCheckArgv(CHECK, { who: "w" }), ["vigil", "sweep", "armed", "--project", PROJECT, "--json", "--who", "web:w"]);
+  assert.ok(!stub.started[0]?.argv.includes("--force"), "the page never lifts the cooldown");
+  assert.equal(stub.started[0]?.log, join(openProject(PROJECT).root, "sweeps", "armed.log"));
+});
+
+test("check: a lease refusal or a cooldown is 409 with the CLI's own sentence", async () => {
+  const cases: [Script, RegExp][] = [
+    [{ output: "darius: the daily sweep runs on host-b\n", code: 1 }, /^the daily sweep runs on host-b$/u],
+    [{ output: "darius: a check of 'armed' is already running (host-b holds the lease)\n", code: 1 }, /^a check of 'armed' is already running \(host-b holds the lease\)$/u],
+    [{ output: "darius: vigil 'armed' was swept less than 2 minutes ago; wait 90 s or pass --force\n", code: 1 }, /^vigil 'armed' was swept less than 2 minutes ago; wait 90 s or pass --force$/u],
+    [{ output: `${JSON.stringify({ project: PROJECT, skipped: { reason: "lease-offline", detail: "the bucket did not answer" } })}\n`, code: 3 }, /^the bucket did not answer$/u],
+    [{ output: "", code: 1 }, /ended with exit code 1 and no message/u],
+  ];
+  for (const [script, reason] of cases) {
+    const answer = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps(script));
+    assert.equal(answer.status, 409, script.output);
+    assert.match(errorOf(answer.body), reason, script.output);
+  }
+});
+
+test("check: a started line wins over a fast exit, a CLI that could not start is 500, and silence within the wait is 202 pending", async () => {
+  const fast = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps({ output: `${SWEEP_STARTED_PREFIX}armed on host-a\n{"project":"demo"}\n`, code: 1 }));
+  assert.equal(fast.status, 202, "a sweep that started and ended with errors still started");
+  assert.ok(isRecord(fast.body) && fast.body.started === true);
+  const broken = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps({ output: "", code: null }));
+  assert.equal(broken.status, 500);
+  const slow = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps({ output: "" }));
+  assert.equal(slow.status, 202);
+  assert.ok(isRecord(slow.body) && slow.body.pending === true && slow.body.host === "host-a" && isText(slow.body.message), JSON.stringify(slow.body));
 });

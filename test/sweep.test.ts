@@ -573,11 +573,14 @@ test("a one-vigil sweep is refused while another check of the vigil holds the le
 
 test("a second check of one vigil inside 2 minutes is refused, --force passes", async () => {
   await addFailing("cool-down");
-  assert.equal((await runVigil(["sweep", "cool-down", "--json"])).code, 0);
+  const first = await runVigil(["sweep", "cool-down", "--json"]);
+  assert.equal(first.code, 0);
+  assert.match(first.stderr, new RegExp(`^darius vigil sweep: started cool-down on ${hostId()}$`, "mu"), "the web's Check now waits for this line");
   assert.equal(lines("cool-down", "evidence").length, 1);
 
   const refused = await runVigil(["sweep", "cool-down", "--json"]);
   assert.equal(refused.code, 1);
+  assert.doesNotMatch(refused.stderr, /started/u, "a refusal never says started");
   assert.match(refused.stderr, /vigil 'cool-down' was swept less than 2 minutes ago; wait \d+ s or pass --force/u);
   assert.equal((await runVigil(["sweep", "--only", "cool-down"])).code, 1, "--only is the same sweep");
   assert.equal(lines("cool-down", "evidence").length, 1, "nothing ran");

@@ -185,6 +185,13 @@ export function vigilFailureText(vigil: VigilRow, today: string, offset: number)
   return [step, lastFailure.exit === null ? null : `exit ${lastFailure.exit}`, momentText(lastFailure.at, today, offset)].filter((part) => part !== null).join(", ");
 }
 
+/** Why "Check now" is off for a vigil: it is closed or paused. Null when a check can start. */
+export function checkBlocked(vigil: VigilRow): string | null {
+  if (vigil.state === "closed") return "This vigil is closed. There is nothing to check.";
+  if (vigil.paused) return "This vigil is paused. Resume it to check it.";
+  return null;
+}
+
 /** What a failure kind means, for the failure block of the vigil page. */
 export function failKindText(kind: VigilFailKind): string {
   if (kind === "pending") return "Pending: the check failed the way it does while the event is still ahead.";
