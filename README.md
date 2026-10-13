@@ -630,6 +630,9 @@ darius trusts the header only when sent from the designated proxy address. Other
 verified via `tailscale whois`, preventing client spoofing. If the proxy runs on the same
 host, set `DARIUS_WEB_PROXY=127.0.0.1`: loopback connections then require the header as well.
 
+The proxy must send the host of `DARIUS_WEB_URL`, or this host's own name or address, as the
+Host header. darius answers 421 to any other Host, which stops DNS rebinding.
+
 ## License
 
 MIT. `tools/oxlint/anti-slop/` is a vendored copy of

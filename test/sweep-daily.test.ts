@@ -14,9 +14,10 @@ import { join } from "node:path";
 import { parseArgs } from "../src/cli/args.ts";
 import { UsageError } from "../src/cli/registry.ts";
 import { vigilCommand } from "../src/cli/vigil.ts";
-import { appendLine } from "../src/core/ledger.ts";
+import { appendLine, linesFor, readLedger } from "../src/core/ledger.ts";
 import { writeLink } from "../src/core/links.ts";
-import { openProject } from "../src/core/store.ts";
+import { itemRef, openProject } from "../src/core/store.ts";
+import { takeVigilSweepLease } from "../src/core/sweep-lease.ts";
 import { localToday } from "../src/core/sweep.ts";
 import { LINKED_LINE } from "../src/core/workdir.ts";
 
@@ -122,4 +123,20 @@ test("a project that lives in a checkout on another host is skipped with --all-p
   // Classifying runs nothing, so it needs no working dir.
   const classify = await runVigil(["sweep", "--project", project, "--classify-only", "--json"]);
   assert.equal(classify.code, 0, classify.stderr);
+});
+
+test("--daily leaves out a vigil whose one-vigil check runs on another host, and writes no line for it (0.86.2)", async () => {
+  const project = "sd-held";
+  linkedCheckout(project);
+  await addHereVigil(project);
+  const held = await takeVigilSweepLease(openProject(project), { s3: null, host: "host-a", today: localToday(), slug: "here", ttlMs: 60_000 });
+  assert.ok("handle" in held);
+  const run = await runVigil(["sweep", "--project", project, "--daily", "--json"]);
+  assert.equal(run.code, 0, run.stderr);
+  const swept = JSON.parse(run.stdout).vigils[0];
+  assert.equal(swept.outcome, "skipped", run.stdout);
+  assert.match(swept.reason, /a check of 'here' runs on host-a until /u);
+  assert.equal(swept.closed, false);
+  assert.equal(linesFor(readLedger(openProject(project)), itemRef("vigil", "here")).filter((line) => line.type === "vigil.swept" || line.type === "evidence").length, 0, "no line: the check on host A writes its own");
+  await held.handle.release();
 });

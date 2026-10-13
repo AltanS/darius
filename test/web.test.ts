@@ -28,7 +28,7 @@ const { parseMarkdown } = await import("../src/web/markdown.ts");
 const { webContext } = await import("../src/web/context.ts");
 import type { MdSpan, RitualRow } from "../src/web/api.ts";
 import type { Ritual } from "../src/core/model.ts";
-const { allowedLogins, authorize, authorizeRequest, cachedWhois, parseWhois, proxyTrust } = await import("../src/web/auth.ts");
+const { HostCheck, allowedLogins, authorize, authorizeRequest, cachedWhois, hostOf, parseSelfNames, parseWhois, proxyTrust } = await import("../src/web/auth.ts");
 const { appendLine, readLedger } = await import("../src/core/ledger.ts");
 const { openProject, putBlob } = await import("../src/core/store.ts");
 const { acknowledgeRun } = await import("../src/runner/hold.ts");
@@ -710,5 +710,93 @@ test("serve dispatches POST /api/finding/close to the finding API; the loopback 
     assert.equal(await serving, 0);
   } finally {
     console.log = log;
+  }
+});
+
+// --- Host check (0.86.1) ------------------------------------------------------------------
+
+const SELF_STATUS = JSON.stringify({ Self: { HostName: "Laptop", DNSName: "laptop.example-tailnet.ts.net.", TailscaleIPs: ["100.64.0.9", "fd7a:115c:a1e0::9"] } });
+
+test("Host check: this host's tailnet names, its IPs, localhost, the binds and DARIUS_WEB_URL pass; other names do not", async () => {
+  assert.deepEqual(parseSelfNames(SELF_STATUS), ["laptop", "laptop.example-tailnet.ts.net", "100.64.0.9", "fd7a:115c:a1e0::9"]);
+  assert.equal(hostOf("Laptop.Example-Tailnet.ts.net.:4747"), "laptop.example-tailnet.ts.net");
+  assert.equal(hostOf("[::1]:4747"), "::1");
+  assert.equal(hostOf(undefined), null);
+  assert.equal(hostOf("evil.example/x"), null);
+  const check = new HostCheck({ binds: ["192.168.1.7"], learn: async () => parseSelfNames(SELF_STATUS) });
+  for (const host of ["laptop", "laptop:4747", "laptop.example-tailnet.ts.net", "100.64.0.9:4747", "[fd7a:115c:a1e0::9]:4747", "localhost", "localhost:4747", "127.0.0.1:4747", "[::1]", "192.168.1.7:4747"]) {
+    assert.equal(await check.allows(host, undefined), true, host);
+  }
+  assert.equal(await check.allows("darius.example.com", "https://darius.example.com/"), true, "the host of DARIUS_WEB_URL");
+  for (const host of ["evil.example", "evil.example:4747", "laptop.evil.example", "100.64.0.10", "", undefined]) {
+    assert.equal(await check.allows(host, "https://darius.example.com/"), false, String(host));
+  }
+});
+
+test("Host check: without Tailscale it fails closed for tailnet names, says so once, and asks again after 30 s", async () => {
+  let clock = 0;
+  let asked = 0;
+  const lines: string[] = [];
+  let up = false;
+  const check = new HostCheck({
+    learn: async () => {
+      asked += 1;
+      if (!up) throw new Error("tailscaled is down");
+      return parseSelfNames(SELF_STATUS);
+    },
+    now: () => clock,
+    log: (line) => lines.push(line),
+  });
+  assert.equal(await check.allows("laptop", undefined), false);
+  assert.equal(await check.allows("laptop", undefined), false);
+  assert.equal(await check.allows("127.0.0.1:4747", undefined), true, "loopback names pass without Tailscale");
+  assert.equal(asked, 1, "no second ask within 30 s");
+  assert.equal(lines.length, 1);
+  assert.match(lines[0] ?? "", /cannot learn this host's tailnet names \(tailscaled is down\)/u);
+  up = true;
+  clock = 31_000;
+  assert.equal(await check.allows("laptop", undefined), true);
+  assert.equal(await check.allows("100.64.0.9", undefined), true);
+  assert.equal(asked, 2, "names, once learned, are kept");
+});
+
+test("serve refuses a wrong Host with 421 on GET and POST; tailnet name, IP, localhost and DARIUS_WEB_URL pass; healthz always answers", async () => {
+  const fake = join(SANDBOX, "fake-tailscale");
+  writeFileSync(fake, `#!/bin/sh\nif [ "$1" = status ]; then printf '%s' '${SELF_STATUS}'; exit 0; fi\nexit 1\n`, { mode: 0o755 });
+  const log = console.log;
+  const error = console.error;
+  const errors: string[] = [];
+  console.log = () => undefined;
+  console.error = (line: string) => errors.push(line);
+  const tailscale = process.env.DARIUS_TAILSCALE;
+  process.env.DARIUS_TAILSCALE = fake;
+  process.env.DARIUS_WEB_URL = "https://darius.example.com";
+  try {
+    const serving = serveCommand.run(parseArgs(["--port", "47996", "--bind", "127.0.0.1"]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const body = JSON.stringify({ project: "demo", run: "01JX" });
+    const post = { method: "POST", path: "/api/run/ack", body };
+    for (const host of ["evil.example", "evil.example:47996", "laptop.evil.example"]) {
+      const read = await call(47_996, { method: "GET", path: "/api/status.json", headers: { host } });
+      assert.equal(read.status, 421, `GET with Host ${host}`);
+      assert.match(read.body, /does not answer to the name/u);
+      const write = await call(47_996, { ...post, headers: { host, origin: `http://${host}`, "content-type": "application/json" } });
+      assert.equal(write.status, 421, `POST with Host ${host}`);
+    }
+    assert.ok(errors.some((line) => /Host 'evil\.example' does not name this host/u.test(line)));
+    for (const host of ["laptop:47996", "laptop.example-tailnet.ts.net", "100.64.0.9:47996", "localhost:47996", "127.0.0.1:47996", "[::1]:47996", "darius.example.com"]) {
+      assert.equal((await call(47_996, { method: "GET", path: "/api/status.json", headers: { host } })).status, 200, `GET with Host ${host}`);
+      const write = await call(47_996, { ...post, headers: { host, "content-type": "application/json" } });
+      assert.equal(write.status, 403, `POST with Host ${host} reaches the action API, which refuses the loopback viewer`);
+      assert.match(write.body, /acknowledging a run needs a tailnet identity/u);
+    }
+    assert.equal((await call(47_996, { method: "GET", path: "/healthz", headers: { host: "evil.example" } })).body, "ok\n", "healthz takes any Host");
+    process.emit("SIGTERM");
+    assert.equal(await serving, 0);
+  } finally {
+    console.log = log;
+    console.error = error;
+    process.env.DARIUS_TAILSCALE = tailscale;
+    delete process.env.DARIUS_WEB_URL;
   }
 });

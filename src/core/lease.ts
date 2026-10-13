@@ -10,15 +10,18 @@
  *   sweep     `<project>/leases/sweep-<YYYY-MM-DD>.json`, FINISHED when the
  *             sweep ends: the body gets `done: true` and stays, so every other
  *             host sees that the project was swept today and skips it.
- *   vigil     `<project>/leases/vigil-<slug>.json`, RELEASED when a one-vigil
- *             sweep ends (src/core/sweep-lease.ts).
+ *   vigil     `<project>/leases/vigil-<slug>.json`, COOLED when a one-vigil
+ *             sweep ends (0.86.2, src/core/sweep-lease.ts): the body gets
+ *             `cooldown: true` and expires 2 minutes later, so no host checks
+ *             the vigil again before then. A taker with `force` may take it over.
  *
  * Take: PUT with If-None-Match: * (or an O_EXCL create). When the key exists,
  * a lease that is expired, unreadable, or held by a dead process of this host
  * is stale: delete it and try once more. Two takers race on the conditional
- * PUT and exactly one wins. A finished lease is never stale.
+ * PUT and exactly one wins. A finished lease is never stale. A cooldown lease
+ * is stale only once it expires: its process has ended by design.
  *
- * Release and finish change the lease only while this holder still owns it,
+ * Release, finish and cool change the lease only while this holder still owns it,
  * and a network error there is swallowed: the lease expires on its own.
  */
 
@@ -39,6 +42,8 @@ export interface LeaseBody {
   expires: string;
   done?: boolean;
   finished?: string;
+  /** Set by `cool`: the work ended, and the lease only keeps others out until `expires`. */
+  cooldown?: boolean;
 }
 
 export interface LeaseSpec {
@@ -51,6 +56,8 @@ export interface LeaseSpec {
   ttlMs: number;
   /** The run the lease guards; empty for a sweep. */
   run?: string;
+  /** Take over a cooldown lease (a one-vigil sweep's `--force`). */
+  force?: boolean;
 }
 
 export interface LeaseHandle {
@@ -58,9 +65,11 @@ export interface LeaseHandle {
   release(): Promise<void>;
   /** Marks the lease done and keeps it, so nobody takes it again. */
   finish(): Promise<void>;
+  /** Keeps the lease as a cooldown that expires `ms` from now, so nobody takes it before then. */
+  cool(ms: number): Promise<void>;
 }
 
-export type LeaseBlock = "lease-held" | "lease-done" | "lease-offline";
+export type LeaseBlock = "lease-held" | "lease-done" | "lease-offline" | "lease-cooldown";
 
 export type LeaseOutcome = { handle: LeaseHandle } | { blocked: LeaseBlock; detail: string };
 
@@ -91,11 +100,12 @@ export function decodeLease(text: string): LeaseBody | null {
   try {
     const parsed: JsonValue = JSON.parse(text);
     if (!isRecord(parsed)) return null;
-    const { holder, host, pid, run, expires, done, finished } = parsed;
+    const { holder, host, pid, run, expires, done, finished, cooldown } = parsed;
     if (!isText(holder) || !isText(host) || !isNumber(pid) || !isText(expires)) return null;
     const lease: LeaseBody = { holder, host, pid, run: isText(run) ? run : "", expires };
     if (done === true) lease.done = true;
     if (isText(finished)) lease.finished = finished;
+    if (cooldown === true) lease.cooldown = true;
     return lease;
   } catch {
     return null;
@@ -115,13 +125,13 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/** Expired, unreadable, or held by a process of this host that no longer exists. A done lease never is. */
+/** Expired, unreadable, or held by a process of this host that no longer exists. A done lease never is; a cooldown lease only by expiry. */
 export function isLeaseStale(lease: LeaseBody | null, host: string): boolean {
   if (lease === null) return true;
   if (lease.done === true) return false;
   const expires = Date.parse(lease.expires);
   if (Number.isNaN(expires) || expires <= Date.now()) return true;
-  return lease.host === host && !isProcessAlive(lease.pid);
+  return lease.cooldown !== true && lease.host === host && !isProcessAlive(lease.pid);
 }
 
 function isSameLease(current: LeaseBody | null, mine: LeaseBody): boolean {
@@ -213,6 +223,12 @@ function handleFor(slot: LeaseSlot, mine: LeaseBody): LeaseHandle {
         if (!isSameLease(decodeLease((await slot.read()) ?? ""), mine)) return;
         await slot.overwrite(encodeLease({ ...mine, done: true, finished: new Date().toISOString() }));
       }),
+    cool: (ms) =>
+      quietly(async () => {
+        if (!isSameLease(decodeLease((await slot.read()) ?? ""), mine)) return;
+        const now = Date.now();
+        await slot.overwrite(encodeLease({ ...mine, expires: new Date(now + ms).toISOString(), finished: new Date(now).toISOString(), cooldown: true }));
+      }),
   };
 }
 
@@ -221,6 +237,7 @@ function blockedBy(current: LeaseBody): LeaseOutcome {
     const when = current.finished === undefined ? "" : ` at ${current.finished}`;
     return { blocked: "lease-done", detail: `done by ${current.host}${when}` };
   }
+  if (current.cooldown === true) return { blocked: "lease-cooldown", detail: `ended on ${current.host}, cooling down until ${current.expires}` };
   return { blocked: "lease-held", detail: `held by ${current.holder} until ${current.expires}` };
 }
 
@@ -235,7 +252,8 @@ async function takeFrom(slot: LeaseSlot, spec: LeaseSpec): Promise<LeaseOutcome>
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (await slot.create(encodeLease(mine))) return { handle: handleFor(slot, mine) };
     const current = decodeLease((await slot.read()) ?? "");
-    if (current !== null && !isLeaseStale(current, spec.host)) return blockedBy(current);
+    const isForced = spec.force === true && current?.cooldown === true;
+    if (current !== null && !isLeaseStale(current, spec.host) && !isForced) return blockedBy(current);
     await slot.remove();
   }
   return { blocked: "lease-held", detail: "lost the takeover race" };

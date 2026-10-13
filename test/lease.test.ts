@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { decodeLease, isLeaseStale, takeLease, type LeaseSpec } from "../src/core/lease.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
 import { openProject } from "../src/core/store.ts";
-import { pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../src/core/sweep-lease.ts";
+import { coolVigilSweepLease, heldVigilChecks, pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../src/core/sweep-lease.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-lease-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -199,4 +199,48 @@ test("a one-vigil lease works on a local lock file and reads an offline bucket a
 
   const offline = await takeVigilSweepLease(local, { ...target, s3: memoryS3({ isOffline: true }) });
   assert.ok("blocked" in offline && offline.blocked === "lease-offline");
+});
+
+test("cross-host cooldown in the bucket: host A's ended check keeps host B out for 2 minutes; --force takes it over (0.86.2)", async () => {
+  const project = openProject("lease-cool", { create: true });
+  const s3 = memoryS3();
+  const key = "lease-cool/leases/vigil-soak.json";
+  const target = { s3, host: "hostA", today: "2026-09-28", slug: "soak", ttlMs: 60_000 };
+  const mine = await takeVigilSweepLease(project, target);
+  assert.ok("handle" in mine);
+  await coolVigilSweepLease(mine.handle);
+  const cooled = decodeLease(s3.objects.get(key) ?? "");
+  assert.equal(cooled?.cooldown, true);
+  const left = Date.parse(cooled?.expires ?? "") - Date.now();
+  assert.ok(left > 110_000 && left <= 120_000, String(left));
+  assert.equal(isLeaseStale(cooled, "hostA"), false, "a cooldown lease is not stale on its own host, though its process has ended");
+
+  const refused = await takeVigilSweepLease(project, { ...target, host: "hostB" });
+  assert.ok("blocked" in refused && refused.blocked === "lease-cooldown");
+  assert.match(refused.detail, /^vigil 'soak' was checked less than 2 minutes ago \(ended on hostA, cooling down until .+\); wait or pass --force$/u);
+  assert.deepEqual(await heldVigilChecks(project, { s3, host: "hostB" }), new Map(), "a cooldown is no running check");
+
+  const forced = await takeVigilSweepLease(project, { ...target, host: "hostB", force: true });
+  assert.ok("handle" in forced, "--force takes the cooldown over");
+  assert.equal(decodeLease(s3.objects.get(key) ?? "")?.host, "hostB");
+  const busy = await takeVigilSweepLease(project, { ...target, host: "hostC", force: true });
+  assert.ok("blocked" in busy && busy.blocked === "lease-held", "--force never takes a running check");
+
+  await forced.handle.release();
+  s3.objects.set(key, JSON.stringify({ ...cooled, expires: new Date(Date.now() - 1000).toISOString() }));
+  assert.ok("handle" in (await takeVigilSweepLease(project, { ...target, host: "hostB" })), "an expired cooldown is free");
+});
+
+test("heldVigilChecks: host B's daily sweep sees host A's running check in the bucket; expired and other leases do not count (0.86.2)", async () => {
+  const project = openProject("lease-held", { create: true });
+  const s3 = memoryS3();
+  const running = await takeVigilSweepLease(project, { s3, host: "hostA", today: "2026-09-28", slug: "soak", ttlMs: 60_000 });
+  assert.ok("handle" in running);
+  s3.objects.set("lease-held/leases/vigil-old.json", JSON.stringify({ holder: "hostA:1", host: "hostA", pid: 1, run: "", expires: "2026-01-01T00:00:00.000Z" }));
+  assert.ok("handle" in (await takeSweepLease(project, { s3, host: "hostB", today: "2026-09-28" })));
+  const held = await heldVigilChecks(project, { s3, host: "hostB" });
+  assert.deepEqual([...held.keys()], ["soak"]);
+  assert.match(held.get("soak") ?? "", /^a check of 'soak' runs on hostA until /u);
+  assert.deepEqual(await heldVigilChecks(project, { s3: memoryS3({ isOffline: true }), host: "hostB" }), new Map(), "unreadable leases: sweep every vigil");
+  assert.deepEqual(await heldVigilChecks(openProject("lease-held-none", { create: true }), { s3: null, host: "hostB" }), new Map(), "no lease directory");
 });

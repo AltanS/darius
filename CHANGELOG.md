@@ -2,6 +2,31 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.86.4] - 2026-10-13
+
+### Changed
+
+- `vigil show` and the web vigil page mask obvious secrets in the output tail they show: an `Authorization:` value, a `Bearer` token, the value after `token=`, `key=`, `password=` and similar names, `sk-`, `ghp_`, `AKIA`-style keys, and a long hex or base64 run after a secret-like word. Each becomes `[masked]`. This is display only: the stored output never changes, and `vigil show --json` keeps the raw tail. The concept now states the rule: a Command must not print a secret.
+
+## [0.86.3] - 2026-10-13
+
+### Fixed
+
+- A snooze ends at the same moment on every host. `vigil pause --until DATE` also stores `until_at` on `vigil.paused`: the instant DATE ends in the writer's zone (midnight after it, as UTC). Readers prefer it, so a host in another zone no longer sees the vigil paused for hours longer or shorter. A line without `until_at` keeps the old local date rule. The CLI prints the end: "through 2026-10-20, ends 2026-10-21 00:00 Europe/Berlin".
+
+## [0.86.2] - 2026-10-13
+
+### Fixed
+
+- The 2 minute wait between two checks of one vigil now holds across hosts. At the end of a one-vigil sweep that ran something, `leases/vigil-<slug>.json` stays as a cooldown (`cooldown: true`) that expires 2 minutes later, so a check on another host is refused (exit 1) even before the ledger lines arrive there. `--force` takes a cooldown lease over, never a running check. The local ledger cooldown stays as the first check.
+- `vigil sweep --daily` leaves out a vigil whose one-vigil check runs now on any host. It reports the vigil as skipped and writes no line; that check writes its own. It costs one LIST of the `vigil-` leases per project and one GET per lease. When the leases cannot be read, the daily sweep runs every vigil as before.
+
+## [0.86.1] - 2026-10-13
+
+### Fixed
+
+- `darius serve` checks the Host header of every request but `/healthz`, on GET as well as POST. It answers 421 unless the Host names this host: `localhost`, `127.0.0.1` or `[::1]`, this host's tailnet name, MagicDNS name or tailnet IP, an address given to `--bind`, or the host of `DARIUS_WEB_URL`. The port does not count. This stops DNS rebinding: a page on another name that resolves to this host can no longer read the pages or reach the write buttons. While Tailscale cannot tell this host's names, only the other names pass, and serve logs one line that says so.
+
 ## [0.86.0] - 2026-10-13
 
 ### Added

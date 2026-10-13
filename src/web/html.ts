@@ -1,6 +1,6 @@
 /**
  * The few answers `darius serve` gives without the web app: the 403 page,
- * and the page for a missing build. Every value passes through escapeHtml.
+ * the 421 page for a wrong Host, and the page for a missing build. Every value passes through escapeHtml.
  */
 
 export function escapeHtml(value: string): string {
@@ -25,4 +25,9 @@ export function plainPage(title: string, message: string, note: string): string 
 
 export function renderForbidden(reason: string): string {
   return plainPage("not allowed", `Not allowed: ${reason}.`, "Only devices of the allowed Tailscale logins may see this page.");
+}
+
+/** The 421 page: the request named another host (src/web/auth.ts, HostCheck). */
+export function renderWrongHost(host: string): string {
+  return plainPage("wrong address", `Not allowed: this host does not answer to the name '${host}'.`, "Open the page by this host's tailnet name or address, or by DARIUS_WEB_URL.");
 }

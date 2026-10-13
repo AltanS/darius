@@ -16,7 +16,7 @@ process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
 
 const { appendLine } = await import("../src/core/ledger.ts");
-const { itemRef, openProject, putBlob } = await import("../src/core/store.ts");
+const { getBlobText, itemRef, openProject, putBlob } = await import("../src/core/store.ts");
 const { addVigil, pauseVigil } = await import("../src/core/sweep.ts");
 const { webContext } = await import("../src/web/context.ts");
 const { collectStatus, vigilDetail } = await import("../src/web/status.ts");
@@ -112,6 +112,15 @@ test("the vigil detail has the failure block, the output as plain text and the s
   assert.deepEqual([detail.sweeps[0]?.outcome, detail.sweeps[0]?.failKind], ["failed", "broken"]);
   assert.equal(detail.row.title, "Title of detail");
   assert.equal(detail.body.length > 0, true);
+});
+
+test("the vigil detail masks obvious secrets in the output tail; the stored blob keeps them (0.86.4)", () => {
+  addOne("leaky");
+  const raw = "curl: (22) 401\nAuthorization: Bearer placeholder123token\napi_key=abc\nok\n";
+  const sha = putBlob(project(), raw);
+  failSweep("leaky", 0, { recorded: true, exit: 22, output: sha });
+  assert.equal(vigilDetail(PROJECT, "leaky")?.failure?.outputTail, "curl: (22) 401\nAuthorization: Bearer [masked]\napi_key=[masked]\nok");
+  assert.equal(getBlobText(project(), sha), raw);
 });
 
 test("an older evidence line shows the current body and says where it came from; a missing blob has no output", () => {

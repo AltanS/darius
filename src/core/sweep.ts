@@ -156,6 +156,12 @@ export interface SweepOptions {
   today: string;
   /** Sweep one vigil only. */
   only?: string;
+  /**
+   * Vigils a one-vigil check holds on some host now (src/core/sweep-lease.ts,
+   * `heldVigilChecks`): slug to where. Reported as skipped with no line
+   * written; that check writes its own. Only the daily sweep sets it.
+   */
+  held?: ReadonlyMap<string, string>;
   /** Per Command, gate included. Default 120 s. */
   timeoutMs?: number;
   /** The `who` of every line written. Default `sweep`. */
@@ -388,8 +394,22 @@ function worstFailKind(kinds: readonly FailKind[]): FailKind {
   return kinds.length > 0 && !kinds.includes("unknown") ? "pending" : "unknown";
 }
 
-/** Status computed from the ledger lines of one vigil (`linesFor(ledger, "vigil/<slug>")`). `today` is the local date a snooze is judged on. */
-export function vigilStatus(slug: string, lines: readonly LedgerLine[], today: string = localToday()): VigilStatus {
+/**
+ * Whether a snooze is over. A line with `until_at` (0.86.3) ends at that
+ * instant, the same on every host. An older line has only `until`, its last
+ * local day: it is over once `today` is past it, judged in the reader's zone.
+ */
+function isPauseOver(pause: LedgerLine, today: string, now: Date): boolean {
+  const end = isText(pause.until_at) ? Date.parse(pause.until_at) : Number.NaN;
+  if (!Number.isNaN(end)) return now.getTime() >= end;
+  return isText(pause.until) && pause.until < today;
+}
+
+/**
+ * Status computed from the ledger lines of one vigil (`linesFor(ledger, "vigil/<slug>")`).
+ * `today` is the local date and `now` the instant a snooze is judged on (isPauseOver).
+ */
+export function vigilStatus(slug: string, lines: readonly LedgerLine[], today: string = localToday(), now: Date = new Date()): VigilStatus {
   const closedLine = lines.findLast((line) => line.type === "vigil.closed");
   const swept = lines.filter((line) => line.type === "vigil.swept");
   const judged = swept.findLast((line) => isText(line.outcome) && JUDGED_OUTCOMES.has(line.outcome));
@@ -409,8 +429,8 @@ export function vigilStatus(slug: string, lines: readonly LedgerLine[], today: s
     if (isText(closedLine.reason)) status.closedReason = closedLine.reason;
   }
   const pause = lines.findLast((line) => line.type === "vigil.paused" || line.type === "vigil.resumed");
-  // A snooze covers its last day: it is over once `today` is past `until`.
-  if (closedLine === undefined && pause?.type === "vigil.paused" && !(isText(pause.until) && pause.until < today)) {
+  // A snooze covers its last day: it is over once that day has ended.
+  if (closedLine === undefined && pause?.type === "vigil.paused" && !isPauseOver(pause, today, now)) {
     status.paused = true;
     if (isText(pause.until)) status.pausedUntil = pause.until;
     if (isText(pause.reason)) status.pausedReason = pause.reason;
@@ -624,7 +644,20 @@ export interface PauseInput {
   who: string;
 }
 
-/** Appends `vigil.paused`. Refuses (throws) a missing or closed vigil; a second pause replaces the first. */
+/**
+ * The instant a snooze through `until` ends: midnight after that day, in this
+ * host's zone (the writer's), as ISO UTC.
+ */
+export function pauseEndsAt(until: string): string {
+  const [year, month, day] = until.split("-").map(Number);
+  return new Date(year ?? 0, (month ?? 1) - 1, (day ?? 1) + 1).toISOString();
+}
+
+/**
+ * Appends `vigil.paused`. Refuses (throws) a missing or closed vigil; a second pause replaces the first.
+ * With `until` the line also carries `until_at` (0.86.3), the end instant in the writer's zone,
+ * so hosts in other zones end the snooze at the same moment.
+ */
 export function pauseVigil(project: Project, input: PauseInput): LedgerLine {
   if (input.reason.trim() === "") throw new UsageError("a pause needs a --reason");
   assertIsoDate(input.until, "--until");
@@ -642,6 +675,7 @@ export function pauseVigil(project: Project, input: PauseInput): LedgerLine {
       item: itemRef("vigil", input.slug),
       reason: input.reason,
       until: input.until,
+      until_at: input.until === undefined ? undefined : pauseEndsAt(input.until),
     });
   });
 }
@@ -763,6 +797,8 @@ async function sweepVigil(ctx: SweepContext, slug: string): Promise<SweptVigil> 
   const plan = planVigil(ctx, slug);
   const status = vigilStatus(slug, plan.lines, ctx.opts.today);
   if (status.state === "closed") return report(plan, { bucket: "closed", gate: "n/a", closed: true, checks: [] });
+  const heldBy = ctx.opts.held?.get(slug);
+  if (heldBy !== undefined) return report(plan, { bucket: "runnable", gate: "n/a", outcome: "skipped", closed: false, reason: heldBy });
   if (status.paused) return skip(ctx, plan, "paused", pausedReason(status));
 
   const header = plan.doc.header;

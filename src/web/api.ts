@@ -324,7 +324,7 @@ export interface VigilFailureDetail extends VigilFailure {
   /** `body` when the sweep did not record Command and Expected, so they come from the current body. */
   source: "evidence" | "body";
   host: string;
-  /** The last lines of the check output, control characters dropped; null when the blob is not on this host. */
+  /** The last lines of the check output, control characters dropped and obvious secrets masked (0.86.4); null when the blob is not on this host. */
   outputTail: string | null;
 }
 

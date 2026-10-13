@@ -129,6 +129,103 @@ export async function tailnetAddress(): Promise<string | null> {
   }
 }
 
+/**
+ * The names of this host on the tailnet, from `tailscale status --json`: the
+ * host name, the MagicDNS name and its first label, and every tailnet IP.
+ * Lower case, no trailing dot, IPv6 without brackets. Exported for tests.
+ */
+export function parseSelfNames(stdout: string): string[] {
+  const self = field(JSON.parse(stdout), "Self");
+  const names: string[] = [];
+  const host = field(self, "HostName");
+  if (isText(host)) names.push(host);
+  const dns = field(self, "DNSName");
+  if (isText(dns)) {
+    const full = dns.replace(/\.$/u, "");
+    names.push(full, full.split(".")[0] ?? full);
+  }
+  const ips = field(self, "TailscaleIPs");
+  if (Array.isArray(ips)) for (const ip of ips) if (isText(ip)) names.push(ip);
+  return [...new Set(names.filter((name) => name !== "").map((name) => name.toLowerCase()))];
+}
+
+/** This host's tailnet names (parseSelfNames). Throws when Tailscale cannot tell. */
+export async function tailnetNames(): Promise<string[]> {
+  const names = parseSelfNames(await runTailscale(["status", "--json", "--peers=false"]));
+  if (names.length === 0) throw new Error("tailscale status names no host and no address");
+  return names;
+}
+
+/** The host name of a Host header, without port, brackets or trailing dot, lower case; null when it is missing or not a host. */
+export function hostOf(header: string | undefined): string | null {
+  if (header === undefined || header === "" || /[/?#@\s]/u.test(header)) return null;
+  let host: string;
+  try {
+    host = new URL(`http://${header}`).hostname;
+  } catch {
+    return null;
+  }
+  return host.replace(/^\[(.*)\]$/u, "$1").replace(/\.$/u, "").toLowerCase() || null;
+}
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"]);
+const NAMES_RETRY_MS = 30_000;
+
+/**
+ * The Host check against DNS rebinding (0.86.1): a page on another name that
+ * resolves to this host's address sends that name as Host, and is refused.
+ * A request passes when its Host names this host: localhost, 127.0.0.1 or
+ * [::1]; a tailnet name or IP of this host; an address serve was told to
+ * bind; or the host of `$DARIUS_WEB_URL`. The port does not count. While
+ * the tailnet names are unknown, only the other names pass: the check fails
+ * closed, says so once, and asks Tailscale again after 30 s.
+ */
+export class HostCheck {
+  private names: ReadonlySet<string> | null = null;
+  private triedAt = Number.NEGATIVE_INFINITY;
+  private warned = false;
+  private readonly binds: ReadonlySet<string>;
+  private readonly learn: () => Promise<string[]>;
+  private readonly now: () => number;
+  private readonly log: (line: string) => void;
+
+  constructor(options: { binds?: readonly string[]; learn?: () => Promise<string[]>; now?: () => number; log?: (line: string) => void } = {}) {
+    this.binds = new Set((options.binds ?? []).map((bind) => hostOf(bind.includes(":") && !bind.startsWith("[") ? `[${bind}]` : bind)).filter((bind) => bind !== null));
+    this.learn = options.learn ?? tailnetNames;
+    this.now = options.now ?? Date.now;
+    this.log = options.log ?? ((line) => console.error(line));
+  }
+
+  /** Whether `header`, the request's Host, names this host. Never throws. */
+  async allows(header: string | undefined, publicUrl: string | undefined = process.env.DARIUS_WEB_URL?.trim()): Promise<boolean> {
+    const host = hostOf(header);
+    if (host === null) return false;
+    if (LOOPBACK_HOSTS.has(host) || this.binds.has(host)) return true;
+    if (publicUrl !== undefined && publicUrl !== "" && host === publicHost(publicUrl)) return true;
+    return (await this.tailnet()).has(host);
+  }
+
+  private async tailnet(): Promise<ReadonlySet<string>> {
+    if (this.names !== null || this.now() - this.triedAt < NAMES_RETRY_MS) return this.names ?? new Set();
+    this.triedAt = this.now();
+    try {
+      this.names = new Set(await this.learn());
+    } catch (cause) {
+      if (!this.warned) this.log(`darius serve: cannot learn this host's tailnet names (${errorMessage(cause)}); until then only localhost, the bind addresses and DARIUS_WEB_URL pass the Host check`);
+      this.warned = true;
+    }
+    return this.names ?? new Set();
+  }
+}
+
+function publicHost(publicUrl: string): string | null {
+  try {
+    return hostOf(new URL(publicUrl).host);
+  } catch {
+    return null;
+  }
+}
+
 /** Remembers answers for a minute, so a page load with its reload costs one lookup, not one per request. */
 export function cachedWhois(lookup: WhoisLookup, now: () => number = Date.now): WhoisLookup {
   const cache = new Map<string, { at: number; whois: Whois | null }>();

@@ -13,17 +13,19 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseArgs } from "../src/cli/args.ts";
 import { vigilCommand } from "../src/cli/vigil.ts";
 import { appendLine, hostId, linesFor, readLedger } from "../src/core/ledger.ts";
+import { decodeLease } from "../src/core/lease.ts";
+import { dateIn, zoned } from "../src/core/zone.ts";
 import { UsageError, type LedgerLine } from "../src/core/model.ts";
-import { itemRef, openProject, putBlob } from "../src/core/store.ts";
+import { getBlobText, itemRef, openProject, putBlob } from "../src/core/store.ts";
 import { takeSweepLease, takeVigilSweepLease } from "../src/core/sweep-lease.ts";
-import { cooldownLeftMs, lastFailure, localToday, sweepProject, trailingPipeFilter, vigilStatus, type SweepResult, type SweptVigil } from "../src/core/sweep.ts";
+import { cooldownLeftMs, lastFailure, localToday, pauseEndsAt, sweepProject, trailingPipeFilter, vigilStatus, type SweepResult, type SweptVigil } from "../src/core/sweep.ts";
 
 // Every path is read at call time, so pointing the store at a throwaway dir
 // here, before any call, keeps the operator's real store untouched.
@@ -345,6 +347,20 @@ test("a failing vigil records command and expected, and show says why it is flag
   assert.match(shown.lastFailure?.outputTail ?? "", /^7\n/u);
 });
 
+test("vigil show masks obvious secrets in the output tail; --json and the stored blob keep the raw text (0.86.4)", async () => {
+  await addDue("leaky", "echo 'Authorization: Bearer placeholder123token'; echo token=abc; echo plain line; exit 1");
+  await sweep(["leaky"]);
+  const text = await runVigil(["show", "leaky"]);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /output, last 20 lines at most, obvious secrets masked:\n {4}Authorization: Bearer \[masked\]\n {4}token=\[masked\]\n {4}plain line$/mu);
+  const output = text.stdout.slice(text.stdout.indexOf("obvious secrets masked:"), text.stdout.indexOf("\n# checks"));
+  assert.doesNotMatch(output, /placeholder123token|token=abc/u, "the output tail is masked; the Command text is the body's, shown as it is");
+  const shown: { lastFailure: ShownFailure | null } = JSON.parse((await runVigil(["show", "leaky", "--json"])).stdout);
+  assert.ok(shown.lastFailure?.outputTail?.startsWith("Authorization: Bearer placeholder123token\ntoken=abc\nplain line"), "--json keeps the raw tail");
+  const sha = lines("leaky", "evidence")[0]?.output_sha;
+  assert.match(getBlobText(openProject(PROJECT), String(sha)) ?? "", /Bearer placeholder123token\ntoken=abc\n/u, "the stored output is unchanged");
+});
+
 test("an old evidence line without command falls back to the body and says so", async () => {
   const body = checklist(execItem("the page loads", "curl -sf http://localhost/", "exit 0"));
   assert.equal((await runVigil(["add", "old-line", "--title", "old line", "--until", "someday", "--stdin"], body)).code, 0);
@@ -501,6 +517,42 @@ test("a snooze covers its last local day and ends after it", async () => {
   assert.equal(lines("snooze-open", "vigil.paused").length, 2, "a second pause replaces the first");
 });
 
+function pausedLine(extra: Record<string, string>): LedgerLine {
+  return { v: 1, id: "x", at: "2026-10-13T08:00:00.000Z", host: "h", who: "w", project: PROJECT, type: "vigil.paused", item: "vigil/s", reason: "r", until: "2026-10-20", ...extra };
+}
+
+/** Whether a reader in zone `tz` at instant `iso` sees the vigil paused. */
+function readIn(tz: string, iso: string, one: LedgerLine): boolean {
+  return vigilStatus("s", [one], dateIn(new Date(iso), tz), new Date(iso)).paused;
+}
+
+test("until_at ends a snooze at one instant for readers in any zone; an old line keeps the local date rule (0.86.3)", async () => {
+  // Written in Europe/Berlin: the 20th ends at 2026-10-21 00:00 there, 22:00 UTC.
+  const line = pausedLine({ until_at: zoned("2026-10-21", "00:00", "Europe/Berlin").toISOString() });
+  assert.equal(line.until_at, "2026-10-20T22:00:00.000Z");
+  for (const [iso, paused] of [["2026-10-20T21:59:00.000Z", true], ["2026-10-20T22:00:00.000Z", false]] as const) {
+    assert.equal(dateIn(new Date(iso), "Pacific/Auckland"), "2026-10-21", "Auckland is already past the 20th");
+    assert.equal(dateIn(new Date(iso), "America/Los_Angeles"), "2026-10-20", "Los Angeles is still on the 20th");
+    assert.equal(readIn("Pacific/Auckland", iso, line), paused, `Auckland at ${iso}`);
+    assert.equal(readIn("America/Los_Angeles", iso, line), paused, `Los Angeles at ${iso}`);
+  }
+  const old = pausedLine({});
+  assert.equal(readIn("Pacific/Auckland", "2026-10-20T21:00:00.000Z", old), false, "an old line: over once the reader's date is past until");
+  assert.equal(readIn("America/Los_Angeles", "2026-10-20T21:00:00.000Z", old), true, "an old line: still the 20th for this reader");
+  assert.equal(readIn("America/Los_Angeles", "2026-10-20T21:00:00.000Z", pausedLine({ until_at: "not a time" })), true, "a bad until_at falls back to the date rule");
+
+  await addDue("snooze-at", "test 1 = 1");
+  const run = await runVigil(["pause", "snooze-at", "--until", "2026-10-20", "--reason", "zones"]);
+  assert.equal(run.code, 0, run.stderr);
+  const written = lines("snooze-at", "vigil.paused")[0];
+  assert.equal(written?.until, "2026-10-20");
+  assert.equal(written?.until_at, pauseEndsAt("2026-10-20"));
+  assert.equal(written?.until_at, new Date(2026, 9, 21).toISOString(), "midnight after the 20th in this host's zone");
+  assert.match(run.stdout, /\(through 2026-10-20, ends 2026-10-21 00:00( \S+)?\): zones$/u);
+  const forever = await runVigil(["pause", "snooze-at", "--reason", "no end", "--json"]);
+  assert.equal(JSON.parse(forever.stdout).paused.until_at, undefined, "no --until, no until_at");
+});
+
 test("pause needs a reason and a real date, and refuses a closed or unknown vigil", async () => {
   await addDue("pause-guard", "test 1 = 1");
   await assert.rejects(runVigil(["pause", "pause-guard"]), UsageError);
@@ -537,11 +589,14 @@ async function addFailing(slug: string): Promise<void> {
   await addDue(slug, "test 1 = 2");
 }
 
-test("a one-vigil sweep never writes the daily lease and releases its own", async () => {
+test("a one-vigil sweep never writes the daily lease and keeps its own as a 2 minute cooldown (0.86.2)", async () => {
   await addFailing("lease-free");
   assert.equal(entry(await sweep(["lease-free"]), "lease-free").outcome, "failed");
   assert.equal(existsSync(leaseFile(`sweep-${localToday()}.lock`)), false, "no daily lease");
-  assert.equal(existsSync(leaseFile("vigil-lease-free.lock")), false, "the vigil lease is released");
+  const cooled = decodeLease(readFileSync(leaseFile("vigil-lease-free.lock"), "utf8"));
+  assert.equal(cooled?.cooldown, true, "the vigil lease stays as a cooldown");
+  const left = Date.parse(cooled?.expires ?? "") - Date.now();
+  assert.ok(left > 100_000 && left <= 120_000, String(left));
 });
 
 test("a one-vigil sweep is refused while the daily sweep is held, and allowed once it is done", async () => {
@@ -588,7 +643,22 @@ test("a second check of one vigil inside 2 minutes is refused, --force passes", 
   const forced = await runVigil(["sweep", "cool-down", "--force", "--json"]);
   assert.equal(forced.code, 0, forced.stderr);
   assert.equal(lines("cool-down", "evidence").length, 2);
-  assert.equal(existsSync(leaseFile("vigil-cool-down.lock")), false);
+  assert.equal(decodeLease(readFileSync(leaseFile("vigil-cool-down.lock"), "utf8"))?.cooldown, true, "--force takes the cooldown over and leaves a new one");
+});
+
+test("the cooldown holds across hosts: another host's cooldown lease refuses a check this ledger knows nothing of; --force passes (0.86.2)", async () => {
+  await addFailing("cool-remote");
+  // Host A checked the vigil a moment ago; its ledger lines have not reached this host yet.
+  const fromA = { holder: "host-a:1", host: "host-a", pid: 1, run: "", expires: new Date(Date.now() + 90_000).toISOString(), cooldown: true };
+  writeFileSync(leaseFile("vigil-cool-remote.lock"), `${JSON.stringify(fromA)}\n`);
+  assert.equal(lines("cool-remote", "vigil.swept").length, 0, "the local ledger cooldown cannot see it");
+  const refused = await runVigil(["sweep", "cool-remote", "--json"]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /vigil 'cool-remote' was checked less than 2 minutes ago \(ended on host-a, cooling down until .+\); wait or pass --force/u);
+  assert.equal(lines("cool-remote", "evidence").length, 0, "nothing ran");
+  const forced = await runVigil(["sweep", "cool-remote", "--force", "--json"]);
+  assert.equal(forced.code, 0, forced.stderr);
+  assert.equal(lines("cool-remote", "evidence").length, 1);
 });
 
 test("--force needs a vigil, and a classify-only look is never on cooldown", async () => {

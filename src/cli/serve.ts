@@ -42,7 +42,9 @@
  * again every 30 s. Port 4747 (`$DARIUS_WEB_PORT`). An address that listens
  * on every interface (`0.0.0.0`, `::`) is refused.
  *
- * Every request but /healthz passes src/web/auth.ts first: loopback always,
+ * Every request but /healthz must name this host in its Host header first
+ * (src/web/auth.ts, HostCheck, 0.86.1): another name gets 421, on GET as
+ * well as POST, which stops DNS rebinding. Then it passes src/web/auth.ts: loopback always,
  * a tailnet caller only when its device belongs to an allowed login
  * (`$DARIUS_WEB_ALLOW`, else the owner of this host). The rest get 403.
  * Behind a reverse proxy, `$DARIUS_WEB_PROXY` names the proxy, and a request
@@ -57,11 +59,11 @@ import { extname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { errorMessage } from "../runtime.ts";
-import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
+import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
 import { ACTION_API_PREFIX, FINDING_API_PREFIX, VIGIL_API_PREFIX, actionApi, findingApi, vigilApi } from "../web/action-api.ts";
 import type { WebHandler } from "../web/api.ts";
 import { webContext } from "../web/context.ts";
-import { plainPage, renderForbidden } from "../web/html.ts";
+import { plainPage, renderForbidden, renderWrongHost } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
 import { collectStatus } from "../web/status.ts";
@@ -286,6 +288,7 @@ function send(response: ServerResponse, answer: WebReply, isHead: boolean): void
 }
 
 interface Gate {
+  hosts: HostCheck;
   allow: Set<string>;
   whois: WhoisLookup;
   proxy: ProxyTrust | null;
@@ -324,6 +327,12 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
   try {
     if (url.pathname === "/healthz") {
       send(response, reply(200, "text/plain", "ok\n"), isHead);
+      return;
+    }
+    if (!(await gate.hosts.allows(request.headers.host))) {
+      const host = request.headers.host ?? "";
+      console.error(`darius serve: refused ${url.pathname}: Host '${host.slice(0, 100)}' does not name this host`);
+      send(response, reply(421, "text/html", renderWrongHost(host.slice(0, 100))), isHead);
       return;
     }
     const access = await authorizeRequest(request.socket.remoteAddress ?? "", headersOf(request), await gateFor(gate));
@@ -417,7 +426,7 @@ export const serveCommand: Command = {
   async run(args: ParsedArgs): Promise<number> {
     const binds = webBind(stringFlag(args, "bind"));
     const port = webPort(stringFlag(args, "port"));
-    const gate: Gate = { allow: new Set(), whois: cachedWhois(tailscaleWhois), proxy: proxyTrust() };
+    const gate: Gate = { hosts: new HostCheck({ binds: binds === "auto" ? [] : binds }), allow: new Set(), whois: cachedWhois(tailscaleWhois), proxy: proxyTrust() };
     const app = new WebApp();
     const servers: Server[] = [];
     let stopRetry: () => void = noRetry;

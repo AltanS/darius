@@ -17,6 +17,7 @@ import { readLegacyMilestonesAt, type LegacyMilestone } from "../core/legacy-mil
 import { readLegacyVigilsAt } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
 import { readMarker, type Marker } from "../core/marker.ts";
+import { maskSecrets } from "../core/mask-secrets.ts";
 import { ritualWarnings } from "../core/reconcile.ts";
 import type { Document, JsonValue, LedgerLine, Profile, Ritual, Vigil } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
@@ -512,7 +513,7 @@ export function vigilDetail(projectName: string, slug: string): VigilDetail | nu
     failure:
       found === null || row.lastFailure === null
         ? null
-        : { ...row.lastFailure, command: found.command ?? null, expected: found.expected ?? null, source: found.source, host: found.host, outputTail: tail === null ? null : plainOutput(tail) },
+        : { ...row.lastFailure, command: found.command ?? null, expected: found.expected ?? null, source: found.source, host: found.host, outputTail: tail === null ? null : maskSecrets(plainOutput(tail)) },
     sweeps: lines.filter((line) => line.type === "vigil.swept").map(sweepRow).slice(-VIGIL_SWEEPS).toReversed(),
     body: parseMarkdown(doc.body),
   };

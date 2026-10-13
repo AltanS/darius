@@ -121,8 +121,8 @@
  * at once: the "started" line once the vigil's lease is taken (202 names the
  * host), or a refusal (the daily sweep runs, another check runs, the 2 minute
  * cooldown), which comes back as 409 with the CLI's own sentence. The CLI
- * releases the lease itself when it ends, so a client that went away leaves
- * nothing held. A paused or closed vigil is a 409 before anything starts.
+ * ends the lease itself (as a 2 minute cooldown since 0.86.2), so a client
+ * that went away leaves nothing held. A paused or closed vigil is a 409 before anything starts.
  * The guards are the follow-up's (`guard()`): the Origin, JSON, MAX_BODY and a
  * tailnet identity, and the loopback viewer is refused for the same reason: a
  * check runs the vigil's Commands.

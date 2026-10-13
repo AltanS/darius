@@ -18,10 +18,16 @@
  * A one-vigil sweep never takes the daily lease. It refuses (exit 1) while the
  * daily sweep of the project runs, while another check of the vigil runs, and
  * for 2 minutes after the vigil's last sweep; --force lifts that last wait only.
+ * The wait holds across hosts: the vigil's lease stays as a 2 minute cooldown
+ * after a check (0.86.2).
  * Once it holds its lease it prints `darius vigil sweep: started SLUG on HOST`
  * on stderr (0.86.0), before the checks run; the web's "Check now" waits for it.
+ * `vigil show` prints the failing check's output tail with obvious secrets
+ * masked (0.86.4, src/core/mask-secrets.ts); `--json` keeps the raw tail.
  * `vigil pause` stops the sweep from running a vigil; with --until the pause ends
- * after that local date, without it `vigil resume` ends it.
+ * after that local date, without it `vigil resume` ends it. The line also
+ * stores the end instant in this host's zone (`until_at`, 0.86.3), so every host
+ * ends the pause at the same moment.
  *
  * `add`, `set-body`, `list` and `close` take the command-line forms of the
  * legacy tracker's verbs, so skills and existing vigil
@@ -46,7 +52,8 @@
  * `--daily` is what the timer runs: each project is swept at most once per
  * local day across every host that shares the bucket
  * (src/core/sweep-lease.ts). A project another host swept today, or is
- * sweeping now, is skipped.
+ * sweeping now, is skipped. A vigil whose one-vigil check runs now on any
+ * host is reported as skipped, with no line written (0.86.2).
  *
  * Exit codes: 0 when the sweep ran, even when vigils failed (failures are
  * data), and when a project was skipped for another host; 1 on a real error,
@@ -65,7 +72,7 @@ import type { Document, Vigil } from "../core/model.ts";
 import { projectDir, resolveProject } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { itemRef, listProjects, openProject, type Project } from "../core/store.ts";
-import { pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../core/sweep-lease.ts";
+import { coolVigilSweepLease, heldVigilChecks, pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../core/sweep-lease.ts";
 import { projectWorkdir } from "../core/workdir.ts";
 import {
   addVigil,
@@ -92,6 +99,7 @@ import {
   type SweptVigil,
   type VigilStatus,
 } from "../core/sweep.ts";
+import { maskSecrets } from "../core/mask-secrets.ts";
 import { checkVigilBody, commandCount } from "../core/vigil-body.ts";
 import { treeDir as treeDirOf } from "../core/tree.ts";
 import { projectedVigilPath, projectVigils } from "../core/vigil-projection.ts";
@@ -432,7 +440,7 @@ function printWhyFlagged(failure: LastFailure, tail: string | null): void {
   console.log(`  kind: ${failure.failKind}`);
   if (tail === null) console.log("  output: not stored on this host");
   else if (tail === "") console.log("  output: none");
-  else console.log(`  output, last ${OUTPUT_TAIL_LINES} lines at most:\n${plainOutput(tail).replace(/^/gmu, "    ")}`);
+  else console.log(`  output, last ${OUTPUT_TAIL_LINES} lines at most, obvious secrets masked:\n${maskSecrets(plainOutput(tail)).replace(/^/gmu, "    ")}`);
 }
 
 // --- close ----------------------------------------------------------------------
@@ -475,8 +483,16 @@ function runPause(args: ParsedArgs): number {
   const who = stringFlag(args, "who") ?? defaultWho();
   const line = pauseVigil(project, { slug, reason, until, who });
   if (args.json) printJson({ project: project.name, paused: line });
-  else console.log(`paused vigil ${slug} in ${project.name} (${until === undefined ? "until resumed" : `through ${until}`}): ${reason}`);
+  else console.log(`paused vigil ${slug} in ${project.name} (${until === undefined ? "until resumed" : `through ${until}, ends ${localWallTime(String(line.until_at))}`}): ${reason}`);
   return 0;
+}
+
+/** `2026-10-21 00:00 Europe/Berlin`: an instant as this host's wall time and zone. */
+function localWallTime(iso: string): string {
+  const at = new Date(iso);
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${localToday(at)} ${hhmm}${zone === undefined || zone === "" ? "" : ` ${zone}`}`;
 }
 
 function runResume(args: ParsedArgs): number {
@@ -571,6 +587,7 @@ const LEASE_SKIPS = {
   "lease-done": "swept-today",
   "lease-held": "sweep-held",
   "lease-offline": "lease-offline",
+  "lease-cooldown": "cooldown",
 } as const satisfies Record<LeaseBlock, SkipReason>;
 
 function leaseTarget() {
@@ -613,7 +630,9 @@ async function sweepSingle(project: Project, run: SweepOptions, single: NonNulla
   try {
     return { result: await sweepProject(project, run) };
   } finally {
-    await lease.handle.release();
+    // The same rule as the ledger cooldown: only a sweep that ran something starts one.
+    if (cooldownLeftMs(linesFor(readLedger(project), itemRef("vigil", slug))) > 0) await coolVigilSweepLease(lease.handle);
+    else await lease.handle.release();
   }
 }
 
@@ -635,6 +654,7 @@ async function sweepOne(project: Project, plan: SweepPlan): Promise<ProjectSweep
   }
   const lease = await takeSweepLease(project, { ...daily, today: opts.today });
   if ("blocked" in lease) return { skip: { project: project.name, reason: LEASE_SKIPS[lease.blocked], detail: lease.detail } };
+  run.held = await heldVigilChecks(project, daily);
   let result: SweepResult;
   try {
     result = await sweepProject(project, run);
