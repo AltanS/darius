@@ -89,6 +89,7 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
+import { takeOverBucketLease } from "./lease.ts";
 import { appendLine, closeOpenChunk, hostId, listChunks, parseLedgerText, writeRemoteChunk } from "./ledger.ts";
 import type { JsonValue, Kind } from "./model.ts";
 import { S3NetworkError } from "./s3.ts";
@@ -461,12 +462,10 @@ function isLeaseStale(lease: Lease, host: string): boolean {
 }
 
 /**
- * Takes `lease.json` with If-None-Match:*. A stale lease is deleted and the
- * PUT tried once more. Returns the lease taken, or the holder that blocks.
- *
- * Known gap, accepted by the concept: two hosts that both see the same stale
- * lease can both delete; the later delete may remove the earlier winner's
- * fresh lease. The window is one round trip, once per 60 s crash.
+ * Takes `lease.json` with If-None-Match:*. A stale lease is taken over with
+ * a claim (src/core/lease.ts, takeOverBucketLease, 0.87.0), never deleted, so
+ * two hosts that see the same stale lease cannot both hold it. Returns the
+ * lease taken, or the holder that blocks.
  */
 async function takeLease(ctx: SyncContext): Promise<{ taken: Lease } | { heldBy: string }> {
   let blocker = "unknown";
@@ -482,11 +481,15 @@ async function takeLease(ctx: SyncContext): Promise<{ taken: Lease } | { heldBy:
       contentType: JSON_CONTENT,
     });
     if (!("conflict" in result)) return { taken: lease };
-    const current = await readLease(ctx);
-    if (current === null) continue;
+    const got = await ctx.s3.get(leaseKey(ctx));
+    if (got === null) continue;
+    const text = textOf(got.body, leaseKey(ctx));
+    const current = decodeLease(text, leaseKey(ctx));
     blocker = `${current.holder} until ${current.expires}`;
     if (!isLeaseStale(current, ctx.host)) return { heldBy: blocker };
-    await ctx.s3.del(leaseKey(ctx));
+    const taken = await takeOverBucketLease(ctx.s3, leaseKey(ctx), text, `${JSON.stringify(lease)}\n`, ctx.host);
+    if ("taken" in taken) return { taken: lease };
+    if ("blocked" in taken) return { heldBy: taken.blocked };
   }
   return { heldBy: blocker };
 }

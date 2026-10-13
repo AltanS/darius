@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.87.0] - 2026-10-13
+
+### Added
+
+- `DARIUS_WEB_HOSTS` (comma separated) lists more names that pass the web Host check. A name the check does not know now needs one line in the env file and a restart of `darius serve`, not a rollback. The 421 page and the journal line name the setting.
+
+### Fixed
+
+- A lease takeover no longer deletes the stale lease. Two hosts that took over the same stale lease, or forced the same cooldown lease, could each delete the lease the other had just written, and both then held it. A taker now first creates a claim object next to the lease with If-None-Match, so exactly one taker wins, and it overwrites the lease in place. A claim older than 60 s, left by a taker that died, is removed by the next taker. The sync's `lease.json` uses the same takeover.
+- The web vigil page of a vigil that only the legacy `.tracker` holds shows "Check now" off, with the reason, instead of a button that answered 404.
+
 ## [0.86.4] - 2026-10-13
 
 ### Changed

@@ -185,8 +185,9 @@ export function vigilFailureText(vigil: VigilRow, today: string, offset: number)
   return [step, lastFailure.exit === null ? null : `exit ${lastFailure.exit}`, momentText(lastFailure.at, today, offset)].filter((part) => part !== null).join(", ");
 }
 
-/** Why "Check now" is off for a vigil: it is closed or paused. Null when a check can start. */
+/** Why "Check now" is off for a vigil: it is only in the legacy tracker, closed or paused. Null when a check can start. */
 export function checkBlocked(vigil: VigilRow): string | null {
+  if (vigil.legacy === true) return "This vigil is only in the old .tracker folder. darius checks only the vigils in its store.";
   if (vigil.state === "closed") return "This vigil is closed. There is nothing to check.";
   if (vigil.paused) return "This vigil is paused. Resume it to check it.";
   return null;

@@ -315,6 +315,8 @@ export interface VigilRow {
   paused: boolean;
   /** The last day of a snooze; null for a pause without an end date. */
   pausedUntil: string | null;
+  /** Set when only the legacy `.tracker` holds the vigil: darius cannot check it (0.87.0). */
+  legacy?: true;
 }
 
 /** The failure block of the vigil page. Every text is untrusted: the page shows it as text. */

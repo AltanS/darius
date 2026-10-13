@@ -29,5 +29,5 @@ export function renderForbidden(reason: string): string {
 
 /** The 421 page: the request named another host (src/web/auth.ts, HostCheck). */
 export function renderWrongHost(host: string): string {
-  return plainPage("wrong address", `Not allowed: this host does not answer to the name '${host}'.`, "Open the page by this host's tailnet name or address, or by DARIUS_WEB_URL.");
+  return plainPage("wrong address", `Not allowed: this host does not answer to the name '${host}'.`, "Open the page by this host's tailnet name or address, or by DARIUS_WEB_URL. To allow this name, add it to DARIUS_WEB_HOSTS and restart darius serve.");
 }

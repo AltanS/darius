@@ -1622,6 +1622,13 @@ test("the vigil page of a vigil that is not flagged has no failure block; an old
   assert.equal((await get("/w/ghost/vigils/soak")).status, 404);
 });
 
+test("the vigil page of a vigil only the legacy .tracker holds has a disabled Check now and says why (0.87.0)", async () => {
+  const legacy: WebContext = { ...context, vigil: () => ({ ...VIGIL, row: { ...SOAK, legacy: true }, failure: null, sweeps: [], body: [] }) };
+  const page = (await (await handler(new Request("http://darius.test/w/demo/vigils/soak"), legacy)).text()).replaceAll("<!-- -->", "");
+  assert.ok(page.includes("only in the old .tracker folder"), "the page says why there is no check");
+  assert.match(page, /<button[^>]*disabled[^>]*>[^<]*Check now/u, "the button is off");
+});
+
 // --- the information architecture (0.39.0, reworked 0.63.0): scopes, Places, tabs, settings -------------
 
 const SETTINGS_COOKIE = "darius-settings";

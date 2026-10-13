@@ -237,6 +237,7 @@ function legacyVigilRows(trackerDir: string | null, known: readonly VigilRow[]):
         failKind: null,
         paused: false,
         pausedUntil: null,
+        legacy: true,
       };
     });
 }

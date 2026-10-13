@@ -168,6 +168,11 @@ export function hostOf(header: string | undefined): string | null {
   return host.replace(/^\[(.*)\]$/u, "$1").replace(/\.$/u, "").toLowerCase() || null;
 }
 
+/** Names and addresses as a Host header would carry them; a bare IPv6 address gets its brackets first. */
+function hostsOf(names: readonly string[]): ReadonlySet<string> {
+  return new Set(names.map((name) => hostOf(name.includes(":") && !name.startsWith("[") ? `[${name}]` : name)).filter((name) => name !== null));
+}
+
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"]);
 const NAMES_RETRY_MS = 30_000;
 
@@ -176,7 +181,9 @@ const NAMES_RETRY_MS = 30_000;
  * resolves to this host's address sends that name as Host, and is refused.
  * A request passes when its Host names this host: localhost, 127.0.0.1 or
  * [::1]; a tailnet name or IP of this host; an address serve was told to
- * bind; or the host of `$DARIUS_WEB_URL`. The port does not count. While
+ * bind; the host of `$DARIUS_WEB_URL`; or a name in `$DARIUS_WEB_HOSTS`
+ * (comma separated, 0.87.0), the escape for a name the check does not know,
+ * such as a second proxy name. The port does not count. While
  * the tailnet names are unknown, only the other names pass: the check fails
  * closed, says so once, and asks Tailscale again after 30 s.
  */
@@ -185,12 +192,14 @@ export class HostCheck {
   private triedAt = Number.NEGATIVE_INFINITY;
   private warned = false;
   private readonly binds: ReadonlySet<string>;
+  private readonly extra: ReadonlySet<string>;
   private readonly learn: () => Promise<string[]>;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
 
-  constructor(options: { binds?: readonly string[]; learn?: () => Promise<string[]>; now?: () => number; log?: (line: string) => void } = {}) {
-    this.binds = new Set((options.binds ?? []).map((bind) => hostOf(bind.includes(":") && !bind.startsWith("[") ? `[${bind}]` : bind)).filter((bind) => bind !== null));
+  constructor(options: { binds?: readonly string[]; extra?: readonly string[]; learn?: () => Promise<string[]>; now?: () => number; log?: (line: string) => void } = {}) {
+    this.binds = hostsOf(options.binds ?? []);
+    this.extra = hostsOf(options.extra ?? listOf(process.env.DARIUS_WEB_HOSTS));
     this.learn = options.learn ?? tailnetNames;
     this.now = options.now ?? Date.now;
     this.log = options.log ?? ((line) => console.error(line));
@@ -200,7 +209,7 @@ export class HostCheck {
   async allows(header: string | undefined, publicUrl: string | undefined = process.env.DARIUS_WEB_URL?.trim()): Promise<boolean> {
     const host = hostOf(header);
     if (host === null) return false;
-    if (LOOPBACK_HOSTS.has(host) || this.binds.has(host)) return true;
+    if (LOOPBACK_HOSTS.has(host) || this.binds.has(host) || this.extra.has(host)) return true;
     if (publicUrl !== undefined && publicUrl !== "" && host === publicHost(publicUrl)) return true;
     return (await this.tailnet()).has(host);
   }
@@ -211,7 +220,7 @@ export class HostCheck {
     try {
       this.names = new Set(await this.learn());
     } catch (cause) {
-      if (!this.warned) this.log(`darius serve: cannot learn this host's tailnet names (${errorMessage(cause)}); until then only localhost, the bind addresses and DARIUS_WEB_URL pass the Host check`);
+      if (!this.warned) this.log(`darius serve: cannot learn this host's tailnet names (${errorMessage(cause)}); until then only localhost, the bind addresses, DARIUS_WEB_URL and DARIUS_WEB_HOSTS pass the Host check`);
       this.warned = true;
     }
     return this.names ?? new Set();

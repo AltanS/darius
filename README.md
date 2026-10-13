@@ -631,7 +631,10 @@ verified via `tailscale whois`, preventing client spoofing. If the proxy runs on
 host, set `DARIUS_WEB_PROXY=127.0.0.1`: loopback connections then require the header as well.
 
 The proxy must send the host of `DARIUS_WEB_URL`, or this host's own name or address, as the
-Host header. darius answers 421 to any other Host, which stops DNS rebinding.
+Host header. darius answers 421 to any other Host, which stops DNS rebinding. To allow one more
+name, list it in `DARIUS_WEB_HOSTS` (comma separated, for example
+`DARIUS_WEB_HOSTS=darius.example.com,darius-alt.example.com`) and restart `darius serve`. The
+journal of `darius serve` names each refused Host.
 
 ## License
 

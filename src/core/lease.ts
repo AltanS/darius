@@ -17,14 +17,26 @@
  *
  * Take: PUT with If-None-Match: * (or an O_EXCL create). When the key exists,
  * a lease that is expired, unreadable, or held by a dead process of this host
- * is stale: delete it and try once more. Two takers race on the conditional
- * PUT and exactly one wins. A finished lease is never stale. A cooldown lease
- * is stale only once it expires: its process has ended by design.
+ * is stale. A finished lease is never stale. A cooldown lease is stale only
+ * once it expires: its process has ended by design.
+ *
+ * Takeover (0.87.0): a stale lease, or a cooldown lease under `force`, is
+ * never deleted. Before 0.87.0 two takers could both delete it, and the
+ * second delete removed the lease the first had just written; both then held
+ * it. Now a taker first creates a claim next to the lease,
+ * `<key>.takeover-<sha256 of the stale body>`, with the same conditional PUT.
+ * Exactly one taker per stale body wins the claim. The winner reads the lease
+ * again and overwrites it only while it still holds that same stale body,
+ * then deletes the claim. A loser is blocked as `lease-held`. The backend
+ * needs nothing beyond If-None-Match: * (docs/concept.md, "Write path").
+ * A claim older than CLAIM_TTL_MS is from a taker that died: the next taker
+ * deletes it and is blocked once, and the taker after that can claim again.
  *
  * Release, finish and cool change the lease only while this holder still owns it,
  * and a network error there is swallowed: the lease expires on its own.
  */
 
+import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -33,6 +45,9 @@ import type { JsonValue } from "./model.ts";
 import { S3NetworkError, type S3 } from "./s3.ts";
 
 const JSON_CONTENT = "application/json";
+/** A takeover is two reads and one write; a claim this old belongs to a taker that died. */
+export const CLAIM_TTL_MS = 60_000;
+const CLAIM_SUFFIX = ".takeover-";
 
 export interface LeaseBody {
   holder: string;
@@ -80,6 +95,8 @@ interface LeaseSlot {
   read(): Promise<string | null>;
   overwrite(text: string): Promise<void>;
   remove(): Promise<void>;
+  /** The slot of the takeover claim for the stale body with this digest. */
+  claim(digest: string): LeaseSlot;
 }
 
 // --- body ------------------------------------------------------------------------
@@ -179,6 +196,7 @@ function fileSlot(path: string): LeaseSlot {
         if (!hasErrnoCode(cause, "ENOENT")) throw cause;
       }
     },
+    claim: (digest) => fileSlot(`${path}${CLAIM_SUFFIX}${digest}`),
   };
 }
 
@@ -198,6 +216,7 @@ function bucketSlot(s3: S3, key: string): LeaseSlot {
     async remove() {
       await s3.del(key);
     },
+    claim: (digest) => bucketSlot(s3, `${key}${CLAIM_SUFFIX}${digest}`),
   };
 }
 
@@ -241,6 +260,49 @@ function blockedBy(current: LeaseBody): LeaseOutcome {
   return { blocked: "lease-held", detail: `held by ${current.holder} until ${current.expires}` };
 }
 
+/** A claim that cannot be read, or is older than CLAIM_TTL_MS, belongs to a taker that died. */
+function isClaimStale(text: string | null): boolean {
+  if (text === null) return false;
+  try {
+    const parsed: JsonValue = JSON.parse(text);
+    const at = isRecord(parsed) && isText(parsed.at) ? Date.parse(parsed.at) : Number.NaN;
+    return Number.isNaN(at) || Date.now() - at > CLAIM_TTL_MS;
+  } catch {
+    return true;
+  }
+}
+
+/** What a takeover gave: the lease is now `next`, the stale body was already gone, or why another taker has it. */
+export type TakeoverResult = { taken: true } | { gone: true } | { blocked: string };
+
+/**
+ * Replaces the stale lease whose text is `stale` with `next`. Only the taker
+ * that creates the claim for this stale body may write; it checks that the
+ * lease still holds that body before it overwrites it, then deletes the claim.
+ */
+async function replaceStale(slot: LeaseSlot, stale: string, next: string, host: string): Promise<TakeoverResult> {
+  const claim = slot.claim(createHash("sha256").update(stale).digest("hex").slice(0, 32));
+  if (!(await claim.create(`${JSON.stringify({ host, pid: process.pid, at: new Date().toISOString() })}\n`))) {
+    if (isClaimStale(await claim.read())) {
+      await claim.remove();
+      return { blocked: "an earlier takeover of this lease stopped half way; its claim is removed, try again" };
+    }
+    return { blocked: "another taker is taking over this lease" };
+  }
+  try {
+    if ((await slot.read()) !== stale) return { gone: true };
+    await slot.overwrite(next);
+    return { taken: true };
+  } finally {
+    await claim.remove();
+  }
+}
+
+/** The same takeover for a lease of another shape in the bucket (the sync's `lease.json`, src/core/sync.ts). */
+export function takeOverBucketLease(s3: S3, key: string, stale: string, next: string, host: string): Promise<TakeoverResult> {
+  return replaceStale(bucketSlot(s3, key), stale, next, host);
+}
+
 async function takeFrom(slot: LeaseSlot, spec: LeaseSpec): Promise<LeaseOutcome> {
   const mine: LeaseBody = {
     holder: `${spec.host}:${String(process.pid)}`,
@@ -251,10 +313,14 @@ async function takeFrom(slot: LeaseSlot, spec: LeaseSpec): Promise<LeaseOutcome>
   };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (await slot.create(encodeLease(mine))) return { handle: handleFor(slot, mine) };
-    const current = decodeLease((await slot.read()) ?? "");
+    const text = await slot.read();
+    if (text === null) continue;
+    const current = decodeLease(text);
     const isForced = spec.force === true && current?.cooldown === true;
     if (current !== null && !isLeaseStale(current, spec.host) && !isForced) return blockedBy(current);
-    await slot.remove();
+    const taken = await replaceStale(slot, text, encodeLease(mine), spec.host);
+    if ("taken" in taken) return { handle: handleFor(slot, mine) };
+    if ("blocked" in taken) return { blocked: "lease-held", detail: taken.blocked };
   }
   return { blocked: "lease-held", detail: "lost the takeover race" };
 }

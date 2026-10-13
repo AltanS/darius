@@ -3,13 +3,14 @@
  * a local lock file and on an in-memory bucket with If-None-Match.
  */
 
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeLease, isLeaseStale, takeLease, type LeaseSpec } from "../src/core/lease.ts";
+import { CLAIM_TTL_MS, decodeLease, isLeaseStale, takeLease, type LeaseSpec } from "../src/core/lease.ts";
 import { S3NetworkError, type ListedObject, type S3 } from "../src/core/s3.ts";
 import { openProject } from "../src/core/store.ts";
 import { coolVigilSweepLease, heldVigilChecks, pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../src/core/sweep-lease.ts";
@@ -243,4 +244,72 @@ test("heldVigilChecks: host B's daily sweep sees host A's running check in the b
   assert.match(held.get("soak") ?? "", /^a check of 'soak' runs on hostA until /u);
   assert.deepEqual(await heldVigilChecks(project, { s3: memoryS3({ isOffline: true }), host: "hostB" }), new Map(), "unreadable leases: sweep every vigil");
   assert.deepEqual(await heldVigilChecks(openProject("lease-held-none", { create: true }), { s3: null, host: "hostB" }), new Map(), "no lease directory");
+});
+
+const STALE = `${JSON.stringify({ holder: "hostC:9", host: "hostC", pid: 9, run: "", expires: "2000-01-01T00:00:00.000Z" })}\n`;
+
+/** A second view of `shared` whose first read of `key` waits for `gate`, so its holder falls behind another taker. */
+function slowReader(shared: MemoryS3, key: string, gate: Promise<void>): MemoryS3 {
+  let isFirst = true;
+  return {
+    ...shared,
+    async get(wanted) {
+      const got = await shared.get(wanted);
+      if (wanted === key && isFirst) {
+        isFirst = false;
+        await gate;
+      }
+      return got;
+    },
+  };
+}
+
+test("two takers of one stale lease: the slower one cannot delete the winner's new lease (0.87.0)", async () => {
+  const s3 = memoryS3();
+  const key = "p/leases/x.json";
+  s3.objects.set(key, STALE);
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  const slow = takeLease(spec(slowReader(s3, key, gate), "hostB", join(SANDBOX, "unused4.lock")));
+  await new Promise((resolve) => setImmediate(resolve));
+  const fast = await takeLease(spec(s3, "hostA", join(SANDBOX, "unused4.lock")));
+  assert.ok("handle" in fast);
+  open();
+  const late = await slow;
+  assert.ok("blocked" in late && late.blocked === "lease-held", JSON.stringify(late));
+  assert.equal(decodeLease(s3.objects.get(key) ?? "")?.host, "hostA");
+  assert.deepEqual([...s3.objects.keys()], [key], "no claim is left behind");
+});
+
+test("a takeover claim blocks other takers; a claim from a taker that died is removed (0.87.0)", async () => {
+  const s3 = memoryS3();
+  const key = "p/leases/x.json";
+  const file = join(SANDBOX, "unused5.lock");
+  s3.objects.set(key, STALE);
+  const claimKey = `${key}.takeover-${createHash("sha256").update(STALE).digest("hex").slice(0, 32)}`;
+
+  s3.objects.set(claimKey, JSON.stringify({ host: "hostC", pid: 1, at: new Date().toISOString() }));
+  const busy = await takeLease(spec(s3, "hostA", file));
+  assert.ok("blocked" in busy && busy.blocked === "lease-held");
+  assert.match(busy.detail, /another taker/u);
+  assert.equal(s3.objects.get(key), STALE);
+
+  s3.objects.set(claimKey, JSON.stringify({ host: "hostC", pid: 1, at: new Date(Date.now() - CLAIM_TTL_MS - 1000).toISOString() }));
+  const stalled = await takeLease(spec(s3, "hostA", file));
+  assert.ok("blocked" in stalled && stalled.blocked === "lease-held");
+  assert.match(stalled.detail, /stopped half way/u);
+  assert.equal(s3.objects.has(claimKey), false);
+
+  const taken = await takeLease(spec(s3, "hostA", file));
+  assert.ok("handle" in taken);
+  assert.equal(decodeLease(s3.objects.get(key) ?? "")?.host, "hostA");
+});
+
+test("a stale local lock file is taken over in place and leaves no claim file (0.87.0)", async () => {
+  const dir = mkdtempSync(join(SANDBOX, "claim-"));
+  const file = join(dir, "x.lock");
+  writeFileSync(file, STALE);
+  const taken = await takeLease(spec(null, "hostA", file));
+  assert.ok("handle" in taken);
+  assert.equal(decodeLease(readFileSync(file, "utf8"))?.host, "hostA");
+  assert.deepEqual(readdirSync(dir), ["x.lock"]);
 });

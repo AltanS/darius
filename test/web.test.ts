@@ -603,6 +603,7 @@ test("status: the store tree shows without a checkout link, and wins over the ch
   const both = projects.find((entry) => entry.name === "web-tree-both");
   assert.deepEqual(both?.milestones.map((row) => [row.id, row.title]), [["M22", "From the store"]]);
   assert.deepEqual(both?.vigils.map((row) => row.slug), ["store-soak"]);
+  assert.equal(only?.vigils[0]?.legacy, true, "a vigil only the tracker tree holds is marked legacy (0.87.0)");
   const neither = projects.find((entry) => entry.name === "web-tree-neither");
   assert.deepEqual([neither?.milestones, neither?.vigils, neither?.milestonesArchived], [[], [], 0]);
 
@@ -730,6 +731,24 @@ test("Host check: this host's tailnet names, its IPs, localhost, the binds and D
   assert.equal(await check.allows("darius.example.com", "https://darius.example.com/"), true, "the host of DARIUS_WEB_URL");
   for (const host of ["evil.example", "evil.example:4747", "laptop.evil.example", "100.64.0.10", "", undefined]) {
     assert.equal(await check.allows(host, "https://darius.example.com/"), false, String(host));
+  }
+});
+
+test("Host check: a name in DARIUS_WEB_HOSTS passes, with any port and case; other names still get refused (0.87.0)", async () => {
+  const check = new HostCheck({ extra: ["Darius-Alt.example.com", " ", "10.0.0.5", "fd7a::5"], learn: async () => [] });
+  for (const host of ["darius-alt.example.com", "DARIUS-ALT.example.com:443", "10.0.0.5:4747", "[fd7a::5]:4747"]) {
+    assert.equal(await check.allows(host, undefined), true, host);
+  }
+  assert.equal(await check.allows("evil.example", undefined), false);
+  const saved = process.env.DARIUS_WEB_HOSTS;
+  process.env.DARIUS_WEB_HOSTS = "from-env.example.com, second.example.com";
+  try {
+    const fromEnv = new HostCheck({ learn: async () => [] });
+    assert.equal(await fromEnv.allows("second.example.com:4747", undefined), true);
+    assert.equal(await fromEnv.allows("third.example.com", undefined), false);
+  } finally {
+    if (saved === undefined) delete process.env.DARIUS_WEB_HOSTS;
+    else process.env.DARIUS_WEB_HOSTS = saved;
   }
 });
 

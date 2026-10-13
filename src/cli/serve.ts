@@ -331,7 +331,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     }
     if (!(await gate.hosts.allows(request.headers.host))) {
       const host = request.headers.host ?? "";
-      console.error(`darius serve: refused ${url.pathname}: Host '${host.slice(0, 100)}' does not name this host`);
+      console.error(`darius serve: refused ${url.pathname}: Host '${host.slice(0, 100)}' does not name this host (to allow it, add it to DARIUS_WEB_HOSTS)`);
       send(response, reply(421, "text/html", renderWrongHost(host.slice(0, 100))), isHead);
       return;
     }
