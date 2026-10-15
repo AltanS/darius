@@ -2,7 +2,7 @@
  * The vigil pages over a real store (0.95.0): the real WebContext reads a
  * seeded project and the committed app build renders the vigil page, the
  * Vigils list and the Overview. A check that runs shows as "Checking" with
- * the running light, the vigil page lists its pauses and sweeps, and the
+ * the busy gem (0.98.0), the vigil page lists its pauses and sweeps, and the
  * flagged card of the Overview offers "Check now" to a viewer who may write.
  * The in-flight timer is in the component; check-poll.test.ts covers its rules.
  */
@@ -75,10 +75,11 @@ function cardOf(html: string, title: string): string {
   return found.split("</article>")[0] ?? "";
 }
 
-test("the vigil page of a running check shows the running light and the host, not the button", async () => {
+test("the vigil page of a running check shows the busy gem and the host, not the button", async () => {
   const html = await page(`/w/${PROJECT}/vigils/running`);
   assert.match(text(html), /Checking on host-b, asked \d\d:\d\d/u);
-  assert.ok(html.includes("live-bar"));
+  assert.match(html, /<div role="status"><p class="gem-line"><svg[^>]*class="gem gem-busy"/u, "0.98.0: the busy gem, not the running light");
+  assert.equal(html.includes("live-bar"), false);
   assert.equal(html.includes("Check now: Soak test"), false, "the button is off while the check runs");
   assert.equal(html.includes("Reload to see the result"), false);
 });
@@ -108,11 +109,12 @@ test("a vigil never swept draws no Activity section", async () => {
   assert.equal(/Activity \d\d:\d\d/u.test(body), false);
 });
 
-test("the Vigils list says Checking, with the running light, for a vigil with a check; the other rows keep their words", async () => {
+test("the Vigils list says Checking, with the busy gem, for a vigil with a check; the other rows keep their words", async () => {
   const html = await page(`/w/${PROJECT}/vigils`);
   const rows = html.split("<li ").filter((row) => row.includes('class="rw'));
   const running = rows.find((row) => row.includes("Soak test")) ?? "";
-  assert.ok(running.includes("rw-live") && running.includes("live-bar"), "the running light");
+  assert.match(running, /<span class="rw-seg"><svg[^>]*class="gem gem-busy"/u, "the busy gem before the state word");
+  assert.equal(running.includes("live-bar"), false, "no running light");
   assert.match(text(running), /Checking/u);
   const idle = rows.find((row) => row.includes("Queue empty")) ?? "";
   assert.equal(text(idle).includes("Checking"), false);
@@ -124,7 +126,7 @@ test("a row of a vigil that is not flagged still says Checking while its check r
   const html = await page(`/w/${PROJECT}/vigils`);
   const row = html.split("<li ").find((part) => part.includes('class="rw') && part.includes("Calm one")) ?? "";
   assert.match(text(row), /Checking/u);
-  assert.ok(row.includes("live-bar"));
+  assert.ok(row.includes("gem-busy"));
   assert.equal(row.includes("Check now"), false);
 });
 

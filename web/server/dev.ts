@@ -22,6 +22,7 @@ import { createServer } from "node:http";
 import { createRequestHandler, type ServerBuild } from "react-router";
 import { createServer as createVite } from "vite";
 
+import { actionApi, FOLLOW_UP_READY_PATH } from "../../src/web/action-api.ts";
 import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, runTailscale, tailnetAddress, tailscaleWhois } from "../../src/web/auth.ts";
 import { webContext } from "../../src/web/context.ts";
 import { collectStatus } from "../../src/web/status.ts";
@@ -121,6 +122,21 @@ server.on("request", (req, res) => {
         res.setHeader("content-type", "application/json; charset=utf-8");
         res.statusCode = req.method === "POST" ? 200 : 405;
         res.end(req.method === "POST" ? `${JSON.stringify(url.pathname.endsWith("/check") ? { ok: true, count: 4 } : { ok: true })}\n` : `${JSON.stringify({ ok: false, error: "POST only" })}\n`);
+        return;
+      }
+      if (url.pathname === FOLLOW_UP_READY_PATH) {
+        // A read: the same answer as `darius serve`, over the local store. The demo has no runs to follow up.
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        const query = url.search;
+        const answer = demo
+          ? Promise.resolve({ status: 200, body: { ok: true, ready: false, host: "demo", reason: "the demo has no runs" } })
+          : actionApi({ method: req.method ?? "GET", path: url.pathname, headers, body: "", query }, { who: access.who, local: access.local === true });
+        const send = async (): Promise<void> => {
+          const reply = await answer;
+          res.statusCode = reply.status;
+          res.end(`${JSON.stringify(reply.body)}\n`);
+        };
+        void send();
         return;
       }
       if (url.pathname === "/api/run/ack") {

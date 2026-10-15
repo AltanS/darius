@@ -16,6 +16,7 @@ import { useRevalidator } from "react-router";
 
 import { postJson } from "../lib/post.ts";
 import { useReloadSoon } from "../lib/reload.ts";
+import { BusyButton } from "./busy-button.tsx";
 import { Fold } from "./ui.tsx";
 
 /** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
@@ -59,9 +60,9 @@ export function AckButton({ project, run, canWrite, subject }: AckButtonProps): 
   return (
     <form className="ack" onSubmit={(event) => void submit(event)}>
       <div className="fu-acts">
-        <button type="submit" className="st-btn st-btn-small" aria-label={`Acknowledge: ${subject}`} disabled={busy || isDone}>
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={`Acknowledge: ${subject}`} disabled={busy || isDone}>
           {busy ? "Acknowledging…" : isDone ? "Acknowledged" : "Acknowledge"}
-        </button>
+        </BusyButton>
       </div>
       <Fold summary="Add a note">
         <label className="fu-label" htmlFor={id}>

@@ -2,7 +2,7 @@
  * The "Check now" button of a vigil (0.86.0; `darius vigil sweep <slug>`).
  * One click posts to `/api/vigil/check`. The server starts the sweep detached
  * and answers at once. Since 0.95.0 the page does not ask the person to
- * reload: the button turns into the running light with "Checking on <host>,
+ * reload: the button turns into the busy gem (0.98.0) with "Checking on <host>,
  * asked 09:12", and the page loads its data again (1.5 s, 5 s, then every
  * 5 s, for 3 minutes) until the pending start of the check is no longer
  * `starting`. The new sweep then shows in the list without a reload. The
@@ -24,6 +24,8 @@ import { useClock } from "../lib/clock.tsx";
 import { clockTime } from "../lib/format.ts";
 import { postJson } from "../lib/post.ts";
 import { pendingText } from "../lib/receipt.ts";
+import { BusyButton } from "./busy-button.tsx";
+import { GemLine } from "./wait-line.tsx";
 
 /** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
 const NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
@@ -104,18 +106,17 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain, p
 
   if (phase === "checking" && pending !== null) {
     return (
-      <div className="check-live rw-live relative px-3 py-2" role="status">
-        <span className="live-bar" aria-hidden="true" />
-        <p className="rail-note">{`Checking on ${pending.host}, asked ${clockTime(pending.at, offset)}`}</p>
+      <div role="status">
+        <GemLine text={`Checking on ${pending.host}, asked ${clockTime(pending.at, offset)}`} />
       </div>
     );
   }
   return (
     <form className="ack" onSubmit={(event) => void submit(event)}>
       <div className="fu-acts">
-        <button type="submit" className="st-btn st-btn-small" aria-label={`Check now: ${subject}`} disabled={busy || blocked !== null}>
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={`Check now: ${subject}`} disabled={busy || blocked !== null}>
           {busy ? "Starting…" : "Check now"}
-        </button>
+        </BusyButton>
         {phase === "stalled" ? (
           <button type="button" className="st-btn st-btn-small" disabled={state === "loading"} onClick={() => void revalidate()}>
             Look again

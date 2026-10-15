@@ -3,6 +3,7 @@ import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestora
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { Gem } from "./components/nav-icons.tsx";
 import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
 import { NonceContext } from "./lib/nonce.ts";
@@ -138,6 +139,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactN
   const detail = isRouteErrorResponse(error) ? String(error.data ?? "") : error instanceof Error ? error.message : "";
   return (
     <main className="wa page-main reading stack">
+      <Gem size={32} />
       <p className="brand">darius</p>
       <h1 className="page-title ink-bad">{title}</h1>
       {detail === "" ? null : <pre className="code-block">{detail}</pre>}

@@ -370,6 +370,10 @@ test("serve dispatches POST /api/run/follow-up to the action API; every other wr
     assert.match(loopback.body, /the follow-up button needs a tailnet identity; open the page by its tailnet address/u, "loopback is \"this host\": refused before any other check");
     const read = await call(47_992, { method: "GET", path: "/api/run/follow-up" });
     assert.equal(read.status, 405, "the action API takes POST only");
+    const ready = await call(47_992, { method: "GET", path: "/api/run/follow-up/ready?project=demo&run=01JX" });
+    assert.equal(ready.status, 200, "0.98.0: the readiness read is a GET, and the loopback viewer gets a plain answer");
+    assert.match(ready.type, /^application\/json/u);
+    assert.match(ready.body, /"ready":false.*the follow-up button needs a tailnet identity/u);
     for (const path of ["/", "/p/demo/runs/01JX", "/api/status.json", "/api/run"]) {
       assert.equal((await call(47_992, { method: "POST", path, headers: { "content-type": "application/json" }, body })).status, 405, path);
     }

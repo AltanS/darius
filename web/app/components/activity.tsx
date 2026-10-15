@@ -16,6 +16,7 @@ import { afterLead, leadOf } from "../lib/activity-place.ts";
 import { timelineDays } from "../lib/ritual-activity.ts";
 import type { RunSentence, TrailLine } from "../lib/run-origin.ts";
 import { Fold } from "./ui.tsx";
+import { GemLine } from "./wait-line.tsx";
 
 interface StartingProps {
   starts: readonly PendingStart[];
@@ -31,7 +32,7 @@ export function Starting({ starts, project }: StartingProps): React.ReactNode {
         const failed = start.state === "refused" || start.state === "lost";
         return (
           <div key={start.id} className={`card card-accent ${failed ? "edge-bad" : "edge-run"}`}>
-            <p>{pendingText(start, { offset })}</p>
+            {failed ? <p>{pendingText(start, { offset })}</p> : <GemLine text={pendingText(start, { offset })} />}
             {failed && start.parent !== undefined ? (
               <p className="rail-note">
                 <Link to={href({ to: "run", ws: project, run: start.parent })}>Try again</Link> from the run page.

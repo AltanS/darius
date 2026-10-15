@@ -20,6 +20,7 @@ import { closedText, stepKey, stepRun, stepText } from "../lib/findings.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { useReloadSoon } from "../lib/reload.ts";
+import { BusyButton } from "./busy-button.tsx";
 import { itemStateTag, severityTone } from "../lib/result.ts";
 import type { Badge } from "../lib/tone.ts";
 import { Chip } from "./chip.tsx";
@@ -103,9 +104,9 @@ function NoteForm({ row, verb, onDone }: NoteFormProps): React.ReactNode {
       </label>
       <input id={id} className="st-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
       <div className="fu-acts">
-        <button type="submit" className="st-btn st-btn-main" disabled={busy}>
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" disabled={busy}>
           {busy ? VERB_WORDS[verb].busy : VERB_WORDS[verb].main}
-        </button>
+        </BusyButton>
         <button type="button" className="st-btn" disabled={busy} onClick={onDone}>
           Cancel
         </button>

@@ -4,7 +4,7 @@ import type { Route } from "./+types/run";
 import { RunTrail, SentenceLine } from "../components/activity.tsx";
 import { KindWord } from "../components/chip.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
-import { FollowUpCard } from "../components/follow-up.tsx";
+import { FollowUpSection } from "../components/follow-up.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Actions, Items, ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
@@ -33,15 +33,15 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const next = failure === null ? null : nextStep(failure, { today: status.today, offset: status.utcOffset });
   const ritual = project?.rituals.find((candidate) => `ritual/${candidate.slug}` === run.row.item);
   // A closed, complete ritual run with a result can have a follow-up from this page (0.65.0: with no command
-  // question it carries a decision note). The check runs on the server. A run with no command question shows
-  // the card only when the check passes, so a run that cannot be followed up gets no "off" card. A run that
-  // proposes changes (0.69.0: a needs-decision item with a key) is meant to be followed up, so it shows the
-  // card either way, with the reason when it is off.
+  // question it carries a decision note). Whether it can start is a check that takes seconds over ssh, so since
+  // 0.98.0 the loader does not run it: the card asks `GET /api/run/follow-up/ready` after the page shows. The
+  // loader says only whether a card is certain: a run with a command question or a proposal (0.69.0: a
+  // needs-decision item with a key) shows it either way, with the reason when it is off. A plain followable run
+  // shows the card only when the check passes.
   const hasCommands = (run.result?.questions ?? []).some((question) => (question.commands ?? []).length > 0);
   const hasProposals = (run.result?.items ?? []).some((item) => item.state === "needs-decision" && item.key !== undefined);
   const isFollowable = run.result !== null && run.row.item.startsWith("ritual/") && run.row.phase === "closed" && run.row.outcome === "complete";
-  const checked = hasCommands || isFollowable ? await context.followUp(run.project, run.row.run) : null;
-  const followUp = checked !== null && (hasCommands || (hasProposals && isFollowable) || checked.ready) ? checked : null;
+  const followUp = hasCommands || isFollowable ? { host: ritual?.host ?? status.host, certain: hasCommands || (hasProposals && isFollowable) } : null;
   // Each follow-up with its state word against the runs of the project (0.69.0).
   const children = run.children.map((child) => ({ ...child, state: runState(child.row, project?.runs ?? []) }));
   // Where the run came from, what came of it, and its own events (0.92.0), from the ledger and the activity model.
@@ -137,9 +137,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
               canRunNow={canRunNow}
               afterQuestions={
                 followUp === null ? null : (
-                  <Section title="Follow-up">
-                    <FollowUpCard project={project} run={row.run} readiness={followUp} questions={run.result.questions} items={run.result.items} />
-                  </Section>
+                  <FollowUpSection key={row.run} project={project} run={row.run} plan={followUp} questions={run.result.questions} items={run.result.items} />
                 )
               }
             />

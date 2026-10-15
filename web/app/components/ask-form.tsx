@@ -26,7 +26,9 @@ import { postJson } from "../lib/post.ts";
 import { useReloadSoon } from "../lib/reload.ts";
 import { dismissAllText, earlierText } from "../lib/view.ts";
 import { QuestionList } from "./questions.tsx";
+import { BusyButton } from "./busy-button.tsx";
 import { Fold } from "./ui.tsx";
+import { WaitLine } from "./wait-line.tsx";
 
 /** What the loopback viewer reads where the form would be. */
 const NO_WRITE_HINT = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
@@ -146,19 +148,20 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
       ) : null}
       <div className="fu-acts">
         {questions.length === 0 ? null : (
-          <button type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0}>
+          <BusyButton busy={busy === "send"} type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0}>
             {busy === "send" ? "Sending…" : "Send answer"}
-          </button>
+          </BusyButton>
         )}
         {isEarlier || !canRunNow || questions.length === 0 ? null : (
-          <button type="button" className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0} onClick={() => void send(true)}>
+          <BusyButton busy={busy === "now"} className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0} onClick={() => void send(true)}>
             {busy === "now" ? "Sending…" : "Send and run now"}
-          </button>
+          </BusyButton>
         )}
-        <button type="button" className="st-link" aria-label={`Dismiss, no action: ${subject}`} disabled={isLocked} onClick={() => void dismiss()}>
+        <BusyButton busy={busy === "dismiss"} className="st-link" aria-label={`Dismiss, no action: ${subject}`} disabled={isLocked} onClick={() => void dismiss()}>
           {busy === "dismiss" ? "Dismissing…" : "Dismiss, no action"}
-        </button>
+        </BusyButton>
       </div>
+      <WaitLine active={busy !== null} />
       {notice === null ? null : (
         <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
           {notice.text}
@@ -242,10 +245,11 @@ export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAs
         <Fold summary="Dismiss all earlier asks">
           <p className="fu-ask-q">{dismissAllText(asks.length)}</p>
           <div className="fu-acts">
-            <button type="button" className="st-btn st-btn-danger" disabled={busy || isDone} onClick={() => void dismissAll()}>
+            <BusyButton busy={busy} className="st-btn st-btn-danger" disabled={busy || isDone} onClick={() => void dismissAll()}>
               {busy ? "Dismissing…" : isDone ? "Dismissed" : `Yes, dismiss ${asks.length}`}
-            </button>
+            </BusyButton>
           </div>
+          <WaitLine active={busy} />
           {error === null ? null : (
             <p className="bk-note tone-bad" role="alert">
               {error}
@@ -332,10 +336,11 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
         </p>
       ) : null}
       <div className="fu-acts">
-        <button type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
           {busy ? "Sending…" : "Answer and resume"}
-        </button>
+        </BusyButton>
       </div>
+      <WaitLine active={busy} />
       {notice === null ? null : (
         <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
           {notice.text}

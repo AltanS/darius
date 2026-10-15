@@ -88,6 +88,54 @@ test("only the keyframes dim a facet, and both reduced-motion switches stop them
   assert.doesNotMatch(NAV_ICONS, /style=\{\{/u, "no inline style");
 });
 
-test("the light themes define the focus stroke", () => {
-  assert.equal(CSS.match(/--gem-lit: #fffdf4;/gu)?.length, 2, "the light theme and its system twin");
+test("the light themes define a dark focus stroke: a near-white one vanished on the parchment (0.98.0)", () => {
+  assert.equal(CSS.match(/--gem-lit: #3a2a12;/gu)?.length, 2, "the light theme and its system twin");
+  assert.equal(CSS.includes("--gem-lit: #fffdf4;"), false);
+});
+
+// --- where the busy gem shows (0.98.0, web/app/components) -------------------------------------
+
+const COMPONENTS = fileURLToPath(new URL("../web/app/components/", import.meta.url));
+const source = (name: string): string => readFileSync(`${COMPONENTS}${name}`, "utf8");
+
+test("BusyButton draws a 14 px busy gem before the label only while busy, and hides it from screen readers", () => {
+  const code = source("busy-button.tsx");
+  assert.match(code, /\{busy \? <Gem size=\{14\} busy \/> : null\}\s*\{children\}/u);
+  assert.equal(/<Gem[^>]*label=/u.test(code), false, "decoration: no name");
+  assert.match(CSS, /\.st-btn > \.gem,\s*\.st-link > \.gem \{ display: inline-block;/u, "the gem sits in the line of the label");
+});
+
+test("every button that posts uses BusyButton, with the words of its busy state kept", () => {
+  for (const [file, words] of [
+    ["findings.tsx", ["Closing…", "Reopening…"]],
+    ["ack.tsx", ["Acknowledging…"]],
+    ["ask-form.tsx", ["Sending…", "Dismissing…"]],
+    ["follow-up.tsx", ["Starting…"]],
+    ["check-now.tsx", ["Starting…"]],
+    ["backups.tsx", ["Starting…", "Testing…"]],
+  ] as const) {
+    const code = source(file);
+    assert.ok(code.includes("<BusyButton"), `${file} uses BusyButton`);
+    for (const word of words) assert.ok(code.includes(word), `${file} keeps "${word}"`);
+  }
+  assert.equal(/<button[^>]*onClick=\{\(\) => void (send|start|dismiss|test|submit|save)\b/u.test(source("ask-form.tsx")), false, "no plain post button is left in the answer forms");
+});
+
+test("a waiting line has the busy gem and the frame's gems follow the router, not a timer of their own", () => {
+  assert.match(source("wait-line.tsx"), /<Gem size=\{14\} busy \/>/u);
+  const shell = source("shell.tsx");
+  assert.match(shell, /useNavigation\(\)/u);
+  assert.match(shell, /<Gem size=\{28\} busy=\{busy\} \/>/u);
+  assert.match(source("places.tsx"), /<Gem size=\{28\} busy=\{busy\} \/>/u);
+});
+
+test("the error pages carry a still gem", () => {
+  assert.match(source("route-error.tsx"), /<Gem size=\{32\} \/>/u);
+  assert.match(readFileSync(fileURLToPath(new URL("../web/app/root.tsx", import.meta.url)), "utf8"), /<Gem size=\{32\} \/>/u);
+});
+
+test("a busy gem inside the solid main button takes the label's colour and the button fades less (light theme: gold on gold vanished)", () => {
+  const main = block(".st-btn-main > .gem");
+  for (const name of ["--gem-a", "--gem-b", "--gem-c", "--gem-d", "--gem-edge"]) assert.match(main, new RegExp(`${name}: var\\(--on-solid\\);`, "u"), name);
+  assert.match(block(".st-btn:disabled:has(> .gem-busy)"), /opacity: 0\.8;/u);
 });

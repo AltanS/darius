@@ -11,6 +11,10 @@
  * new run with a link, or says why it did not start (0.69.0): the POST waits
  * for the CLI.
  *
+ * The card does not come with the page (0.98.0): `FollowUpSection` asks
+ * `GET /api/run/follow-up/ready` after it mounts, because the check can take
+ * seconds over ssh. `FollowUpCard` below draws the answer.
+ *
  * The follow-up may start on another host, the ritual's (0.69.0): the
  * server forwards it over ssh, and the card names that host. When a
  * follow-up cannot start, the card says why. For a reason on this host it
@@ -18,17 +22,62 @@
  * it gives the reason only.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import type { FollowUpReadiness, ResultItem, ResultQuestion } from "../../../src/web/api.ts";
+import { cardView, checkingText, fetchReadiness, type FollowUpPlan, type Loaded } from "../lib/follow-up-load.ts";
 import { shortRun } from "../lib/format.ts";
 import { useReloadSoon } from "../lib/reload.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
+import { BusyButton } from "./busy-button.tsx";
 import { Command } from "./command.tsx";
 import { ProposalView } from "./result.tsx";
-import { Fold, Status } from "./ui.tsx";
+import { Fold, Section, Status } from "./ui.tsx";
+import { GemLine, WaitLine } from "./wait-line.tsx";
+
+interface FollowUpSectionProps {
+  project: string;
+  run: string;
+  /** What the loader knows without the check (src/web/api.ts, `GET /api/run/follow-up/ready`). */
+  plan: FollowUpPlan;
+  questions: readonly ResultQuestion[];
+  items: readonly ResultItem[];
+}
+
+/**
+ * The "Follow-up" section of a run page (0.98.0). The page renders without the
+ * readiness check, which can take seconds over ssh. This asks for it after it
+ * mounts: a run that lists commands or proposes changes holds the place of the
+ * card with the busy gem and one line; any other followable run draws nothing
+ * until the check passes, so an empty section never shows.
+ */
+export function FollowUpSection({ project, run, plan, questions, items }: FollowUpSectionProps): React.ReactNode {
+  const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  useEffect(() => {
+    const abort = new AbortController();
+    const ask = async (): Promise<void> => {
+      const answer = await fetchReadiness(project, run, abort.signal);
+      if (!abort.signal.aborted) setLoaded(answer);
+    };
+    void ask();
+    return () => abort.abort();
+  }, [project, run]);
+  const view = cardView(plan, loaded);
+  if (view.view === "none") return null;
+  return (
+    <Section title="Follow-up">
+      {view.view === "waiting" ? (
+        <div className="card fu">
+          <GemLine text={checkingText(plan.host)} />
+        </div>
+      ) : (
+        <FollowUpCard project={project} run={run} readiness={view.readiness} questions={questions} items={items} />
+      )}
+    </Section>
+  );
+}
 
 interface FollowUpCardProps {
   project: string;
@@ -239,9 +288,9 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
           </div>
           {decision === "" ? null : <p>Note: {decision}</p>}
           <div className="fu-acts">
-            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void start()}>
+            <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy} onClick={() => void start()}>
               {busy ? "Starting…" : "Yes, start it"}
-            </button>
+            </BusyButton>
             <button type="button" className="st-btn" disabled={busy} onClick={() => setAsking(false)}>
               No
             </button>
@@ -249,11 +298,12 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
         </div>
       ) : (
         <div className="fu-acts">
-          <button type="button" className="st-btn st-btn-main" disabled={busy || (approved === 0 && decision === "")} onClick={press}>
+          <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy || (approved === 0 && decision === "")} onClick={press}>
             {busy ? "Starting…" : approved === 0 ? `Start follow-up on ${readiness.host}` : `Start follow-up with ${approved} approved`}
-          </button>
+          </BusyButton>
         </div>
       )}
+      <WaitLine active={busy} host={readiness.host} />
       <p className="fu-off">
         It runs on {where} and carries out only what you approve, within the ritual's policy. Anything else the run tries still holds as usual. {how}
       </p>

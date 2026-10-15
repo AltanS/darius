@@ -1,9 +1,10 @@
-/** The error boundary of every page: a 404 or a failure, inside the frame. */
+/** The error boundary of every page: a 404 or a failure, inside the frame, under a still gem (0.98.0). */
 
 import { isRouteErrorResponse, Link, useRouteError, useRouteLoaderData } from "react-router";
 
 import type { loader as rootLoader } from "../root.tsx";
 import { href } from "../lib/paths.ts";
+import { Gem } from "./nav-icons.tsx";
 
 interface BackProps {
   /** The scope to go back to: a workspace name, or null for all workspaces. */
@@ -28,6 +29,7 @@ export function RouteError(): React.ReactNode {
     return (
       <div className="stack">
         <header className="page-head">
+          <Gem size={32} />
           <h1 className="page-title">Nothing here</h1>
           <p className="lede">{text}</p>
         </header>
@@ -39,6 +41,7 @@ export function RouteError(): React.ReactNode {
   return (
     <div className="stack">
       <header className="page-head">
+        <Gem size={32} />
         <h1 className="page-title ink-bad">This page failed</h1>
       </header>
       <pre className="code-block">{message}</pre>

@@ -165,6 +165,8 @@ interface PlacesProps {
   scope: string | null;
   /** The row that is lit, or null when none is (an error page). */
   lit: LitRow | null;
+  /** The page is loading and has taken more than 300 ms: the brand gem blinks. */
+  busy: boolean;
 }
 
 const HOST_ROWS: readonly { page: "status" | "profiles" | "settings"; label: string; icon: NavIconName }[] = [
@@ -201,7 +203,7 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
   );
 }
 
-export function Places({ data, scope, lit }: PlacesProps): React.ReactNode {
+export function Places({ data, scope, lit, busy }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
   const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 }, icon: null }];
@@ -210,7 +212,7 @@ export function Places({ data, scope, lit }: PlacesProps): React.ReactNode {
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
       <div className="places-head">
         <Link to={href({ to: "overview", ws: scope })} className="places-brand" aria-label="darius, the Overview">
-          <Gem size={28} />
+          <Gem size={28} busy={busy} />
           <span>darius</span>
         </Link>
         <span className="places-hostname">{data.host}</span>

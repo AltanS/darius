@@ -20,6 +20,7 @@ import type { Kind } from "../lib/kind.ts";
 import type { Rail } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
 import { KindIcon } from "./kind.tsx";
+import { Gem } from "./nav-icons.tsx";
 
 interface StateWordProps {
   state: Badge;
@@ -41,6 +42,8 @@ interface RowProps {
   rail?: Rail | null;
   /** A running item: a light sweeps along the top edge. */
   live?: boolean;
+  /** Work in flight that has not become a run: the busy gem (0.98.0) sits before the state word. */
+  busy?: boolean;
   /** The chips at the start of the second line. */
   chips?: React.ReactNode;
   state?: Badge | null;
@@ -62,11 +65,18 @@ interface RowProps {
 }
 
 /** One row of a list; put it in a `RowList`. */
-export function Row({ id, kind, manual = false, title, href, rail = null, live = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, foot, className }: RowProps): React.ReactNode {
+export function Row({ id, kind, manual = false, title, href, rail = null, live = false, busy = false, chips, state = null, meta = [], time, acts, detail, note, excerpt, foot, className }: RowProps): React.ReactNode {
   const classes = ["rw", rail === null ? "" : `rw-rail tone-${rail}`, live ? "rw-live" : "", className ?? ""].filter((part) => part !== "");
   const segments: React.ReactNode[] = [];
   if (chips !== undefined && chips !== null) segments.push(<span key="chips" className="rw-seg rw-chips">{chips}</span>);
-  if (state !== null) segments.push(<span key="state" className="rw-seg"><StateWord state={state} /></span>);
+  if (state !== null) {
+    segments.push(
+      <span key="state" className="rw-seg">
+        {busy ? <Gem size={14} busy /> : null}
+        <StateWord state={state} />
+      </span>,
+    );
+  }
   const pieces: React.ReactNode[] = [...meta, ...(time === undefined || time === null ? [] : [time])];
   if (pieces.length > 0) {
     segments.push(

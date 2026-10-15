@@ -2851,6 +2851,54 @@
     animation-delay: 1.4s;
   }
 
+  /*
+   * The gem inside a button or a line (0.98.0). A 14 px emblem loader sits before the label of a busy
+   * button, and before the text of a waiting line. The gem is a flex item of its line, so it never
+   * moves the text it sits next to by more than its own width.
+   */
+
+  .st-btn > .gem,
+  .st-link > .gem {
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: -2px;
+  }
+
+  /*
+   * On the solid gold main button the colours of the gem are gold too, so it vanished (light theme).
+   * There the gem takes the colour of the label, and a busy button is less faded than a plain disabled one.
+   */
+
+  .st-btn-main > .gem {
+    --gem-a: var(--on-solid);
+    --gem-b: var(--on-solid);
+    --gem-c: var(--on-solid);
+    --gem-d: var(--on-solid);
+    --gem-edge: var(--on-solid);
+  }
+
+  .st-btn:disabled:has(> .gem-busy) {
+    opacity: 0.8;
+  }
+
+  .gem-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .rw-seg > .gem {
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: -2px;
+  }
+
+  .page-head > .gem {
+    margin-bottom: 16px;
+  }
+
   .nav-icon {
     display: block;
   }
@@ -3947,7 +3995,7 @@
     --gem-b: #a4802b;
     --gem-c: #7a6142;
     --gem-d: #c8a24e;
-    --gem-lit: #fffdf4;
+    --gem-lit: #3a2a12;
     --card-a: #fbf6e6;
     --card-b: #f6efd9;
     --select-ink: #2a1f14;
@@ -3989,7 +4037,7 @@
       --gem-b: #a4802b;
       --gem-c: #7a6142;
       --gem-d: #c8a24e;
-      --gem-lit: #fffdf4;
+      --gem-lit: #3a2a12;
       --card-a: #fbf6e6;
       --card-b: #f6efd9;
       --select-ink: #2a1f14;

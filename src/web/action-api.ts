@@ -35,6 +35,16 @@
  * process on this host is that viewer, and a run that may `curl` could set
  * its own Origin. Only a tailnet identity starts a follow-up.
  *
+ *   GET /api/run/follow-up/ready?project=&run=   (0.98.0)
+ *                             200 { ok: true, ...FollowUpReadiness } | 400 or 405 { ok: false, error }
+ *
+ * The check the run page asks after it renders: whether a follow-up can start
+ * now, which over ssh can take seconds. It keeps the guards of the POST except
+ * the Origin, the content type and the size, which a read has no use for. A
+ * browser request marked `Sec-Fetch-Site: cross-site` is refused, because the
+ * check can cost an ssh round trip. The loopback viewer gets 200 with
+ * `ready: false` and the POST's reason.
+ *
  * The other is the Acknowledge button (0.68.0; docs/concept.md, "Acknowledge"):
  *
  *   POST /api/run/ack         body { project, run, note? }
@@ -164,6 +174,8 @@ export const VIGIL_API_PREFIX = "/api/vigil/";
 const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
 const FINDING_REOPEN_PATH = `${FINDING_API_PREFIX}reopen`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
+/** The read of whether a follow-up can start (0.98.0). The run page asks it after it renders, because the check can take seconds over ssh. */
+export const FOLLOW_UP_READY_PATH = `${ACTION_API_PREFIX}follow-up/ready`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 const ACK_EARLIER_PATH = `${ACTION_API_PREFIX}ack-earlier`;
 const ANSWER_PATH = `${ACTION_API_PREFIX}answer`;
@@ -314,6 +326,8 @@ export interface ActionRequest {
   path: string;
   headers: Headers;
   body: string;
+  /** The query string of the address, with or without the leading `?`; absent for a request with none. */
+  query?: string;
 }
 
 function fail(status: number, error: string, id?: string): PushApiReply {
@@ -411,10 +425,36 @@ function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: str
 /** One request under ACTION_API_PREFIX, already past the access check. `viewer` is who the access check let in. */
 export async function actionApi(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps = DEFAULT_DEPS): Promise<PushApiReply> {
   if (request.path === FOLLOW_UP_PATH) return startFollowUp(request, viewer, deps);
+  if (request.path === FOLLOW_UP_READY_PATH) return followUpReady(request, viewer, deps);
   if (request.path === ACK_PATH) return acknowledge(request, viewer, deps);
   if (request.path === ACK_EARLIER_PATH) return acknowledgeEarlier(request, viewer, deps);
   if (request.path === ANSWER_PATH) return answerHeld(request, viewer, deps);
   return fail(404, "no such endpoint");
+}
+
+/**
+ * `GET /api/run/follow-up/ready?project=&run=` (0.98.0): whether a follow-up of the run can start now, as
+ * `FollowUpReadiness`. It keeps the guards of the POST except the Origin check, which protects a write, and
+ * the content type and body size, which a read has none of: the method, the viewer, the shape of the project
+ * and run names, and that both exist. The loopback viewer gets `{ready: false, reason}`, as the run page showed
+ * before. It writes nothing.
+ */
+async function followUpReady(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {
+  if (request.method !== "GET") return fail(405, "GET only");
+  if (viewer.local === true) return { status: 200, body: { ok: true, ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP } };
+  // No Origin check, since a read changes nothing. But the check costs an ssh round trip, so a page of another site may not start it.
+  if (request.headers.get("sec-fetch-site") === "cross-site") return fail(403, "the request must come from the darius page");
+  const query = new URLSearchParams(request.query ?? "");
+  const project = query.get("project") ?? "";
+  const run = query.get("run") ?? "";
+  if (!PROJECT_NAME.test(project)) return fail(400, "project must be a project name");
+  if (!RUN_ID.test(run)) return fail(400, "run must be a run id");
+  if (!listProjects().includes(project)) return fail(400, `no project ${project}`);
+  if (viewRun(readLedger(openProject(project)), run).item === undefined) return fail(400, `no run ${run} in ${project}`);
+  const ready = await deps.readiness(project, run);
+  // FollowUpReadiness holds only strings, booleans and lists of them; the round trip makes it a JSON value.
+  const json: JsonValue = JSON.parse(JSON.stringify(ready));
+  return { status: 200, body: isRecord(json) ? { ok: true, ...json } : { ok: true } };
 }
 
 async function startFollowUp(request: ActionRequest, viewer: ActionViewer, deps: ActionDeps): Promise<PushApiReply> {

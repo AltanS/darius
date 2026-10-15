@@ -1279,59 +1279,49 @@ function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: str
   };
 }
 
-test("a question's command lines show as written, and the follow-up card offers a button on this host", async () => {
+// Since 0.98.0 the run page renders without the readiness check: the card asks `GET /api/run/follow-up/ready` after it
+// mounts, so the server-side page holds the place of a certain card with one gem line and draws nothing for a possible one.
+// The ready and off bodies of the card are client state; the rules are tested in test/web-follow-up-ready.test.ts, the
+// endpoint there too, and the page without a wait in test/web-serve-run-fast.test.ts.
+
+test("a question's command lines show as written, and the follow-up card holds its place with the busy gem", async () => {
   const ctx = followUpContext({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [{ n: 1, commands: [COMMAND, "git push origin main"] }], items: [] });
   const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
-  assert.deepEqual(ctx.calls, [`demo/${ASKS}`]);
+  assert.deepEqual(ctx.calls, [], "0.98.0: the loader does not run the readiness check");
   assert.ok(page.includes("A yes runs, as written:"));
   assert.ok(page.includes("pnpm -C tools cli fc --post 12 --confirm &#x27;site &lt;b&gt;a&lt;/b&gt;&#x27;\ngit push origin main"), "the lines verbatim, as text");
   assert.equal(page.includes("<b>a</b>"), false, "a command line never becomes markup");
   const section = page.indexOf('<h2 class="label">Follow-up</h2>');
   const found = page.indexOf('<h2 class="label">What it found</h2>');
   assert.ok(section !== -1 && section < found, "the card follows the questions");
-  const card = textOf(between(page, section, found));
-  assert.match(card, /Approve the commands ofQuestion 1 \(2 lines\)/u);
-  assert.match(card, /Start follow-up with 1 approved/u, "0.69.0: the button counts what is approved");
-  assert.equal(card.includes("Yes, start it"), false, "the confirm box needs the first press");
-  assert.match(page, /<input type="checkbox" checked=""/u, "one question with commands: picked");
+  const card = between(page, section, found);
+  assert.match(textOf(card), /Checking whether a follow-up can start on testhost…/u, "the host of the page: the ritual has no pin");
+  assert.match(card, /<svg[^>]*class="gem gem-busy"/u);
+  assert.equal(textOf(card).includes("Start follow-up"), false, "no button before the check answers");
   assertScriptsCarryNonce(page, "run page with a follow-up card");
 });
 
-test("the follow-up card says why it is off and gives the command; a run without commands asks nothing", async () => {
-  const ctx = followUpContext({ ready: false, host: "host-a", reason: "gated profile: profile x has permissions gated" });
-  const card = textOf(await readPage(`/w/demo/runs/${ASKS}`, ctx));
-  assert.match(card, /off A follow-up cannot start from this page: gated profile: profile x has permissions gated/u);
-  assert.ok(card.includes(`darius run follow-up ${ASKS} --approve 1 --project demo`));
-  assert.equal(card.includes("Start follow-up on"), false);
-  const plain = { ...asksContext(null), followUp: () => Promise.resolve<FollowUpReadiness>({ ready: false, host: "host-a", reason: "x" }) };
-  const page = await readPage(`/w/demo/runs/${ASKS}`, plain);
-  assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false, "without commands, a card that is off is not shown");
+test("a ritual pinned to another host: the waiting line names that host", async () => {
+  const base = followUpContext({ ready: false, host: "host-a", reason: "x" });
+  const pinned: WebContext & { calls: string[] } = {
+    ...base,
+    status: () => {
+      const status = base.status();
+      const project = status.projects[0]!;
+      const rituals = project.rituals.map((ritual) => Object.assign({}, ritual, { host: "host-b" }));
+      return { ...status, projects: [{ ...project, rituals }] };
+    },
+  };
+  const card = textOf(between(await readPage(`/w/demo/runs/${ASKS}`, pinned), 0, Number.MAX_SAFE_INTEGER));
+  assert.match(card, /Checking whether a follow-up can start on host-b…/u);
+  assert.deepEqual(pinned.calls, []);
 });
 
-test("a complete run with no command question gets a decision card when it is ready (0.65.0)", async () => {
-  const base = asksContext(null);
-  const ctx: WebContext = { ...base, followUp: () => Promise.resolve<FollowUpReadiness>({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [], items: [] }) };
-  const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
-  const card = textOf(page);
-  assert.match(card, /Operator decision for the follow-up/u);
-  assert.equal(card.includes("Approve the commands of"), false, "no checkboxes without command questions");
-  assert.equal(page.includes('type="checkbox"'), false);
-  assert.match(card, /Start follow-up on host-a/u);
-  assert.match(page, /<button[^>]*disabled=""[^>]*>Start follow-up on host-a/u, "nothing picked and no decision yet");
-});
-
-test("the ritual runs on another host: ready there, the button names it; off there, the card gives the reason and no command to copy (0.69.0)", async () => {
-  const ready = followUpContext({ ready: true, host: "host-b", via: "host-a", profile: "opus-skip", surface: "headless", questions: [{ n: 1, commands: [COMMAND] }], items: [] });
-  const card = textOf(await readPage(`/w/demo/runs/${ASKS}`, ready));
-  assert.match(card, /Start follow-up with 1 approved/u);
-  assert.match(card, /It runs on host-b, forwarded from host-a and carries out only what you approve/u);
-  assert.match(card, /The run is headless on host-b\./u);
-  const off = followUpContext({ ready: false, host: "host-a", reason: "on host-b: ssh to host-b failed: ssh: connect to host host-b port 22: No route to host", rightHost: "host-b" });
-  const page = await readPage(`/w/demo/runs/${ASKS}`, off);
-  assert.match(textOf(page), /off This ritual runs on host-b, and a follow-up cannot start there now: on host-b: ssh to host-b failed/u);
-  const section = between(page, page.indexOf('<h2 class="label">Follow-up</h2>'), page.indexOf('<h2 class="label">What it found</h2>'));
-  assert.equal(section.includes('class="copy"'), false, "no command to copy");
-  assert.equal(textOf(section).includes("darius run follow-up"), false);
+test("a run without commands or proposals draws no Follow-up section before the check passes (no card that shows and vanishes)", async () => {
+  const plainCtx = { ...asksContext(null), followUp: () => Promise.reject(new Error("the loader must not ask")) };
+  const page = await readPage(`/w/demo/runs/${ASKS}`, plainCtx);
+  assert.equal(page.includes('<h2 class="label">Follow-up</h2>'), false);
+  assert.equal(textOf(page).includes("Checking whether a follow-up"), false);
 });
 
 test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
@@ -2330,22 +2320,14 @@ function proposingContext(readiness: FollowUpReadiness, children: RunDetail["chi
   };
 }
 
-test("a run that proposes and asks nothing still gets the follow-up card, with a checkbox per proposal, select all and one button", async () => {
+test("a run that proposes and asks nothing holds a Follow-up place before the items, with no questions", async () => {
   const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext(PROPOSALS_READY));
   assert.equal(page.includes('<h2 class="label">Questions for you</h2>'), false);
   const section = page.indexOf('<h2 class="label">Follow-up</h2>');
   const found = page.indexOf('<h2 class="label">What it found</h2>');
   assert.ok(section !== -1 && section < found, "the card shows before the items, with no questions");
-  const card = between(page, section, found);
-  assert.equal((card.match(/type="checkbox"/gu) ?? []).length, 3, "select all, then one per proposal");
-  assert.match(textOf(card), /Approve the proposalsSelect all proposals \(2\)/u);
-  assert.match(textOf(card), /post 12 · key post-12\/title/u);
-  assert.match(card, /<button[^>]*disabled=""[^>]*>Start follow-up on host-a/u, "nothing picked, no note yet");
-  assert.match(textOf(card), /The run is headless on host-a\./u);
+  assert.match(textOf(between(page, section, found)), /Checking whether a follow-up can start on testhost…/u, "proposals make the card certain");
   assert.equal(page.includes(EVIL), false, "proposal text never becomes a script");
-  assert.ok(card.includes('<p class="proposal-text">Old &lt;b&gt;title&lt;/b&gt;\nline two</p>'), "current, as text, newline kept");
-  assert.ok(card.includes(`<p class="proposal-text proposal-new">New title ${EVIL.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`), "proposed, as text");
-  assert.match(textOf(card), /Why: The query is missing\..*Expected effect: Rank 8 to top 5\./su);
   assertScriptsCarryNonce(page, "run page with proposals");
 });
 
@@ -2354,11 +2336,6 @@ test("the items list shows a proposal in a fold, current and proposed as labelle
   const found = between(page, page.indexOf('<h2 class="label">What it found</h2>'), page.length);
   assert.match(found, /<summary>Proposal<\/summary>/u);
   assert.match(textOf(found), /CurrentOld &lt;b&gt;title&lt;\/b&gt;\nline twoProposedNew title &lt;script&gt;/u);
-});
-
-test("a run that proposes but cannot be followed up shows the card with the reason", async () => {
-  const page = await readPage(`/w/demo/runs/${ASKS}`, proposingContext({ ready: false, host: "host-a", reason: "no-workdir: a follow-up runs in a checkout" }));
-  assert.match(textOf(page), /off A follow-up cannot start from this page: no-workdir: a follow-up runs in a checkout/u);
 });
 
 test("the parent page shows each follow-up with its state, summary, approvals, actions and items", async () => {

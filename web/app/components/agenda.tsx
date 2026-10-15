@@ -40,7 +40,7 @@ interface RowProps {
   extra: boolean;
   /** A flagged vigil row gets a "Check now" button (0.86.0); false for the loopback viewer and for pages that offer none. */
   canCheck: boolean;
-  /** The checks that run now, by `project/slug` (0.95.0): such a row says "Checking" and shows the running light. */
+  /** The checks that run now, by `project/slug` (0.95.0): such a row says "Checking" and shows the busy gem. */
   checks: Readonly<Record<string, PendingStart>>;
 }
 
@@ -53,7 +53,7 @@ function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck,
   const isChecking = checkPhase(check, now) === "checking";
   const state = isChecking ? CHECKING : (row.state ?? (group.kind === "later" && row.date !== null ? { tone: "idle" as const, label: shortDate(row.date) } : null));
   const meta = [showProject ? row.project : null, ...(row.facts === "" ? [] : row.facts.split(", ")), row.note].filter((part) => part !== null);
-  return <Row id={id} kind={row.kind} manual={row.manual} href={row.href} title={row.title} rail={row.rail} chips={<KindWord kind={row.kind} manual={row.manual} />} state={state} meta={meta} detail={row.until === null ? undefined : `waits for: ${row.until}`} foot={canCheck && row.kind === "vigil" && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={classes.join(" ")} live={isChecking} />;
+  return <Row id={id} kind={row.kind} manual={row.manual} href={row.href} title={row.title} rail={row.rail} chips={<KindWord kind={row.kind} manual={row.manual} />} state={state} meta={meta} detail={row.until === null ? undefined : `waits for: ${row.until}`} foot={canCheck && row.kind === "vigil" && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={classes.join(" ")} busy={isChecking} />;
 }
 
 /** The label of a day group: "Overdue · 6", "Today · 2", "Tomorrow · 4", "Later · 5", or the weekday date as it is. */
@@ -140,7 +140,7 @@ function WaitingItem({ row, showProject, anchors, target, canCheck, checks }: Wa
   const check = checks[checkKey(row.project, row.slug)] ?? null;
   const { now } = useClock();
   const isChecking = checkPhase(check, now) === "checking";
-  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(row.state)} chips={<KindWord kind="vigil" />} state={isChecking ? CHECKING : row.state} meta={meta} detail={row.until} foot={canCheck && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={cls} live={isChecking} />;
+  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(row.state)} chips={<KindWord kind="vigil" />} state={isChecking ? CHECKING : row.state} meta={meta} detail={row.until} foot={canCheck && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={cls} busy={isChecking} />;
 }
 
 interface WaitingProps {

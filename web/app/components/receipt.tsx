@@ -29,7 +29,7 @@ export function Receipt({ row }: ReceiptProps): React.ReactNode {
         href={row.href}
         title={row.title}
         rail={railOf(row.word)}
-        live={row.start.state === "starting"}
+        busy={row.start.state === "starting"}
         chips={<KindWord kind={row.item} manual={row.manual} />}
         state={row.word}
         meta={[row.project]}

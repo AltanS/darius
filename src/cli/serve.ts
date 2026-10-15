@@ -356,7 +356,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     }
     if (url.pathname.startsWith(ACTION_API_PREFIX)) {
       const body = await readBody(request);
-      const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, { who: access.who, local: access.local === true });
+      const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body, query: url.search }, { who: access.who, local: access.local === true });
       send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
       return;
     }

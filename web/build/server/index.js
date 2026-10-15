@@ -1,4 +1,4 @@
-import { n as createRequestHandler } from "./assets/chunk-H4DAEOV7-Br-5CKvD.js";
+import { n as createRequestHandler } from "./assets/chunk-H4DAEOV7-CxcVxk3C.js";
 //#region server/load-context.ts
 function loadContext(context) {
 	return {
@@ -26,7 +26,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-Bm5gABNX.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-BSGj0U-M.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

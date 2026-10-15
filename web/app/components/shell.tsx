@@ -13,17 +13,19 @@
  */
 
 import { useEffect } from "react";
-import { Link, useLocation, useRouteLoaderData } from "react-router";
+import { Link, useLocation, useNavigation, useRevalidator, useRouteLoaderData } from "react-router";
 
 import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
 import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
+import { BUSY_AFTER_MS, isLoading } from "../lib/busy.ts";
 import type { Kind } from "../lib/kind.ts";
 import { href, placeOf, type Place, type Section } from "../lib/paths.ts";
 import { effectiveScope, type TabCounts } from "../lib/scope.ts";
 import { scopeCookieText } from "../lib/settings.ts";
+import { useAfter } from "../lib/use-after.ts";
 
 /** The section a page belongs to, for the lit state: a ritual page is in Rituals, a run page in the section of its item. */
 function sectionOf(place: Place, runKind: Kind | undefined): Section | null {
@@ -46,6 +48,8 @@ interface TopBarProps {
   host: boolean;
   /** Keyed by the address, so the drawer closes after each navigation. */
   pathKey: string;
+  /** The page is loading and has taken more than 300 ms: the gem blinks. */
+  busy: boolean;
 }
 
 /** A press on the scrim shuts the drawer it sits in. */
@@ -57,14 +61,14 @@ function closeDrawer(event: React.MouseEvent<HTMLButtonElement>): void {
 }
 
 /** The phone top bar: one button that opens Places as a drawer. A desktop does not show it. */
-function TopBar({ data, scope, host, pathKey }: TopBarProps): React.ReactNode {
+function TopBar({ data, scope, host, pathKey, busy }: TopBarProps): React.ReactNode {
   // A dot when a scope other than this one needs you: another workspace, or on a host page any workspace. All workspaces already holds them all.
   const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
   const icon = host || scope === null ? null : (data.workspaces.find((entry) => entry.name === scope)?.icon ?? null);
   return (
     <details key={pathKey} data-menu className="drawer">
       <summary className="topbar">
-        <Gem size={28} />
+        <Gem size={28} busy={busy} />
         <span className="topbar-lab">
           <span className="topbar-cap">{host ? "Host" : "Workspace"}</span>
           <span className="topbar-now">
@@ -92,6 +96,10 @@ interface ShellProps {
 
 export function Shell({ data, children }: ShellProps): React.ReactNode {
   useMenuDismiss();
+  // The gems of the bar and of Places blink while a page loads (0.98.0): navigation or a reload that takes over 300 ms.
+  const navigation = useNavigation();
+  const revalidator = useRevalidator();
+  const busy = useAfter(isLoading(navigation.state, revalidator.state), BUSY_AFTER_MS);
   const location = useLocation();
   // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind.
   const runKind = useRouteLoaderData<typeof runLoader>("routes/run")?.kind;
@@ -110,8 +118,8 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   }, [remembered]);
   return (
     <div className="app">
-      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} />
-      <Places data={data} scope={scope} lit={lit} />
+      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} />
+      <Places data={data} scope={scope} lit={lit} busy={busy} />
       <main className="wa page-main">{children}</main>
       <nav aria-label="Tabs" className="tabbar">
         <Link to={href({ to: "overview", ws: scope })} className={lit === "overview" ? "tab on" : "tab"} aria-current={lit === "overview" ? "page" : undefined}>

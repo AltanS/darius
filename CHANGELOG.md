@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.98.0] - 2026-10-15
+
+### Added
+
+- `GET /api/run/follow-up/ready?project=&run=` answers whether a follow-up can start, with the guards of the POST except the Origin check. A request marked `Sec-Fetch-Site: cross-site` is refused. The loopback viewer gets `ready: false` with its reason, as before.
+- `BusyButton`: every button that posts shows the busy gem before its label while it waits. The words ("Sending…") stay.
+- The top bar gem and the Places brand gem are busy while a page loads, after 300 ms.
+- A line with the gem under a button that waits for a host: "Waiting for <host>…", and after 10 s "Still waiting. The run may start after this page answers."
+- The error pages show a still gem above the text.
+
+### Changed
+
+- The run page renders at once. The follow-up card asks the new GET after the page shows, so a ritual pinned to another host no longer holds the page for the ssh check. A card that is certain (the run has a command question or a proposal) holds its place with "Checking whether a follow-up can start on <host>…". Any other followable run shows a card only when the check passes.
+- The vigil "Checking" rows, the Starting cards and the check line of the vigil page use the busy gem instead of the running light.
+
 ## [0.97.0] - 2026-10-15
 
 ### Added

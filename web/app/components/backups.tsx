@@ -22,6 +22,7 @@ import { useClock } from "../lib/clock.tsx";
 import { ALL_FIELDS, credentialsWord, ENV_KEY_ID, ENV_SECRET, envName, LOCAL_FIELDS, PING_FIELDS, REMOTE_FIELDS, shortSha, sourceWord, type FieldSpec } from "../lib/backup.ts";
 import { byteSize, hostDate, momentText } from "../lib/format.ts";
 import { postJson, type PostBody } from "../lib/post.ts";
+import { BusyButton } from "./busy-button.tsx";
 import { NavIcon } from "./nav-icons.tsx";
 import { SettingRow, SettingsCard, Switch } from "./settings-ui.tsx";
 import { Fold, Status, Time } from "./ui.tsx";
@@ -198,9 +199,9 @@ function RunButton({ backups }: StateProps): React.ReactNode {
   const label = posting || (waiting && backups.running === null) ? "Starting…" : busy ? "Backup is running…" : "Back up now";
   return (
     <div className="bk-run">
-      <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void press()}>
+      <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy} onClick={() => void press()}>
         {label}
-      </button>
+      </BusyButton>
       <Notice note={note} />
     </div>
   );
@@ -287,9 +288,9 @@ function SnapshotRow({ row, remoteConfigured, remotePrune }: SnapshotRowProps): 
         ) : (
           <span className="bk-ask" role="group" aria-label="Confirm the delete">
             <span className="bk-ask-q">{ask === "local" ? "Delete from this host?" : "Delete from the bucket?"}</span>
-            <button type="button" className="st-btn st-btn-small st-btn-danger" disabled={busy} onClick={() => void remove(ask)}>
+            <BusyButton busy={busy} className="st-btn st-btn-small st-btn-danger" disabled={busy} onClick={() => void remove(ask)}>
               Yes
-            </button>
+            </BusyButton>
             <button type="button" className="st-btn st-btn-small" disabled={busy} onClick={() => setAsk(null)}>
               No
             </button>
@@ -547,9 +548,9 @@ function SettingsForm({ backups }: StateProps): React.ReactNode {
             <button type="button" className="st-btn" disabled={busy} onClick={discard}>
               Discard
             </button>
-            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={() => void save()}>
+            <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy} onClick={() => void save()}>
               Save settings
-            </button>
+            </BusyButton>
           </div>
         </div>
       )}
@@ -624,13 +625,13 @@ function Credentials({ backups }: StateProps): React.ReactNode {
           </SettingRow>
           <div className="st-card-foot">
             {credentials === "file" ? (
-              <button type="button" className="st-btn" disabled={busy} onClick={() => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed.")}>
+              <BusyButton busy={busy} className="st-btn" disabled={busy} onClick={() => void send("/api/snapshots/credentials/clear", {}, "The saved key pair is removed.")}>
                 Remove the saved key
-              </button>
+              </BusyButton>
             ) : null}
-            <button type="button" className="st-btn st-btn-main" disabled={busy} onClick={store}>
+            <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy} onClick={store}>
               Save the key pair
-            </button>
+            </BusyButton>
           </div>
         </div>
       )}
@@ -665,9 +666,9 @@ function BucketTest(): React.ReactNode {
 
   return (
     <SettingRow label="Bucket test" help="Lists the bucket, writes one small test object and tries to delete it, then asks whether the bucket keeps old versions. A key that cannot delete leaves the test object, and the next test overwrites it. It uses the saved settings." marker={<Notice note={note} />}>
-      <button type="button" className="st-btn" disabled={busy} onClick={() => void test()}>
+      <BusyButton busy={busy} className="st-btn" disabled={busy} onClick={() => void test()}>
         {busy ? "Testing…" : "Test the bucket"}
-      </button>
+      </BusyButton>
     </SettingRow>
   );
 }
