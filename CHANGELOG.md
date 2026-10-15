@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.96.0] - 2026-10-15
+
+### Added
+
+- A closed finding can be reopened from the Findings page. The closed row says "Closed by web:altan on 12 Oct: note" and offers "Reopen" with an optional note. `POST /api/finding/reopen` has the guards of the close, and only a closed finding qualifies.
+- The history of a finding lists the closes, the reopens and the resets between the reports, dated, with who and the note. A close ended by a report of a higher severity reads "reopened by the run of <date>" with a link to the run.
+- `darius finding reopen --note TEXT` writes the note on the `finding.reopened` line.
+
+### Changed
+
+- The steps of `FindingRow.history` and of `darius finding show --json` gain `kind` (`report`, `closed`, `reopened` or `reset`), `who` and `note`. An event has no run. The history keeps the newest 10 reports and every event from the oldest of them on. `finding show` prints an event as "closed by tester: note".
+
 ## [0.95.0] - 2026-10-15
 
 ### Added

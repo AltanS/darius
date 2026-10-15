@@ -358,3 +358,84 @@ test("not lapsed: reported by the full run before the newest, or only one full r
   fixed.run("check", [{ key: "b" }]);
   assert.equal(fixed.find("check", "a").status, "fixed", "fixed stays fixed");
 });
+
+// --- close and reopen events in the history (0.96.0) -----------------------------------
+
+/** The kind, who and note of each history step, for a short assertion. */
+function stepsOf(history: readonly { kind: string; who?: string; note?: string; run: string }[]): string[] {
+  return history.map((step) => [step.kind, step.who ?? "", step.note ?? "", step.run === "" ? "-" : "run"].join("|"));
+}
+
+test("a close and a reopen are steps of the history, between the reports, with who and note", () => {
+  const seed = new Seeder("fi-events");
+  seed.run("check", [{ key: "a", severity: "medium" }]);
+  seed.close("check", "a", "known issue");
+  assert.deepEqual(stepsOf(seed.find("check", "a").history), ["report|||run", "closed|op|known issue|-"]);
+  seed.reopen("check", "a", "it was wrong");
+  seed.run("check", [{ key: "a", severity: "medium" }]);
+  const finding = seed.find("check", "a");
+  assert.deepEqual(stepsOf(finding.history), ["report|||run", "closed|op|known issue|-", "reopened|op|it was wrong|-", "report|||run"]);
+  const [report, closed, reopened] = finding.history;
+  assert.equal(closed?.severity, report?.severity, "an event keeps the severity the finding had");
+  assert.ok((closed?.at ?? "") < (reopened?.at ?? ""), "steps stay in time order");
+  assert.equal(finding.runs, 2, "an event is no report");
+});
+
+test("a reopen of a finding that is not closed adds no step", () => {
+  const seed = new Seeder("fi-events-noop");
+  seed.run("check", [{ key: "a" }]);
+  seed.reopen("check", "a");
+  assert.deepEqual(stepsOf(seed.find("check", "a").history), ["report|||run"]);
+});
+
+test("a report at a higher severity ends a close and adds a reopened step with its run and no who", () => {
+  const seed = new Seeder("fi-events-severity");
+  seed.run("check", [{ key: "a", severity: "low" }]);
+  seed.close("check", "a");
+  const worse = seed.run("check", [{ key: "a", severity: "high" }]);
+  const finding = seed.find("check", "a");
+  assert.equal(finding.reopened, true);
+  assert.deepEqual(stepsOf(finding.history), ["report|||run", "closed|op||-", "report|||run", "reopened|||run"]);
+  const last = finding.history.at(-1);
+  assert.equal(last?.run, worse);
+  assert.equal(last?.severity, "high");
+  assert.equal(last?.at, finding.lastSeen.at);
+});
+
+test("a finding first reported after a reset starts with a reset step; the newest reset of its ritual or of all counts", () => {
+  const seed = new Seeder("fi-events-reset");
+  seed.run("check", [{ key: "a" }]);
+  seed.reset("check", "start over");
+  seed.run("check", [{ key: "a" }, { key: "b" }]);
+  const a = seed.find("check", "a");
+  assert.deepEqual(stepsOf(a.history), ["reset|op|start over|-", "report|||run"]);
+  seed.reset();
+  seed.run("check", [{ key: "a" }]);
+  const again = seed.find("check", "a");
+  assert.deepEqual(stepsOf(again.history), ["reset|op||-", "report|||run"], "the second reset replaces the first");
+  assert.equal(again.history[0]?.at > a.history[0]!.at, true);
+});
+
+test("the history keeps the newest ten reports and every event from the oldest of them on", () => {
+  const seed = new Seeder("fi-events-clip");
+  seed.run("check", [{ key: "a" }]);
+  seed.close("check", "a", "too old to show");
+  seed.reopen("check", "a");
+  for (let index = 0; index < 9; index += 1) seed.run("check", [{ key: "a" }]);
+  seed.close("check", "a", "kept");
+  seed.reopen("check", "a", "kept too");
+  seed.run("check", [{ key: "a" }]);
+  const history = seed.find("check", "a").history;
+  assert.equal(history.filter((step) => step.kind === "report").length, 10, "ten reports");
+  assert.equal(history.length, 12, "ten reports and the two events after the oldest of them");
+  assert.equal(history[0]?.kind, "report", "the clip starts at a report");
+  assert.deepEqual(history.filter((step) => step.kind !== "report").map((step) => step.note), ["kept", "kept too"]);
+  const older = new Seeder("fi-events-clip-2");
+  older.run("check", [{ key: "a" }]);
+  older.close("check", "a", "old");
+  older.reopen("check", "a");
+  for (let index = 0; index < 10; index += 1) older.run("check", [{ key: "a" }]);
+  const clipped = older.find("check", "a").history;
+  assert.equal(clipped.length, 10, "events older than the oldest kept report go");
+  assert.ok(clipped.every((step) => step.kind === "report"));
+});

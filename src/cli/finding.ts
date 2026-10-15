@@ -12,8 +12,8 @@
  *   finding show <key> [--ritual SLUG] [--json]
  *   finding close <key> [--ritual SLUG] [--note TEXT] [--who NAME]
  *                  refuses a fixed or an already closed finding
- *   finding reopen <key> [--ritual SLUG] [--who NAME]
- *                  refuses a finding that is not closed
+ *   finding reopen <key> [--ritual SLUG] [--note TEXT] [--who NAME]
+ *                  refuses a finding that is not closed (--note since 0.96.0)
  *   finding reset [--ritual SLUG] [--note TEXT] [--who NAME] (0.66.0)
  *                  hides every run result that completed before now, for
  *                  one ritual or for all; prints how many findings it hid
@@ -23,7 +23,7 @@
  * usage error too. A refused close or reopen exits 1.
  */
 
-import { collectFindings, FINDING_RESET, type Finding, type FindingStatus } from "../core/finding-index.ts";
+import { collectFindings, FINDING_RESET, type Finding, type FindingStatus, type FindingStep } from "../core/finding-index.ts";
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
@@ -109,6 +109,15 @@ function lookup(findings: readonly Finding[], key: string, ritual: string | unde
 
 // --- show -------------------------------------------------------------------------
 
+/** One history step: a report names its run; an event the operator wrote names who did it and the note (0.96.0). */
+function historyLine(step: FindingStep): string {
+  const by = step.who === undefined ? "" : ` by ${step.who}`;
+  const note = step.note === undefined ? "" : `: ${step.note}`;
+  if (step.kind === "report") return `${step.at} run ${step.run}: ${step.severity} ${step.state}`;
+  if (step.kind === "reopened" && step.who === undefined) return `${step.at} reopened by run ${step.run}: ${step.severity} ${step.state}`;
+  return `${step.at} ${step.kind}${by}${note}`;
+}
+
 function describeFinding(finding: Finding): string[] {
   const lines = [findingLine(finding)];
   if (finding.auto) lines.push("  key made by darius: the run gave none");
@@ -120,7 +129,7 @@ function describeFinding(finding: Finding): string[] {
     lines.push(`  closed by ${closed.who} at ${closed.at} at severity ${closed.severity}${closed.note === undefined ? "" : `: ${closed.note}`}`);
   }
   lines.push("  history, oldest first:");
-  for (const step of finding.history) lines.push(`    ${step.at} run ${step.run}: ${step.severity} ${step.state}`);
+  for (const step of finding.history) lines.push(`    ${historyLine(step)}`);
   return lines;
 }
 
@@ -166,7 +175,7 @@ function change(args: ParsedArgs, verb: "close" | "reopen"): Change {
       item: itemRef("ritual", finding.ritual),
       key,
     };
-    if (verb === "close" && note !== undefined && note !== "") line.note = note;
+    if (note !== undefined && note !== "") line.note = note;
     appendLine(project, line);
     return { ok: true, finding };
   });

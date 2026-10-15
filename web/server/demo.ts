@@ -141,8 +141,8 @@ function finding(now: number, row: Partial<FindingRow> & Pick<FindingRow, "proje
     lastSeen: { run: last, at: ago(now, lastAgo) },
     runs: 3,
     history: [
-      { run: first, at: ago(now, firstAgo), state: "open", severity: row.severity },
-      { run: last, at: ago(now, lastAgo), state: row.state, severity: row.severity },
+      { run: first, at: ago(now, firstAgo), state: "open", severity: row.severity, kind: "report" },
+      { run: last, at: ago(now, lastAgo), state: row.state, severity: row.severity, kind: "report" },
     ],
     stale: false,
     reopened: false,
@@ -165,7 +165,7 @@ function demoFindings(now: number): FindingRow[] {
       { project: shop, ritual: "site-report", key: "promo-banner", title: "Promo banner shows last season's prices", severity: "high", state: "needs-decision", status: "needs-you", group: "home page", target: "banner 2" },
       6 * DAY,
       5 * 60 * MINUTE,
-      { reopened: true, history: [{ run: "01DEMOFIRSTpromobanner", at: ago(now, 6 * DAY), state: "open", severity: "high" }, { run: "01DEMOMIDpromobanner", at: ago(now, 4 * DAY), state: "fixed", severity: "high" }, { run: "01DEMOLASTpromobanner", at: ago(now, 5 * 60 * MINUTE), state: "needs-decision", severity: "high" }] },
+      { reopened: true, history: [{ run: "01DEMOFIRSTpromobanner", at: ago(now, 6 * DAY), state: "open", severity: "high", kind: "report" }, { run: "01DEMOMIDpromobanner", at: ago(now, 4 * DAY), state: "fixed", severity: "high", kind: "report" }, { run: "01DEMOLASTpromobanner", at: ago(now, 5 * 60 * MINUTE), state: "needs-decision", severity: "high", kind: "report" }] },
     ),
     finding(now, { project: shop, ritual: "link-check", key: "link-img-44", title: "Image link on the size guide is broken", severity: "medium", state: "open", status: "open", target: "/size-guide" }, 9 * DAY, 26 * 60 * MINUTE),
     finding(
@@ -186,7 +186,14 @@ function demoFindings(now: number): FindingRow[] {
       { project: shop, ritual: "site-report", key: "cdn-hit-rate", title: "Image CDN hit rate is low", severity: "medium", state: "open", status: "closed", group: "performance" },
       14 * DAY,
       5 * 60 * MINUTE,
-      { closed: { at: ago(now, 2 * DAY), who: "operator", note: "known, the CDN plan changes next month", severity: "medium" } },
+      {
+        closed: { at: ago(now, 2 * DAY), who: "web:altan", note: "known, the CDN plan changes next month", severity: "medium" },
+        history: [
+          { run: "01DEMOFIRSTcdnhitrate", at: ago(now, 14 * DAY), state: "open", severity: "medium", kind: "report" },
+          { run: "", at: ago(now, 2 * DAY), state: "open", severity: "medium", kind: "closed", who: "web:altan", note: "known, the CDN plan changes next month" },
+          { run: "01DEMOLASTcdnhitrate", at: ago(now, 5 * 60 * MINUTE), state: "open", severity: "medium", kind: "report" },
+        ],
+      },
     ),
     finding(now, { project: shop, ritual: "link-check", key: "footer-typo", title: "Typo in the footer", severity: "low", state: "fixed", status: "fixed", target: "footer" }, 8 * DAY, 26 * 60 * MINUTE),
     finding(now, { project: "atlas-docs", ritual: "sitemap-check", key: "sitemap-gap", title: "Sitemap misses the new install guide", severity: "high", state: "needs-code", status: "needs-you", target: "/guides/install" }, 2 * DAY, 9 * 60 * MINUTE),

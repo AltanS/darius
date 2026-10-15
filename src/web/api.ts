@@ -177,11 +177,24 @@ export interface FindingSeen {
   at: string;
 }
 
+/**
+ * What a history step is (0.96.0). `closed` and `reopened` are the operator's
+ * lines, with `who` and a `note` when given. A `reopened` step with a run and
+ * no `who` is a report at a higher severity that ended a close. `reset` opens
+ * the history of a finding first reported after a reset.
+ */
+export type FindingStepKind = "report" | "closed" | "reopened" | "reset";
+
 export interface FindingStep {
+  /** The run that reported it; "" for an event the operator wrote. */
   run: string;
   at: string;
   state: ResultItemState;
   severity: ResultSeverity;
+  kind: FindingStepKind;
+  /** Who closed, reopened or reset (an event the operator wrote). Plain text. */
+  who?: string;
+  note?: string;
 }
 
 /** One finding of a ritual, as `darius finding list --json` gives it, with the project it belongs to. Every text is untrusted plain text. */
@@ -202,7 +215,7 @@ export interface FindingRow {
   lastSeen: FindingSeen;
   /** The results that reported it. */
   runs: number;
-  /** Oldest first, the newest 10. */
+  /** Oldest first: the newest 10 reports and every event from the oldest of them on. */
   history: FindingStep[];
   stale: boolean;
   reopened: boolean;

@@ -15745,214 +15745,6 @@ function ChipRow({ label, current, children }) {
 	});
 }
 //#endregion
-//#region app/components/findings.tsx
-/**
-* The findings of the findings page (0.62.0): one row per finding, drawn with
-* the shared `Row`. Every text in a finding comes from a run, so it is
-* rendered as plain text only. A row says how bad it is, where it is, which
-* ritual reported it and since when; under it a fold holds the detail, the
-* key and the short history. A finding that waits can be closed with the
-* "Close" button and an optional note, which posts to `/api/finding/close`
-* and then reloads the page data.
-*/
-/** The state word of a finding: its own state, unless the operator closed it. */
-function stateOf(row) {
-	if (row.status === "closed") return {
-		tone: "idle",
-		label: "closed"
-	};
-	const tag = itemStateTag(row.state);
-	return {
-		tone: tag.tone ?? "idle",
-		label: tag.text
-	};
-}
-function stepText(step, offset) {
-	return `${shortDate(hostDate(step.at, offset))}, ${step.severity}, ${itemStateTag(step.state).text}`;
-}
-/** The fold under a row: the detail, the key, why it is marked, who closed it, and the history with a link to each run. */
-function Details({ row }) {
-	const { offset } = useClock();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
-		summary: "Detail and history",
-		children: [
-			row.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ritem-detail",
-				children: row.detail
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ritem-key",
-				children: `key ${row.key}${row.auto ? " (darius made this key: the run gave none)" : ""}`
-			}),
-			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ritem-key",
-				children: "Stale: the newest run of this ritual did not report it."
-			}) : null,
-			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ritem-key",
-				children: "Reopened: it came back after it was fixed or closed."
-			}) : null,
-			row.closed === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "ritem-key",
-				children: `Closed by ${row.closed.who} on ${shortDate(hostDate(row.closed.at, offset))}${row.closed.note === void 0 ? "" : `: ${row.closed.note}`}`
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-				className: "fnd-history",
-				"aria-label": "History, oldest first",
-				children: row.history.map((step) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-					to: href({
-						to: "run",
-						ws: row.project,
-						run: step.run
-					}),
-					children: stepText(step, offset)
-				}) }, `${step.run}-${step.at}`))
-			})
-		]
-	});
-}
-/** The note field and the two buttons that close a finding. */
-function CloseForm({ row, onDone }) {
-	const { revalidate } = useRevalidator();
-	const reloadSoon = useReloadSoon();
-	const id = (0, import_react.useId)();
-	const [note, setNote] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [error, setError] = (0, import_react.useState)(null);
-	const submit = async (event) => {
-		event.preventDefault();
-		setBusy(true);
-		setError(null);
-		const trimmed = note.trim();
-		const base = {
-			project: row.project,
-			ritual: row.ritual,
-			key: row.key
-		};
-		const result = await postJson("/api/finding/close", trimmed === "" ? base : {
-			...base,
-			note: trimmed
-		});
-		setBusy(false);
-		reloadSoon();
-		if (!result.ok) {
-			setError(result.error);
-			return;
-		}
-		onDone();
-		await revalidate();
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-		className: "fnd-close-form",
-		onSubmit: (event) => void submit(event),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-				className: "fu-label",
-				htmlFor: id,
-				children: "Note (optional)"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id,
-				className: "st-input",
-				type: "text",
-				maxLength: 500,
-				value: note,
-				disabled: busy,
-				onChange: (event) => setNote(event.currentTarget.value)
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "fu-acts",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "submit",
-					className: "st-btn st-btn-main",
-					disabled: busy,
-					children: busy ? "Closing…" : "Close finding"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "st-btn",
-					disabled: busy,
-					onClick: onDone,
-					children: "Cancel"
-				})]
-			}),
-			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bk-note tone-bad",
-				role: "alert",
-				children: error
-			})
-		]
-	});
-}
-function FindingItem({ row, showProject }) {
-	const { offset } = useClock();
-	const [asking, setAsking] = (0, import_react.useState)(false);
-	const canClose = row.status === "needs-you" || row.status === "open";
-	const where = [row.group, row.target].filter((part) => part !== void 0).join(" · ");
-	const state = stateOf(row);
-	const meta = [showProject ? row.project : null, `since ${shortDate(hostDate(row.firstSeen.at, offset))}`].filter((part) => part !== null);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
-		kind: "ritual",
-		title: row.title,
-		rail: row.status === "needs-you" ? "wait" : null,
-		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag: {
-				text: row.severity,
-				tone: severityTone(row.severity)
-			} }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "kind-word c-ritual",
-				children: row.ritual
-			}),
-			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
-				color: "idle",
-				children: "stale"
-			}) : null,
-			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
-				color: "late",
-				children: "reopened"
-			}) : null
-		] }),
-		state,
-		meta,
-		detail: where === "" ? void 0 : where,
-		foot: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseForm, {
-			row,
-			onDone: () => setAsking(false)
-		}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "fnd-foot",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "fnd-acts",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-					to: href({
-						to: "run",
-						ws: row.project,
-						run: row.lastSeen.run
-					}),
-					children: "last report"
-				}), canClose ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "st-btn st-btn-small",
-					"aria-expanded": asking,
-					"aria-label": `Close the finding: ${row.title}`,
-					onClick: () => setAsking(!asking),
-					children: "Close"
-				}) : null]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Details, { row })]
-		})] })
-	});
-}
-function FindingList({ rows, showProject, empty }) {
-	if (rows.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: empty });
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
-		bare: true,
-		className: "stagger",
-		children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindingItem, {
-			row,
-			showProject
-		}, `${row.project}/${row.ritual}/${row.key}`))
-	});
-}
-//#endregion
 //#region app/lib/findings.ts
 var VIEWS = [
 	{
@@ -16065,6 +15857,264 @@ function emptyText(query) {
 	if (query.project !== "" || query.ritual !== "" || query.severity !== "") return "No finding matches this filter.";
 	if (query.view === "needs-you") return "Nothing needs you.";
 	return query.view === "open" ? "No open findings." : "No findings yet.";
+}
+/** The note of an event as a tail: ": known issue", or nothing. */
+function noteTail(note) {
+	return note === void 0 || note === "" ? "" : `: ${note}`;
+}
+/**
+* One step of the history fold (0.96.0), dated on the host's calendar: a
+* report says how bad it was, an event says who did it and why. A reopen with
+* no `who` is the report of a higher severity that ended a close.
+*/
+function stepText(step, offset) {
+	const date = shortDate(hostDate(step.at, offset));
+	if (step.kind === "report") return `${date}, ${step.severity}, ${itemStateTag(step.state).text}`;
+	if (step.kind === "closed") return `${date}, closed by ${step.who ?? "someone"}${noteTail(step.note)}`;
+	if (step.kind === "reset") return `${date}, history starts after a reset by ${step.who ?? "someone"}${noteTail(step.note)}`;
+	if (step.who === void 0) return `Reopened by the run of ${date}, now ${step.severity}`;
+	return `${date}, reopened by ${step.who}${noteTail(step.note)}`;
+}
+/** Whether a step links to a run: the reports, and the reopen a report caused. */
+function stepRun(step) {
+	return step.run === "" ? null : step.run;
+}
+/** The key of a step in a list: a report and the reopen it caused share a run and a time. */
+function stepKey(step, index) {
+	return `${String(index)}-${step.kind}-${step.at}`;
+}
+/** "Closed by web:altan on 12 Oct: known issue" while a close is in force; null otherwise. */
+function closedText(row, offset) {
+	const { closed } = row;
+	if (closed === void 0) return null;
+	return `Closed by ${closed.who} on ${shortDate(hostDate(closed.at, offset))}${noteTail(closed.note)}`;
+}
+//#endregion
+//#region app/components/findings.tsx
+/**
+* The findings of the findings page (0.62.0): one row per finding, drawn with
+* the shared `Row`. Every text in a finding comes from a run, so it is
+* rendered as plain text only. A row says how bad it is, where it is, which
+* ritual reported it and since when; under it a fold holds the detail, the
+* key and the short history. A finding that waits can be closed with the
+* "Close" button and an optional note, which posts to `/api/finding/close`
+* and then reloads the page data. A closed one says who closed it and when,
+* and offers "Reopen" with an optional note (`/api/finding/reopen`, 0.96.0).
+* The history lists the closes and the reopens between the reports.
+*/
+/** The state word of a finding: its own state, unless the operator closed it. */
+function stateOf(row) {
+	if (row.status === "closed") return {
+		tone: "idle",
+		label: "closed"
+	};
+	const tag = itemStateTag(row.state);
+	return {
+		tone: tag.tone ?? "idle",
+		label: tag.text
+	};
+}
+/** The fold under a row: the detail, the key, why it is marked, and the history with a link to each run. */
+function Details({ row }) {
+	const { offset } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
+		summary: "Detail and history",
+		children: [
+			row.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-detail",
+				children: row.detail
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: `key ${row.key}${row.auto ? " (darius made this key: the run gave none)" : ""}`
+			}),
+			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: "Stale: the newest run of this ritual did not report it."
+			}) : null,
+			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ritem-key",
+				children: "Reopened: it came back after it was fixed or closed."
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "fnd-history",
+				"aria-label": "History, oldest first",
+				children: row.history.map((step, index) => {
+					const run = stepRun(step);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: run === null ? stepText(step, offset) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						to: href({
+							to: "run",
+							ws: row.project,
+							run
+						}),
+						children: stepText(step, offset)
+					}) }, stepKey(step, index));
+				})
+			})
+		]
+	});
+}
+var VERB_WORDS = {
+	close: {
+		main: "Close finding",
+		busy: "Closing…"
+	},
+	reopen: {
+		main: "Reopen finding",
+		busy: "Reopening…"
+	}
+};
+/** The note field and the two buttons that close or reopen a finding. */
+function NoteForm({ row, verb, onDone }) {
+	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
+	const id = (0, import_react.useId)();
+	const [note, setNote] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)(null);
+	const submit = async (event) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		const trimmed = note.trim();
+		const base = {
+			project: row.project,
+			ritual: row.ritual,
+			key: row.key
+		};
+		const result = await postJson(`/api/finding/${verb}`, trimmed === "" ? base : {
+			...base,
+			note: trimmed
+		});
+		setBusy(false);
+		reloadSoon();
+		if (!result.ok) {
+			setError(result.error);
+			return;
+		}
+		onDone();
+		await revalidate();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "fnd-close-form",
+		onSubmit: (event) => void submit(event),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "fu-label",
+				htmlFor: id,
+				children: "Note (optional)"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id,
+				className: "st-input",
+				type: "text",
+				maxLength: 500,
+				value: note,
+				disabled: busy,
+				onChange: (event) => setNote(event.currentTarget.value)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fu-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-main",
+					disabled: busy,
+					children: busy ? VERB_WORDS[verb].busy : VERB_WORDS[verb].main
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-btn",
+					disabled: busy,
+					onClick: onDone,
+					children: "Cancel"
+				})]
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
+	});
+}
+function FindingItem({ row, showProject }) {
+	const { offset } = useClock();
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const canClose = row.status === "needs-you" || row.status === "open";
+	const canReopen = row.status === "closed";
+	const verb = canReopen ? "reopen" : "close";
+	const closed = closedText(row, offset);
+	const where = [row.group, row.target].filter((part) => part !== void 0).join(" · ");
+	const state = stateOf(row);
+	const meta = [showProject ? row.project : null, `since ${shortDate(hostDate(row.firstSeen.at, offset))}`].filter((part) => part !== null);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+		kind: "ritual",
+		title: row.title,
+		rail: row.status === "needs-you" ? "wait" : null,
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag: {
+				text: row.severity,
+				tone: severityTone(row.severity)
+			} }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "kind-word c-ritual",
+				children: row.ritual
+			}),
+			row.stale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
+				color: "idle",
+				children: "stale"
+			}) : null,
+			row.reopened ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
+				color: "late",
+				children: "reopened"
+			}) : null
+		] }),
+		state,
+		meta,
+		detail: where === "" ? void 0 : where,
+		foot: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			closed === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fnd-closed",
+				children: closed
+			}),
+			asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NoteForm, {
+				row,
+				verb,
+				onDone: () => setAsking(false)
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fnd-foot",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "fnd-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						to: href({
+							to: "run",
+							ws: row.project,
+							run: row.lastSeen.run
+						}),
+						children: "last report"
+					}), canClose || canReopen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn st-btn-small",
+						"aria-expanded": asking,
+						"aria-label": `${canReopen ? "Reopen" : "Close"} the finding: ${row.title}`,
+						onClick: () => setAsking(!asking),
+						children: canReopen ? "Reopen" : "Close"
+					}) : null]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Details, { row })]
+			})
+		] })
+	});
+}
+function FindingList({ rows, showProject, empty }) {
+	if (rows.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: empty });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
+		bare: true,
+		className: "stagger",
+		children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindingItem, {
+			row,
+			showProject
+		}, `${row.project}/${row.ritual}/${row.key}`))
+	});
 }
 //#endregion
 //#region app/routes/findings.tsx
@@ -21309,7 +21359,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-jLTYtqKU.js",
+			"module": "/assets/root-XuYqV5qy.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21324,7 +21374,7 @@ var server_manifest_default = {
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-DfSJK2vk.css"],
+			"css": ["/assets/root-DF0URKrP.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -21610,7 +21660,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Bs431E8M.js",
+			"module": "/assets/findings-lcynj_Ct.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21646,7 +21696,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Bs431E8M.js",
+			"module": "/assets/findings-lcynj_Ct.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -22350,8 +22400,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-8a58c41e.js",
-	"version": "8a58c41e",
+	"url": "/assets/manifest-027d044e.js",
+	"version": "027d044e",
 	"sri": void 0
 };
 //#endregion

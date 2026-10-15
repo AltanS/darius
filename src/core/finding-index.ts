@@ -39,11 +39,27 @@ export interface FindingSeen {
   at: string;
 }
 
+/**
+ * What a history step is (0.96.0): a `report` of a run, or an event between
+ * the reports. `closed` and `reopened` are the operator's lines (`who`, and a
+ * `note` when given); a `reopened` step with a run and no `who` is a report at
+ * a higher severity that ended a close. `reset` opens the history of every
+ * finding that has a report after a `finding.reset`: the reports before it are
+ * hidden. It also opens the history of a finding that is new since the reset,
+ * because the hidden results are not read to tell the two apart.
+ */
+export type StepKind = "report" | "closed" | "reopened" | "reset";
+
 export interface FindingStep {
+  /** The run that reported it; "" for an event the operator wrote. */
   run: string;
   at: string;
+  /** For an event: the state and severity the finding had when it happened. */
   state: ItemState;
   severity: Severity;
+  kind: StepKind;
+  who?: string;
+  note?: string;
 }
 
 export type FindingStatus = "needs-you" | "open" | "fixed" | "closed" | "lapsed";
@@ -64,7 +80,7 @@ export interface Finding {
   lastSeen: FindingSeen;
   /** The results that reported it. */
   runs: number;
-  /** Oldest first, the newest HISTORY_MAX. */
+  /** Oldest first: the newest HISTORY_MAX reports and every event from the oldest of them on. */
   history: FindingStep[];
   stale: boolean;
   reopened: boolean;
@@ -73,7 +89,7 @@ export interface Finding {
   status: FindingStatus;
 }
 
-/** How many history steps a finding keeps. */
+/** How many report steps a finding keeps in its history; events between them come on top. */
 export const HISTORY_MAX = 10;
 
 const RITUAL_PREFIX = "ritual/";
@@ -134,12 +150,12 @@ function itemsByKey(items: readonly ResultItem[]): Map<string, { item: ResultIte
 
 function report(
   tracks: Map<string, Track>,
-  at: { ritual: string; seen: FindingSeen; order: number; isFull: boolean },
+  at: { ritual: string; seen: FindingSeen; order: number; isFull: boolean; reset: ResetMark | undefined },
   key: string,
   entry: { item: ResultItem; auto: boolean },
 ): void {
   const { item } = entry;
-  const step: FindingStep = { run: at.seen.run, at: at.seen.at, state: item.state, severity: item.severity };
+  const step: FindingStep = { run: at.seen.run, at: at.seen.at, state: item.state, severity: item.severity, kind: "report" };
   const id = trackId(at.ritual, key);
   const known = tracks.get(id);
   if (known === undefined) {
@@ -153,7 +169,7 @@ function report(
       lastOrder: at.order,
       lastFullOrder: at.isFull ? at.order : -1,
       runs: 1,
-      history: [step],
+      history: at.reset === undefined ? [step] : [resetStep(at.reset, item), step],
       everFixed: item.state === "fixed",
       fixedBefore: false,
       reopenedBySeverity: false,
@@ -162,7 +178,8 @@ function report(
   }
   known.fixedBefore = known.everFixed;
   known.everFixed ||= item.state === "fixed";
-  if (known.closed !== undefined && severityRank(item.severity) < severityRank(known.closed.severity)) {
+  const endsClose = known.closed !== undefined && severityRank(item.severity) < severityRank(known.closed.severity);
+  if (endsClose) {
     delete known.closed;
     known.reopenedBySeverity = true;
   }
@@ -173,6 +190,7 @@ function report(
   if (at.isFull) known.lastFullOrder = at.order;
   known.runs += 1;
   known.history.push(step);
+  if (endsClose) known.history.push({ ...step, kind: "reopened" });
 }
 
 /**
@@ -188,6 +206,17 @@ function statusOf(track: Track, stale: boolean, lapsed: boolean): FindingStatus 
   if (stale || track.auto) return "open";
   if (state === "needs-decision" || state === "needs-code" || severity === "critical" || severity === "high") return "needs-you";
   return "open";
+}
+
+/** The newest HISTORY_MAX report steps, and every event from the oldest of them on. */
+function clipHistory(history: readonly FindingStep[]): FindingStep[] {
+  let seen = 0;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.kind !== "report") continue;
+    seen += 1;
+    if (seen === HISTORY_MAX) return history.slice(index);
+  }
+  return [...history];
 }
 
 /**
@@ -212,7 +241,7 @@ function toFinding(track: Track, fullRuns: ReadonlyMap<string, readonly number[]
     firstSeen: track.firstSeen,
     lastSeen: track.lastSeen,
     runs: track.runs,
-    history: track.history.slice(-HISTORY_MAX),
+    history: clipHistory(track.history),
     stale,
     reopened,
     status: statusOf(track, stale, lapsed),
@@ -254,27 +283,52 @@ function operatorLine(line: LedgerLine): { ritual: string; key: string } | null 
 /** The ledger line type `darius finding reset` writes (0.66.0). */
 export const FINDING_RESET = "finding.reset";
 
-/** The time of the newest `finding.reset` per ritual slug; "" holds the newest reset of all rituals. */
-function resetTimes(ledger: readonly LedgerLine[]): Map<string, string> {
-  const times = new Map<string, string>();
+/** The newest `finding.reset`: when, by whom, and the note. */
+interface ResetMark {
+  at: string;
+  who: string;
+  note?: string;
+}
+
+/** The newest `finding.reset` per ritual slug; "" holds the newest reset of all rituals. */
+function resetMarks(ledger: readonly LedgerLine[]): Map<string, ResetMark> {
+  const marks = new Map<string, ResetMark>();
   for (const line of ledger) {
     if (line.type !== FINDING_RESET) continue;
     const ritual = isText(line.item) && line.item.startsWith(RITUAL_PREFIX) ? line.item.slice(RITUAL_PREFIX.length) : "";
-    const known = times.get(ritual);
-    if (known === undefined || line.at > known) times.set(ritual, line.at);
+    const known = marks.get(ritual);
+    if (known !== undefined && line.at <= known.at) continue;
+    const mark: ResetMark = { at: line.at, who: line.who };
+    if (isText(line.note) && line.note.trim() !== "") mark.note = line.note.trim();
+    marks.set(ritual, mark);
   }
-  return times;
+  return marks;
+}
+
+/** The reset that hides the older results of `ritual`: the newer of the one for the ritual and the one for all. */
+function resetFor(resets: ReadonlyMap<string, ResetMark>, ritual: string): ResetMark | undefined {
+  const [all, own] = [resets.get(""), resets.get(ritual)];
+  if (all === undefined || own === undefined) return all ?? own;
+  return own.at > all.at ? own : all;
 }
 
 /** True when a reset hides a result of `ritual` that completed at `at`: a reset for the ritual, or for all, came later. */
-function isHiddenByReset(resets: ReadonlyMap<string, string>, ritual: string, at: string): boolean {
-  return [resets.get(""), resets.get(ritual)].some((reset) => reset !== undefined && at < reset);
+function isHiddenByReset(resets: ReadonlyMap<string, ResetMark>, ritual: string, at: string): boolean {
+  const reset = resetFor(resets, ritual);
+  return reset !== undefined && at < reset.at;
+}
+
+/** The first step of a finding first reported after a reset. */
+function resetStep(reset: ResetMark, item: ResultItem): FindingStep {
+  const step: FindingStep = { run: "", at: reset.at, state: item.state, severity: item.severity, kind: "reset", who: reset.who };
+  if (reset.note !== undefined) step.note = reset.note;
+  return step;
 }
 
 /** The findings of every ritual of the project, worst first (see the sort rules in docs/concept.md). */
 export function collectFindings(project: Project, ledger: readonly LedgerLine[]): Finding[] {
   const followUps = followUpRuns(ledger);
-  const resets = resetTimes(ledger);
+  const resets = resetMarks(ledger);
   const tracks = new Map<string, Track>();
   const fullRuns = new Map<string, number[]>();
   ledger.forEach((line, order) => {
@@ -282,14 +336,19 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
       const target = operatorLine(line);
       const track = target === null ? undefined : tracks.get(trackId(target.ritual, target.key));
       if (track === undefined) return;
+      const note = isText(line.note) && line.note.trim() !== "" ? line.note.trim() : undefined;
+      const event: FindingStep = { run: "", at: line.at, state: track.latest.state, severity: track.latest.severity, kind: line.type === "finding.closed" ? "closed" : "reopened", who: line.who };
+      if (note !== undefined) event.note = note;
       if (line.type === "finding.reopened") {
+        if (track.closed !== undefined) track.history.push(event);
         delete track.closed;
         return;
       }
       const closed: NonNullable<Track["closed"]> = { at: line.at, who: line.who, severity: track.latest.severity };
-      if (isText(line.note) && line.note.trim() !== "") closed.note = line.note.trim();
+      if (note !== undefined) closed.note = note;
       track.closed = closed;
       track.reopenedBySeverity = false;
+      track.history.push(event);
       return;
     }
     if (line.type !== "run.completed" || !isText(line.item) || !line.item.startsWith(RITUAL_PREFIX) || !isText(line.run)) return;
@@ -300,7 +359,7 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
     const isFull = line.outcome === "complete" && !followUps.has(line.run);
     if (isFull) fullRuns.set(ritual, [...(fullRuns.get(ritual) ?? []), order]);
     const seen: FindingSeen = { run: line.run, at: line.at };
-    for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order, isFull }, key, entry);
+    for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order, isFull, reset: resetFor(resets, ritual) }, key, entry);
   });
   return [...tracks.values()].map((track) => toFinding(track, fullRuns)).toSorted(compareFindings);
 }

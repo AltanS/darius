@@ -107,6 +107,16 @@
  * and a finding that exists and is neither fixed nor closed. The key goes
  * after `--`, so a key that looks like a flag stays a key.
  *
+ * A closed finding can be reopened where it was closed (0.96.0):
+ *
+ *   POST /api/finding/reopen  body { project, ritual, key, note? }
+ *                             200 { ok: true } | { ok: false, error }
+ *
+ * It runs `darius finding reopen <key> --ritual R --project P [--note N]
+ * --who "web:<who>"` and has the guards of the close, except that only a
+ * closed finding qualifies (any other status is a 409). The note goes on the
+ * `finding.reopened` line, where the history and the Activity list show it.
+ *
  * The vigil page has one action (0.86.0; docs/concept.md, "Failure
  * reason, dispatch, one-vigil check, separate states"):
  *
@@ -152,6 +162,7 @@ export const ACTION_API_PREFIX = "/api/run/";
 export const FINDING_API_PREFIX = "/api/finding/";
 export const VIGIL_API_PREFIX = "/api/vigil/";
 const FINDING_CLOSE_PATH = `${FINDING_API_PREFIX}close`;
+const FINDING_REOPEN_PATH = `${FINDING_API_PREFIX}reopen`;
 const FOLLOW_UP_PATH = `${ACTION_API_PREFIX}follow-up`;
 const ACK_PATH = `${ACTION_API_PREFIX}ack`;
 const ACK_EARLIER_PATH = `${ACTION_API_PREFIX}ack-earlier`;
@@ -283,6 +294,9 @@ export const LOOPBACK_FOLLOW_UP = "the follow-up button needs a tailnet identity
 
 /** Why the loopback viewer cannot close a finding; the same reason as the follow-up. */
 export const LOOPBACK_CLOSE = "closing a finding needs a tailnet identity; open the page by its tailnet address";
+
+/** Why the loopback viewer cannot reopen a finding (0.96.0). */
+export const LOOPBACK_REOPEN = "reopening a finding needs a tailnet identity; open the page by its tailnet address";
 
 /** Why the loopback viewer cannot acknowledge a run; the same reason as the follow-up, and the page hides the button for it (src/web/context.ts). */
 export const LOOPBACK_ACK = "acknowledging a run needs a tailnet identity; open the page by its tailnet address";
@@ -832,7 +846,7 @@ async function acknowledgeEarlier(request: ActionRequest, viewer: ActionViewer, 
   return { status: 200, body: { ok: true, count } };
 }
 
-// --- close a finding (0.62.0) --------------------------------------------------------------
+// --- close a finding (0.62.0), reopen it (0.96.0) --------------------------------------------------------------
 
 /** The longest key the endpoint takes: a key the run gave has at most 120 characters, a key darius made from the title may have more. */
 const FINDING_KEY_MAX = 1000;
@@ -880,11 +894,12 @@ function readCloseBody(parsed: JsonValue): CloseBody {
   return { project, ritual, key, ...note };
 }
 
-/** One request under FINDING_API_PREFIX, already past the access check. */
+/** One request under FINDING_API_PREFIX, already past the access check: `close` or `reopen`. */
 export async function findingApi(request: ActionRequest, viewer: ActionViewer, deps: FindingDeps = DEFAULT_FINDING_DEPS): Promise<PushApiReply> {
-  if (request.path !== FINDING_CLOSE_PATH) return fail(404, "no such endpoint");
+  const verb = request.path === FINDING_CLOSE_PATH ? "close" : request.path === FINDING_REOPEN_PATH ? "reopen" : null;
+  if (verb === null) return fail(404, "no such endpoint");
   if (request.method !== "POST") return fail(405, "POST only");
-  if (viewer.local === true) return fail(403, LOOPBACK_CLOSE);
+  if (viewer.local === true) return fail(403, verb === "close" ? LOOPBACK_CLOSE : LOOPBACK_REOPEN);
   if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return fail(403, "the request must come from the darius page");
   if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return fail(415, "send JSON");
   if (request.body.length > MAX_BODY) return fail(413, "too large");
@@ -899,9 +914,13 @@ export async function findingApi(request: ActionRequest, viewer: ActionViewer, d
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
   const found = deps.findings(body.project).find((finding) => finding.ritual === body.ritual && finding.key === body.key);
   if (found === undefined) return fail(400, `no finding '${body.key}' in ritual '${body.ritual}' of ${body.project}`);
-  if (found.status === "fixed") return fail(409, "that finding is fixed; there is nothing to close");
-  if (found.status === "closed") return fail(409, `that finding is already closed by ${found.closed?.who ?? "someone"}`);
-  const argv = ["finding", "close", "--ritual", body.ritual, "--project", body.project];
+  if (verb === "close") {
+    if (found.status === "fixed") return fail(409, "that finding is fixed; there is nothing to close");
+    if (found.status === "closed") return fail(409, `that finding is already closed by ${found.closed?.who ?? "someone"}`);
+  } else if (found.status !== "closed") {
+    return fail(409, `that finding is not closed (status: ${found.status}); there is nothing to reopen`);
+  }
+  const argv = ["finding", verb, "--ritual", body.ritual, "--project", body.project];
   if (body.note !== undefined) argv.push("--note", body.note);
   argv.push("--who", `web:${viewer.who}`, "--json", "--", body.key);
   const answer = await deps.run(argv);

@@ -5,15 +5,18 @@
  * ritual reported it and since when; under it a fold holds the detail, the
  * key and the short history. A finding that waits can be closed with the
  * "Close" button and an optional note, which posts to `/api/finding/close`
- * and then reloads the page data.
+ * and then reloads the page data. A closed one says who closed it and when,
+ * and offers "Reopen" with an optional note (`/api/finding/reopen`, 0.96.0).
+ * The history lists the closes and the reopens between the reports.
  */
 
 import { useId, useState } from "react";
 import { Link, useRevalidator } from "react-router";
 
-import type { FindingRow, FindingStep } from "../../../src/web/api.ts";
+import type { FindingRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { hostDate, shortDate } from "../lib/format.ts";
+import { closedText, stepKey, stepRun, stepText } from "../lib/findings.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { useReloadSoon } from "../lib/reload.ts";
@@ -31,15 +34,11 @@ function stateOf(row: FindingRow): Badge {
   return { tone: tag.tone ?? "idle", label: tag.text };
 }
 
-function stepText(step: FindingStep, offset: number): string {
-  return `${shortDate(hostDate(step.at, offset))}, ${step.severity}, ${itemStateTag(step.state).text}`;
-}
-
 interface DetailsProps {
   row: FindingRow;
 }
 
-/** The fold under a row: the detail, the key, why it is marked, who closed it, and the history with a link to each run. */
+/** The fold under a row: the detail, the key, why it is marked, and the history with a link to each run. */
 function Details({ row }: DetailsProps): React.ReactNode {
   const { offset } = useClock();
   return (
@@ -48,27 +47,31 @@ function Details({ row }: DetailsProps): React.ReactNode {
       <p className="ritem-key">{`key ${row.key}${row.auto ? " (darius made this key: the run gave none)" : ""}`}</p>
       {row.stale ? <p className="ritem-key">Stale: the newest run of this ritual did not report it.</p> : null}
       {row.reopened ? <p className="ritem-key">Reopened: it came back after it was fixed or closed.</p> : null}
-      {row.closed === undefined ? null : (
-        <p className="ritem-key">{`Closed by ${row.closed.who} on ${shortDate(hostDate(row.closed.at, offset))}${row.closed.note === undefined ? "" : `: ${row.closed.note}`}`}</p>
-      )}
       <ol className="fnd-history" aria-label="History, oldest first">
-        {row.history.map((step) => (
-          <li key={`${step.run}-${step.at}`}>
-            <Link to={href({ to: "run", ws: row.project, run: step.run })}>{stepText(step, offset)}</Link>
-          </li>
-        ))}
+        {row.history.map((step, index) => {
+          const run = stepRun(step);
+          return <li key={stepKey(step, index)}>{run === null ? stepText(step, offset) : <Link to={href({ to: "run", ws: row.project, run })}>{stepText(step, offset)}</Link>}</li>;
+        })}
       </ol>
     </Fold>
   );
 }
 
-interface CloseFormProps {
+type Verb = "close" | "reopen";
+
+const VERB_WORDS = {
+  close: { main: "Close finding", busy: "Closing…" },
+  reopen: { main: "Reopen finding", busy: "Reopening…" },
+} as const satisfies Record<Verb, { main: string; busy: string }>;
+
+interface NoteFormProps {
   row: FindingRow;
+  verb: Verb;
   onDone: () => void;
 }
 
-/** The note field and the two buttons that close a finding. */
-function CloseForm({ row, onDone }: CloseFormProps): React.ReactNode {
+/** The note field and the two buttons that close or reopen a finding. */
+function NoteForm({ row, verb, onDone }: NoteFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
   const reloadSoon = useReloadSoon();
   const id = useId();
@@ -82,7 +85,7 @@ function CloseForm({ row, onDone }: CloseFormProps): React.ReactNode {
     setError(null);
     const trimmed = note.trim();
     const base = { project: row.project, ritual: row.ritual, key: row.key };
-    const result = await postJson("/api/finding/close", trimmed === "" ? base : { ...base, note: trimmed });
+    const result = await postJson(`/api/finding/${verb}`, trimmed === "" ? base : { ...base, note: trimmed });
     setBusy(false);
     reloadSoon();
     if (!result.ok) {
@@ -101,7 +104,7 @@ function CloseForm({ row, onDone }: CloseFormProps): React.ReactNode {
       <input id={id} className="st-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
       <div className="fu-acts">
         <button type="submit" className="st-btn st-btn-main" disabled={busy}>
-          {busy ? "Closing…" : "Close finding"}
+          {busy ? VERB_WORDS[verb].busy : VERB_WORDS[verb].main}
         </button>
         <button type="button" className="st-btn" disabled={busy} onClick={onDone}>
           Cancel
@@ -125,6 +128,9 @@ function FindingItem({ row, showProject }: FindingItemProps): React.ReactNode {
   const { offset } = useClock();
   const [asking, setAsking] = useState(false);
   const canClose = row.status === "needs-you" || row.status === "open";
+  const canReopen = row.status === "closed";
+  const verb: Verb = canReopen ? "reopen" : "close";
+  const closed = closedText(row, offset);
   const where = [row.group, row.target].filter((part) => part !== undefined).join(" · ");
   const state = stateOf(row);
   const meta = [showProject ? row.project : null, `since ${shortDate(hostDate(row.firstSeen.at, offset))}`].filter((part) => part !== null);
@@ -146,13 +152,14 @@ function FindingItem({ row, showProject }: FindingItemProps): React.ReactNode {
       detail={where === "" ? undefined : where}
       foot={
         <>
-          {asking ? <CloseForm row={row} onDone={() => setAsking(false)} /> : null}
+          {closed === null ? null : <p className="fnd-closed">{closed}</p>}
+          {asking ? <NoteForm row={row} verb={verb} onDone={() => setAsking(false)} /> : null}
           <div className="fnd-foot">
             <span className="fnd-acts">
               <Link to={href({ to: "run", ws: row.project, run: row.lastSeen.run })}>last report</Link>
-              {canClose ? (
-                <button type="button" className="st-btn st-btn-small" aria-expanded={asking} aria-label={`Close the finding: ${row.title}`} onClick={() => setAsking(!asking)}>
-                  Close
+              {canClose || canReopen ? (
+                <button type="button" className="st-btn st-btn-small" aria-expanded={asking} aria-label={`${canReopen ? "Reopen" : "Close"} the finding: ${row.title}`} onClick={() => setAsking(!asking)}>
+                  {canReopen ? "Reopen" : "Close"}
                 </button>
               ) : null}
             </span>

@@ -796,6 +796,16 @@
     padding: 12px 0;
   }
 
+  /* Who closed a finding, and when: one quiet line above the actions of a closed row. */
+
+  .fnd-closed {
+    margin: 2px 0 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-muted);
+    overflow-wrap: anywhere;
+  }
+
   .fnd-history {
     display: grid;
     gap: 0;

@@ -11,8 +11,10 @@
  * never shows an empty page for a typo.
  */
 
-import type { FindingRow, ResultSeverity } from "../../../src/web/api.ts";
+import type { FindingRow, FindingStep, ResultSeverity } from "../../../src/web/api.ts";
+import { hostDate, shortDate } from "./format.ts";
 import { href } from "./paths.ts";
+import { itemStateTag } from "./result.ts";
 
 export type FindingView = "needs-you" | "open" | "all";
 
@@ -122,4 +124,40 @@ export function emptyText(query: FindingQuery): string {
   if (narrowed) return "No finding matches this filter.";
   if (query.view === "needs-you") return "Nothing needs you.";
   return query.view === "open" ? "No open findings." : "No findings yet.";
+}
+
+/** The note of an event as a tail: ": known issue", or nothing. */
+function noteTail(note: string | undefined): string {
+  return note === undefined || note === "" ? "" : `: ${note}`;
+}
+
+/**
+ * One step of the history fold (0.96.0), dated on the host's calendar: a
+ * report says how bad it was, an event says who did it and why. A reopen with
+ * no `who` is the report of a higher severity that ended a close.
+ */
+export function stepText(step: FindingStep, offset: number): string {
+  const date = shortDate(hostDate(step.at, offset));
+  if (step.kind === "report") return `${date}, ${step.severity}, ${itemStateTag(step.state).text}`;
+  if (step.kind === "closed") return `${date}, closed by ${step.who ?? "someone"}${noteTail(step.note)}`;
+  if (step.kind === "reset") return `${date}, history starts after a reset by ${step.who ?? "someone"}${noteTail(step.note)}`;
+  if (step.who === undefined) return `Reopened by the run of ${date}, now ${step.severity}`;
+  return `${date}, reopened by ${step.who}${noteTail(step.note)}`;
+}
+
+/** Whether a step links to a run: the reports, and the reopen a report caused. */
+export function stepRun(step: FindingStep): string | null {
+  return step.run === "" ? null : step.run;
+}
+
+/** The key of a step in a list: a report and the reopen it caused share a run and a time. */
+export function stepKey(step: FindingStep, index: number): string {
+  return `${String(index)}-${step.kind}-${step.at}`;
+}
+
+/** "Closed by web:altan on 12 Oct: known issue" while a close is in force; null otherwise. */
+export function closedText(row: Pick<FindingRow, "closed">, offset: number): string | null {
+  const { closed } = row;
+  if (closed === undefined) return null;
+  return `Closed by ${closed.who} on ${shortDate(hostDate(closed.at, offset))}${noteTail(closed.note)}`;
 }

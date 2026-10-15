@@ -70,9 +70,10 @@ export class Seeder {
   }
 
   /** A `finding.reset` line (0.66.0): for one ritual, or for all without one. */
-  reset(ritual?: string): void {
+  reset(ritual?: string, note?: string): void {
     const line: LedgerLineInput = { who: "op", type: "finding.reset", at: this.at() };
     if (ritual !== undefined) line.item = `ritual/${ritual}`;
+    if (note !== undefined) line.note = note;
     appendLine(this.project, line);
   }
 
@@ -81,8 +82,10 @@ export class Seeder {
     return this.at();
   }
 
-  reopen(ritual: string, key: string): void {
-    appendLine(this.project, { who: "op", type: "finding.reopened", item: `ritual/${ritual}`, key, at: this.at() });
+  reopen(ritual: string, key: string, note?: string): void {
+    const line: LedgerLineInput = { who: "op", type: "finding.reopened", item: `ritual/${ritual}`, key, at: this.at() };
+    if (note !== undefined) line.note = note;
+    appendLine(this.project, line);
   }
 
   findings(): Finding[] {

@@ -202,3 +202,27 @@ test("finding list: a lapsed finding shows only under --all, marked lapsed", asy
   assert.equal((await finding("fc-lapsed", ["list", "--open"])).stdout.includes("{banner-3}"), false);
   assert.match((await finding("fc-lapsed", ["list", "--all"])).stdout, /^lapsed medium open: Old banner \{banner-3\} stale since/mu);
 });
+
+test("finding reopen --note writes the note on the line; show lists the close and the reopen in the history (0.96.0)", async () => {
+  const seed = seeded("fc-reopen-note");
+  await finding("fc-reopen-note", ["close", "banner-3", "--note", "tracked elsewhere", "--who", "tester"]);
+  const reopened = await finding("fc-reopen-note", ["reopen", "banner-3", "--note", "it is back", "--who", "tester2"]);
+  assert.equal(reopened.code, 0);
+  const lines = readLedger(seed.project).filter((line) => line.type === "finding.reopened");
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0]?.note, "it is back");
+  assert.equal(lines[0]?.who, "tester2");
+  const noNote = await finding("fc-reopen-note", ["close", "banner-3"]);
+  assert.equal(noNote.code, 0);
+  await finding("fc-reopen-note", ["reopen", "banner-3"]);
+  assert.equal(readLedger(seed.project).findLast((line) => line.type === "finding.reopened")?.note, undefined, "no note, no field");
+  const shown = (await finding("fc-reopen-note", ["show", "banner-3"])).stdout;
+  assert.match(shown, /^ {4}\S+ closed by tester: tracked elsewhere$/mu);
+  assert.match(shown, /^ {4}\S+ reopened by tester2: it is back$/mu);
+  assert.match(shown, /^ {4}\S+ run RUN\d+: medium open$/mu, "a report still names its run");
+  const json = JSON.parse((await finding("fc-reopen-note", ["show", "banner-3", "--json"])).stdout);
+  assert.deepEqual(
+    json.finding.history.map((step: { kind: string }) => step.kind),
+    ["report", "closed", "reopened", "closed", "reopened"],
+  );
+});

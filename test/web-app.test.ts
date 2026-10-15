@@ -142,8 +142,8 @@ function finding(key: string, extra: Partial<FindingRow>): FindingRow {
     lastSeen: { run: DONE, at: "2026-09-28T08:00:00.000Z" },
     runs: 2,
     history: [
-      { run: DONE, at: "2026-09-26T08:00:00.000Z", state: "open", severity: "medium" },
-      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "open", severity: "medium" },
+      { run: DONE, at: "2026-09-26T08:00:00.000Z", state: "open", severity: "medium", kind: "report" },
+      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "open", severity: "medium", kind: "report" },
     ],
     stale: false,
     reopened: false,
@@ -153,11 +153,28 @@ function finding(key: string, extra: Partial<FindingRow>): FindingRow {
 }
 
 const FINDINGS: FindingRow[] = [
-  finding("link-12", { title: `Broken ${EVIL} link`, severity: "high", state: "needs-code", status: "needs-you", group: "site-a", target: "page 12", detail: `Seen twice ${EVIL}`, reopened: true }),
+  finding("link-12", { title: `Broken ${EVIL} link`, severity: "high", state: "needs-code", status: "needs-you", group: "site-a", target: "page 12", detail: `Seen twice ${EVIL}`,
+    reopened: true,
+    history: [
+      { run: DONE, at: "2026-09-26T08:00:00.000Z", state: "open", severity: "medium", kind: "report" },
+      { run: "", at: "2026-09-27T08:00:00.000Z", state: "open", severity: "medium", kind: "closed", who: "web:op" },
+      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "needs-code", severity: "high", kind: "report" },
+      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "needs-code", severity: "high", kind: "reopened" },
+    ],
+  }),
   finding("tax-1", { title: "Tax rate missing", severity: "critical", state: "needs-decision", status: "needs-you" }),
   finding("banner-3", { title: "Old banner", severity: "medium" }),
   finding("feed-9", { title: "Old feed", severity: "low", stale: true }),
-  finding("shut-1", { title: "Shut thing", status: "closed", closed: { at: "2026-09-27T08:00:00.000Z", who: "op", note: "known", severity: "medium" } }),
+  finding("shut-1", {
+    title: "Shut thing",
+    status: "closed",
+    closed: { at: "2026-09-27T08:00:00.000Z", who: "web:op", note: "known", severity: "medium" },
+    history: [
+      { run: DONE, at: "2026-09-26T08:00:00.000Z", state: "open", severity: "medium", kind: "report" },
+      { run: "", at: "2026-09-27T08:00:00.000Z", state: "open", severity: "medium", kind: "closed", who: "web:op", note: "known" },
+      { run: HELD, at: "2026-09-28T08:00:00.000Z", state: "open", severity: "medium", kind: "report" },
+    ],
+  }),
   finding("done-1", { title: "Done thing", state: "fixed", status: "fixed" }),
 ];
 
@@ -368,6 +385,7 @@ function assertScriptsCarryNonce(body: string, path: string): void {
 const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/all", ["Two things need you.", "Needs you", `darius run answer ${HELD} 1 &quot;your answer&quot; --project demo`, `darius run answer ${HELD} 2`, "Guard soak", "seen by", "owner on phone", "testhost"]],
   ["/findings", ["Findings", "Findings that need you of every project, worst first.", "needs you (2)", "open (4)", "all (6)", "Broken &lt;script&gt;alert(1)&lt;/script&gt; link", "Tax rate missing", "needs code", "reopened", `/w/demo/runs/${DONE}`, "Detail and history", "Close"]],
+  ["/findings?view=all", ["Closed by web:op on 27 Sep: known", "Reopen the finding: Shut thing", "27 Sep, closed by web:op: known", "27 Sep, closed by web:op<", "Reopened by the run of 28 Sep, now high"]],
   ["/w/demo/findings", ["Findings", "Findings that need you in demo, worst first.", "Tax rate missing"]],
   ["/runs", ["Runs", `/w/demo/runs/${DONE}`, `/w/demo/runs/${FAILED}`, "Failed", "Complete"]],
   ["/w/demo/runs?state=failed", [`/w/demo/runs/${FAILED}`]],
@@ -1996,7 +2014,9 @@ test("the findings page: the view, project, ritual and severity filters, closed 
   const all = await get("/findings?view=all");
   assert.ok(all.body.includes("Shut thing") && all.body.includes("Done thing"));
   assert.equal(count(all.body), 4, "no Close button on a closed or a fixed finding");
-  assert.ok(all.body.includes("Closed by op"), "the fold says who closed it");
+  assert.ok(all.body.includes("Closed by web:op on 27 Sep: known"), "the row says who closed it, and when");
+  assert.equal(all.body.split("Reopen the finding: ").length - 1, 1, "a Reopen button on the closed finding only");
+  assert.equal(needs.body.includes("Reopen the finding"), false);
   const severe = await get("/findings?view=open&severity=critical");
   assert.ok(severe.body.includes("Tax rate missing") && !severe.body.includes("Old banner"));
   const none = await get("/w/demo/findings?ritual=nothing");
