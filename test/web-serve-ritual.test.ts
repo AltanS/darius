@@ -116,7 +116,7 @@ test("History puts the follow-up under its parent and says who started it and wh
 test("a ritual with no activity draws no Activity section, and ?days= falls back to 30", async () => {
   await cli(ritualCommand, ["add", "quiet", "--title", "Quiet", "--cadence", "1d"]);
   const body = text(await page("/w/darius-selftest/rituals/quiet?days=banana"));
-  assert.equal(body.includes("Activity"), false);
+  assert.equal(body.includes("Activity Today"), false, "no Activity section; the sidebar row of the same name is not one");
   assert.equal(body.includes("Last decision"), false);
   assert.equal(body.includes("Starting"), false);
 });
@@ -170,5 +170,5 @@ test("Last decision and the History notes read past the 30 day window", async ()
   appendLine(project, { who: "web:altan", type: "run.acknowledged", item: "ritual/slow", run: ulid(), note: "decided long ago", at: new Date(Date.now() - 50 * DAY_MS).toISOString() });
   const body = text(await page("/w/darius-selftest/rituals/slow"));
   assert.match(body, /Last decision: Noted by web:altan at \d\d:\d\d: decided long ago/u);
-  assert.equal(body.includes("Activity"), false, "the timeline keeps its 30 day window");
+  assert.equal(body.includes("Activity Today"), false, "the timeline keeps its 30 day window");
 });

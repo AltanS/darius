@@ -28,6 +28,9 @@ const CASES: { target: Target; place: Place }[] = [
   { target: { to: "section", ws: null, section: "findings", query: { view: "all" } }, place: { scope: null, kind: "section", section: "findings" } },
   { target: { to: "section", ws: null, section: "milestones" }, place: { scope: null, kind: "section", section: "milestones" } },
   { target: { to: "section", ws: null, section: "runs", query: { state: "failed" } }, place: { scope: null, kind: "section", section: "runs" } },
+  { target: { to: "section", ws: null, section: "activity" }, place: { scope: null, kind: "section", section: "activity" } },
+  { target: { to: "section", ws: "demo", section: "activity", query: { days: "30", by: "web" } }, place: { scope: "demo", kind: "section", section: "activity" } },
+  { target: { to: "section", ws: SPACED, section: "activity" }, place: { scope: SPACED, kind: "section", section: "activity" } },
   { target: { to: "section", ws: "demo", section: "vigils" }, place: { scope: "demo", kind: "section", section: "vigils" } },
   { target: { to: "section", ws: "demo", section: "runs", query: { imported: "1" } }, place: { scope: "demo", kind: "section", section: "runs" } },
   { target: { to: "section", ws: "demo", section: "findings", query: { view: "open", ritual: "daily report" } }, place: { scope: "demo", kind: "section", section: "findings" } },
@@ -85,6 +88,61 @@ test("an unknown filter value or key is ignored, so an old or hand-made link sho
   assert.deepEqual(filter, paths.ANY_RUNS);
   assert.deepEqual(paths.runsQuery(filter), {});
   assert.equal(paths.runsFilterOf(new URLSearchParams("kind=FOLLOW-UP")).kind, "", "the words are exact");
+});
+
+const ACTIVITY_FILTERS: Array<[string, Partial<ReturnType<typeof paths.activityFilterOf>>]> = [
+  ["", {}],
+  ["days=30", { days: 30 }],
+  ["days=90&by=timer", { days: 90, by: "timer" }],
+  ["kind=run-held", { kind: "run-held" }],
+  ["kind=vigil-swept&by=web&days=30", { kind: "vigil-swept", by: "web", days: 30 }],
+  ["by=run", { by: "run" }],
+];
+
+test("the Activity filters parse and round-trip through the query: kind, by, days", () => {
+  for (const [query, part] of ACTIVITY_FILTERS) {
+    const filter = paths.activityFilterOf(new URLSearchParams(query));
+    assert.deepEqual(filter, { ...paths.ANY_ACTIVITY, ...part }, query);
+    const rebuilt = paths.activityQuery(filter);
+    assert.deepEqual(paths.activityFilterOf(new URLSearchParams(rebuilt)), filter, `${query} survives a round trip`);
+    assert.deepEqual([...new URLSearchParams(rebuilt).keys()].toSorted(), [...new URLSearchParams(query).keys()].toSorted(), `${query}: the query holds only what differs from the plain list`);
+    const address = paths.href({ to: "section", ws: "demo", section: "activity", query: rebuilt });
+    assert.deepEqual(paths.placeOf(pathnameOf(address)), { scope: "demo", kind: "section", section: "activity" }, address);
+  }
+  assert.equal(paths.href({ to: "section", ws: null, section: "activity", query: paths.activityQuery(paths.ANY_ACTIVITY) }), "/activity", "the plain page has no query");
+  assert.equal(paths.href({ to: "section", ws: "demo", section: "activity" }), "/w/demo/activity");
+});
+
+test("an unknown Activity value falls back to the plain page; kind=all is any kind", () => {
+  for (const query of ["kind=nonsense&by=robot&days=45", "days=0&kind=RUN-HELD", "days=7.0&by=", "kind=all", "days=banana"]) {
+    assert.deepEqual(paths.activityFilterOf(new URLSearchParams(query)), paths.ANY_ACTIVITY, query);
+  }
+  assert.equal(paths.activityFilterOf(new URLSearchParams("days=7")).days, 7);
+});
+
+test("ACTIVITY_KINDS lists every kind of the ActivityKind type, and only those", () => {
+  const api = readFileSync(fileURLToPath(new URL("../src/web/api.ts", import.meta.url)), "utf8");
+  const union = /export type ActivityKind =([^;]*);/u.exec(api)?.[1] ?? "";
+  const declared = [...union.matchAll(/"([a-z-]+)"/gu)].map((match) => match[1]);
+  assert.ok(declared.length >= 20, "the union was found");
+  assert.deepEqual([...paths.ACTIVITY_KINDS].toSorted(), declared.toSorted());
+});
+
+test("crumbsOf() and litSection() know Activity: scope, section, no tab", () => {
+  const all = paths.placeOf("/activity");
+  assert.deepEqual(paths.crumbsOf(all), [
+    { label: "All workspaces", href: "/all" },
+    { label: "Activity", href: null },
+  ]);
+  const one = paths.placeOf("/w/demo/activity");
+  assert.deepEqual(paths.crumbsOf(one), [
+    { label: "demo", href: "/w/demo" },
+    { label: "Activity", href: null },
+  ]);
+  assert.equal(paths.litSection(one), "activity");
+  assert.equal(paths.href(paths.switchTarget(one, "other")), "/w/other/activity", "the place stays when the scope changes");
+  assert.equal(paths.href(paths.switchTarget(all, "demo")), "/w/demo/activity");
+  assert.deepEqual(paths.placeOf("/w/demo/activity/x"), { scope: "demo", kind: "unknown", section: null });
 });
 
 test("href() encodes names, and keeps a query and a hash apart from the path", () => {

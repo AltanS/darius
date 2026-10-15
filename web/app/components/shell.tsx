@@ -99,7 +99,8 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   const scope = effectiveScope(place, data.lastScope);
   const host = place.kind === "host";
   const section = sectionOf(place, runKind);
-  const tabLit = section === "runs" ? null : section;
+  // Runs and Activity are places, not tabs: they light a Places row and no tab.
+  const tabLit = section === "runs" || section === "activity" ? null : section;
   const lit: LitRow | null = host ? hostRowOf(location.pathname) : place.kind === "overview" ? "overview" : section;
   const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
   // Remember the scope you are in, for the host pages and the error pages. A path with no scope (a 404) says nothing.

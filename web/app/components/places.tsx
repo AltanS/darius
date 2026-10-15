@@ -3,7 +3,7 @@
  * desktop and the drawer of a phone (the shell opens it with a
  * `<details data-menu>`; the drawer is closed by a press outside, Escape or a
  * link). The tree: All workspaces; each workspace with what needs you there;
- * the scope you are in, expanded to its six places; the host pages; and a
+ * the scope you are in, expanded to its seven places; the host pages; and a
  * small host line at the end. At most one row is lit, and the row of the
  * scope you are in carries a check mark.
  */
@@ -37,8 +37,9 @@ export const TAB_SECTIONS: readonly SectionSpec[] = [
   { section: "milestones", label: "Milestones", badge: NO_BADGE },
 ];
 
-/** The six places of a scope: Overview comes first, Runs last (it is not a tab). */
+/** The seven places of a scope: Overview comes first, Runs and Activity last (they are not tabs). */
 const RUNS: SectionSpec = { section: "runs", label: "Runs", badge: NO_BADGE };
+const ACTIVITY: SectionSpec = { section: "activity", label: "Activity", badge: NO_BADGE };
 
 /** The row of a page that is lit in Places: the Overview, a section, or a host page. */
 export type LitRow = "overview" | Section | "status" | "profiles" | "settings";
@@ -52,6 +53,7 @@ export function SectionIcon({ section, size }: SectionIconProps): React.ReactNod
   if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
   if (section === "findings") return <NavIcon name="finding" size={size} className="tab-ico" />;
   if (section === "runs") return <NavIcon name="run" size={size} className="tab-ico" />;
+  if (section === "activity") return <NavIcon name="activity" size={size} className="tab-ico" />;
   return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;
 }
 
@@ -176,7 +178,7 @@ function ScopePlaces({ scope, tabs, lit }: { scope: string | null; tabs: TabCoun
   return (
     <ul className="places-sub">
       <Leaf to={href({ to: "overview", ws: scope })} label="Overview" icon={<NavIcon name="overview" size={18} className="places-ico tab-ico" />} lit={lit === "overview"} />
-      {[...TAB_SECTIONS, RUNS].map(({ section, label, badge }) => (
+      {[...TAB_SECTIONS, RUNS, ACTIVITY].map(({ section, label, badge }) => (
         <Leaf key={section} to={href({ to: "section", ws: scope, section })} label={label} icon={<SectionIcon section={section} size={18} />} lit={lit === section} badge={<TabBadge {...badge(tabs)} />} />
       ))}
     </ul>

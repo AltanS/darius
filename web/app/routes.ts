@@ -14,6 +14,9 @@ export default [
   route("w/:ws/findings", "routes/findings.tsx", { id: "findings-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
+  // The seventh place (0.94.0): what happened, for all workspaces and for one. The query holds kind, by and days.
+  route("activity", "routes/activity.tsx", { id: "activity-all" }),
+  route("w/:ws/activity", "routes/activity.tsx", { id: "activity-workspace" }),
   // The runs of one workspace, and the detail pages of a workspace: a ritual, a vigil, a run, a milestone (README, spec texts, worklogs).
   route("w/:ws/runs", "routes/runs.tsx", { id: "runs-workspace" }),
   route("w/:ws/rituals/:slug", "routes/ritual.tsx"),

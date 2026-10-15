@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.94.0] - 2026-10-15
+
+### Added
+
+- Activity, the seventh place of a scope: `/w/<workspace>/activity` and `/activity` list the events of rituals, vigils and findings by day, newest first. Each entry starts with the kind word and the title of its item. Starts that show no run sit on top as "Starting".
+- The Activity filters live in the query: `kind=<activity kind>`, `by=web|timer|cli|run` and `days=7|30|90`. The window is 7 days and "Show older" widens it. The all-workspaces page shows the newest 500 entries and says so.
+- Places lists Activity after Runs in the sidebar and the drawer. The phone bar keeps its five tabs.
+
 ## [0.93.0] - 2026-10-15
 
 ### Added

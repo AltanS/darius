@@ -5,9 +5,11 @@
  * source for hand-built links.
  */
 
-export type Section = "vigils" | "rituals" | "findings" | "milestones" | "runs";
+import type { ActivityKind } from "../../../src/web/api.ts";
 
-const SECTIONS: readonly Section[] = ["vigils", "rituals", "findings", "milestones", "runs"];
+export type Section = "vigils" | "rituals" | "findings" | "milestones" | "runs" | "activity";
+
+const SECTIONS: readonly Section[] = ["vigils", "rituals", "findings", "milestones", "runs", "activity"];
 
 // --- the filters of the Runs list (0.93.0) ----------------------------------------------------
 
@@ -55,6 +57,69 @@ export function runsQuery(filter: RunsFilter) {
     ["by", filter.by],
     ["ack", filter.ack],
     ["imported", filter.imported ? "1" : ""],
+  ];
+  return Object.fromEntries(entries.filter(([, value]) => value !== ""));
+}
+
+// --- the filters of the Activity place (0.94.0) -----------------------------------------------
+
+/**
+ * The kinds of an activity entry, as `ActivityKind` lists them. The type exists only at build time, so the
+ * page keeps this list to validate `?kind=`. `satisfies` makes a word that is not a kind a type error; the
+ * test in test/web-paths.test.ts makes a kind missing from the list a test failure.
+ */
+export const ACTIVITY_KINDS = [
+  "run-started",
+  "follow-up-started",
+  "run-held",
+  "run-answered",
+  "run-resumed",
+  "run-completed",
+  "run-failed",
+  "ack-answered",
+  "ack-dismissed",
+  "ack-note",
+  "ack-follow-up",
+  "vigil-swept",
+  "vigil-paused",
+  "vigil-resumed",
+  "vigil-closed",
+  "finding-closed",
+  "finding-reopened",
+  "finding-reset",
+  "ritual-lifecycle",
+  "ritual-rescheduled",
+  "start-requested",
+  "start-refused",
+  "start-lost",
+] as const satisfies readonly ActivityKind[];
+/** Who acted, as the filter offers it: the web, the timer, the CLI, or a run. A system entry (an import) has no chip. */
+export const ACTIVITY_ACTORS = ["web", "timer", "cli", "run"] as const;
+/** The windows of the Activity place, in days. The first is the default; "Show older" goes to the next. */
+export const ACTIVITY_DAYS = [7, 30, 90] as const;
+
+/** The query of the Activity place. An empty `kind` or `by` means "any". */
+export interface ActivityFilter {
+  kind: (typeof ACTIVITY_KINDS)[number] | "";
+  by: (typeof ACTIVITY_ACTORS)[number] | "";
+  days: (typeof ACTIVITY_DAYS)[number];
+}
+
+/** The filter that lists the last week of everything. */
+export const ANY_ACTIVITY: ActivityFilter = { kind: "", by: "", days: ACTIVITY_DAYS[0] };
+
+/** The filter a query names. `kind=all` and any value that is not one of the words give "any", so a hand-made link shows the plain list. */
+export function activityFilterOf(params: { get(name: string): string | null }): ActivityFilter {
+  const days = ACTIVITY_DAYS.find((candidate) => String(candidate) === params.get("days"));
+  return { kind: oneOf(ACTIVITY_KINDS, params.get("kind")), by: oneOf(ACTIVITY_ACTORS, params.get("by")), days: days ?? ACTIVITY_DAYS[0] };
+}
+
+/** The query of a filter: only what narrows or widens the plain list. `activityFilterOf` reads it back. */
+export function activityQuery(filter: ActivityFilter) {
+  const entries: Array<[string, string]> = [
+    ["kind", filter.kind],
+    ["by", filter.by],
+    ["days", filter.days === ACTIVITY_DAYS[0] ? "" : String(filter.days)],
   ];
   return Object.fromEntries(entries.filter(([, value]) => value !== ""));
 }
@@ -171,6 +236,7 @@ const SECTION_LABELS = {
   findings: "Findings",
   milestones: "Milestones",
   runs: "Runs",
+  activity: "Activity",
 } satisfies Record<Section, string>;
 
 /** One step of the trail above a page. The last step is the current page and has no `href`. */

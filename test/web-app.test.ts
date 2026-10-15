@@ -1749,12 +1749,12 @@ test("both navs are in the HTML: the tab bar for a phone and Places for a deskto
   assert.ok(places.indexOf('class="places-foot"') > places.indexOf("This host"), "after the host pages");
 });
 
-test("Places lists All workspaces and each workspace with what needs you; the scope is expanded to its six places, one lit", async () => {
+test("Places lists All workspaces and each workspace with what needs you; the scope is expanded to its seven places, one lit", async () => {
   const status = threeWorkspaces();
   const { body } = await readWith("/w/demo/rituals", {}, status);
   const places = navOf(body, "Places");
   const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Milestones", "Runs", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Milestones", "Runs", "Activity", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
   assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
   assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
   assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
