@@ -70,6 +70,7 @@ import { rebuildIndex } from "./tracker-writer.ts";
 import { CURRENT_SCHEMA_VERSION } from "./version.ts";
 import { discoverAgents } from "./agent-discovery.ts";
 import { hasUnhashedStamp } from "./counsel-stamp.ts";
+import { expandBareSpecNumber } from "./dep-ref.ts";
 import { repoStylePath, resolveTreeRef } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
@@ -139,16 +140,14 @@ export function runDoctor(opts: {
     }
   }
 
-  // 0. Inline sequence syntax — `key: [a, b]` is the one YAML shape the
-  // strict frontmatter parser rejects outright (block form only), and it's
-  // the single most likely way a hand-written `depends_on:` breaks: the
-  // parser throws, and — before this check existed — that throw either
-  // surfaced as an opaque generic schema-error or (in the dangling-dep and
-  // agent-roster passes below) crashed `tracker doctor` entirely. Detect it
-  // explicitly, with a rewrite `--fix` can apply automatically, and track
-  // which files it covers so the generic schema-error pass below doesn't
-  // also report the exact same root cause a second time.
+  // 0. Inline sequence syntax — `key: [a, b]`. Since 0.100.0 the frontmatter
+  // parser reads a flat list of plain and quoted scalars, so it is a warning
+  // only; `--fix` rewrites it to block form, the form the tracker writes. A
+  // nested `[` or `{`, or a missing `]`, still cannot be read: that is a
+  // finding, and the file is tracked so the generic schema-error pass below
+  // doesn't report the same root cause a second time.
   const inlineSequenceFiles = new Set<string>();
+  const inlineSequenceWarnings: DoctorFinding[] = [];
   for (const folder of milestoneFolders) {
     const filesToScan = [join(folder, "00-README.md"), ...getSpecFiles(folder)].filter(
       existsSync,
@@ -165,15 +164,28 @@ export function runDoctor(opts: {
         continue;
       }
 
-      inlineSequenceFiles.add(filePath);
       for (const issue of issues) {
+        if (issue.unsupported !== undefined) {
+          // Nested flow collections cannot be read, so the file is broken.
+          inlineSequenceFiles.add(filePath);
+          findings.push({
+            kind: "inline-sequence",
+            file: filePath,
+            detail:
+              `${issue.key}: ${issue.raw} (line ${issue.line}): ${issue.unsupported}. ` +
+              `Write the list in block form: one "  - item" line per entry under "${issue.key}:".`,
+          });
+          continue;
+        }
+        // A flat list reads fine. Block form is the form the tracker writes.
         const blockForm = issue.items.map((item) => `      - ${item}`).join("\n");
-        findings.push({
+        inlineSequenceWarnings.push({
           kind: "inline-sequence",
           file: filePath,
+          warnOnly: true,
           detail:
-            `${issue.key}: ${issue.raw} (line ${issue.line}) uses inline sequence syntax — ` +
-            `the tracker's YAML parser only supports block form. Rewrite as:\n` +
+            `${issue.key}: ${issue.raw} (line ${issue.line}) is an inline list. It is read, ` +
+            `but the tracker writes block form. \`doctor --fix\` rewrites it as:\n` +
             `    ${issue.key}:\n${blockForm}`,
         });
       }
@@ -266,8 +278,9 @@ export function runDoctor(opts: {
         depsOn = data["depends_on"] as string[];
       }
 
+      const siblingFiles = specs.map((spec) => basename(spec));
       for (const dep of depsOn) {
-        const depNorm = dep.replace(/^\.\//, "");
+        const depNorm = expandBareSpecNumber(dep, siblingFiles).replace(/^\.\//, "");
         const isResolvable =
           allSpecRelPaths.has(depNorm) ||
           allSpecRelPaths.has(basename(depNorm)) ||
@@ -385,7 +398,7 @@ export function runDoctor(opts: {
   }
 
   // 6. Agent roster check — warn when spec's agent: field is not in live roster
-  const warnings: DoctorFinding[] = stampNotice === undefined ? [] : [stampNotice];
+  const warnings: DoctorFinding[] = [...inlineSequenceWarnings, ...(stampNotice === undefined ? [] : [stampNotice])];
   try {
     const roster = discoverAgents();
     const rosterInvocables = new Set(roster.map((a) => a.invocable));

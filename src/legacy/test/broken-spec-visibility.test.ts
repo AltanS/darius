@@ -1,7 +1,7 @@
 /**
  * Tests for broken-spec visibility — the fix for the silent-drop bug where
- * a spec that failed to parse (most commonly `depends_on: [x.md]` inline
- * sequence syntax, which the strict frontmatter parser rejects) simply
+ * a spec that failed to parse (for example a nested `depends_on: [[x.md]]`
+ * list, which the strict frontmatter parser rejects) simply
  * vanished from readSpecs()'s output. That let a milestone report
  * "N/N Complete" while one of its N+1 real specs was never counted at all.
  *
@@ -29,10 +29,11 @@ updated: 2026-06-10
 - [x] done one
 `;
 
-// Inline `[...]` sequence — rejected by the strict frontmatter parser.
+// A nested flow list — rejected by the strict frontmatter parser. (A flat
+// `[x.md]` list is read since 0.100.0.)
 const BROKEN_SPEC = `---
 updated: 2026-06-10
-depends_on: [01-first.md]
+depends_on: [[01-first.md]]
 ---
 
 # Broken Spec
@@ -69,7 +70,7 @@ describe("broken specs are never silently dropped", () => {
     expect(m.specs.map((s) => s.file)).toEqual(["01-first.md"]);
     expect(m.brokenSpecs).toHaveLength(1);
     expect(m.brokenSpecs[0]!.file).toBe("02-second.md");
-    expect(m.brokenSpecs[0]!.error).toContain("Inline non-empty sequences");
+    expect(m.brokenSpecs[0]!.error).toContain("Nested flow sequences");
   });
 
   it("never reports Complete while a spec in the milestone is broken", () => {
@@ -127,7 +128,7 @@ describe("broken specs are never silently dropped", () => {
       {
         milestoneSlug: "M1-demo",
         file: "02-second.md",
-        error: expect.stringContaining("Inline non-empty sequences"),
+        error: expect.stringContaining("Nested flow sequences"),
       },
     ]);
   });

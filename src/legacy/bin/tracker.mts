@@ -384,7 +384,7 @@ async function dispatch(argv: string[]): Promise<number> {
     process.stderr.write("  next\n");
     process.stderr.write("  init\n");
     process.stderr.write("  add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]\n");
-    process.stderr.write("  add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n");
+    process.stderr.write("  add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path|NN>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n");
     process.stderr.write("      Scaffolded Commands are deliberate failures (`test -f /nonexistent/...`) — replace them with real\n");
     process.stderr.write("      assertions. --manual scaffolds operator decisions instead, and needs a named owner and an expiry.\n");
     process.stderr.write("  mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence \"...\"] [--override \"<why the check cannot run>\"]\n");
@@ -898,7 +898,7 @@ function runAddSpec(args: string[]): void {
 
   if (!values.milestone || !values.name || !values.template) {
     process.stderr.write(
-      "Usage: darius add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n",
+      "Usage: darius add spec --milestone <slug> --name <name> --template <generic|api-endpoint|ui-component|library> [--depends-on <path|NN>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]\n",
     );
     process.exit(2);
   }

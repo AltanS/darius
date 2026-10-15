@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.100.0] - 2026-10-15
+
+### Added
+
+- A bare spec number in `depends_on`. `02` names the spec whose file starts with `02-` in the same milestone. The reader, `spec check`, `doctor` and the native milestone reader all resolve it. A number that names no spec, or two, counts as a missing target, as before for any unknown entry.
+- `add spec --depends-on` takes a path or a bare number. A number is stored as the tracker-relative path (`M3-name/02-other.md`). A number that names no single spec is refused. The help text, the generated skill (one rule, trimmed elsewhere to stay under the 7000-byte room) and the enrich skill say which forms work.
+
+### Changed
+
+- The frontmatter parser reads a flat inline list of plain and quoted scalars, `depends_on: [02, 03]`. Before, it refused the form, and a spec written that way showed up only as "broken" in `darius list milestones`. A nested `[` or `{`, a missing `]` and an unclosed quote are still refused. The message says what is wrong and ends with "Use block form."
+- `darius doctor` warns about a flat inline list instead of failing: it reads fine, and the tracker writes block form. `doctor --fix` rewrites it to block form. A nested list is still a finding, and `--fix` leaves it alone.
+- The native header reader marks only an unreadable list (`unsupported`) as a broken spec. It was every inline list.
+
 ## [0.99.0] - 2026-10-15
 
 ### Added

@@ -161,44 +161,47 @@ depends_on:
   });
 
   describe("inline sequence syntax (depends_on: [x.md])", () => {
-    it("reports a specific inline-sequence finding, not a bare crash", () => {
+    it("reads a flat inline list: warns, and the tracker stays healthy", () => {
       const specPath = join(milestonePath, "02-inline.md");
       writeFileSync(join(milestonePath, "01-first.md"), VALID_SPEC, "utf-8");
       writeFileSync(specPath, INLINE_SEQUENCE_SPEC("01-first.md"), "utf-8");
 
       const report = runDoctor({ trackerRoot });
-      const inlineFindings = report.findings.filter((f) => f.kind === "inline-sequence");
-      expect(inlineFindings).toHaveLength(1);
-      expect(inlineFindings[0]!.detail).toContain("depends_on");
-      expect(inlineFindings[0]!.detail).toContain("- 01-first.md");
+      expect(report.healthy).toBe(true);
+      expect(report.findings).toEqual([]);
+      const warnings = report.warnings.filter((w) => w.kind === "inline-sequence");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.detail).toContain("depends_on");
+      expect(warnings[0]!.detail).toContain("- 01-first.md");
     });
 
-    it("does not also emit a duplicate generic schema-error for the same file", () => {
-      const specPath = join(milestonePath, "02-inline.md");
-      writeFileSync(join(milestonePath, "01-first.md"), VALID_SPEC, "utf-8");
-      writeFileSync(specPath, INLINE_SEQUENCE_SPEC("01-first.md"), "utf-8");
+    it("still reports a dangling target in a flat inline list", () => {
+      const specPath = join(milestonePath, "01-inline.md");
+      writeFileSync(specPath, INLINE_SEQUENCE_SPEC("nonexistent.md"), "utf-8");
 
       const report = runDoctor({ trackerRoot });
+      expect(report.healthy).toBe(false);
+      expect(report.findings.some((f) => f.kind === "dangling-dep")).toBe(true);
+    });
+
+    it("reports a nested list as one inline-sequence finding, not a bare crash", () => {
+      const specPath = join(milestonePath, "02-nested.md");
+      writeFileSync(join(milestonePath, "01-first.md"), VALID_SPEC, "utf-8");
+      writeFileSync(specPath, INLINE_SEQUENCE_SPEC("[01-first.md]"), "utf-8");
+
+      expect(() => runDoctor({ trackerRoot })).not.toThrow();
+      const report = runDoctor({ trackerRoot });
+      expect(report.healthy).toBe(false);
+      const inlineFindings = report.findings.filter((f) => f.kind === "inline-sequence");
+      expect(inlineFindings).toHaveLength(1);
+      expect(inlineFindings[0]!.detail).toContain("Nested flow sequences");
       const schemaErrorsForFile = report.findings.filter(
         (f) => f.kind === "schema-error" && f.file === specPath,
       );
       expect(schemaErrorsForFile).toHaveLength(0);
     });
 
-    it("does not crash the dangling-dep or agent-roster checks", () => {
-      // Before this fix, an inline `depends_on: [...]` threw an uncaught
-      // FrontmatterParseError inside the (unguarded) dangling-dep pass,
-      // aborting `tracker doctor` entirely instead of producing findings.
-      const specPath = join(milestonePath, "01-inline.md");
-      writeFileSync(specPath, INLINE_SEQUENCE_SPEC("nonexistent.md"), "utf-8");
-
-      expect(() => runDoctor({ trackerRoot })).not.toThrow();
-      const report = runDoctor({ trackerRoot });
-      expect(report.healthy).toBe(false);
-      expect(report.findings.some((f) => f.kind === "inline-sequence")).toBe(true);
-    });
-
-    it("--fix rewrites the inline sequence to block form and the tracker becomes healthy", () => {
+    it("--fix rewrites the flat inline list to block form and clears the warning", () => {
       const spec1 = join(milestonePath, "01-first.md");
       const specPath = join(milestonePath, "02-inline.md");
       writeFileSync(spec1, VALID_SPEC, "utf-8");
@@ -213,6 +216,33 @@ depends_on:
 
       const rereport = runDoctor({ trackerRoot });
       expect(rereport.healthy).toBe(true);
+      expect(rereport.warnings.some((w) => w.kind === "inline-sequence")).toBe(false);
+    });
+
+    it("--fix leaves a nested list alone", () => {
+      const specPath = join(milestonePath, "01-nested.md");
+      writeFileSync(specPath, INLINE_SEQUENCE_SPEC("[a.md]"), "utf-8");
+      runDoctor({ trackerRoot, fix: true });
+      expect(readFileSync(specPath, "utf-8")).toContain("depends_on: [[a.md]]");
+    });
+  });
+
+  describe("bare sibling numbers in depends_on", () => {
+    it("resolves a bare number to the spec with that number in the same milestone", () => {
+      writeFileSync(join(milestonePath, "01-first.md"), VALID_SPEC, "utf-8");
+      writeFileSync(join(milestonePath, "02-second.md"), INLINE_SEQUENCE_SPEC("01, 1"), "utf-8");
+
+      const report = runDoctor({ trackerRoot });
+      expect(report.findings.filter((f) => f.kind === "dangling-dep")).toEqual([]);
+    });
+
+    it("reports a bare number that names no spec", () => {
+      writeFileSync(join(milestonePath, "01-first.md"), INLINE_SEQUENCE_SPEC("07"), "utf-8");
+
+      const report = runDoctor({ trackerRoot });
+      const dangling = report.findings.filter((f) => f.kind === "dangling-dep");
+      expect(dangling).toHaveLength(1);
+      expect(dangling[0]!.detail).toContain("07");
     });
   });
 });

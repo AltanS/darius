@@ -11,6 +11,7 @@ import { parseFrontmatter } from "./markdown/frontmatter.ts";
 import { parseSpec } from "./documents/spec.ts";
 import type { SpecView, SpecStatusType } from "./documents/spec.ts";
 import { isDue, daysBetween } from "./dates.ts";
+import { expandBareSpecNumber } from "./dep-ref.ts";
 import { displayPath } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
@@ -564,13 +565,15 @@ function resolveDependencies(milestones: MilestoneEntry[]): void {
 
   // Now apply waiting status
   for (const milestone of milestones) {
+    const siblingFiles = milestone.specs.map((spec) => spec.file);
     for (const spec of milestone.specs) {
       const depsOn = spec.view.depends_on ?? [];
       if (depsOn.length === 0) continue;
 
       // Check if any dependency is not Complete
       const unmetDeps = depsOn.filter((dep) => {
-        const normalized = dep.replace(/^\.\//, "");
+        // A bare number (`02`) names the spec with that number in the same milestone.
+        const normalized = expandBareSpecNumber(dep, siblingFiles).replace(/^\.\//, "");
         // Try exact match first, then basename-only match
         const depStatus =
           statusMap.get(normalized) ??

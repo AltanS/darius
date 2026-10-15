@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
+import { expandBareSpecNumber, isBareSpecNumber } from "./dep-ref.ts";
 import {
   parseFrontmatter,
   serializeFrontmatter,
@@ -272,6 +273,26 @@ export type AddSpecResult =
   | { kind: "exists"; filePath: string };
 
 /**
+ * `--depends-on` values as stored paths. A bare number (`02`) becomes the
+ * tracker-relative path of the spec with that number in this milestone, e.g.
+ * `M3-name/02-other.md`; any other value is stored as given. A number that
+ * names no spec, or two, is an error: the spec would wait on nothing.
+ */
+function resolveDependsOnArgs(milestonePath: string, values: readonly string[]): string[] {
+  const files = readdirSync(milestonePath).filter((file) => file.endsWith(".md"));
+  return values.map((value) => {
+    if (!isBareSpecNumber(value)) return value;
+    const file = expandBareSpecNumber(value, files);
+    if (file === value) {
+      throw new Error(
+        `--depends-on ${value}: expected exactly one spec numbered ${value} in ${basename(milestonePath)}; pass a path such as ${basename(milestonePath)}/01-name.md`,
+      );
+    }
+    return `${basename(milestonePath)}/${file}`;
+  });
+}
+
+/**
  * Create a new spec file inside a milestone directory.
  * Auto-increments NN from highest existing spec number.
  * Idempotent: if a spec with the same slug (name → kebab) already exists, returns {kind:'exists'}.
@@ -287,6 +308,7 @@ export function addSpec(opts: AddSpecOpts): AddSpecResult {
   }
 
   const specSlug = toKebabCase(name);
+  const dependsOnPaths = resolveDependsOnArgs(milestonePath, dependsOn ?? []);
 
   // Idempotency check: look for any file matching NN-<slug>.md
   const existing = findSpecBySlug(milestonePath, specSlug);
@@ -320,7 +342,7 @@ export function addSpec(opts: AddSpecOpts): AddSpecResult {
   // never write a derived field at creation.
   const frontmatter: Record<string, unknown> = {
     updated: today,
-    depends_on: dependsOn ?? [],
+    depends_on: dependsOnPaths,
     agent: agent ?? "unassigned",
     template,
   };

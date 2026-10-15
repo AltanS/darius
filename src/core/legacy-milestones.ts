@@ -14,6 +14,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { expandBareSpecNumber } from "./dep-ref.ts";
 import { parseHeader } from "./legacy-header.ts";
 import { trackerDirOfCheckout } from "./tracker-root.ts";
 
@@ -137,7 +138,7 @@ type SpecRead = SpecDraft | "broken";
 function readSpec(dir: string, milestone: string, id: string, file: string): SpecRead | null {
   try {
     const parsed = parseHeader(readFileSync(join(dir, file), "utf8"));
-    if (parsed.inline) return "broken";
+    if (parsed.unsupported) return "broken";
     const body = parsed.body;
     const counts = countItems(body);
     const state = specState(counts);
@@ -260,10 +261,13 @@ export function readLegacyMilestonesAt(root: string): LegacyMilestones {
   const states = new Map<string, SpecState>();
   for (const { drafts } of read) for (const draft of drafts) for (const key of draft.keys) states.set(key, draft.state);
   for (const { milestone, drafts } of read) {
+    // A bare number (`02`) names the spec with that number in the same milestone.
+    const files = drafts.map((draft) => draft.keys.at(-1) ?? "");
     for (const draft of drafts) {
       if (draft.deps.length === 0) continue;
-      draft.spec.dependsOn = draft.deps.map((entry) => depSlug(entry, milestone.id));
-      const unmet = draft.deps.some((entry) => {
+      const deps = draft.deps.map((entry) => expandBareSpecNumber(entry, files));
+      draft.spec.dependsOn = deps.map((entry) => depSlug(entry, milestone.id));
+      const unmet = deps.some((entry) => {
         const normal = entry.replace(/^\.\//u, "");
         const state = states.get(normal) ?? states.get(normal.split("/").at(-1) ?? normal);
         return state !== "Complete";

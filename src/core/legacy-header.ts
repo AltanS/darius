@@ -9,8 +9,8 @@ export interface LegacyHeader {
   fields: Map<string, string>;
   /** Keys that hold a list: block items (`  - a`) or an inline `[a, b]`. */
   lists: Map<string, string[]>;
-  /** A list written inline with items, `key: [a, b]`: the tracker CLI refuses that form. */
-  inline: boolean;
+  /** An inline list the tracker CLI refuses: a nested `[` or `{`, or no closing `]`. A flat `[a, b]` is read. */
+  unsupported: boolean;
   /** False when the text has no header, or the header never closes. */
   closed: boolean;
   /** Everything after the closing `---`; the whole text when `closed` is false. */
@@ -25,17 +25,30 @@ export function unquote(value: string): string {
   return single === null ? value : (single[1] ?? "").replaceAll("''", "'");
 }
 
-/** The items of an inline list, `[a, 'b, c']`; a comma inside quotes stays. */
-function inlineItems(value: string): string[] {
+/** An inline list read: its items, and whether the tracker CLI accepts it. */
+interface InlineList {
+  items: string[];
+  supported: boolean;
+}
+
+/**
+ * The items of an inline list, `[a, 'b, c']`; a comma inside quotes stays.
+ * `supported` is false for a nested `[` or `{` outside quotes (the tracker CLI refuses it).
+ */
+function inlineItems(value: string): InlineList {
   const items: string[] = [];
+  let supported = true;
   let current = "";
   let quote = "";
   for (const char of value.slice(1, -1)) {
     if (quote !== "") {
       if (char === quote) quote = "";
       current += char;
-    } else if (char === '"' || char === "'") {
+    } else if ((char === '"' || char === "'") && current.trim() === "") {
       quote = char;
+      current += char;
+    } else if (char === "[" || char === "{" || char === "]" || char === "}") {
+      supported = false;
       current += char;
     } else if (char === ",") {
       items.push(current);
@@ -45,7 +58,7 @@ function inlineItems(value: string): string[] {
     }
   }
   items.push(current);
-  return items.map((item) => unquote(item.trim())).filter((item) => item !== "");
+  return { items: items.map((item) => unquote(item.trim())).filter((item) => item !== ""), supported: supported && quote === "" };
 }
 
 /**
@@ -54,7 +67,7 @@ function inlineItems(value: string): string[] {
  * `closed` is false.
  */
 export function parseHeader(text: string): LegacyHeader {
-  const none: LegacyHeader = { fields: new Map(), lists: new Map(), inline: false, closed: false, body: text };
+  const none: LegacyHeader = { fields: new Map(), lists: new Map(), unsupported: false, closed: false, body: text };
   if (!text.startsWith("---")) return none;
   const first = text.indexOf("\n");
   if (first === -1 || text.slice(0, first).trim() !== "---") return none;
@@ -62,14 +75,14 @@ export function parseHeader(text: string): LegacyHeader {
   const fields = new Map<string, string>();
   const lists = new Map<string, string[]>();
   let listKey: string | null = null;
-  let inline = false;
+  let unsupported = false;
   let position = first + 1;
   while (position <= text.length) {
     const next = text.indexOf("\n", position);
     const end = next === -1 ? text.length : next;
     const line = text.slice(position, end);
     const after = next === -1 ? text.length : next + 1;
-    if (line.trim() === "---") return { fields, lists, inline, closed: true, body: text.slice(after) };
+    if (line.trim() === "---") return { fields, lists, unsupported, closed: true, body: text.slice(after) };
     const item = /^\s+-\s+(.*)$/u.exec(line);
     if (item !== null && listKey !== null) {
       lists.get(listKey)?.push(unquote((item[1] ?? "").trim()));
@@ -80,9 +93,11 @@ export function parseHeader(text: string): LegacyHeader {
         const key = match[1] ?? "";
         const raw = (match[2] ?? "").trim();
         if (raw.startsWith("[") && raw.endsWith("]")) {
-          const items = inlineItems(raw);
-          lists.set(key, items);
-          if (items.length > 0) inline = true;
+          const parsed = inlineItems(raw);
+          lists.set(key, parsed.items);
+          if (!parsed.supported) unsupported = true;
+        } else if (raw.startsWith("[")) {
+          unsupported = true;
         } else {
           fields.set(key, unquote(raw));
           if (raw === "") {
@@ -95,5 +110,5 @@ export function parseHeader(text: string): LegacyHeader {
     if (next === -1) break;
     position = after;
   }
-  return { fields, lists, inline, closed: false, body: text };
+  return { fields, lists, unsupported, closed: false, body: text };
 }

@@ -466,15 +466,17 @@ describe("agentDiscovery", () => {
 
   // -------------------------------------------------------------------------
   describe("regex fallback — recovers agents whose inline-array tools trip the strict parser", () => {
-    it("discovers agent when frontmatter has inline-array tools field (strict parser throws, regex recovers)", () => {
+    it("discovers agent when frontmatter has a flow mapping (strict parser throws, regex recovers)", () => {
       // Realistic fixture mirroring the real expert agents (typescript-expert,
-      // wp-expert, design-expert) that use inline-array tools syntax.
+      // wp-expert, design-expert): an inline-array tools field, which the strict
+      // parser reads since 0.100.0, and a flow mapping, which it still rejects.
       const agentContent = [
         "---",
         "name: ts-expert",
         "description: Use PROACTIVELY for ALL TypeScript development. MUST BE USED when editing .ts files.",
         'tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash(git *)", "mcp__ide__getDiagnostics"]',
         "model: sonnet",
+        "metadata: {owner: team}",
         "---",
         "body text",
       ].join("\n");

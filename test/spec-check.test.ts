@@ -97,6 +97,25 @@ test("depends_on targets must exist", () => {
   assert.deepEqual(missing.problems, ["depends_on: M1-t/09-gone.md does not exist"]);
 });
 
+test("depends_on takes an inline list and bare sibling numbers", () => {
+  const root = checkout();
+  writeFileSync(join(root, ".tracker", "M1-t", "00-base.md"), spec(GOOD_ITEM));
+  writeFileSync(join(root, ".tracker", "M1-t", "02-other.md"), spec(GOOD_ITEM));
+  const inline = check(spec(GOOD_ITEM, "name: T\ndepends_on: [00, 02]"), root);
+  assert.equal(inline.ok, true, inline.problems.join("; "));
+  const mixed = check(spec(GOOD_ITEM, "name: T\ndepends_on: [2, 'M1-t/00-base.md']"), root);
+  assert.equal(mixed.ok, true, mixed.problems.join("; "));
+  const missing = check(spec(GOOD_ITEM, "name: T\ndepends_on: [00, 07]"), root);
+  assert.equal(missing.ok, false);
+  assert.deepEqual(missing.problems, ["depends_on: 07 does not exist"]);
+});
+
+test("a nested depends_on list fails with the block-form hint", () => {
+  const result = check(spec(GOOD_ITEM, "name: T\ndepends_on: [[02]]"));
+  assert.equal(result.ok, false);
+  assert.match(result.problems.join("\n"), /frontmatter: Nested flow sequences and mappings are not supported.*Use block form\./u);
+});
+
 // --- risk ----------------------------------------------------------------------
 
 const ROLLBACK = "\n## Rollback\n\nRevert the commit.\n";

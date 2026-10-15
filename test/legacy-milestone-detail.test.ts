@@ -39,7 +39,7 @@ const FIXTURE = {
   "M12-cart/02-totals.md": "---\ndepends_on:\n  - 01-keeps.md\n---\n\n# Totals\n\n- [ ] a\n",
   "M12-cart/01-keeps.md": "---\nupdated: 2026-09-03\n---\n\n# Keeps\n\n- [x] one\n  - Command: `true`\n- [ ] two\n",
   "M12-cart/10-later.md": "# Later\n\n- [ ] x\n",
-  "M12-cart/05-refused.md": "---\ndepends_on: [M9]\n---\n\n# Refused\n",
+  "M12-cart/05-refused.md": "---\ndepends_on: [[M9]]\n---\n\n# Refused\n",
   "M12-cart/_audit.md": "# Audit\n",
   "M12-cart/_counsel/01-keeps.md": "counsel on 01\n",
   "M12-cart/notes.txt": "plain notes\n",

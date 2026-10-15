@@ -49,7 +49,10 @@ const FIXTURE = {
   "M14-search/00-README.md": "---\nname: Search\nstatus: Deferred\n---\n",
   "M14-search/01-typos.md": "---\nagent: x\n---\n\n# Typos\n\n- [ ] a\n",
   "M20-refused/00-README.md": "---\nname: Refused\n---\n",
-  "M20-refused/01-inline.md": "---\ndepends_on: [M12]\n---\n\n# Inline list\n\n- [x] a\n",
+  "M20-refused/01-inline.md": "---\ndepends_on: [[M12]]\n---\n\n# Nested list\n\n- [x] a\n",
+  "M22-short/00-README.md": "---\nname: Short\n---\n",
+  "M22-short/01-base.md": "---\ndepends_on: []\n---\n\n# Base\n\n- [ ] a\n",
+  "M22-short/02-next.md": "---\ndepends_on: [01, 09]\n---\n\n# Next\n\n- [x] a\n",
   "M21-empty/00-README.md": "---\nname: Empty\n---\n",
   "00-INDEX.md": "# index\n",
   "vigils/soak.md": "---\nname: Soak\n---\n",
@@ -65,7 +68,7 @@ test("milestones: ids, headers, counts over the specs' checklist items, states",
   const { milestones, archived } = readLegacyMilestones(checkout(FIXTURE));
   assert.deepEqual(
     milestones.map((milestone) => milestone.id),
-    ["M9", "M12", "M14", "M20", "M21"],
+    ["M9", "M12", "M14", "M20", "M21", "M22"],
     "open milestones, the lowest number first; folders that are not M<n>- are not milestones",
   );
   assert.equal(archived, 3, "two archive files and one archive folder, not the assets, a dot file or an underscore file");
@@ -118,9 +121,17 @@ test("specs: slug, label, title, counts, verification, depends_on as slugs, Wait
 
 test("a spec the tracker CLI refuses is skipped and the milestone is never Complete", () => {
   const refused = readLegacyMilestones(checkout(FIXTURE)).milestones.find((milestone) => milestone.id === "M20");
-  assert.deepEqual(refused?.specs, [], "an inline depends_on list is left out");
+  assert.deepEqual(refused?.specs, [], "a nested depends_on list is left out");
   assert.equal(refused?.status, "In Progress");
   assert.deepEqual([refused?.done, refused?.total], [0, 0]);
+});
+
+test("an inline depends_on list and a bare number are read: the spec waits on the sibling", () => {
+  const short = readLegacyMilestones(checkout(FIXTURE)).milestones.find((milestone) => milestone.id === "M22");
+  const next = short?.specs.find((spec) => spec.number === 2);
+  assert.deepEqual(next?.dependsOn, ["m22-01-base", "m22-09"], "a bare number becomes the sibling's slug");
+  assert.equal(next?.status, "Waiting", "01 is not Complete, and 09 names no spec");
+  assert.equal(short?.status, "In Progress");
 });
 
 test("older trackers: S<n>- spec names and a README-less milestone", () => {
@@ -148,7 +159,9 @@ test("the shared header parser: quotes, doubled quotes, block and inline lists, 
   assert.deepEqual(parsed.lists.get("d"), ["p", "q, r"]);
   assert.deepEqual(parsed.lists.get("e"), []);
   assert.equal(parsed.fields.get("f"), "plain: value");
-  assert.equal(parsed.inline, true);
+  assert.equal(parsed.unsupported, false, "a flat inline list is read");
+  assert.equal(parseHeader("---\nd: [[p], q]\n---\n").unsupported, true);
+  assert.equal(parseHeader("---\nd: [p, q\n---\n").unsupported, true);
   assert.equal(parsed.body, "body\n");
   const open = parseHeader("---\na: 1\nno closing line\n");
   assert.equal(open.closed, false);

@@ -118,8 +118,10 @@ export type InlineSequenceIssue = {
   line: number;
   /** The raw inline value text, e.g. "[01-first.md, 02-second.md]". */
   raw: string;
-  /** Parsed items, unquoted. */
+  /** Parsed items, unquoted. Empty when `unsupported` is set. */
   items: string[];
+  /** Why the list cannot be read (nested flow collections, no closing `]`); set only then. */
+  unsupported?: string;
 };
 
 /**
@@ -154,7 +156,10 @@ export function rewriteInlineSequences(raw: string): {
 
   const eol = /\r\n/.test(located.yamlBlock) ? "\r\n" : "\n";
   const lines = located.yamlBlock.replace(/\r\n/g, "\n").split("\n");
-  const issueByLine = new Map(issues.map((issue) => [issue.line, issue]));
+  // A list that cannot be read stays as it is; there is nothing to rewrite it from.
+  const fixable = issues.filter((issue) => issue.unsupported === undefined);
+  if (fixable.length === 0) return { raw, rewrites: [] };
+  const issueByLine = new Map(fixable.map((issue) => [issue.line, issue]));
 
   const rewrittenLines: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -171,7 +176,43 @@ export function rewriteInlineSequences(raw: string): {
 
   const newYamlBlock = rewrittenLines.join(eol);
   const newRaw = "---" + newYamlBlock + located.closingDelim + located.content;
-  return { raw: newRaw, rewrites: issues };
+  return { raw: newRaw, rewrites: fixable };
+}
+
+/**
+ * Parse `[a, 'b, c', "d"]` into its items: plain and quoted scalars only.
+ * A comma inside quotes stays in the item; empty items (`[a, ]`) are dropped.
+ * Returns a message instead of items when the list holds a nested `[` or `{`
+ * outside quotes, or when the closing `]` is missing.
+ */
+export function parseInlineSequence(rawValue: string): string[] | string {
+  const unsupported = "Nested flow sequences and mappings are not supported";
+  if (!rawValue.endsWith("]")) return "Inline sequence has no closing ]";
+  const items: string[] = [];
+  let current = "";
+  let quote = "";
+  for (const char of rawValue.slice(1, -1)) {
+    if (quote !== "") {
+      if (char === quote) quote = "";
+      current += char;
+    } else if ((char === '"' || char === "'") && current.trim() === "") {
+      // A quote opens only at the start of an item, so `it's` stays plain.
+      quote = char;
+      current += char;
+    } else if (char === "[" || char === "{" || char === "]" || char === "}") {
+      return unsupported;
+    } else if (char === ",") {
+      items.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (quote !== "") return "Inline sequence has an unclosed quote";
+  items.push(current);
+  return items
+    .map((item) => unquoteInlineItem(item.trim()))
+    .filter((item) => item.length > 0);
 }
 
 function scanInlineSequences(yamlBlock: string): InlineSequenceIssue[] {
@@ -192,14 +233,11 @@ function scanInlineSequences(yamlBlock: string): InlineSequenceIssue[] {
     if (rawValue === "[]") continue;
     if (!(rawValue.startsWith("[") && rawValue.endsWith("]"))) continue;
 
-    const items = rawValue
-      .slice(1, -1)
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .map(unquoteInlineItem);
+    const parsed = parseInlineSequence(rawValue);
+    const items = typeof parsed === "string" ? [] : parsed;
+    const unsupported = typeof parsed === "string" ? parsed : undefined;
 
-    issues.push({ key, line: i + 1, raw: rawValue, items });
+    issues.push({ key, line: i + 1, raw: rawValue, items, ...(unsupported === undefined ? {} : { unsupported }) });
   }
 
   return issues;
@@ -304,11 +342,18 @@ function parseYamlBlock(yaml: string): Record<string, unknown> {
       );
     }
 
-    // Check for inline non-empty sequence — not supported (use block form)
-    if (rawValue.startsWith("[") && rawValue !== "[]") {
-      throw new FrontmatterParseError(
-        `Inline non-empty sequences are not supported (line ${i + 1}): ${line}. Use block form.`,
-      );
+    // Inline non-empty sequence of plain and quoted scalars: `[a, b]`.
+    // Nested flow collections are not supported.
+    if (rawValue.startsWith("[")) {
+      const parsed = parseInlineSequence(rawValue);
+      if (typeof parsed === "string") {
+        throw new FrontmatterParseError(
+          `${parsed} (line ${i + 1}): ${line}. Use block form.`,
+        );
+      }
+      result[key] = parsed;
+      i++;
+      continue;
     }
 
     // Empty value (key: or key: <whitespace>)
