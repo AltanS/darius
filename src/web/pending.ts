@@ -312,3 +312,16 @@ export function pendingStarts(project: string | null, ledgerView: LedgerView, no
   );
   return states.toSorted((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0));
 }
+
+/**
+ * The check of a vigil that the vigil page and the vigils list show (0.95.0): the newest `vigil-check`
+ * start for the slug that has no result yet. It is `starting`, `refused` or `lost`; a `started` one has
+ * its `vigil.swept` line, so it is null. A refusal or a loss that a later sweep (the timer's, another
+ * check) overtook is null too: `sweptAt` is the time of the newest `vigil.swept` line of the vigil.
+ */
+export function vigilCheckOf(starts: readonly PendingStart[], slug: string, sweptAt: string | null): PendingStart | null {
+  const newest = starts.filter((start) => start.kind === "vigil-check" && start.vigil === slug).toSorted((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0))[0];
+  if (newest === undefined || newest.state === "started") return null;
+  if (newest.state !== "starting" && sweptAt !== null && sweptAt > newest.at) return null;
+  return newest;
+}

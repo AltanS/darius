@@ -358,6 +358,14 @@ export interface VigilDetail {
   /** The newest first, at most 10. */
   sweeps: VigilSweep[];
   body: MdBlock[];
+  /** The sweeps, pauses, resumes and the close of this vigil, newest first, at most 100 (0.95.0). Operator text in them is masked. */
+  activity: ActivityEntry[];
+  /**
+   * The newest check the web asked for that has not ended well and that no later sweep answers (0.95.0):
+   * `starting` while it runs, `refused` or `lost` when it did not start. Null when there is none, or the
+   * newest one started (its `vigil.swept` line is in `sweeps`). Filled by `WebContext.vigil`.
+   */
+  pending: PendingStart | null;
 }
 
 /**

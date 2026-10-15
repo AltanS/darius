@@ -2,18 +2,23 @@ import { data } from "react-router";
 
 import type { Route } from "./+types/vigil";
 import type { VigilSweep } from "../../../src/web/api.ts";
+import { Timeline } from "../components/activity.tsx";
 import { KindWord } from "../components/chip.tsx";
 import { CheckNow } from "../components/check-now.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Empty, Facts, Fold, Section, TitleText } from "../components/ui.tsx";
+import { untilShort } from "../lib/activity-place.ts";
 import { useClock } from "../lib/clock.tsx";
 import { momentText } from "../lib/format.ts";
 import { vigilWord } from "../lib/state-words.ts";
 import { checkBlocked, failKindText, vigilWaits } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
+
+/** `VigilDetail.activity` holds at most this many entries; a list that long says so. */
+const ACTIVITY_SHOWN = 100;
 
 export function loader({ context, params }: Route.LoaderArgs) {
   const vigil = context.vigil(params.ws, params.slug);
@@ -60,7 +65,7 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
         </p>
         {vigil.closedReason === null ? null : <p className="lede lede-tight">Closed because: {vigil.closedReason}</p>}
         {vigil.pausedReason === null || !row.paused ? null : <p className="lede lede-tight">Paused because: {vigil.pausedReason}</p>}
-        <CheckNow key={row.slug} project={vigil.project} slug={row.slug} subject={row.title} canWrite={canWrite} blocked={checkBlocked(row)} explain />
+        <CheckNow key={row.slug} project={vigil.project} slug={row.slug} subject={row.title} canWrite={canWrite} blocked={checkBlocked(row)} explain pending={vigil.pending} />
       </header>
 
       <div className="board">
@@ -114,6 +119,12 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
               </div>
             )}
           </Section>
+
+          {vigil.activity.length === 0 ? null : (
+            <Section title="Activity" id="activity">
+              <Timeline entries={vigil.activity} project={vigil.project} olderHref={null} isCapped={vigil.activity.length >= ACTIVITY_SHOWN} sentence={untilShort} />
+            </Section>
+          )}
         </div>
 
         <aside className="board-rail">

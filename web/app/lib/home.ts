@@ -34,13 +34,14 @@
 
 import type { ActivityEntry, HostStatus, MdBlock, PendingStart, ProjectActivityEntry, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./agenda.ts";
+import { startingCheck } from "./check-poll.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate, shortRun } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { answerBefore, pendingText, readerOf, readsAnswers, receiptText, type ReceiptFacts } from "./receipt.ts";
 import { ASKS_YOU, datePhrase, FLAGGED, NOT_STARTED, RUNNING, STARTING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Badge, type Tone } from "./tone.ts";
-import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
+import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, checkBlocked, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -147,6 +148,18 @@ export interface Card {
   fades: boolean;
   error: string | null;
   actions: Action[];
+  /** Set on a flagged vigil's card (0.95.0): "Check now" and the check that runs now. Null on any other card. */
+  check: CardCheck | null;
+}
+
+/** What a card needs to offer "Check now" for its vigil. */
+export interface CardCheck {
+  project: string;
+  slug: string;
+  /** Why a check cannot start (paused, closed); null when it can. */
+  blocked: string | null;
+  /** The check of the vigil that the web asked for and that has not started a sweep yet. */
+  pending: PendingStart | null;
 }
 
 /** One segment of the status strip. Each one is a link to what it counts. */
@@ -281,7 +294,7 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
 // --- cards ---------------------------------------------------------------------------------
 
 function blank(id: string, kind: CardKind, item: Kind | null, manual = false): Card {
-  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], held: null, ask: null, ack: null, report: null, fades: false, error: null, actions: [] };
+  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], held: null, ask: null, ack: null, report: null, fades: false, error: null, actions: [], check: null };
 }
 
 function historyHref(run: ActivityRun): string {
@@ -411,7 +424,7 @@ function vigilWaitText(vigil: VigilRow, today: string): string[] {
   return [vigil.due === null ? null : `due ${relativeDate(vigil.due, today)}`, vigil.until === null ? null : `waits for ${vigil.until}`].filter((part) => part !== null);
 }
 
-function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs: readonly ActivityRun[], generatedAt: string): Card {
+function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs: readonly ActivityRun[], generatedAt: string, starts: readonly PendingStart[]): Card {
   const check = runs.find((run) => run.project === project.name && run.item === `vigil/${vigil.slug}` && run.phase === "running");
   const meta = [project.name, vigilFailureText(vigil, clock.today, clock.offset), ...vigilWaitText(vigil, clock.today)].filter((part) => part !== null);
   const size = check === undefined ? 0 : clock.now - Date.parse(check.startedAt);
@@ -425,6 +438,7 @@ function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs
     meta,
     meta2: check === undefined ? null : `A new check is running, ${byText(check.who)}, ${roughDuration(size)} so far.${stuckFor(check, generatedAt) === null ? "" : " It may be stuck."}`,
     actions: [{ text: "Open the vigil", href: href({ to: "vigil", ws: project.name, slug: vigil.slug }) }],
+    check: { project: project.name, slug: vigil.slug, blocked: checkBlocked(vigil), pending: startingCheck(starts, project.name, vigil.slug) },
   };
 }
 
@@ -895,7 +909,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
       .map(({ stack, ritual }) => asksCard(clock, readRun, stack, ritual)),
     ...all.flatMap((entry) => entry.failed).flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)])),
     ...all.flatMap((entry) => entry.stuck).toSorted((left, right) => newest(left.run, right.run)).map(({ run, size }) => stuckCard(clock, run, size)),
-    ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
+    ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt, feed.pending))),
     ...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project)),
   ];
   const done = doneLately(status, feed.pending, feed.activity, clock.now, { scope, readRun });

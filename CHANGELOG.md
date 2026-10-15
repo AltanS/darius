@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.95.0] - 2026-10-15
+
+### Added
+
+- "Check now" shows the check while it runs: the button gives way to the running light and "Checking on <host>, asked 09:12". The page loads its data again at 1.5 s, 5 s and then every 5 s, for 3 minutes, so the new sweep shows without a reload. A refused or lost check shows the CLI's sentence.
+- The vigil page has an "Activity" section: its sweeps with who and outcome, and its pauses, resumes and close with who and why. `VigilDetail` gains `activity` and `pending`.
+- The Overview card of a flagged vigil offers "Check now" to a viewer who may write.
+- A Vigils list row says "Checking", with the running light, while a check of that vigil runs.
+
+### Changed
+
+- The "Reload to see the result" sentence and its Reload button are gone.
+
 ## [0.94.0] - 2026-10-15
 
 ### Added

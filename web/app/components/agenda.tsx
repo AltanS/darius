@@ -8,17 +8,23 @@
 
 import { useEffect, useState } from "react";
 
+import type { PendingStart } from "../../../src/web/api.ts";
+import { checkKey, checkPhase } from "../lib/check-poll.ts";
+import { useClock } from "../lib/clock.tsx";
 import { isFolded, phoneHidden, type Agenda, type AgendaGroup, type AgendaRow, type WaitingRow } from "../lib/agenda.ts";
 import { shortDate } from "../lib/format.ts";
 import { vigilAnchor } from "../lib/paths.ts";
-import { railOf } from "../lib/state-words.ts";
+import { CHECKING, railOf } from "../lib/state-words.ts";
 import { KindWord } from "./chip.tsx";
-import { CheckNow } from "./check-now.tsx";
+import { CheckNow, Follow } from "./check-now.tsx";
 import { Row, RowList } from "./row.tsx";
 import { Fold, SectHead } from "./ui.tsx";
 
 /** Rows of Waiting on an event before its fold. */
 export const WAITING_SHOWN = 5;
+
+/** No check runs. */
+const NO_CHECKS: Readonly<Record<string, PendingStart>> = {};
 
 /** Why a paused row's "Check now" is off; the row's state word already says "Paused". */
 const PAUSED = "This vigil is paused. Resume it to check it.";
@@ -34,15 +40,20 @@ interface RowProps {
   extra: boolean;
   /** A flagged vigil row gets a "Check now" button (0.86.0); false for the loopback viewer and for pages that offer none. */
   canCheck: boolean;
+  /** The checks that run now, by `project/slug` (0.95.0): such a row says "Checking" and shows the running light. */
+  checks: Readonly<Record<string, PendingStart>>;
 }
 
-function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck }: RowProps): React.ReactNode {
+function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck, checks }: RowProps): React.ReactNode {
   const id = anchors && row.kind === "vigil" ? vigilAnchor(row.slug) : undefined;
   const classes = [extra ? "phone-extra" : "", id !== undefined && target === id ? "target-row is-target" : id === undefined ? "" : "target-row"].filter((part) => part !== "");
   // A row in Later names its date in the place of a state; under a day label the label says it.
-  const state = row.state ?? (group.kind === "later" && row.date !== null ? { tone: "idle" as const, label: shortDate(row.date) } : null);
+  const check = row.kind === "vigil" ? (checks[checkKey(row.project, row.slug)] ?? null) : null;
+  const { now } = useClock();
+  const isChecking = checkPhase(check, now) === "checking";
+  const state = isChecking ? CHECKING : (row.state ?? (group.kind === "later" && row.date !== null ? { tone: "idle" as const, label: shortDate(row.date) } : null));
   const meta = [showProject ? row.project : null, ...(row.facts === "" ? [] : row.facts.split(", ")), row.note].filter((part) => part !== null);
-  return <Row id={id} kind={row.kind} manual={row.manual} href={row.href} title={row.title} rail={row.rail} chips={<KindWord kind={row.kind} manual={row.manual} />} state={state} meta={meta} detail={row.until === null ? undefined : `waits for: ${row.until}`} foot={canCheck && row.kind === "vigil" && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} /> : undefined} className={classes.join(" ")} />;
+  return <Row id={id} kind={row.kind} manual={row.manual} href={row.href} title={row.title} rail={row.rail} chips={<KindWord kind={row.kind} manual={row.manual} />} state={state} meta={meta} detail={row.until === null ? undefined : `waits for: ${row.until}`} foot={canCheck && row.kind === "vigil" && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={classes.join(" ")} live={isChecking} />;
 }
 
 /** The label of a day group: "Overdue · 6", "Today · 2", "Tomorrow · 4", "Later · 5", or the weekday date as it is. */
@@ -58,6 +69,8 @@ interface ComingUpProps {
   target: string;
   /** Flagged vigil rows get "Check now"; the Vigils page sets it for a viewer who may write. */
   canCheck?: boolean;
+  /** The checks that run now, by `project/slug`. */
+  checks?: Readonly<Record<string, PendingStart>>;
 }
 
 /**
@@ -65,7 +78,7 @@ interface ComingUpProps {
  * a few more rows, then one button. A desktop shows every day and keeps Later
  * and No schedule in a fold under the list.
  */
-export function ComingUp({ agenda, anchors, target, canCheck = false }: ComingUpProps): React.ReactNode {
+export function ComingUp({ agenda, anchors, target, canCheck = false, checks = NO_CHECKS }: ComingUpProps): React.ReactNode {
   const hidden = phoneHidden(agenda);
   const folded = agenda.groups.filter((group) => isFolded(group));
   const foldedCount = folded.reduce((sum, group) => sum + group.rows.length, 0);
@@ -89,7 +102,7 @@ export function ComingUp({ agenda, anchors, target, canCheck = false }: ComingUp
                 <h3 className={`ag-day ag-day-${group.kind}`}>{groupLabel(group)}</h3>
                 <RowList bare>
                   {group.rows.map((row) => (
-                    <AgendaItem key={row.key} row={row} group={group} showProject={agenda.showProject} anchors={anchors} target={target} extra={hidden.has(row.key)} canCheck={canCheck} />
+                    <AgendaItem key={row.key} row={row} group={group} showProject={agenda.showProject} anchors={anchors} target={target} extra={hidden.has(row.key)} canCheck={canCheck} checks={checks} />
                   ))}
                 </RowList>
               </div>
@@ -117,13 +130,17 @@ interface WaitingItemProps {
   anchors: boolean;
   target: string;
   canCheck: boolean;
+  checks: Readonly<Record<string, PendingStart>>;
 }
 
-function WaitingItem({ row, showProject, anchors, target, canCheck }: WaitingItemProps): React.ReactNode {
+function WaitingItem({ row, showProject, anchors, target, canCheck, checks }: WaitingItemProps): React.ReactNode {
   const id = anchors ? vigilAnchor(row.slug) : undefined;
   const cls = id === undefined ? "" : target === id ? "target-row is-target" : "target-row";
   const meta = [showProject ? row.project : null, row.note].filter((part) => part !== null);
-  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(row.state)} chips={<KindWord kind="vigil" />} state={row.state} meta={meta} detail={row.until} foot={canCheck && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} /> : undefined} className={cls} />;
+  const check = checks[checkKey(row.project, row.slug)] ?? null;
+  const { now } = useClock();
+  const isChecking = checkPhase(check, now) === "checking";
+  return <Row id={id} kind="vigil" href={row.href} title={row.title} rail={railOf(row.state)} chips={<KindWord kind="vigil" />} state={isChecking ? CHECKING : row.state} meta={meta} detail={row.until} foot={canCheck && row.flagged ? <CheckNow project={row.project} slug={row.slug} subject={row.title} canWrite blocked={row.paused ? PAUSED : null} explain={false} pending={check} /> : canCheck && check !== null ? <Follow pending={check} /> : undefined} className={cls} live={isChecking} />;
 }
 
 interface WaitingProps {
@@ -134,10 +151,12 @@ interface WaitingProps {
   anchors: boolean;
   target: string;
   canCheck?: boolean;
+  /** The checks that run now, by `project/slug`. */
+  checks?: Readonly<Record<string, PendingStart>>;
 }
 
 /** The armed vigils without a due date: flagged first, a few in view, the rest in a fold. */
-export function Waiting({ rows, shown, showProject, anchors, target, canCheck = false }: WaitingProps): React.ReactNode {
+export function Waiting({ rows, shown, showProject, anchors, target, canCheck = false, checks = NO_CHECKS }: WaitingProps): React.ReactNode {
   if (rows.length === 0) return null;
   const head = rows.slice(0, shown);
   const rest = rows.slice(shown);
@@ -148,14 +167,14 @@ export function Waiting({ rows, shown, showProject, anchors, target, canCheck = 
       <div className="panel ag">
         <RowList bare>
           {head.map((row) => (
-            <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} canCheck={canCheck} />
+            <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} canCheck={canCheck} checks={checks} />
           ))}
         </RowList>
         {rest.length === 0 ? null : (
           <Fold open={pointed} summary={`${rest.length} more waiting`}>
             <RowList bare>
               {rest.map((row) => (
-                <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} canCheck={canCheck} />
+                <WaitingItem key={row.key} row={row} showProject={showProject} anchors={anchors} target={target} canCheck={canCheck} checks={checks} />
               ))}
             </RowList>
           </Fold>

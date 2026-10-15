@@ -10007,6 +10007,11 @@ var DUE_TODAY = {
 	tone: "gold",
 	label: "Due today"
 };
+/** A vigil whose check the web asked for and that has not finished (0.95.0). */
+var CHECKING = {
+	tone: "run",
+	label: "Checking"
+};
 var FLAGGED = {
 	tone: "bad",
 	label: "Flagged"
@@ -10741,6 +10746,29 @@ function phoneHidden(agenda) {
 function isFolded(group) {
 	return group.kind === "later" || group.kind === "none";
 }
+/**
+* When the look number `step` (from 0) happens, in milliseconds after the page
+* saw the pending start: 1.5 s, 5 s, then every 5 s (10 s, 15 s, ...).
+*/
+function lookAt(step) {
+	if (step === 0) return 1500;
+	return 5e3 * step;
+}
+/** The phase of a pending start at time `now` (ms). */
+function checkPhase(pending, now) {
+	if (pending === null || pending.state === "started") return "idle";
+	if (pending.state === "refused") return "refused";
+	if (pending.state === "lost") return "lost";
+	return now - Date.parse(pending.at) >= 18e4 ? "stalled" : "checking";
+}
+/** The newest check of one vigil that has not started (`starting`), from the starts of a project or of all. Null when there is none. */
+function startingCheck(starts, project, slug) {
+	return starts.filter((start) => start.kind === "vigil-check" && start.state === "starting" && start.project === project && start.vigil === slug).toSorted((left, right) => left.at < right.at ? 1 : left.at > right.at ? -1 : 0)[0] ?? null;
+}
+/** The `project/slug` key of a vigil, for a map of its checks. */
+function checkKey(project, slug) {
+	return `${project}/${slug}`;
+}
 //#endregion
 //#region app/lib/receipt.ts
 /** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
@@ -10953,7 +10981,8 @@ function blank(id, kind, item, manual = false) {
 		report: null,
 		fades: false,
 		error: null,
-		actions: []
+		actions: [],
+		check: null
 	};
 }
 function historyHref(run) {
@@ -11185,7 +11214,7 @@ function stuckCard(clock, run, stuck) {
 function vigilWaitText(vigil, today) {
 	return [vigil.due === null ? null : `due ${relativeDate(vigil.due, today)}`, vigil.until === null ? null : `waits for ${vigil.until}`].filter((part) => part !== null);
 }
-function flaggedCard(clock, project, vigil, runs, generatedAt) {
+function flaggedCard(clock, project, vigil, runs, generatedAt, starts) {
 	const check = runs.find((run) => run.project === project.name && run.item === `vigil/${vigil.slug}` && run.phase === "running");
 	const meta = [
 		project.name,
@@ -11216,7 +11245,13 @@ function flaggedCard(clock, project, vigil, runs, generatedAt) {
 				ws: project.name,
 				slug: vigil.slug
 			})
-		}]
+		}],
+		check: {
+			project: project.name,
+			slug: vigil.slug,
+			blocked: checkBlocked(vigil),
+			pending: startingCheck(starts, project.name, vigil.slug)
+		}
 	};
 }
 function unreadableCard(project) {
@@ -11775,7 +11810,7 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1, feed = NO_FEED) {
 		}))).toSorted((left, right) => newest(left.stack.main, right.stack.main)).map(({ stack, ritual }) => asksCard(clock, readRun, stack, ritual)),
 		...all.flatMap((entry) => entry.failed).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]),
 		...all.flatMap((entry) => entry.stuck).toSorted((left, right) => newest(left.run, right.run)).map(({ run, size }) => stuckCard(clock, run, size)),
-		...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
+		...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt, feed.pending))),
 		...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project))
 	];
 	const done = doneLately(status, feed.pending, feed.activity, clock.now, {
@@ -12771,6 +12806,146 @@ function KindWord({ kind, manual = false, icon = false }) {
 	});
 }
 //#endregion
+//#region app/components/check-now.tsx
+/**
+* The "Check now" button of a vigil (0.86.0; `darius vigil sweep <slug>`).
+* One click posts to `/api/vigil/check`. The server starts the sweep detached
+* and answers at once. Since 0.95.0 the page does not ask the person to
+* reload: the button turns into the running light with "Checking on <host>,
+* asked 09:12", and the page loads its data again (1.5 s, 5 s, then every
+* 5 s, for 3 minutes) until the pending start of the check is no longer
+* `starting`. The new sweep then shows in the list without a reload. The
+* in-flight state comes from the `pending` prop, which the loader reads from
+* the registry of this host, so a reload of the page shows it too. A refusal
+* of the server (the daily sweep runs, another check runs, the 2 minute
+* wait) shows as its own sentence. The button is off for a paused or a
+* closed vigil, with the reason beside it. For the loopback viewer the server
+* would refuse the POST: the detail page says why there is no button, a list
+* row draws nothing.
+*/
+/** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
+var NO_WRITE_HINT$1 = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
+/** Looks again at 1.5 s, 5 s and every 5 s while `pending` is `starting`, until it is not or its window has passed. A new pending start (its id) begins a new round; unmounting ends it. */
+function useFollow(pending) {
+	const { revalidate } = useRevalidator();
+	const again = (0, import_react.useRef)(revalidate);
+	again.current = revalidate;
+	const id = pending?.state === "starting" ? pending.id : null;
+	const asked = pending?.at ?? null;
+	(0, import_react.useEffect)(() => {
+		if (id === null || asked === null) return;
+		let step = 0;
+		let timer;
+		const look = () => {
+			if (checkPhase({
+				state: "starting",
+				at: asked
+			}, Date.now()) !== "checking") return;
+			again.current();
+			step += 1;
+			timer = setTimeout(look, lookAt(step) - lookAt(step - 1));
+		};
+		timer = setTimeout(look, lookAt(0));
+		return () => clearTimeout(timer);
+	}, [id, asked]);
+}
+/** Follows a check that has no button on its row (a vigil that is not flagged): it only looks again, and draws nothing. */
+function Follow({ pending }) {
+	useFollow(pending);
+	return null;
+}
+function CheckNow({ project, slug, subject, canWrite, blocked, explain, pending }) {
+	const { revalidate, state } = useRevalidator();
+	const { now, offset } = useClock();
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)(null);
+	const [message, setMessage] = (0, import_react.useState)(null);
+	useFollow(pending);
+	const phase = checkPhase(pending, now);
+	(0, import_react.useEffect)(() => {
+		if (phase === "checking") setMessage(null);
+	}, [phase]);
+	if (!canWrite) return explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fu-off",
+		children: NO_WRITE_HINT$1
+	}) : null;
+	const submit = async (event) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		setMessage(null);
+		const result = await postJson("/api/vigil/check", {
+			project,
+			slug
+		});
+		if (!result.ok) {
+			setBusy(false);
+			setError(result.error);
+			return;
+		}
+		await revalidate();
+		setBusy(false);
+		if (!result.started) setMessage(result.message ?? "Check requested.");
+	};
+	if (phase === "checking" && pending !== null) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "check-live rw-live relative px-3 py-2",
+		role: "status",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "live-bar",
+			"aria-hidden": "true"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "rail-note",
+			children: `Checking on ${pending.host}, asked ${clockTime(pending.at, offset)}`
+		})]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "ack",
+		onSubmit: (event) => void submit(event),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fu-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "st-btn st-btn-small",
+					"aria-label": `Check now: ${subject}`,
+					disabled: busy || blocked !== null,
+					children: busy ? "Starting…" : "Check now"
+				}), phase === "stalled" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "st-btn st-btn-small",
+					disabled: state === "loading",
+					onClick: () => void revalidate(),
+					children: "Look again"
+				}) : null]
+			}),
+			blocked !== null && explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				children: blocked
+			}) : null,
+			phase === "stalled" && pending !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				role: "status",
+				children: `No result yet after 3 minutes on ${pending.host}. The check may still finish.`
+			}) : null,
+			(phase === "refused" || phase === "lost") && pending !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "status",
+				children: pendingText(pending, { offset })
+			}) : null,
+			message === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				role: "status",
+				children: message
+			}),
+			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bk-note tone-bad",
+				role: "alert",
+				children: error
+			})
+		]
+	});
+}
+//#endregion
 //#region app/components/command.tsx
 /**
 * A command in a box with a Copy button. `navigator.clipboard` exists only
@@ -13114,7 +13289,7 @@ function QuestionList({ questions, after }) {
 * state only: nothing is written to the ledger to close an old card.
 */
 /** What the loopback viewer reads where the form would be. */
-var NO_WRITE_HINT$1 = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
+var NO_WRITE_HINT = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
 function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNow, isEarlier = false }) {
 	const { revalidate } = useRevalidator();
 	const reloadSoon = useReloadSoon();
@@ -13125,7 +13300,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 	const [notice, setNotice] = (0, import_react.useState)(null);
 	if (!canWrite) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuestionList, { questions }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "fu-off",
-		children: NO_WRITE_HINT$1
+		children: NO_WRITE_HINT
 	})] });
 	const answers = answersOf(texts);
 	const isLocked = busy !== null || isDone;
@@ -13888,7 +14063,7 @@ function AskBody({ ask, title, canWrite }) {
 */
 function CardView({ card, canWrite }) {
 	const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null;
+	const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null || card.check !== null && canWrite && card.check.blocked === null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
 		id: card.id,
 		className: `card hcard ${edge}`,
@@ -13965,6 +14140,15 @@ function CardView({ card, canWrite }) {
 					card.error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 						className: "code-block",
 						children: card.error
+					}),
+					card.check === null || !canWrite || card.check.blocked !== null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckNow, {
+						project: card.check.project,
+						slug: card.check.slug,
+						subject: card.title,
+						canWrite: true,
+						blocked: card.check.blocked,
+						explain: false,
+						pending: card.check.pending
 					}),
 					card.ack === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AckButton, {
 						project: card.ack.project,
@@ -15116,83 +15300,6 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 	});
 });
 //#endregion
-//#region app/components/check-now.tsx
-/**
-* The "Check now" button of a vigil (0.86.0; `darius vigil sweep <slug>`).
-* One click posts to `/api/vigil/check`. The server starts the sweep detached
-* and answers at once, so the page does not wait for the checks: it says on
-* which host the check started and offers a reload. A refusal of the server
-* (the daily sweep runs, another check runs, the 2 minute wait) shows as its
-* own sentence. The button is off for a paused or a closed vigil, with the
-* reason beside it. For the loopback viewer the server would refuse the POST:
-* the detail page says why there is no button, a list row draws nothing.
-*/
-/** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
-var NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
-function CheckNow({ project, slug, subject, canWrite, blocked, explain }) {
-	const { revalidate, state } = useRevalidator();
-	const reloadSoon = useReloadSoon();
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [started, setStarted] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)(null);
-	if (!canWrite) return explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "fu-off",
-		children: NO_WRITE_HINT
-	}) : null;
-	const submit = async (event) => {
-		event.preventDefault();
-		setBusy(true);
-		setError(null);
-		const result = await postJson("/api/vigil/check", {
-			project,
-			slug
-		});
-		setBusy(false);
-		reloadSoon();
-		if (!result.ok) {
-			setError(result.error);
-			return;
-		}
-		setStarted(result.started ? `Check started on ${result.host ?? "this host"}. Reload to see the result.` : result.message ?? "Check requested. Reload to see the result.");
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-		className: "ack",
-		onSubmit: (event) => void submit(event),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "fu-acts",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "submit",
-					className: "st-btn st-btn-small",
-					"aria-label": `Check now: ${subject}`,
-					disabled: busy || blocked !== null || started !== null,
-					children: busy ? "Starting…" : started === null ? "Check now" : "Check started"
-				}), started === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "st-btn st-btn-small",
-					disabled: state === "loading",
-					onClick: () => void revalidate(),
-					children: "Reload"
-				})]
-			}),
-			blocked !== null && explain ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "rail-note",
-				children: blocked
-			}) : null,
-			started === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "rail-note",
-				role: "status",
-				children: started
-			}),
-			error === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bk-note tone-bad",
-				role: "alert",
-				children: error
-			})
-		]
-	});
-}
-//#endregion
 //#region app/components/agenda.tsx
 /**
 * Coming up and Waiting on an event: the two lists of `lib/agenda.ts`, drawn
@@ -15201,12 +15308,17 @@ function CheckNow({ project, slug, subject, canWrite, blocked, explain }) {
 * full, and a second line of chips, state word and facts. A rail marks the
 * rows that need attention.
 */
+/** No check runs. */
+var NO_CHECKS = {};
 /** Why a paused row's "Check now" is off; the row's state word already says "Paused". */
 var PAUSED = "This vigil is paused. Resume it to check it.";
-function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck }) {
+function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck, checks }) {
 	const id = anchors && row.kind === "vigil" ? vigilAnchor(row.slug) : void 0;
 	const classes = [extra ? "phone-extra" : "", id !== void 0 && target === id ? "target-row is-target" : id === void 0 ? "" : "target-row"].filter((part) => part !== "");
-	const state = row.state ?? (group.kind === "later" && row.date !== null ? {
+	const check = row.kind === "vigil" ? checks[checkKey(row.project, row.slug)] ?? null : null;
+	const { now } = useClock();
+	const isChecking = checkPhase(check, now) === "checking";
+	const state = isChecking ? CHECKING : row.state ?? (group.kind === "later" && row.date !== null ? {
 		tone: "idle",
 		label: shortDate(row.date)
 	} : null);
@@ -15235,9 +15347,11 @@ function AgendaItem({ row, group, showProject, anchors, target, extra, canCheck 
 			subject: row.title,
 			canWrite: true,
 			blocked: row.paused ? PAUSED : null,
-			explain: false
-		}) : void 0,
-		className: classes.join(" ")
+			explain: false,
+			pending: check
+		}) : canCheck && check !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Follow, { pending: check }) : void 0,
+		className: classes.join(" "),
+		live: isChecking
 	});
 }
 /** The label of a day group: "Overdue · 6", "Today · 2", "Tomorrow · 4", "Later · 5", or the weekday date as it is. */
@@ -15249,7 +15363,7 @@ function groupLabel(group) {
 * a few more rows, then one button. A desktop shows every day and keeps Later
 * and No schedule in a fold under the list.
 */
-function ComingUp({ agenda, anchors, target, canCheck = false }) {
+function ComingUp({ agenda, anchors, target, canCheck = false, checks = NO_CHECKS }) {
 	const hidden = phoneHidden(agenda);
 	const foldedCount = agenda.groups.filter((group) => isFolded(group)).reduce((sum, group) => sum + group.rows.length, 0);
 	const pointed = anchors && agenda.groups.some((group) => group.rows.some((row) => row.kind === "vigil" && vigilAnchor(row.slug) === target && (hidden.has(row.key) || isFolded(group))));
@@ -15283,7 +15397,8 @@ function ComingUp({ agenda, anchors, target, canCheck = false }) {
 								anchors,
 								target,
 								extra: hidden.has(row.key),
-								canCheck
+								canCheck,
+								checks
 							}, row.key))
 						})]
 					}, group.key);
@@ -15306,10 +15421,13 @@ function ComingUp({ agenda, anchors, target, canCheck = false }) {
 		})]
 	});
 }
-function WaitingItem({ row, showProject, anchors, target, canCheck }) {
+function WaitingItem({ row, showProject, anchors, target, canCheck, checks }) {
 	const id = anchors ? vigilAnchor(row.slug) : void 0;
 	const cls = id === void 0 ? "" : target === id ? "target-row is-target" : "target-row";
 	const meta = [showProject ? row.project : null, row.note].filter((part) => part !== null);
+	const check = checks[checkKey(row.project, row.slug)] ?? null;
+	const { now } = useClock();
+	const isChecking = checkPhase(check, now) === "checking";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 		id,
 		kind: "vigil",
@@ -15317,7 +15435,7 @@ function WaitingItem({ row, showProject, anchors, target, canCheck }) {
 		title: row.title,
 		rail: railOf(row.state),
 		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, { kind: "vigil" }),
-		state: row.state,
+		state: isChecking ? CHECKING : row.state,
 		meta,
 		detail: row.until,
 		foot: canCheck && row.flagged ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckNow, {
@@ -15326,13 +15444,15 @@ function WaitingItem({ row, showProject, anchors, target, canCheck }) {
 			subject: row.title,
 			canWrite: true,
 			blocked: row.paused ? PAUSED : null,
-			explain: false
-		}) : void 0,
-		className: cls
+			explain: false,
+			pending: check
+		}) : canCheck && check !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Follow, { pending: check }) : void 0,
+		className: cls,
+		live: isChecking
 	});
 }
 /** The armed vigils without a due date: flagged first, a few in view, the rest in a fold. */
-function Waiting({ rows, shown, showProject, anchors, target, canCheck = false }) {
+function Waiting({ rows, shown, showProject, anchors, target, canCheck = false, checks = NO_CHECKS }) {
 	if (rows.length === 0) return null;
 	const head = rows.slice(0, shown);
 	const rest = rows.slice(shown);
@@ -15349,7 +15469,8 @@ function Waiting({ rows, shown, showProject, anchors, target, canCheck = false }
 					showProject,
 					anchors,
 					target,
-					canCheck
+					canCheck,
+					checks
 				}, row.key))
 			}), rest.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
 				open: pointed,
@@ -15361,7 +15482,8 @@ function Waiting({ rows, shown, showProject, anchors, target, canCheck = false }
 						showProject,
 						anchors,
 						target,
-						canCheck
+						canCheck,
+						checks
 					}, row.key))
 				})
 			})]
@@ -15439,13 +15561,14 @@ function loader$18({ context, request, params }) {
 		closed: closed.slice(0, CLOSED_SHOWN),
 		closedCount: closed.length,
 		showProject: projects.length > 1,
-		canWrite: context.canWrite
+		canWrite: context.canWrite,
+		checks: Object.fromEntries(context.pending(scope.workspace).toReversed().flatMap((start) => start.kind === "vigil-check" && start.state === "starting" && start.vigil !== void 0 ? [[checkKey(start.project, start.vigil), start]] : []))
 	};
 }
 var meta$16 = ({ data }) => [{ title: data?.workspace === null || data === void 0 ? "Vigils | darius" : `Vigils · ${data.workspace} | darius` }];
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 var vigils_default = withComponentProps(function Vigils({ loaderData }) {
-	const { workspace, agenda, closed, closedCount, showProject, canWrite } = loaderData;
+	const { workspace, agenda, closed, closedCount, showProject, canWrite, checks } = loaderData;
 	const target = useHashTarget();
 	const closedTarget = closed.some(({ vigil }) => vigilAnchor(vigil.slug) === target);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -15464,7 +15587,8 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 						agenda,
 						anchors: true,
 						target,
-						canCheck: canWrite
+						canCheck: canWrite,
+						checks
 					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 					className: "board-rail",
@@ -15474,7 +15598,8 @@ var vigils_default = withComponentProps(function Vigils({ loaderData }) {
 						showProject,
 						anchors: true,
 						target,
-						canCheck: canWrite
+						canCheck: canWrite,
+						checks
 					}), closed.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "folds proj-closed",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Fold, {
@@ -16634,6 +16759,10 @@ function filterSentence$1(filter, project) {
 	const where = project === "" ? "every workspace" : project;
 	return `${filter.kind === "" ? "Everything that happened" : `Only "${KIND_WORDS$1[filter.kind]}" events`}${BY_WORDS$1[filter.by]} in the last ${filter.days} days in ${where}, newest first.`;
 }
+/** "Paused by web:altan until 2026-10-20: waiting" reads "... until 20 Oct: waiting". The vigil page uses it; a text without such a date is as it was. */
+function untilShort(text) {
+	return text.replace(/ until (\d{4}-\d{2}-\d{2})(?=$|[:;,.\s])/u, (_all, date) => ` until ${shortDate(date)}`);
+}
 //#endregion
 //#region app/components/activity.tsx
 /**
@@ -16662,6 +16791,10 @@ function Starting({ starts, project }) {
 			}) : null]
 		}, start.id);
 	}) });
+}
+/** The sentence as the entry has it. */
+function same(text) {
+	return text;
 }
 /** The lead of an entry: "ritual Fact check" with the title as a link to the item, and the workspace when the page spans several. */
 function Lead({ entry, project, workspace }) {
@@ -16694,7 +16827,7 @@ function Lead({ entry, project, workspace }) {
 	] });
 }
 /** One event: its time, its sentence, a link to the run, and its detail folded. */
-function Entry({ entry, project, lead }) {
+function Entry({ entry, project, lead, sentence }) {
 	const { offset } = useClock();
 	const own = entry.project ?? project;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
@@ -16713,7 +16846,7 @@ function Entry({ entry, project, lead }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: `ink-${entry.tone}`,
-					children: lead === void 0 ? shortRuns(entry.text) : afterLead(shortRuns(entry.text))
+					children: lead === void 0 ? sentence(shortRuns(entry.text)) : afterLead(sentence(shortRuns(entry.text)))
 				})
 			]
 		}),
@@ -16738,7 +16871,7 @@ function Entry({ entry, project, lead }) {
 	] });
 }
 /** Every event, newest first, grouped by day. An entry has its time, its sentence, its detail folded and a link to the run. */
-function Timeline({ entries, project, olderHref, isCapped, lead, starting = [] }) {
+function Timeline({ entries, project, olderHref, isCapped, lead, starting = [], sentence = same }) {
 	const { today, offset } = useClock();
 	const days = timelineDays(entries, today, offset);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -16754,7 +16887,8 @@ function Timeline({ entries, project, olderHref, isCapped, lead, starting = [] }
 					children: starting.map((entry, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Entry, {
 						entry,
 						project,
-						lead
+						lead,
+						sentence
 					}, `${entry.at}-${entry.kind}-${index}`))
 				})]
 			}),
@@ -16768,7 +16902,8 @@ function Timeline({ entries, project, olderHref, isCapped, lead, starting = [] }
 					children: day.entries.map((entry, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Entry, {
 						entry,
 						project,
-						lead
+						lead,
+						sentence
 					}, `${entry.at}-${entry.kind}-${index}`))
 				})]
 			}, day.date)),
@@ -17837,6 +17972,8 @@ var vigil_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader$11,
 	meta: () => meta$9
 });
+/** `VigilDetail.activity` holds at most this many entries; a list that long says so. */
+var ACTIVITY_SHOWN = 100;
 function loader$11({ context, params }) {
 	const vigil = context.vigil(params.ws, params.slug);
 	if (vigil === null) throw data(`No vigil ${params.slug} in workspace ${params.ws}.`, { status: 404 });
@@ -17902,106 +18039,121 @@ var vigil_default = withComponentProps(function Vigil({ loaderData }) {
 				subject: row.title,
 				canWrite,
 				blocked: checkBlocked(row),
-				explain: true
+				explain: true,
+				pending: vigil.pending
 			}, row.slug)
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "board",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "board-main",
-			children: [failure === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-				title: "Why flagged",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "card",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
-							{
-								label: "Step",
-								value: `${failure.index}: ${failure.text}`
-							},
-							...failure.command === null ? [] : [{
-								label: "Command",
-								value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-									className: "inline-code",
-									children: failure.command
-								})
-							}],
-							...failure.expected === null ? [] : [{
-								label: "Expected",
-								value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-									className: "inline-code",
-									children: failure.expected
-								})
-							}],
-							{
-								label: "Result",
-								value: failure.exit === null ? failure.outcome : `${failure.outcome}, exit ${failure.exit}`
-							},
-							{
-								label: "When",
-								value: when(failure.at)
-							},
-							{
-								label: "Host",
-								value: failure.host
-							},
-							{
-								label: "Kind",
-								value: failKindText(failure.failKind)
-							}
-						] }),
-						failure.source === "body" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "rail-note",
-							children: "This sweep did not record Command and Expected. They come from the current body, which may have changed since."
-						}) : null,
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "fu-label",
-							children: "Output, last lines"
-						}),
-						failure.outputTail === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "text-muted",
-							children: "The output is not stored on this host."
-						}) : failure.outputTail === "" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "text-muted",
-							children: "The check printed nothing."
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-							className: "code-block",
-							children: failure.outputTail
-						})
-					]
-				})
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-				title: "Last sweeps",
-				children: sweeps.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "This vigil has not been swept yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "panel table-scroll",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
-						className: "grid-table",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-								scope: "col",
-								children: "When"
+			children: [
+				failure === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: "Why flagged",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "card",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Facts, { facts: [
+								{
+									label: "Step",
+									value: `${failure.index}: ${failure.text}`
+								},
+								...failure.command === null ? [] : [{
+									label: "Command",
+									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "inline-code",
+										children: failure.command
+									})
+								}],
+								...failure.expected === null ? [] : [{
+									label: "Expected",
+									value: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "inline-code",
+										children: failure.expected
+									})
+								}],
+								{
+									label: "Result",
+									value: failure.exit === null ? failure.outcome : `${failure.outcome}, exit ${failure.exit}`
+								},
+								{
+									label: "When",
+									value: when(failure.at)
+								},
+								{
+									label: "Host",
+									value: failure.host
+								},
+								{
+									label: "Kind",
+									value: failKindText(failure.failKind)
+								}
+							] }),
+							failure.source === "body" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "rail-note",
+								children: "This sweep did not record Command and Expected. They come from the current body, which may have changed since."
+							}) : null,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "fu-label",
+								children: "Output, last lines"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-								scope: "col",
-								children: "Result"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-								scope: "col",
-								children: "Checks"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-								scope: "col",
-								children: "By"
+							failure.outputTail === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-muted",
+								children: "The output is not stored on this host."
+							}) : failure.outputTail === "" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-muted",
+								children: "The check printed nothing."
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+								className: "code-block",
+								children: failure.outputTail
 							})
-						] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: sweeps.map((sweep) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: when(sweep.at) }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: outcomeText(sweep) }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: sweep.reason ?? checksText(sweep) }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: sweep.who })
-						] }, sweep.at)) })]
+						]
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: "Last sweeps",
+					children: sweeps.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "This vigil has not been swept yet." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "panel table-scroll",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+							className: "grid-table",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+									scope: "col",
+									children: "When"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+									scope: "col",
+									children: "Result"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+									scope: "col",
+									children: "Checks"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+									scope: "col",
+									children: "By"
+								})
+							] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: sweeps.map((sweep) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: when(sweep.at) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: outcomeText(sweep) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: sweep.reason ?? checksText(sweep) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: sweep.who })
+							] }, sweep.at)) })]
+						})
+					})
+				}),
+				vigil.activity.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: "Activity",
+					id: "activity",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Timeline, {
+						entries: vigil.activity,
+						project: vigil.project,
+						olderHref: null,
+						isCapped: vigil.activity.length >= ACTIVITY_SHOWN,
+						sentence: untilShort
 					})
 				})
-			})]
+			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
 			className: "board-rail",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
@@ -21157,7 +21309,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CTFRAU92.js",
+			"module": "/assets/root-jLTYtqKU.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21166,13 +21318,13 @@ var server_manifest_default = {
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
-				"/assets/agenda-CM-mW5xz.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/agenda-B50GO-_P.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-D8OEBmIq.css"],
+			"css": ["/assets/root-DfSJK2vk.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -21212,24 +21364,25 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BvglO46O.js",
+			"module": "/assets/overview-DQumTv_H.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BQKfNgRu.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js"
@@ -21253,24 +21406,25 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BvglO46O.js",
+			"module": "/assets/overview-DQumTv_H.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BQKfNgRu.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js"
@@ -21294,22 +21448,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CNTtAN0x.js",
+			"module": "/assets/vigils-CIRGOknG.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/section-G0oq_mbU.js",
+				"/assets/section-FOy-wD3g.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/agenda-CM-mW5xz.js",
-				"/assets/check-now-Dc3eh8qn.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/agenda-B50GO-_P.js",
+				"/assets/check-now-CqiixF-J.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
@@ -21331,22 +21486,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-CNTtAN0x.js",
+			"module": "/assets/vigils-CIRGOknG.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/section-G0oq_mbU.js",
+				"/assets/section-FOy-wD3g.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/agenda-CM-mW5xz.js",
-				"/assets/check-now-Dc3eh8qn.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/agenda-B50GO-_P.js",
+				"/assets/check-now-CqiixF-J.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
@@ -21368,29 +21524,29 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-PzO_o7nL.js",
+			"module": "/assets/rituals-CIYk7DsL.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/section-G0oq_mbU.js",
+				"/assets/section-FOy-wD3g.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js",
-				"/assets/agenda-CM-mW5xz.js",
-				"/assets/check-now-Dc3eh8qn.js"
+				"/assets/agenda-B50GO-_P.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21411,29 +21567,29 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-PzO_o7nL.js",
+			"module": "/assets/rituals-CIYk7DsL.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/section-G0oq_mbU.js",
+				"/assets/section-FOy-wD3g.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js",
-				"/assets/agenda-CM-mW5xz.js",
-				"/assets/check-now-Dc3eh8qn.js"
+				"/assets/agenda-B50GO-_P.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21454,22 +21610,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-BOBakTaM.js",
+			"module": "/assets/findings-Bs431E8M.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
+				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-CsTK8NN5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-BIYoBeb9.js",
-				"/assets/state-words-CdJGMvfT.js"
+				"/assets/view-CPV8xiEh.js",
+				"/assets/state-words-D6dWebNi.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21490,22 +21646,22 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-BOBakTaM.js",
+			"module": "/assets/findings-Bs431E8M.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
+				"/assets/chip-DMBwRjCd.js",
 				"/assets/post-DvwTzYpm.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-CsTK8NN5.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/view-BIYoBeb9.js",
-				"/assets/state-words-CdJGMvfT.js"
+				"/assets/view-CPV8xiEh.js",
+				"/assets/state-words-D6dWebNi.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21588,7 +21744,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/activity-AGOj2m-z.js",
+			"module": "/assets/activity-BKA0C_kH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21596,7 +21752,7 @@ var server_manifest_default = {
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/activity-BB51_ASl.js",
+				"/assets/activity-oyaJcPxQ.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/receipt-C4CmVsTS.js",
@@ -21621,7 +21777,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/activity-AGOj2m-z.js",
+			"module": "/assets/activity-BKA0C_kH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21629,7 +21785,7 @@ var server_manifest_default = {
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/activity-BB51_ASl.js",
+				"/assets/activity-oyaJcPxQ.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/receipt-C4CmVsTS.js",
@@ -21654,23 +21810,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BndRnIFN.js",
+			"module": "/assets/runs-DEqn8dBJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/view-CPV8xiEh.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/state-words-D6dWebNi.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
@@ -21696,25 +21853,26 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-VpkM7iQd.js",
+			"module": "/assets/ritual-D129ykie.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/activity-BB51_ASl.js",
+				"/assets/activity-oyaJcPxQ.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/post-DvwTzYpm.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js"
@@ -21738,23 +21896,26 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigil-B-DS-52I.js",
+			"module": "/assets/vigil-BCYvvf3Z.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/view-CPV8xiEh.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/check-now-Dc3eh8qn.js",
+				"/assets/activity-oyaJcPxQ.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/kind-CbYiwFqF.js",
+				"/assets/receipt-C4CmVsTS.js",
+				"/assets/post-DvwTzYpm.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/post-DvwTzYpm.js"
+				"/assets/ritual-activity-xIN13lOx.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21775,25 +21936,26 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-CL5jvpWW.js",
+			"module": "/assets/run-D-e3Etkf.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/chip-7jCbr6hC.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/view-CPV8xiEh.js",
 				"/assets/post-DvwTzYpm.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-CKvjoMy2.js",
-				"/assets/activity-BB51_ASl.js",
+				"/assets/activity-oyaJcPxQ.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/state-words-D6dWebNi.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/ritual-activity-xIN13lOx.js",
 				"/assets/receipt-C4CmVsTS.js"
@@ -21990,13 +22152,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/status-BPkEAYUS.js",
+			"module": "/assets/status-eoWJxIxy.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/state-words-D6dWebNi.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/route-error-CKvjoMy2.js"
 			],
@@ -22019,23 +22181,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-BndRnIFN.js",
+			"module": "/assets/runs-DEqn8dBJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BQKfNgRu.js",
-				"/assets/view-BIYoBeb9.js",
+				"/assets/view-CPV8xiEh.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-Di_6NLgV.js",
+				"/assets/runs-Cvfu8LZE.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CIGBF-ey.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/state-words-CdJGMvfT.js",
+				"/assets/state-words-D6dWebNi.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-7jCbr6hC.js",
+				"/assets/chip-DMBwRjCd.js",
+				"/assets/check-now-CqiixF-J.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-CsTK8NN5.js",
+				"/assets/result-L0OnKAsc.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
@@ -22187,8 +22350,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-77a07e0b.js",
-	"version": "77a07e0b",
+	"url": "/assets/manifest-8a58c41e.js",
+	"version": "8a58c41e",
 	"sri": void 0
 };
 //#endregion

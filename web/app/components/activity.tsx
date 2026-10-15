@@ -56,12 +56,20 @@ interface TimelineProps {
   lead?: { workspace: boolean };
   /** Starts the web asked for that show no run yet (Activity place): drawn once, on top, before the days. */
   starting?: readonly (ActivityEntry & { project?: string })[];
+  /** Words an entry's sentence the way a page wants it (the vigil page shows "until 20 Oct"). The text of the entry is not changed. */
+  sentence?: (text: string) => string;
+}
+
+/** The sentence as the entry has it. */
+function same(text: string): string {
+  return text;
 }
 
 interface EntryProps {
   entry: ActivityEntry & { project?: string };
   project: string;
   lead: TimelineProps["lead"];
+  sentence: (text: string) => string;
 }
 
 /** The lead of an entry: "ritual Fact check" with the title as a link to the item, and the workspace when the page spans several. */
@@ -79,7 +87,7 @@ function Lead({ entry, project, workspace }: { entry: ActivityEntry; project: st
 }
 
 /** One event: its time, its sentence, a link to the run, and its detail folded. */
-function Entry({ entry, project, lead }: EntryProps): React.ReactNode {
+function Entry({ entry, project, lead, sentence }: EntryProps): React.ReactNode {
   const { offset } = useClock();
   const own = entry.project ?? project;
   return (
@@ -87,7 +95,7 @@ function Entry({ entry, project, lead }: EntryProps): React.ReactNode {
       <p className="break-words">
         <span className="text-muted">{clockTime(entry.at, offset)}</span>{" "}
         {lead === undefined ? null : <Lead entry={entry} project={own} workspace={lead.workspace} />}
-        <span className={`ink-${entry.tone}`}>{lead === undefined ? shortRuns(entry.text) : afterLead(shortRuns(entry.text))}</span>
+        <span className={`ink-${entry.tone}`}>{lead === undefined ? sentence(shortRuns(entry.text)) : afterLead(sentence(shortRuns(entry.text)))}</span>
       </p>
       {entry.links.run === undefined ? null : (
         <p className="rail-note">
@@ -108,7 +116,7 @@ function Entry({ entry, project, lead }: EntryProps): React.ReactNode {
 }
 
 /** Every event, newest first, grouped by day. An entry has its time, its sentence, its detail folded and a link to the run. */
-export function Timeline({ entries, project, olderHref, isCapped, lead, starting = [] }: TimelineProps): React.ReactNode {
+export function Timeline({ entries, project, olderHref, isCapped, lead, starting = [], sentence = same }: TimelineProps): React.ReactNode {
   const { today, offset } = useClock();
   const days = timelineDays(entries, today, offset);
   return (
@@ -118,7 +126,7 @@ export function Timeline({ entries, project, olderHref, isCapped, lead, starting
           <p className="fu-label">Starting</p>
           <ol className="timeline">
             {starting.map((entry, index) => (
-              <Entry key={`${entry.at}-${entry.kind}-${index}`} entry={entry} project={project} lead={lead} />
+              <Entry key={`${entry.at}-${entry.kind}-${index}`} entry={entry} project={project} lead={lead} sentence={sentence} />
             ))}
           </ol>
         </div>
@@ -128,7 +136,7 @@ export function Timeline({ entries, project, olderHref, isCapped, lead, starting
           <p className="fu-label">{day.label}</p>
           <ol className="timeline">
             {day.entries.map((entry, index) => (
-              <Entry key={`${entry.at}-${entry.kind}-${index}`} entry={entry} project={project} lead={lead} />
+              <Entry key={`${entry.at}-${entry.kind}-${index}`} entry={entry} project={project} lead={lead} sentence={sentence} />
             ))}
           </ol>
         </div>

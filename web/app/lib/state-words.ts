@@ -24,6 +24,8 @@ export const FAILED_SEEN: Badge = { tone: "idle", label: "Failed, seen" };
 export const ABANDONED: Badge = { tone: "idle", label: "Abandoned" };
 export const COMPLETE: Badge = { tone: "ok", label: "Complete" };
 export const DUE_TODAY: Badge = { tone: "gold", label: "Due today" };
+/** A vigil whose check the web asked for and that has not finished (0.95.0). */
+export const CHECKING: Badge = { tone: "run", label: "Checking" };
 export const FLAGGED: Badge = { tone: "bad", label: "Flagged" };
 /** A flagged vigil whose check failed the way it is expected to while the event is still ahead. */
 export const PENDING: Badge = { tone: "wait", label: "Pending" };

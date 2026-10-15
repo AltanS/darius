@@ -9,6 +9,7 @@ import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
 import { KindWord } from "./chip.tsx";
+import { CheckNow } from "./check-now.tsx";
 import { Command } from "./command.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
@@ -215,7 +216,7 @@ interface CardViewProps {
  */
 export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
   const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null;
+  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null || (card.check !== null && canWrite && card.check.blocked === null);
   return (
     <article id={card.id} className={`card hcard ${edge}`}>
       <div className="hc-head">
@@ -257,6 +258,7 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
           <Commands card={card} />
           {card.report === null ? null : <Report report={card.report} lines={card.edge === null ? 3 : 4} fades={card.fades} />}
           {card.error === null ? null : <pre className="code-block">{card.error}</pre>}
+          {card.check === null || !canWrite || card.check.blocked !== null ? null : <CheckNow project={card.check.project} slug={card.check.slug} subject={card.title} canWrite blocked={card.check.blocked} explain={false} pending={card.check.pending} />}
           {card.ack === null ? null : <AckButton project={card.ack.project} run={card.ack.run} canWrite={canWrite} subject={card.title} />}
         </div>
       ) : null}

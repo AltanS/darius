@@ -31,6 +31,7 @@ import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
 import type {
   Acknowledgement,
+  ActivityEntry,
   HostStatus,
   MilestoneDetail,
   MilestoneFile,
@@ -47,7 +48,7 @@ import type {
   VigilRow,
   VigilSweep,
 } from "./api.ts";
-import { ackKindOf, startedByOf } from "./activity.ts";
+import { ackKindOf, activityOf, startedByOf } from "./activity.ts";
 import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
 import { originOf, readersOf } from "./run-origin.ts";
@@ -498,9 +499,10 @@ export function vigilDetail(projectName: string, slug: string): VigilDetail | nu
   const doc = project.readItem<Vigil>("vigil", slug);
   if (doc === null) {
     const legacy = legacyVigilRows(trackerDirOf(projectName, linkedDir(projectName) ?? null), []).find((candidate) => candidate.slug === slug);
-    return legacy === undefined ? null : { project: projectName, row: legacy, closedReason: null, pausedReason: null, failure: null, sweeps: [], body: [] };
+    return legacy === undefined ? null : { project: projectName, row: legacy, closedReason: null, pausedReason: null, failure: null, sweeps: [], body: [], activity: [], pending: null };
   }
-  const lines = linesFor(readLedger(project), itemRef("vigil", slug));
+  const ledger = readLedger(project);
+  const lines = linesFor(ledger, itemRef("vigil", slug));
   const row = vigilRowOf(slug, doc, lines);
   const status = vigilStatus(slug, lines);
   const found = status.flagged ? lastFailure(slug, lines, doc.body) : null;
@@ -516,5 +518,19 @@ export function vigilDetail(projectName: string, slug: string): VigilDetail | nu
         : { ...row.lastFailure, command: found.command ?? null, expected: found.expected ?? null, source: found.source, host: found.host, outputTail: tail === null ? null : maskSecrets(plainOutput(tail)) },
     sweeps: lines.filter((line) => line.type === "vigil.swept").map(sweepRow).slice(-VIGIL_SWEEPS).toReversed(),
     body: parseMarkdown(doc.body),
+    activity: vigilActivity(projectName, ledger, slug, doc.header.title),
+    pending: null,
   };
+}
+
+/** The kinds the vigil page lists. */
+const VIGIL_KINDS: ReadonlySet<string> = new Set(["vigil-swept", "vigil-paused", "vigil-resumed", "vigil-closed"]);
+/** The most entries the vigil page lists. */
+const VIGIL_ACTIVITY = 100;
+
+/** The sweeps, pauses, resumes and the close of one vigil, newest first. */
+function vigilActivity(projectName: string, ledger: readonly LedgerLine[], slug: string, title: string): ActivityEntry[] {
+  return activityOf(projectName, ledger, { vigil: slug, titleOf: () => title })
+    .filter((entry) => VIGIL_KINDS.has(entry.kind))
+    .slice(0, VIGIL_ACTIVITY);
 }

@@ -5,6 +5,7 @@ import { Row, RowList } from "../components/row.tsx";
 import { SectionPageHead } from "../components/section.tsx";
 import { Fold } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
+import { checkKey } from "../lib/check-poll.ts";
 import { href, vigilAnchor } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { vigilWord } from "../lib/state-words.ts";
@@ -32,6 +33,8 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
     closedCount: closed.length,
     showProject: projects.length > 1,
     canWrite: context.canWrite,
+    // The checks that run now (0.95.0), by `project/slug`: their rows say "Checking" and the button follows them.
+    checks: Object.fromEntries(context.pending(scope.workspace).toReversed().flatMap((start) => (start.kind === "vigil-check" && start.state === "starting" && start.vigil !== undefined ? [[checkKey(start.project, start.vigil), start] as const] : []))),
   };
 }
 
@@ -39,7 +42,7 @@ export const meta: Route.MetaFunction = ({ data }) => [{ title: data?.workspace 
 
 /** Vigils by day (the dated ones, with the late first), the ones that wait for an event, and the closed ones in a fold. */
 export default function Vigils({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { workspace, agenda, closed, closedCount, showProject, canWrite } = loaderData;
+  const { workspace, agenda, closed, closedCount, showProject, canWrite, checks } = loaderData;
   const target = useHashTarget();
   const closedTarget = closed.some(({ vigil }) => vigilAnchor(vigil.slug) === target);
   return (
@@ -48,10 +51,10 @@ export default function Vigils({ loaderData }: Route.ComponentProps): React.Reac
       <div className="proj-body">
         <div className="board">
           <div className="board-main">
-            <ComingUp agenda={agenda} anchors target={target} canCheck={canWrite} />
+            <ComingUp agenda={agenda} anchors target={target} canCheck={canWrite} checks={checks} />
           </div>
           <aside className="board-rail">
-            <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={showProject} anchors target={target} canCheck={canWrite} />
+            <Waiting rows={agenda.waiting} shown={WAITING_SHOWN} showProject={showProject} anchors target={target} canCheck={canWrite} checks={checks} />
             {closed.length === 0 ? null : (
               <div className="folds proj-closed">
                 <Fold open={closedTarget} summary={`Closed vigils (${closedCount})`}>

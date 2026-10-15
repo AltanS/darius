@@ -6,6 +6,7 @@
  */
 
 import type { ActivityEntry, ActivityKind } from "../../../src/web/api.ts";
+import { shortDate } from "./format.ts";
 import { ACTIVITY_DAYS, ACTIVITY_KINDS, type ActivityFilter } from "./paths.ts";
 
 /** The most entries the all-workspaces page shows. A workspace page has no cap. */
@@ -85,4 +86,9 @@ export function filterSentence(filter: ActivityFilter, project: string): string 
   const where = project === "" ? "every workspace" : project;
   const what = filter.kind === "" ? "Everything that happened" : `Only "${KIND_WORDS[filter.kind]}" events`;
   return `${what}${BY_WORDS[filter.by]} in the last ${filter.days} days in ${where}, newest first.`;
+}
+
+/** "Paused by web:altan until 2026-10-20: waiting" reads "... until 20 Oct: waiting". The vigil page uses it; a text without such a date is as it was. */
+export function untilShort(text: string): string {
+  return text.replace(/ until (\d{4}-\d{2}-\d{2})(?=$|[:;,.\s])/u, (_all, date: string) => ` until ${shortDate(date)}`);
 }

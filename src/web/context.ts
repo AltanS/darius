@@ -6,7 +6,7 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { ActivityOptions, FindingRow, PendingStart, ProjectActivityEntry, WebContext } from "./api.ts";
+import type { ActivityOptions, FindingRow, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { listProjects, openProject } from "../core/store.ts";
@@ -16,7 +16,7 @@ import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { activityOf, pendingActivity } from "./activity.ts";
 import { collectBackups } from "./backups.ts";
-import { pendingStarts } from "./pending.ts";
+import { pendingStarts, vigilCheckOf } from "./pending.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
 
@@ -111,6 +111,14 @@ export function collectPending(project: string | null): PendingStart[] {
   return pendingStarts(project, (name) => (names.has(name) ? safeLedger(ledgerOf, name) : []));
 }
 
+/** The vigil with its pending check (0.95.0), from the registry of this host. */
+function withCheck(detail: VigilDetail | null): VigilDetail | null {
+  if (detail === null) return null;
+  // A sweep that skipped the vigil is how a refused check answers (`pending.ts`): it must not hide that refusal.
+  const sweptAt = detail.sweeps.find((sweep) => sweep.outcome !== "skipped")?.at ?? null;
+  return { ...detail, pending: vigilCheckOf(collectPending(detail.project), detail.row.slug, sweptAt) };
+}
+
 export function newNonce(): string {
   return randomBytes(16).toString("base64");
 }
@@ -123,7 +131,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     canWrite: !local,
     status: () => collectStatus(),
     ritual: (project, slug) => ritualDetail(project, slug),
-    vigil: (project, slug) => vigilDetail(project, slug),
+    vigil: (project, slug) => withCheck(vigilDetail(project, slug)),
     run: (project, run) => runDetail(project, run),
     milestone: (project, milestone) => milestoneDetail(project, milestone),
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),

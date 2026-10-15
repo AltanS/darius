@@ -319,6 +319,11 @@ const VIGIL: VigilDetail = {
     { at: "2026-09-27T04:31:00.000Z", who: "timer", outcome: "held", failKind: null, reason: null, checks: [{ index: 1, outcome: "pass", exit: 0 }] },
   ],
   body: [{ kind: "paragraph", lines: [[{ kind: "text", text: `Check the page ${EVIL}` }]] }],
+  activity: [
+    { at: "2026-09-28T04:31:00.000Z", who: "timer", actor: "timer", kind: "vigil-swept", item: { type: "vigil", id: "soak", title: "Guard soak" }, text: "Checked by timer: failed", links: { vigil: "soak" }, tone: "bad" },
+    { at: "2026-09-27T10:00:00.000Z", who: "web:altan", actor: "web", kind: "vigil-paused", item: { type: "vigil", id: "soak", title: "Guard soak" }, text: `Paused by web:altan until 2026-10-20: ${EVIL}`, links: { vigil: "soak" }, tone: "wait" },
+  ],
+  pending: null,
 };
 
 /** The events of the DONE run as the activity model gives them (newest first). */
@@ -1619,6 +1624,8 @@ test("the vigil page: the failure block, the output as text in a pre, the last s
   assert.equal(text.includes("<b>bold</b>"), false);
   assert.ok(plain.includes("failed, broken") && plain.includes("held"), "the sweeps list their outcome and kind");
   assert.ok(plain.includes("Check the page"), "the checklist is there");
+  assert.ok(plain.includes("Activity") && plain.includes("Checked by timer: failed"), "the vigil page has its Activity section");
+  assert.ok(plain.includes("Paused by web:altan until 20 Oct:"), "a pause reads with a short date");
 });
 
 test("the vigil page of a vigil that is not flagged has no failure block; an older sweep says the Command comes from the body; unknown vigils answer 404 (0.85.0)", async () => {
