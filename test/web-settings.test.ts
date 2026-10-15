@@ -138,3 +138,29 @@ test("the backups tab shows remote_prune like sse, locked by the environment, th
   assert.ok(body.includes("Delete here"), "the local delete stays");
   assert.ok(!body.includes("Delete in bucket"), "no bucket delete while remote_prune is off");
 });
+
+// --- the emblem loader (0.97.0) --------------------------------------------------------
+
+/** The svg tags of the gem on a page. */
+function gems(body: string): string[] {
+  return body.match(/<svg\b[^>]*\bclass="gem[^"]*"[^>]*>/gu) ?? [];
+}
+
+test("the About tab shows one busy gem with a name; the brand gem of other pages is still decoration", async () => {
+  const about = await page("/settings/about", null);
+  const busy = gems(about).filter((tag) => tag.includes("gem-busy"));
+  assert.equal(busy.length, 1, "one busy gem");
+  assert.match(busy[0] ?? "", /role="img"/u);
+  assert.match(busy[0] ?? "", /aria-label="[^"]+"/u);
+  assert.doesNotMatch(busy[0] ?? "", /aria-hidden/u);
+  assert.equal(about.includes('class="gem-b1"') && about.includes('class="gem-b2"'), true, "the two gem-b facets are split");
+  assert.equal(about.includes('class="gem-b"'), false);
+  for (const tag of gems(about).filter((entry) => !entry.includes("gem-busy"))) {
+    assert.match(tag, /aria-hidden="true"/u, "a gem without busy stays hidden from screen readers");
+    assert.doesNotMatch(tag, /role=/u);
+  }
+  const home = await page("/all", null);
+  assert.ok(gems(home).length >= 1, "the brand gem is on the page");
+  assert.equal(home.includes("gem-busy"), false, "no busy gem outside the About tab");
+  assert.equal(/<svg\b[^>]*\bclass="gem[^"]*"[^>]*\bstyle=/u.test(about), false, "no inline style on the gem");
+});

@@ -8999,14 +8999,17 @@ function NavIcon({ name, size = 16, className }) {
 	});
 }
 /** The brand mark: a cut gem, in four facets and a bright heart. The colours follow the theme. */
-function Gem({ size = 28 }) {
+function Gem({ size = 28, busy = false, label }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-		className: "gem",
+		className: busy ? "gem gem-busy" : "gem",
 		width: size,
 		height: size,
 		viewBox: "0 0 32 32",
 		focusable: "false",
-		"aria-hidden": "true",
+		...label === void 0 ? { "aria-hidden": true } : {
+			role: "img",
+			"aria-label": label
+		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
 			strokeWidth: "2",
 			strokeLinejoin: "miter",
@@ -9018,7 +9021,7 @@ function Gem({ size = 28 }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 					d: "M30 16 16 30 16 22 22 16Z",
-					className: "gem-b"
+					className: "gem-b1"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 					d: "M16 30 2 16 10 16 16 22Z",
@@ -9026,7 +9029,7 @@ function Gem({ size = 28 }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 					d: "M2 16 16 2 16 10 10 16Z",
-					className: "gem-b"
+					className: "gem-b2"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 					d: "M16 10 22 16 16 22 10 16Z",
@@ -20761,8 +20764,16 @@ var settings_about_default = withComponentProps(function SettingsAbout({ loaderD
 					label: "Version",
 					help: "The darius release on this host.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "st-value",
-						children: ["darius ", root?.version]
+						className: "st-value st-value-gem",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gem, {
+								size: 20,
+								busy: true,
+								label: "Emblem loader, shown as an example"
+							}),
+							"darius ",
+							root?.version
+						]
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingRow, {
@@ -21359,11 +21370,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-XuYqV5qy.js",
+			"module": "/assets/root-BWl3hQM5.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/nav-icons-B6jbW45Q.js",
+				"/assets/nav-icons-BTIUXFL9.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/clock-CCM6CgVg.js",
@@ -21374,7 +21385,7 @@ var server_manifest_default = {
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-DF0URKrP.css"],
+			"css": ["/assets/root-CyAjL7Mi.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -22144,11 +22155,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-Ds9dZ1q7.js",
+			"module": "/assets/settings-backups-BUAFsUet.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/nav-icons-B6jbW45Q.js",
+				"/assets/nav-icons-BTIUXFL9.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
@@ -22175,10 +22186,11 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-about-Dkufxeq0.js",
+			"module": "/assets/settings-about-CLq1mseA.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
+				"/assets/nav-icons-BTIUXFL9.js",
 				"/assets/paths-BQKfNgRu.js",
 				"/assets/route-error-CKvjoMy2.js",
 				"/assets/settings-ui-ChNT_lIl.js"
@@ -22400,8 +22412,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-027d044e.js",
-	"version": "027d044e",
+	"url": "/assets/manifest-1b9cb6fa.js",
+	"version": "1b9cb6fa",
 	"sri": void 0
 };
 //#endregion

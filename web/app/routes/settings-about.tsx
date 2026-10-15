@@ -4,6 +4,7 @@ import { Link, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/settings-about";
 import type { loader as rootLoader } from "../root.tsx";
+import { Gem } from "../components/nav-icons.tsx";
 import { SettingRow, SettingsCard } from "../components/settings-ui.tsx";
 import { href } from "../lib/paths.ts";
 import { statusOf } from "../lib/status.ts";
@@ -26,7 +27,10 @@ export default function SettingsAbout({ loaderData }: Route.ComponentProps): Rea
           <span className="st-value">{root?.host}</span>
         </SettingRow>
         <SettingRow label="Version" help="The darius release on this host.">
-          <span className="st-value">darius {root?.version}</span>
+          <span className="st-value st-value-gem">
+            <Gem size={20} busy label="Emblem loader, shown as an example" />
+            darius {root?.version}
+          </span>
         </SettingRow>
         <SettingRow label="Seen by" help="Who this host thinks you are.">
           <span className="st-value">{root?.viewer}</span>

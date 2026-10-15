@@ -46,17 +46,22 @@ export function NavIcon({ name, size = 16, className }: NavIconProps): React.Rea
 
 interface GemProps {
   size?: number;
+  /** The emblem loader (0.97.0): each outer facet comes into focus in turn, then the centre. CSS only; still under reduced motion. */
+  busy?: boolean;
+  /** A name for the gem when it says something ("Working"); without it the gem is decoration and hidden from screen readers. */
+  label?: string;
 }
 
 /** The brand mark: a cut gem, in four facets and a bright heart. The colours follow the theme. */
-export function Gem({ size = 28 }: GemProps): React.ReactNode {
+export function Gem({ size = 28, busy = false, label }: GemProps): React.ReactNode {
+  const name = label === undefined ? { "aria-hidden": true } : { role: "img", "aria-label": label };
   return (
-    <svg className="gem" width={size} height={size} viewBox="0 0 32 32" focusable="false" aria-hidden="true">
+    <svg className={busy ? "gem gem-busy" : "gem"} width={size} height={size} viewBox="0 0 32 32" focusable="false" {...name}>
       <g strokeWidth="2" strokeLinejoin="miter" className="gem-g">
         <path d="M16 2 30 16 22 16 16 10Z" className="gem-a" />
-        <path d="M30 16 16 30 16 22 22 16Z" className="gem-b" />
+        <path d="M30 16 16 30 16 22 22 16Z" className="gem-b1" />
         <path d="M16 30 2 16 10 16 16 22Z" className="gem-c" />
-        <path d="M2 16 16 2 16 10 10 16Z" className="gem-b" />
+        <path d="M2 16 16 2 16 10 10 16Z" className="gem-b2" />
         <path d="M16 10 22 16 16 22 10 16Z" className="gem-d" />
       </g>
     </svg>

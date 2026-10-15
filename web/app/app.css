@@ -2775,7 +2775,8 @@
     fill: var(--gem-a, var(--color-parchment));
   }
 
-  .gem-b {
+  .gem-b1,
+  .gem-b2 {
     fill: var(--gem-b, var(--color-gold));
   }
 
@@ -2785,6 +2786,69 @@
 
   .gem-d {
     fill: var(--gem-d, var(--color-gold-hi));
+  }
+
+  /*
+   * The emblem loader (0.97.0): a busy gem brings its facets into focus one at a time, top right,
+   * bottom right, bottom left, top left, then the centre, in a 1.8 s loop. Each outer facet has a
+   * slot of 0.35 s, the centre holds the last 0.4 s (its own keyframes, `focus-heart`). The facet
+   * in focus has full opacity and a light stroke, the others sit at 0.45. Only the keyframes dim a
+   * facet, so the two reduced-motion switches (animation: none) leave the full emblem. The delays
+   * come from the facet classes, never from an inline style, and a facet keeps its dim look until
+   * its first slot (fill mode backwards).
+   */
+
+  @keyframes focus {
+    0%,
+    23%,
+    100% {
+      opacity: 0.45;
+      stroke: var(--gem-edge, var(--color-deep));
+    }
+    3%,
+    17% {
+      opacity: 1;
+      stroke: var(--gem-lit, var(--color-parchment));
+    }
+  }
+
+  @keyframes focus-heart {
+    0%,
+    27%,
+    100% {
+      opacity: 0.45;
+      stroke: var(--gem-edge, var(--color-deep));
+    }
+    3%,
+    21.5% {
+      opacity: 1;
+      stroke: var(--gem-lit, var(--color-parchment));
+    }
+  }
+
+  .gem-busy path {
+    animation: focus 1.8s linear infinite backwards;
+  }
+
+  .gem-busy .gem-a {
+    animation-delay: 0s;
+  }
+
+  .gem-busy .gem-b1 {
+    animation-delay: 0.35s;
+  }
+
+  .gem-busy .gem-c {
+    animation-delay: 0.7s;
+  }
+
+  .gem-busy .gem-b2 {
+    animation-delay: 1.05s;
+  }
+
+  .gem-busy .gem-d {
+    animation-name: focus-heart;
+    animation-delay: 1.4s;
   }
 
   .nav-icon {
@@ -3883,6 +3947,7 @@
     --gem-b: #a4802b;
     --gem-c: #7a6142;
     --gem-d: #c8a24e;
+    --gem-lit: #fffdf4;
     --card-a: #fbf6e6;
     --card-b: #f6efd9;
     --select-ink: #2a1f14;
@@ -3924,6 +3989,7 @@
       --gem-b: #a4802b;
       --gem-c: #7a6142;
       --gem-d: #c8a24e;
+      --gem-lit: #fffdf4;
       --card-a: #fbf6e6;
       --card-b: #f6efd9;
       --select-ink: #2a1f14;
@@ -4239,6 +4305,14 @@
     font-size: 15px;
     color: var(--color-parchment);
     overflow-wrap: anywhere;
+  }
+
+  /* The About tab shows the busy emblem next to the version. */
+
+  .st-value-gem {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
   }
 
   .st-value-link {

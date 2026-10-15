@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.97.0] - 2026-10-15
+
+### Added
+
+- The emblem loader: a `Gem` with `busy` brings its facets into focus one at a time (top right, bottom right, bottom left, top left, then the centre) in a 1.8 s loop. It is CSS only, works at 14 px inside a button and at 28 px in the bar, and is still under reduced motion. `Gem` also takes a `label` that names it for screen readers.
+- The About tab of Settings shows one busy gem next to the version.
+
+### Changed
+
+- The two `gem-b` facets of the emblem are now `gem-b1` and `gem-b2`, with the same colour.
+
 ## [0.96.0] - 2026-10-15
 
 ### Added
