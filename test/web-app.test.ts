@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -685,7 +685,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.equal(body.includes('id="needs"'), false, "nothing needs you: no Needs you section, and no Quiet line");
   assert.equal(body.includes("Quiet."), false);
   assert.ok(body.includes("Last ritual run 1 h ago, complete."), "the last run moved into the health line");
-  assert.ok(body.includes("Last night"), "the completed djinn");
+  assert.ok(body.includes("Done lately"), "the completed djinn");
   assert.ok(body.includes("Findings heading"), "with its report excerpt");
   assert.equal(segment(body, "flagged"), null, "the self-test vigil does not count");
   assert.equal(segment(body, "need you"), null, "a zero segment does not render");
@@ -755,8 +755,8 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   assert.equal(coming.includes("tone-bad"), false, "no failure colour in Coming up");
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
   assert.match(home, /<h1 class="verdict-h ink-ok">/u);
-  assert.match(home, /Last night.*<li id="done-demo-daily-report" class="rw">/su, "a plain Last night row");
-  assert.match(home, /Last night.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "with the acknowledgement");
+  assert.match(home, /Done lately.*<li id="done-demo-daily-report" class="rw">/su, "a plain Done lately row");
+  assert.match(home, /Done lately.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "with the acknowledgement");
 });
 
 test("the ritual page says where a pinned ritual runs", async () => {
@@ -1347,7 +1347,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(card.includes("demo, by timer, 1 question"), "the question count");
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
   assert.equal(card.includes("darius run ack"), false, "the terminal command moved to the run page");
-  assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Last night");
+  assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Done lately");
   assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
   assert.match(home, /<span class="places-need">1 needs you<\/span>/u, "Places counts the thing that needs you");
 
@@ -1541,7 +1541,7 @@ test("an answered result: the decision replaces the command, home is quiet, the 
   const home = await readPage("/all", ctx);
   assert.equal(h1Of(home), "Nothing needs you.");
   assert.equal(home.includes(`id="asks-`), false);
-  assert.match(home, /Last night.*<li id="done-demo-daily-report" class="rw">.*Answered by owner at 10:30/su, "a plain Last night row with the decision");
+  assert.match(home, /Done lately.*<li id="done-demo-daily-report" class="rw">.*Answered by owner at 10:30/su, "a plain Done lately row with the decision");
   assert.equal(home.includes('class="count tone-wait"'), false, "no badge");
 
   const runs = await readPage("/runs", ctx);
@@ -2437,4 +2437,21 @@ test("the status page marks hosts that back up to different buckets", async () =
   const body = (await response.text()).replaceAll("<!-- -->", "");
   assert.ok(body.includes("Hosts back up to different buckets."), "the card carries one warning line");
   assert.ok(body.includes("s3.example.com/other"), "each host still shows its own bucket");
+});
+
+test("Done lately draws the receipts from the activity and the starts, and a reload shows the same (0.90.0)", async () => {
+  const answered = { project: "demo", at: "2026-09-28T08:40:00.000Z", who: "web:owner", actor: "web", kind: "ack-answered", item: { type: "run", id: DONE, title: "Daily report" }, run: DONE, text: "Answered by web:owner", detail: ["Q1: yes"], links: { ritual: "daily-report", run: DONE }, tone: "ok" } as const;
+  const starting: PendingStart = { id: "p1", at: "2026-09-28T08:50:00.000Z", who: "web:owner", kind: "follow-up", project: "demo", ritual: "daily-report", parent: DONE, host: "host-b", state: "starting" };
+  const refused: PendingStart = { id: "p2", at: "2026-09-28T08:45:00.000Z", who: "web:owner", kind: "run-now", project: "demo", ritual: "daily-report", parent: DONE, host: "host-b", state: "refused", sentence: `no slot ${EVIL}` };
+  const ctx: WebContext = { ...context, activity: () => [answered], pending: () => [starting, refused] };
+  const first = await readPage("/all", ctx);
+  const again = await readPage("/all", ctx);
+  assert.equal(first, again, "a receipt never depends on client state");
+  assert.ok(first.includes("Done lately"));
+  assert.ok(first.includes("Starting a follow-up on host-b, asked 10:50 by web:owner"), "the start with no run yet");
+  assert.ok(first.includes("A run was not started: no slot &lt;script&gt;alert(1)&lt;/script&gt;. Asked 10:45 by web:owner."), "the sentence of a refused start, as text");
+  assert.ok(first.includes(">Try again</a>"));
+  assert.ok(first.includes("Answered by web:owner at 10:40, 1 answer waits for the next run"));
+  assert.ok(first.indexOf("Starting a follow-up") < first.indexOf("Answered by web:owner at"), "starts without a run come first");
+  assert.equal(first.includes(EVIL), false);
 });

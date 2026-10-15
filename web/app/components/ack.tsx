@@ -5,7 +5,7 @@
  * why the failure is fine. A complete run that asks questions has its own
  * answer form since 0.80.0 (`ask-form.tsx`), not this button. The button
  * posts to `/api/run/ack` and then reloads the page data, so the card moves
- * to Last night as an acknowledged card. A refusal of the server (the run is
+ * to Done lately as an acknowledged card. A refusal of the server (the run is
  * held, already acknowledged, and so on) shows as its own sentence and the
  * card stays. The button does not draw for a viewer who cannot write: the
  * server would refuse it. A line says why, and the terminal command stays.

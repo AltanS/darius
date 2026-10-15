@@ -1,6 +1,6 @@
 /**
  * The one row. Coming up, Waiting on an event, Now, Recent runs, /runs, a
- * ritual's history, Latest reports, Last night and closed vigils all draw it,
+ * ritual's history, Latest reports, Done lately and closed vigils all draw it,
  * so the same thing looks the same on every page.
  *
  *     [icon]  Title in full, sans 15px, wraps

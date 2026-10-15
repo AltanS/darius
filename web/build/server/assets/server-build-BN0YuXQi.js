@@ -9090,7 +9090,7 @@ function WorkspaceGlyph({ icon, className, fallback = null }) {
 /** Text helpers for times, ids and commands. Pure, so server and client agree. */
 var MINUTE = 6e4;
 var HOUR$1 = 60 * MINUTE;
-var DAY$2 = 24 * HOUR$1;
+var DAY$3 = 24 * HOUR$1;
 /** "3 min ago", "in 2 h", relative to `now` (ms). */
 function relativeTime(iso, now) {
 	const at = Date.parse(iso);
@@ -9098,11 +9098,11 @@ function relativeTime(iso, now) {
 	const delta = now - at;
 	const size = Math.abs(delta);
 	if (size < MINUTE) return "just now";
-	const amount = size < HOUR$1 ? `${Math.round(size / MINUTE)} min` : size < DAY$2 ? `${Math.round(size / HOUR$1)} h` : `${Math.round(size / DAY$2)} d`;
+	const amount = size < HOUR$1 ? `${Math.round(size / MINUTE)} min` : size < DAY$3 ? `${Math.round(size / HOUR$1)} h` : `${Math.round(size / DAY$3)} d`;
 	return delta >= 0 ? `${amount} ago` : `in ${amount}`;
 }
 function dayNumber(date) {
-	return Math.round(Date.parse(`${date}T00:00:00Z`) / DAY$2);
+	return Math.round(Date.parse(`${date}T00:00:00Z`) / DAY$3);
 }
 /** A YYYY-MM-DD date against the host's `today`: "today", "in 3 d", "2 d ago". */
 function relativeDate(date, today) {
@@ -9126,14 +9126,14 @@ function duration(start, end) {
 	if (Number.isNaN(size) || size < 0) return "";
 	if (size < MINUTE) return `${Math.round(size / 1e3)} s`;
 	if (size < HOUR$1) return `${Math.round(size / MINUTE)} min`;
-	if (size < DAY$2) return pair(Math.floor(size / HOUR$1), "h", Math.round(size % HOUR$1 / MINUTE), "min");
-	return pair(Math.floor(size / DAY$2), "d", Math.round(size % DAY$2 / HOUR$1), "h");
+	if (size < DAY$3) return pair(Math.floor(size / HOUR$1), "h", Math.round(size % HOUR$1 / MINUTE), "min");
+	return pair(Math.floor(size / DAY$3), "d", Math.round(size % DAY$3 / HOUR$1), "h");
 }
 /** A long span in one coarse unit: "12 h", "3 d". */
 function roughDuration(size) {
 	if (size < HOUR$1) return `${Math.max(1, Math.round(size / MINUTE))} min`;
-	if (size < 2 * DAY$2) return `${Math.floor(size / HOUR$1)} h`;
-	return `${Math.floor(size / DAY$2)} d`;
+	if (size < 2 * DAY$3) return `${Math.floor(size / HOUR$1)} h`;
+	return `${Math.floor(size / DAY$3)} d`;
 }
 /** A size in bytes as "812 B", "48 MiB" or "1.4 GiB": one decimal below 10, none above. */
 function byteSize(bytes) {
@@ -9848,6 +9848,16 @@ var ASKS_YOU = {
 	tone: "wait",
 	label: "Asks you"
 };
+/** A start the web asked for that shows no run yet (0.90.0). */
+var STARTING = {
+	tone: "run",
+	label: "Starting"
+};
+/** A start the web asked for that the CLI refused, or that shows no run after 15 minutes. */
+var NOT_STARTED = {
+	tone: "bad",
+	label: "Not started"
+};
 var FAILED = {
 	tone: "bad",
 	label: "Failed"
@@ -10312,9 +10322,9 @@ function reportExcerpt(detail) {
 }
 //#endregion
 //#region app/lib/agenda.ts
-var DAY$1 = 864e5;
+var DAY$2 = 864e5;
 function addDays(date, days) {
-	return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY$1).toISOString().slice(0, 10);
+	return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY$2).toISOString().slice(0, 10);
 }
 /** "Fri 2 Oct" for a YYYY-MM-DD date. */
 function weekdayDate(date) {
@@ -10603,6 +10613,59 @@ function isFolded(group) {
 	return group.kind === "later" || group.kind === "none";
 }
 //#endregion
+//#region app/lib/receipt.ts
+/** "Answered by web:altan" -> "Answered by web:altan at 09:12": the time goes after the name. */
+function withTime(entry, time) {
+	const text = entry.text.replaceAll(/\b[0-9A-Z]{26}\b/gu, (run) => shortRun(run));
+	const marker = `by ${entry.who}`;
+	const at = text.indexOf(marker);
+	if (at < 0) return `${text} at ${time}`;
+	const end = at + marker.length;
+	return `${text.slice(0, end)} at ${time}${text.slice(end)}`;
+}
+function answersWait(count, nextRun) {
+	return `${count === 1 ? "1 answer waits" : `${count} answers wait`} for the next run${nextRun === null ? "" : `, ${nextRun}`}`;
+}
+function answeredTail(entry, facts) {
+	const count = entry.detail?.length ?? 0;
+	if (facts.readBy !== null) return facts.readBy.isNow ? `, run ${shortRun(facts.readBy.run)} started with ${count === 1 ? "it" : "them"}` : `, read by run ${shortRun(facts.readBy.run)}`;
+	return count === 0 ? "" : `, ${answersWait(count, facts.nextRun)}`;
+}
+function followTail(facts) {
+	const follow = facts.follow;
+	if (follow === null) return "";
+	if (follow.state === "running") return `, running${follow.host === null ? "" : ` on ${follow.host}`}`;
+	if (follow.state === "held") return ", waiting for you";
+	if (follow.state === "failed") return ", failed";
+	return follow.changed > 0 ? `, done, ${follow.changed} changed` : ", done";
+}
+/** The sentence of one activity entry as a receipt. */
+function receiptText(entry, facts, clock) {
+	const text = withTime(entry, clockTime(entry.at, clock.offset));
+	if (entry.kind === "ack-answered") return `${text}${answeredTail(entry, facts)}`;
+	if (entry.kind === "follow-up-started") return `${text}${followTail(facts)}`;
+	if (entry.kind === "run-started" && entry.detail?.some((line) => line.startsWith("Read ")) === true) return `${text}, after your answer`;
+	return text;
+}
+var WHAT = {
+	"follow-up": "a follow-up",
+	"run-now": "a run",
+	resume: "a resume",
+	"vigil-check": "a check"
+};
+function capital(text) {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+/** The sentence of a start the web asked for and that shows no run yet. */
+function pendingText(start, clock) {
+	const time = clockTime(start.at, clock.offset);
+	const what = WHAT[start.kind];
+	const asked = `asked ${time} by ${start.who}`;
+	if (start.state === "refused") return `${capital(what)} was not started: ${(start.sentence ?? "the command refused it").replace(/[.\s]+$/u, "")}. ${capital(asked)}.`;
+	if (start.state === "lost") return `${capital(what)} on ${start.host}, ${asked}, shows no start after 15 minutes${start.sentence === void 0 ? "" : `. Last line: ${start.sentence}`}`;
+	return `Starting ${what} on ${start.host}, ${asked}`;
+}
+//#endregion
 //#region app/lib/tone.ts
 var BAD_OUTCOMES = /* @__PURE__ */ new Set([
 	"failed",
@@ -10623,7 +10686,7 @@ function outcomeTone(outcome) {
 //#endregion
 //#region app/lib/home.ts
 var HOUR = 36e5;
-var DAY = 24 * HOUR;
+var DAY$1 = 24 * HOUR;
 /** A sync older than this shows in the overdue colour. */
 var SYNC_STALE_MS = 2 * HOUR;
 /** Report excerpts: the characters sent, and the size past which the last line fades out. */
@@ -10675,7 +10738,7 @@ function when(clock, iso) {
 	const at = Date.parse(iso);
 	if (Number.isNaN(at)) return iso;
 	const size = clock.now - at;
-	if (size >= DAY) return shortDate(hostDate(iso, clock.offset));
+	if (size >= DAY$1) return shortDate(hostDate(iso, clock.offset));
 	if (size < 6e4) return "just now";
 	return `${roughDuration(size)} ago`;
 }
@@ -10865,7 +10928,7 @@ function tookText(run) {
 function isOpenFailure(run) {
 	return run.phase === "closed" && outcomeTone(run.outcome) === "bad" && run.acknowledged === null;
 }
-/** A run for the Last night cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
+/** A run for the Done lately cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
 function isDone(run, runs) {
 	if (asksYou(run, runs)) return false;
 	return run.phase === "closed" && (run.outcome === "complete" || outcomeTone(run.outcome) === "bad" && run.acknowledged !== null);
@@ -11112,6 +11175,270 @@ function needCounts(status, includeSelftest = false) {
 		byProject
 	};
 }
+var NO_FEED = {
+	activity: [],
+	pending: []
+};
+/** Dismissals by one person of one ritual within this many milliseconds read as one: "Dismissed 3 asks". */
+var DISMISS_GROUP_MS = 12e4;
+/** A run that starts this soon after an answer, by the same hand, is "Send and run now". */
+var RUN_NOW_MS = 3e5;
+/** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
+var CLOCK_SKEW_MS = 12e4;
+function isReadLine(line) {
+	return line.startsWith("Read ");
+}
+/** Whether an activity entry is something a person did (or its direct result) and so belongs in a receipt. */
+function isReceiptKind(entry) {
+	switch (entry.kind) {
+		case "ack-answered":
+		case "ack-dismissed":
+		case "ack-note":
+		case "follow-up-started":
+		case "finding-closed":
+		case "vigil-closed": return true;
+		case "vigil-swept": return entry.actor === "web" || entry.actor === "cli";
+		case "run-started": return entry.actor === "web";
+		default: return false;
+	}
+}
+/** Dismissals of the same ritual by the same hand, close in time, as one entry with a count. */
+function groupDismissals(entries) {
+	const out = [];
+	const counts = /* @__PURE__ */ new Map();
+	for (const entry of entries) {
+		const open = entry.kind === "ack-dismissed" ? out.find((candidate) => candidate.kind === "ack-dismissed" && candidate.project === entry.project && candidate.links.ritual === entry.links.ritual && candidate.who === entry.who && Math.abs(Date.parse(candidate.at) - Date.parse(entry.at)) <= DISMISS_GROUP_MS) : void 0;
+		if (open === void 0) {
+			out.push(entry);
+			counts.set(entry, 1);
+			continue;
+		}
+		counts.set(open, (counts.get(open) ?? 1) + 1);
+	}
+	return out.map((entry) => {
+		const count = counts.get(entry) ?? 1;
+		return count > 1 ? Object.assign({}, entry, { text: `Dismissed ${count} asks by ${entry.who}` }) : entry;
+	});
+}
+function receiptPlace(project, entry) {
+	const ws = entry.project;
+	const ritual = entry.links.ritual === void 0 ? void 0 : project?.rituals.find((candidate) => candidate.slug === entry.links.ritual);
+	const item = entry.links.vigil === void 0 ? "ritual" : "vigil";
+	const own = entry.links.vigil !== void 0 ? {
+		text: "Open the vigil",
+		href: href({
+			to: "vigil",
+			ws,
+			slug: entry.links.vigil
+		})
+	} : entry.links.ritual !== void 0 ? {
+		text: "History",
+		href: href({
+			to: "ritual",
+			ws,
+			slug: entry.links.ritual
+		})
+	} : entry.links.finding !== void 0 || entry.item.type === "finding" ? {
+		text: "Findings",
+		href: href({
+			to: "section",
+			ws,
+			section: "findings"
+		})
+	} : null;
+	const runLink = entry.links.run === void 0 ? null : {
+		text: "Open the run",
+		href: href({
+			to: "run",
+			ws,
+			run: entry.links.run
+		})
+	};
+	const first = runLink ?? own;
+	return {
+		item,
+		manual: ritual !== void 0 && isManual(ritual),
+		title: ritual?.title ?? entry.item.title,
+		href: first?.href ?? href({
+			to: "overview",
+			ws
+		}),
+		links: runLink === null || own === null ? [] : [own]
+	};
+}
+function followFacts(project, entry, hosts) {
+	const row = entry.run === void 0 ? void 0 : project?.runs.find((candidate) => candidate.run === entry.run);
+	if (row === void 0) return null;
+	const host = hosts.get(`${entry.project}/${row.run}`) ?? null;
+	if (row.phase === "running") return {
+		state: "running",
+		host,
+		changed: 0
+	};
+	if (row.phase === "held") return {
+		state: "held",
+		host,
+		changed: 0
+	};
+	return row.outcome === "complete" ? {
+		state: "done",
+		host,
+		changed: row.result?.fixed ?? 0
+	} : {
+		state: "failed",
+		host,
+		changed: 0
+	};
+}
+/** The run that took an answer: the first run of the ritual after it that read answers. */
+function readerOf(answer, starts) {
+	const at = Date.parse(answer.at);
+	const reader = starts.filter((start) => start.project === answer.project && start.links.ritual === answer.links.ritual && start.kind === "run-started" && start.run !== void 0 && Date.parse(start.at) >= at - CLOCK_SKEW_MS && (start.detail?.some(isReadLine) ?? false)).toSorted((left, right) => left.at.localeCompare(right.at))[0];
+	if (reader?.run === void 0) return null;
+	return {
+		run: reader.run,
+		isNow: reader.who === answer.who && Math.abs(Date.parse(reader.at) - at) <= RUN_NOW_MS
+	};
+}
+/** The start line of a run, the one that carries "after your answer": the answered run it follows. */
+function answeredBefore(run, project, events) {
+	const started = events.find((entry) => entry.project === project && entry.kind === "run-started" && entry.run === run.run);
+	if (started === void 0 || !(started.detail?.some(isReadLine) ?? false)) return null;
+	return events.filter((entry) => entry.project === project && entry.kind === "ack-answered" && entry.links.ritual === started.links.ritual && entry.links.run !== void 0 && Date.parse(entry.at) <= Date.parse(started.at) + CLOCK_SKEW_MS).toSorted((left, right) => right.at.localeCompare(left.at))[0]?.links.run ?? null;
+}
+function pendingRow(clock, byName, start) {
+	const project = byName.get(start.project);
+	const ritual = start.ritual === void 0 ? void 0 : project?.rituals.find((candidate) => candidate.slug === start.ritual);
+	const vigil = start.vigil === void 0 ? void 0 : project?.vigils.find((candidate) => candidate.slug === start.vigil);
+	const ws = start.project;
+	const place = start.kind === "vigil-check" && start.vigil !== void 0 ? {
+		text: "Try again",
+		href: href({
+			to: "vigil",
+			ws,
+			slug: start.vigil
+		})
+	} : start.parent !== void 0 ? {
+		text: "Try again",
+		href: href({
+			to: "run",
+			ws,
+			run: start.parent
+		})
+	} : start.ritual !== void 0 ? {
+		text: "Try again",
+		href: href({
+			to: "ritual",
+			ws,
+			slug: start.ritual
+		})
+	} : null;
+	const failed = start.state === "refused" || start.state === "lost";
+	const target = start.vigil !== void 0 ? href({
+		to: "vigil",
+		ws,
+		slug: start.vigil
+	}) : start.ritual !== void 0 ? href({
+		to: "ritual",
+		ws,
+		slug: start.ritual
+	}) : place?.href ?? href({
+		to: "overview",
+		ws
+	});
+	return {
+		kind: "pending",
+		id: `pending-${start.id}`,
+		at: start.at,
+		project: ws,
+		start,
+		text: pendingText(start, clock),
+		word: failed ? NOT_STARTED : STARTING,
+		item: start.vigil === void 0 ? "ritual" : "vigil",
+		manual: ritual !== void 0 && isManual(ritual),
+		title: ritual?.title ?? vigil?.title ?? start.vigil ?? start.ritual ?? start.parent ?? "run",
+		href: target,
+		retry: failed ? place : null
+	};
+}
+/**
+* Done lately (0.90.0): what finished and what the operator decided in the
+* last 24 hours, for every ritual and every kind of decision, newest first.
+* A start the web asked for that shows no run yet (or never will) sits on top
+* with the CLI's sentence. The rows come from the status (finished runs), the
+* activity model (answers, dismissals, notes, follow-ups, run now, checks,
+* finding closes) and the pending registry, never from client state, so a
+* reload shows the same. `now` is in milliseconds.
+*/
+function doneLately(status, pending, events, now, options = {}) {
+	const scope = options.scope ?? ALL_WORKSPACES$1;
+	const readRun = options.readRun ?? (() => null);
+	const clock = {
+		now,
+		today: status.today,
+		offset: status.utcOffset
+	};
+	const projects = scopeProjects(status, scope);
+	const byName = new Map(projects.map((project) => [project.name, project]));
+	const since = now - DAY$1;
+	const recent = (iso) => Date.parse(iso) >= since;
+	const lately = events.filter((entry) => byName.has(entry.project) && recent(entry.at));
+	const hosts = new Map(pending.filter((start) => start.state === "started" && start.run !== void 0).map((start) => [`${start.project}/${start.run ?? ""}`, start.host]));
+	const grouped = groupDismissals(lately.filter((entry) => isReceiptKind(entry)));
+	const absorbed = /* @__PURE__ */ new Set();
+	const receipts = [];
+	for (const entry of grouped) {
+		const project = byName.get(entry.project);
+		const readBy = entry.kind === "ack-answered" ? readerOf(entry, lately) : null;
+		if (readBy?.isNow === true) absorbed.add(`${entry.project}/${readBy.run}`);
+		const ritual = entry.links.ritual === void 0 ? void 0 : project?.rituals.find((candidate) => candidate.slug === entry.links.ritual);
+		const nextRun = ritual === void 0 ? null : nextRunText(ritual, clock);
+		const facts = {
+			nextRun: nextRun === "on demand" ? null : nextRun,
+			follow: entry.kind === "follow-up-started" ? followFacts(project, entry, hosts) : null,
+			readBy
+		};
+		const place = receiptPlace(project, entry);
+		const started = readBy === null || !readBy.isNow ? [] : [{
+			text: "Started run",
+			href: href({
+				to: "run",
+				ws: entry.project,
+				run: readBy.run
+			})
+		}];
+		receipts.push({
+			kind: "receipt",
+			id: `receipt-${entry.project}-${entry.kind}-${entry.at}-${entry.run ?? entry.item.id}`,
+			at: entry.at,
+			project: entry.project,
+			entry,
+			facts,
+			text: receiptText(entry, facts, clock),
+			...place,
+			links: [...place.links, ...started]
+		});
+	}
+	const shown = receipts.filter((receipt) => !(receipt.entry.kind === "run-started" && receipt.entry.run !== void 0 && absorbed.has(`${receipt.project}/${receipt.entry.run}`)));
+	const covered = new Set(lately.filter((entry) => entry.kind.startsWith("ack-") && entry.run !== void 0).map((entry) => `${entry.project}/${entry.run ?? ""}`));
+	for (const receipt of shown) if (receipt.entry.run !== void 0) covered.add(`${receipt.project}/${receipt.entry.run}`);
+	for (const key of absorbed) covered.add(key);
+	const finished = projects.flatMap((project) => {
+		return projectNeeds(clock, status.generatedAt, project).states.flatMap((state) => {
+			const last = state.last;
+			if (last === null || !isDone(last, state.own) || now - Date.parse(last.startedAt) >= DAY$1 || covered.has(`${project.name}/${last.run}`)) return [];
+			return [{
+				kind: "run",
+				id: `done-${state.project}-${state.ritual.slug}`,
+				at: last.startedAt,
+				card: finishedCard(clock, readRun, state, last)
+			}];
+		});
+	});
+	const starts = pending.filter((start) => byName.has(start.project) && start.state !== "started" && recent(start.at)).toSorted((left, right) => right.at.localeCompare(left.at)).map((start) => pendingRow(clock, byName, start));
+	const rest = [...shown, ...finished].toSorted((left, right) => right.at.localeCompare(left.at));
+	return [...starts, ...rest];
+}
 function verdictTone(needs) {
 	const kinds = new Set(needs.map((card) => card.kind));
 	if (kinds.has("failed") || kinds.has("flagged") || kinds.has("unreadable")) return "bad";
@@ -11243,7 +11570,27 @@ function groupHref(agenda, kind, workspace) {
 function newest(left, right) {
 	return right.startedAt.localeCompare(left.startedAt);
 }
-function nowRun(run) {
+/** The line under a running row: a follow-up names its parent run, a run an answer started names the answered run. */
+function nowNote(run, events) {
+	if (run.followUpOf !== null) return {
+		text: `follow-up of ${shortRun(run.followUpOf)}`,
+		href: href({
+			to: "run",
+			ws: run.project,
+			run: run.followUpOf
+		})
+	};
+	const answered = answeredBefore(run, run.project, events);
+	return answered === null ? null : {
+		text: "after your answer",
+		href: href({
+			to: "run",
+			ws: run.project,
+			run: answered
+		})
+	};
+}
+function nowRun(run, events) {
 	return {
 		id: run.run,
 		title: run.label,
@@ -11256,7 +11603,8 @@ function nowRun(run) {
 		startedAt: run.startedAt,
 		who: run.who,
 		kind: run.kind,
-		manual: run.manual
+		manual: run.manual,
+		note: nowNote(run, events)
 	};
 }
 var ALL_WORKSPACES$1 = {
@@ -11268,7 +11616,7 @@ function scopeProjects(status, scope) {
 	if (scope.workspace !== null) return status.projects.filter((project) => project.name === scope.workspace);
 	return status.projects.filter((project) => scope.includeSelftest || !isSelftest(project.name));
 }
-function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
+function homeView(status, readRun, scope = ALL_WORKSPACES$1, feed = NO_FEED) {
 	const clock = {
 		now: Date.parse(status.generatedAt),
 		today: status.today,
@@ -11289,13 +11637,16 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
 		...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project))
 	];
-	const lastNight = states.filter((state) => state.last !== null && isDone(state.last, state.own) && clock.now - Date.parse(state.last.startedAt) < DAY).toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? "")).flatMap((state) => state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]);
+	const done = doneLately(status, feed.pending, feed.activity, clock.now, {
+		scope,
+		readRun
+	});
 	const agenda = buildAgenda({
 		projects: all.map((entry) => entry.project),
 		today: clock.today,
 		offset: clock.offset
 	});
-	const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
+	const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run, feed.activity));
 	return {
 		verdict: verdictText(needs.length),
 		tone: verdictTone(needs),
@@ -11304,7 +11655,7 @@ function homeView(status, readRun, scope = ALL_WORKSPACES$1) {
 		strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0), vigilsDue(scoped, clock.today)),
 		now,
 		needs,
-		lastNight,
+		doneLately: done,
 		agenda,
 		health: [
 			timerPiece(clock, status, states),
@@ -12169,7 +12520,7 @@ function Facts({ facts }) {
 * why the failure is fine. A complete run that asks questions has its own
 * answer form since 0.80.0 (`ask-form.tsx`), not this button. The button
 * posts to `/api/run/ack` and then reloads the page data, so the card moves
-* to Last night as an acknowledged card. A refusal of the server (the run is
+* to Done lately as an acknowledged card. A refusal of the server (the run is
 * held, already acknowledged, and so on) shows as its own sentence and the
 * card stays. The button does not draw for a viewer who cannot write: the
 * server would refuse it. A line says why, and the terminal command stays.
@@ -13048,7 +13399,7 @@ function Elapsed({ since }) {
 //#region app/components/row.tsx
 /**
 * The one row. Coming up, Waiting on an event, Now, Recent runs, /runs, a
-* ritual's history, Latest reports, Last night and closed vigils all draw it,
+* ritual's history, Latest reports, Done lately and closed vigils all draw it,
 * so the same thing looks the same on every page.
 *
 *     [icon]  Title in full, sans 15px, wraps
@@ -13151,8 +13502,67 @@ function RowList({ children, bare = false, className }) {
 	});
 }
 //#endregion
+//#region app/components/receipt.tsx
+/**
+* A receipt (0.90.0): the row that takes the place of a card after an action,
+* and the row of a start the web asked for. Both are built from data in
+* `lib/home.ts` (`doneLately`), never from client state, so a reload shows the
+* same row. The sentence says what was done, by whom, when and what comes
+* next; the small links go to the ritual or vigil and to the run.
+*/
+/** One receipt row: the title opens the run (or the ritual), the sentence is under it. */
+function Receipt({ row }) {
+	if (row.kind === "pending") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+		id: row.id,
+		kind: row.item,
+		manual: row.manual,
+		href: row.href,
+		title: row.title,
+		rail: railOf(row.word),
+		live: row.start.state === "starting",
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
+			kind: row.item,
+			manual: row.manual
+		}),
+		state: row.word,
+		meta: [row.project],
+		time: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.at }),
+		acts: row.retry === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+			to: row.retry.href,
+			children: row.retry.text
+		}),
+		note: row.text
+	});
+	const detail = row.entry.detail ?? [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+		id: row.id,
+		kind: row.item,
+		manual: row.manual,
+		href: row.href,
+		title: row.title,
+		chips: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
+			kind: row.item,
+			manual: row.manual
+		}),
+		meta: [row.project],
+		time: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.at }),
+		acts: row.links.length === 0 ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: row.links.map((link) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+			to: link.href,
+			children: link.text
+		}, link.text)) }),
+		note: row.text,
+		foot: detail.length === 0 ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+			summary: detail.length === 1 ? "1 detail" : `${detail.length} details`,
+			children: detail.map((line, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note",
+				children: line
+			}, `${index}`))
+		})
+	});
+}
+//#endregion
 //#region app/components/board.tsx
-/** The pieces of the command board: the Next line, the status strip, the Now rows, the Needs you card and the Last night rows. */
+/** The pieces of the command board: the Next line, the status strip, the Now rows, the Needs you card and the Done lately rows. */
 /** Text in parts, each part in its own colour. */
 function Pieces({ pieces }) {
 	return pieces.map((piece, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -13215,6 +13625,10 @@ function NowList({ runs }) {
 		}),
 		state: RUNNING,
 		meta: [run.project, run.who === "timer" ? "by timer" : `by ${run.who}`],
+		note: run.note === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+			to: run.note.href,
+			children: run.note.text
+		}),
 		time: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: ["for ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since: run.startedAt })] })
 	}, run.id)) });
 }
@@ -13243,35 +13657,39 @@ function NextUp({ next }) {
 		]
 	});
 }
-/** The Last night rows: what finished, as rows. The row opens the report; a desktop shows an excerpt under it. */
-function DoneRows({ cards }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, { children: cards.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
-		id: card.id,
-		kind: card.item ?? "ritual",
-		manual: card.manual,
-		href: card.href,
-		title: card.title,
-		chips: card.item === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
-			kind: card.item,
-			manual: card.manual
-		}),
-		state: card.word.ink === "plain" || card.word.ink === "mute" ? null : {
-			tone: card.word.ink,
-			label: card.word.text
-		},
-		meta: card.meta,
-		time: card.side === null ? void 0 : card.side.text,
-		acts: card.actions[0] === void 0 ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-			to: card.actions[0].href,
-			children: card.actions[0].text
-		}),
-		note: card.meta2,
-		excerpt: card.report === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Report, {
-			report: card.report,
-			lines: 2,
-			fades: false
-		})
-	}, card.id)) });
+/** The Done lately rows: starts that show no run, the operator's decisions, and what finished. A finished run opens its report; a desktop shows an excerpt under it. */
+function DoneRows({ rows }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, { children: rows.map((entry) => {
+		if (entry.kind !== "run") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Receipt, { row: entry }, entry.id);
+		const card = entry.card;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+			id: card.id,
+			kind: card.item ?? "ritual",
+			manual: card.manual,
+			href: card.href,
+			title: card.title,
+			chips: card.item === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
+				kind: card.item,
+				manual: card.manual
+			}),
+			state: card.word.ink === "plain" || card.word.ink === "mute" ? null : {
+				tone: card.word.ink,
+				label: card.word.text
+			},
+			meta: card.meta,
+			time: card.side === null ? void 0 : card.side.text,
+			acts: card.actions[0] === void 0 ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+				to: card.actions[0].href,
+				children: card.actions[0].text
+			}),
+			note: card.meta2,
+			excerpt: card.report === null ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Report, {
+				report: card.report,
+				lines: 2,
+				fades: false
+			})
+		}, card.id);
+	}) });
 }
 /** The commands of a held card, closed under one line: a phone reads the question first and types the answer at a terminal. An "Asks you" card has the answer form instead (0.80.0). */
 function Commands({ card }) {
@@ -13320,7 +13738,7 @@ function AskBody({ ask, title, canWrite }) {
 	] });
 }
 /**
-* A Needs you card, or a plain Last night card when it has no edge. The head
+* A Needs you card, or a plain Done lately card when it has no edge. The head
 * (the status word, the age, the title and the meta line) is one tap target
 * to the run; the questions stay plain text and the commands wait in a
 * closed disclosure. A failed card carries the Acknowledge button (0.68.0). A
@@ -14179,6 +14597,7 @@ var overview_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader$18,
 	meta: () => meta$16
 });
+var DAY = 864e5;
 /** Latest-report rows a phone shows before its own button. */
 var REPORTS_PHONE = 3;
 /** Recent runs a phone shows before its own button. */
@@ -14192,9 +14611,14 @@ function loader$18({ context, request, params }) {
 	const { scope, projects } = scopeOfRequest(status, request, params.ws);
 	const read = (project, run) => context.run(project, run);
 	const only = scope.workspace === null ? void 0 : projects[0];
+	const since = (/* @__PURE__ */ new Date(Date.parse(status.generatedAt) - DAY)).toISOString();
+	const feed = {
+		activity: context.activity(scope.workspace, { since }),
+		pending: context.pending(scope.workspace)
+	};
 	return {
 		workspace: scope.workspace,
-		home: homeView(status, read, scope),
+		home: homeView(status, read, scope, feed),
 		workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
 		extras: only === void 0 ? null : workspaceExtras(only, read),
 		canWrite: context.canWrite
@@ -14295,18 +14719,18 @@ function RecentRuns({ extras }) {
 /**
 * The Overview of a scope: the verdict, the Next line and the status strip on
 * top (the strip only has the segments above zero). Then Needs you (only when
-* something needs you), Now (only when something runs) and Last night. A
+* something needs you), Now (only when something runs) and Done lately. A
 * workspace adds its latest reports, its recent runs and where its checkout
 * is, at the end of the rail; all workspaces add the Workspaces list after
 * Needs you and one link to the list of all runs. What is coming up
 * lives in the Rituals and Vigils sections: the Next line and the strip link
 * there. On a phone the sections stack in the order of the day; on a desktop
-* the wide column holds Needs you, Now and the reports, the rail holds Last
-* night and the health line. Each run shows once.
+* the wide column holds Needs you, Now and the reports, the rail holds Done
+* lately and the health line. Each run shows once.
 */
 var overview_default = withComponentProps(function Overview({ loaderData }) {
 	const { home, extras, workspaces, canWrite } = loaderData;
-	const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
+	const { verdict, tone, sub, next, strip, now, needs, doneLately, health } = home;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "proj ov",
 		children: [
@@ -14353,11 +14777,12 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 					className: "board-rail",
 					children: [
-						lastNight.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						doneLately.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 							className: "section sec-last",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Last night" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							id: "done",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Done lately" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "panel",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoneRows, { cards: lastNight })
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoneRows, { rows: doneLately })
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -19758,14 +20183,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-iPCvSnmH.js",
+			"module": "/assets/overview-CnIKd6OW.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -19797,14 +20222,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-iPCvSnmH.js",
+			"module": "/assets/overview-CnIKd6OW.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -19910,13 +20335,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-D1q8teTj.js",
+			"module": "/assets/rituals-CjksIIc_.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/section-C9Xmmq5G.js",
@@ -19951,13 +20376,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-D1q8teTj.js",
+			"module": "/assets/rituals-CjksIIc_.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/section-C9Xmmq5G.js",
@@ -20126,13 +20551,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DPZH8foI.js",
+			"module": "/assets/runs-C5_1NndN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -20166,7 +20591,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-SfpGQy_7.js",
+			"module": "/assets/ritual-RjtOm7k7.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20176,7 +20601,7 @@ var server_manifest_default = {
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
@@ -20242,7 +20667,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-sWbDkgPg.js",
+			"module": "/assets/run-sJ-HzRNZ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20252,7 +20677,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
@@ -20483,13 +20908,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DPZH8foI.js",
+			"module": "/assets/runs-C5_1NndN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-DMKsRLEz.js",
+				"/assets/runs-D6GSiVV3.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -20649,8 +21074,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-6898a545.js",
-	"version": "6898a545",
+	"url": "/assets/manifest-01c59950.js",
+	"version": "01c59950",
 	"sri": void 0
 };
 //#endregion

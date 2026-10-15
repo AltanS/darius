@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.90.0] - 2026-10-15
+
+### Added
+
+- Done lately: the Overview section "Last night" is now "Done lately". It covers every ritual for 24 hours and every kind of decision: answers (with the number of answers that wait and when the next run is), dismissals, notes, follow-ups (where they run, and done with the number of changes), runs the web started, checks, closed vigils and closed findings. A run started by "Send and run now" joins the receipt of its answer.
+- A start that shows no run yet shows on top of Done lately with the CLI's sentence. A refused or lost one has a "Try again" link.
+- Now names a follow-up ("follow-up of <run>") and a run that an answer started ("after your answer"), each with a link.
+
+### Changed
+
+- A decision on a run replaces the card of that run in Done lately with its receipt, so a run shows once. A receipt is built from the ledger and the pending registry, never from client state.
+
 ## [0.89.0] - 2026-10-15
 
 ### Added

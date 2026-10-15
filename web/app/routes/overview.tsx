@@ -15,6 +15,8 @@ import { workspaceExtras, type WorkspaceExtras } from "../lib/workspace.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
+const DAY = 24 * 3_600_000;
+
 /** Latest-report rows a phone shows before its own button. */
 const REPORTS_PHONE = 3;
 
@@ -30,9 +32,12 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
   const { scope, projects } = scopeOfRequest(status, request, params.ws);
   const read = (project: string, run: string) => context.run(project, run);
   const only = scope.workspace === null ? undefined : projects[0];
+  // The ledger events and the starts of the last day: they are the receipts of Done lately.
+  const since = new Date(Date.parse(status.generatedAt) - DAY).toISOString();
+  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace) };
   return {
     workspace: scope.workspace,
-    home: homeView(status, read, scope),
+    home: homeView(status, read, scope, feed),
     workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
     extras: only === undefined ? null : workspaceExtras(only, read),
     canWrite: context.canWrite,
@@ -131,18 +136,18 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
 /**
  * The Overview of a scope: the verdict, the Next line and the status strip on
  * top (the strip only has the segments above zero). Then Needs you (only when
- * something needs you), Now (only when something runs) and Last night. A
+ * something needs you), Now (only when something runs) and Done lately. A
  * workspace adds its latest reports, its recent runs and where its checkout
  * is, at the end of the rail; all workspaces add the Workspaces list after
  * Needs you and one link to the list of all runs. What is coming up
  * lives in the Rituals and Vigils sections: the Next line and the strip link
  * there. On a phone the sections stack in the order of the day; on a desktop
- * the wide column holds Needs you, Now and the reports, the rail holds Last
- * night and the health line. Each run shows once.
+ * the wide column holds Needs you, Now and the reports, the rail holds Done
+ * lately and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { home, extras, workspaces, canWrite } = loaderData;
-  const { verdict, tone, sub, next, strip, now, needs, lastNight, health } = home;
+  const { verdict, tone, sub, next, strip, now, needs, doneLately, health } = home;
   return (
     <div className="proj ov">
       <section className="verdict">
@@ -174,11 +179,11 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
           {extras === null ? null : <RecentRuns extras={extras} />}
         </div>
         <aside className="board-rail">
-          {lastNight.length === 0 ? null : (
-            <section className="section sec-last">
-              <SectHead title="Last night" />
+          {doneLately.length === 0 ? null : (
+            <section className="section sec-last" id="done">
+              <SectHead title="Done lately" />
               <div className="panel">
-                <DoneRows cards={lastNight} />
+                <DoneRows rows={doneLately} />
               </div>
             </section>
           )}

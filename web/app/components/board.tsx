@@ -1,10 +1,10 @@
-/** The pieces of the command board: the Next line, the status strip, the Now rows, the Needs you card and the Last night rows. */
+/** The pieces of the command board: the Next line, the status strip, the Now rows, the Needs you card and the Done lately rows. */
 
 import { Link } from "react-router";
 
 import type { MdBlock } from "../../../src/web/api.ts";
 import type { NextLine } from "../lib/agenda.ts";
-import type { Ask, Card, NowRun, Piece, Segment } from "../lib/home.ts";
+import type { Ask, Card, DoneRow, NowRun, Piece, Segment } from "../lib/home.ts";
 import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
@@ -15,6 +15,7 @@ import { Markdown } from "./markdown.tsx";
 import { heldKey } from "../lib/ask.ts";
 import { AskForm, EarlierAsks, HeldForm } from "./ask-form.tsx";
 import { Elapsed, Pill } from "./pulse.tsx";
+import { Receipt } from "./receipt.tsx";
 import { Row, RowList } from "./row.tsx";
 import { Fold, Status } from "./ui.tsx";
 
@@ -95,6 +96,7 @@ export function NowList({ runs }: NowListProps): React.ReactNode {
           chips={<KindWord kind={run.kind} manual={run.manual} />}
           state={RUNNING}
           meta={[run.project, run.who === "timer" ? "by timer" : `by ${run.who}`]}
+          note={run.note === null ? undefined : <Link to={run.note.href}>{run.note.text}</Link>}
           time={
             <>
               for <Elapsed since={run.startedAt} />
@@ -123,30 +125,34 @@ export function NextUp({ next }: NextUpProps): React.ReactNode {
 }
 
 interface DoneRowsProps {
-  cards: readonly Card[];
+  rows: readonly DoneRow[];
 }
 
-/** The Last night rows: what finished, as rows. The row opens the report; a desktop shows an excerpt under it. */
-export function DoneRows({ cards }: DoneRowsProps): React.ReactNode {
+/** The Done lately rows: starts that show no run, the operator's decisions, and what finished. A finished run opens its report; a desktop shows an excerpt under it. */
+export function DoneRows({ rows }: DoneRowsProps): React.ReactNode {
   return (
     <RowList>
-      {cards.map((card) => (
-        <Row
-          key={card.id}
-          id={card.id}
-          kind={card.item ?? "ritual"}
-          manual={card.manual}
-          href={card.href}
-          title={card.title}
-          chips={card.item === null ? undefined : <KindWord kind={card.item} manual={card.manual} />}
-          state={card.word.ink === "plain" || card.word.ink === "mute" ? null : { tone: card.word.ink, label: card.word.text }}
-          meta={card.meta}
-          time={card.side === null ? undefined : card.side.text}
-          acts={card.actions[0] === undefined ? undefined : <Link to={card.actions[0].href}>{card.actions[0].text}</Link>}
-          note={card.meta2}
-          excerpt={card.report === null ? undefined : <Report report={card.report} lines={2} fades={false} />}
-        />
-      ))}
+      {rows.map((entry) => {
+        if (entry.kind !== "run") return <Receipt key={entry.id} row={entry} />;
+        const card = entry.card;
+        return (
+          <Row
+            key={card.id}
+            id={card.id}
+            kind={card.item ?? "ritual"}
+            manual={card.manual}
+            href={card.href}
+            title={card.title}
+            chips={card.item === null ? undefined : <KindWord kind={card.item} manual={card.manual} />}
+            state={card.word.ink === "plain" || card.word.ink === "mute" ? null : { tone: card.word.ink, label: card.word.text }}
+            meta={card.meta}
+            time={card.side === null ? undefined : card.side.text}
+            acts={card.actions[0] === undefined ? undefined : <Link to={card.actions[0].href}>{card.actions[0].text}</Link>}
+            note={card.meta2}
+            excerpt={card.report === null ? undefined : <Report report={card.report} lines={2} fades={false} />}
+          />
+        );
+      })}
     </RowList>
   );
 }
@@ -200,7 +206,7 @@ interface CardViewProps {
 }
 
 /**
- * A Needs you card, or a plain Last night card when it has no edge. The head
+ * A Needs you card, or a plain Done lately card when it has no edge. The head
  * (the status word, the age, the title and the meta line) is one tap target
  * to the run; the questions stay plain text and the commands wait in a
  * closed disclosure. A failed card carries the Acknowledge button (0.68.0). A

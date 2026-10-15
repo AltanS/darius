@@ -5,8 +5,8 @@
  * cards)? What runs now (the Now rows)? What is coming (Coming up, one
  * time-ordered list of every active ritual and every dated vigil, and Waiting
  * on an event, the vigils without a date; both built by `lib/agenda.ts`, which
- * the Rituals and Vigils sections draw; the Overview links there)? What happened last night (the Last night
- * cards)? Is darius itself healthy (one quiet line: Timer, Sync, last ritual
+ * the Rituals and Vigils sections draw; the Overview links there)? What happened lately (the Done lately
+ * rows)? Is darius itself healthy (one quiet line: Timer, Sync, last ritual
  * run)? Every value here comes from the status. The sub line under the verdict
  * is the date and time; the Next line under it names what is next.
  *
@@ -21,24 +21,25 @@
  * total, so the Places counts and the verdict cannot drift apart.
  *
  * A failed run that a person acknowledged (`darius run ack`) needs nobody
- * any more: it leaves Needs you and shows as a plain Last night card with
+ * any more: it leaves Needs you and shows as a plain Done lately card with
  * the acknowledgement, so the verdict stops saying "Failed", and its row in
  * Coming up says "Failed, acknowledged" in grey.
  *
  * A complete run whose result asks the operator something (0.22.0) is an
  * "Asks you" card, like a held run, until someone answers it in the card or
- * with `darius run ack --answer`. Then it is a plain Last night card with the
+ * with `darius run ack --answer`. Then it is a plain Done lately card with the
  * decision. Since 0.80.0 the card is the newest open ask of the ritual, and
  * older open asks fold under it.
  */
 
-import type { HostStatus, MdBlock, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
+import type { ActivityEntry, HostStatus, MdBlock, PendingStart, ProjectActivityEntry, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./agenda.ts";
-import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate } from "./format.ts";
+import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate, shortRun } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
-import { ASKS_YOU, datePhrase, FLAGGED, RUNNING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
-import { outcomeTone, type Tone } from "./tone.ts";
+import { pendingText, receiptText, type ReceiptFacts } from "./receipt.ts";
+import { ASKS_YOU, datePhrase, FLAGGED, NOT_STARTED, RUNNING, STARTING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
+import { outcomeTone, type Badge, type Tone } from "./tone.ts";
 import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
 
 const HOUR = 3_600_000;
@@ -172,6 +173,8 @@ export interface NowRun {
   who: string;
   kind: Kind;
   manual: boolean;
+  /** A line under the row: "follow-up of 8SXQ2ABC" or "after your answer", with the run it points to (0.90.0). */
+  note: { text: string; href: string } | null;
 }
 
 export interface Home {
@@ -185,7 +188,8 @@ export interface Home {
   /** The runs that run now and are not stuck (a stuck run has its card in Needs you). */
   now: NowRun[];
   needs: Card[];
-  lastNight: Card[];
+  /** Done lately (0.90.0): what finished and what the operator decided in the last day, newest first, starts that show no run on top. */
+  doneLately: DoneRow[];
   /** Coming up and Waiting on an event: the same agenda the project page draws. */
   agenda: Agenda;
   /** "Timer ok, last run 6 min ago. Synced 2 min ago. Last ritual run 18 h ago, complete." in parts, each in its own colour. */
@@ -350,7 +354,7 @@ function isOpenFailure(run: RunRow): boolean {
   return run.phase === "closed" && outcomeTone(run.outcome) === "bad" && run.acknowledged === null;
 }
 
-/** A run for the Last night cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
+/** A run for the Done lately cards: it completed and asks nothing open, or it failed and a person acknowledged it. */
 function isDone(run: RunRow, runs: readonly RunRow[]): boolean {
   if (asksYou(run, runs)) return false;
   return run.phase === "closed" && (run.outcome === "complete" || (outcomeTone(run.outcome) === "bad" && run.acknowledged !== null));
@@ -540,6 +544,268 @@ export function needsText(count: number): string {
   return count === 1 ? "1 thing needs you" : `${count} things need you`;
 }
 
+// --- Done lately (0.90.0) --------------------------------------------------------------------
+
+/** A run that finished lately: the card the Overview always drew for it. */
+export interface DoneRun {
+  kind: "run";
+  id: string;
+  at: string;
+  card: Card;
+}
+
+/** What the operator did lately, as a receipt built from the ledger (`ActivityEntry`). */
+export interface DoneReceipt {
+  kind: "receipt";
+  id: string;
+  at: string;
+  project: string;
+  entry: ActivityEntry;
+  facts: ReceiptFacts;
+  /** The sentence: what, by whom, when, what comes next. */
+  text: string;
+  item: Kind;
+  manual: boolean;
+  title: string;
+  href: string;
+  /** Small links at the end of the row: the ritual or vigil, and the run a decision started. */
+  links: Action[];
+}
+
+/** A start the web asked for that shows no run yet, or never will (`PendingStart`). */
+export interface DonePending {
+  kind: "pending";
+  id: string;
+  at: string;
+  project: string;
+  start: PendingStart;
+  text: string;
+  word: Badge;
+  item: Kind;
+  manual: boolean;
+  title: string;
+  href: string;
+  /** The page where the operator can ask again; null while it still starts. */
+  retry: Action | null;
+}
+
+export type DoneRow = DoneRun | DoneReceipt | DonePending;
+
+/** The ledger events and the pending starts the Overview reads besides the status. */
+export interface HomeFeed {
+  activity: readonly ProjectActivityEntry[];
+  pending: readonly PendingStart[];
+}
+
+const NO_FEED: HomeFeed = { activity: [], pending: [] };
+
+/** What `doneLately` needs besides its four inputs: the workspaces it covers and the way to read a run. */
+export interface DoneOptions {
+  scope?: HomeScope;
+  readRun?: ReadRun;
+}
+
+/** Dismissals by one person of one ritual within this many milliseconds read as one: "Dismissed 3 asks". */
+const DISMISS_GROUP_MS = 2 * 60 * 1000;
+/** A run that starts this soon after an answer, by the same hand, is "Send and run now". */
+const RUN_NOW_MS = 5 * 60 * 1000;
+/** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
+const CLOCK_SKEW_MS = 2 * 60 * 1000;
+
+function isReadLine(line: string): boolean {
+  return line.startsWith("Read ");
+}
+
+/** Whether an activity entry is something a person did (or its direct result) and so belongs in a receipt. */
+function isReceiptKind(entry: ActivityEntry): boolean {
+  switch (entry.kind) {
+    case "ack-answered":
+    case "ack-dismissed":
+    case "ack-note":
+    case "follow-up-started":
+    case "finding-closed":
+    case "vigil-closed":
+      return true;
+    case "vigil-swept":
+      return entry.actor === "web" || entry.actor === "cli";
+    case "run-started":
+      return entry.actor === "web";
+    default:
+      return false;
+  }
+}
+
+/** Dismissals of the same ritual by the same hand, close in time, as one entry with a count. */
+function groupDismissals(entries: readonly ProjectActivityEntry[]): ProjectActivityEntry[] {
+  const out: ProjectActivityEntry[] = [];
+  const counts = new Map<ProjectActivityEntry, number>();
+  for (const entry of entries) {
+    const open = entry.kind === "ack-dismissed" ? out.find((candidate) => candidate.kind === "ack-dismissed" && candidate.project === entry.project && candidate.links.ritual === entry.links.ritual && candidate.who === entry.who && Math.abs(Date.parse(candidate.at) - Date.parse(entry.at)) <= DISMISS_GROUP_MS) : undefined;
+    if (open === undefined) {
+      out.push(entry);
+      counts.set(entry, 1);
+      continue;
+    }
+    counts.set(open, (counts.get(open) ?? 1) + 1);
+  }
+  return out.map((entry) => {
+    const count = counts.get(entry) ?? 1;
+    return count > 1 ? Object.assign({}, entry, { text: `Dismissed ${count} asks by ${entry.who}` }) : entry;
+  });
+}
+
+/** Where a receipt row points and what it is called. */
+interface ReceiptPlace {
+  item: Kind;
+  manual: boolean;
+  title: string;
+  href: string;
+  links: Action[];
+}
+
+function receiptPlace(project: ProjectStatus | undefined, entry: ProjectActivityEntry): ReceiptPlace {
+  const ws = entry.project;
+  const ritual = entry.links.ritual === undefined ? undefined : project?.rituals.find((candidate) => candidate.slug === entry.links.ritual);
+  const item: Kind = entry.links.vigil === undefined ? "ritual" : "vigil";
+  const own: Action | null =
+    entry.links.vigil !== undefined
+      ? { text: "Open the vigil", href: href({ to: "vigil", ws, slug: entry.links.vigil }) }
+      : entry.links.ritual !== undefined
+        ? { text: "History", href: href({ to: "ritual", ws, slug: entry.links.ritual }) }
+        : entry.links.finding !== undefined || entry.item.type === "finding"
+          ? { text: "Findings", href: href({ to: "section", ws, section: "findings" }) }
+          : null;
+  const runLink: Action | null = entry.links.run === undefined ? null : { text: "Open the run", href: href({ to: "run", ws, run: entry.links.run }) };
+  const first = runLink ?? own;
+  return {
+    item,
+    manual: ritual !== undefined && isManual(ritual),
+    title: ritual?.title ?? entry.item.title,
+    href: first?.href ?? href({ to: "overview", ws }),
+    links: runLink === null || own === null ? [] : [own],
+  };
+}
+
+function followFacts(project: ProjectStatus | undefined, entry: ProjectActivityEntry, hosts: ReadonlyMap<string, string>): ReceiptFacts["follow"] {
+  const row = entry.run === undefined ? undefined : project?.runs.find((candidate) => candidate.run === entry.run);
+  if (row === undefined) return null;
+  const host = hosts.get(`${entry.project}/${row.run}`) ?? null;
+  if (row.phase === "running") return { state: "running", host, changed: 0 };
+  if (row.phase === "held") return { state: "held", host, changed: 0 };
+  return row.outcome === "complete" ? { state: "done", host, changed: row.result?.fixed ?? 0 } : { state: "failed", host, changed: 0 };
+}
+
+/** The run that took an answer: the first run of the ritual after it that read answers. */
+function readerOf(answer: ProjectActivityEntry, starts: readonly ProjectActivityEntry[]): ReceiptFacts["readBy"] {
+  const at = Date.parse(answer.at);
+  const reader = starts
+    .filter((start) => start.project === answer.project && start.links.ritual === answer.links.ritual && start.kind === "run-started" && start.run !== undefined && Date.parse(start.at) >= at - CLOCK_SKEW_MS && (start.detail?.some(isReadLine) ?? false))
+    .toSorted((left, right) => left.at.localeCompare(right.at))[0];
+  if (reader?.run === undefined) return null;
+  return { run: reader.run, isNow: reader.who === answer.who && Math.abs(Date.parse(reader.at) - at) <= RUN_NOW_MS };
+}
+
+/** The start line of a run, the one that carries "after your answer": the answered run it follows. */
+function answeredBefore(run: RunRow, project: string, events: readonly ProjectActivityEntry[]): string | null {
+  const started = events.find((entry) => entry.project === project && entry.kind === "run-started" && entry.run === run.run);
+  if (started === undefined || !(started.detail?.some(isReadLine) ?? false)) return null;
+  const answers = events
+    .filter((entry) => entry.project === project && entry.kind === "ack-answered" && entry.links.ritual === started.links.ritual && entry.links.run !== undefined && Date.parse(entry.at) <= Date.parse(started.at) + CLOCK_SKEW_MS)
+    .toSorted((left, right) => right.at.localeCompare(left.at));
+  return answers[0]?.links.run ?? null;
+}
+
+function pendingRow(clock: Clock, byName: ReadonlyMap<string, ProjectStatus>, start: PendingStart): DonePending {
+  const project = byName.get(start.project);
+  const ritual = start.ritual === undefined ? undefined : project?.rituals.find((candidate) => candidate.slug === start.ritual);
+  const vigil = start.vigil === undefined ? undefined : project?.vigils.find((candidate) => candidate.slug === start.vigil);
+  const ws = start.project;
+  const place: Action | null =
+    start.kind === "vigil-check" && start.vigil !== undefined
+      ? { text: "Try again", href: href({ to: "vigil", ws, slug: start.vigil }) }
+      : start.parent !== undefined
+        ? { text: "Try again", href: href({ to: "run", ws, run: start.parent }) }
+        : start.ritual !== undefined
+          ? { text: "Try again", href: href({ to: "ritual", ws, slug: start.ritual }) }
+          : null;
+  const failed = start.state === "refused" || start.state === "lost";
+  const target = start.vigil !== undefined ? href({ to: "vigil", ws, slug: start.vigil }) : start.ritual !== undefined ? href({ to: "ritual", ws, slug: start.ritual }) : (place?.href ?? href({ to: "overview", ws }));
+  return {
+    kind: "pending",
+    id: `pending-${start.id}`,
+    at: start.at,
+    project: ws,
+    start,
+    text: pendingText(start, clock),
+    word: failed ? NOT_STARTED : STARTING,
+    item: start.vigil === undefined ? "ritual" : "vigil",
+    manual: ritual !== undefined && isManual(ritual),
+    title: ritual?.title ?? vigil?.title ?? start.vigil ?? start.ritual ?? start.parent ?? "run",
+    href: target,
+    retry: failed ? place : null,
+  };
+}
+
+/**
+ * Done lately (0.90.0): what finished and what the operator decided in the
+ * last 24 hours, for every ritual and every kind of decision, newest first.
+ * A start the web asked for that shows no run yet (or never will) sits on top
+ * with the CLI's sentence. The rows come from the status (finished runs), the
+ * activity model (answers, dismissals, notes, follow-ups, run now, checks,
+ * finding closes) and the pending registry, never from client state, so a
+ * reload shows the same. `now` is in milliseconds.
+ */
+export function doneLately(status: HostStatus, pending: readonly PendingStart[], events: readonly ProjectActivityEntry[], now: number, options: DoneOptions = {}): DoneRow[] {
+  const scope = options.scope ?? ALL_WORKSPACES;
+  const readRun = options.readRun ?? (() => null);
+  const clock: Clock = { now, today: status.today, offset: status.utcOffset };
+  const projects = scopeProjects(status, scope);
+  const byName = new Map(projects.map((project) => [project.name, project]));
+  const since = now - DAY;
+  const recent = (iso: string): boolean => Date.parse(iso) >= since;
+
+  const lately = events.filter((entry) => byName.has(entry.project) && recent(entry.at));
+  const hosts = new Map(pending.filter((start) => start.state === "started" && start.run !== undefined).map((start) => [`${start.project}/${start.run ?? ""}`, start.host]));
+  const grouped = groupDismissals(lately.filter((entry) => isReceiptKind(entry)));
+  // A run that "Send and run now" started is part of the answer's receipt: it shows once.
+  const absorbed = new Set<string>();
+  const receipts: DoneReceipt[] = [];
+  for (const entry of grouped) {
+    const project = byName.get(entry.project);
+    const readBy = entry.kind === "ack-answered" ? readerOf(entry, lately) : null;
+    if (readBy?.isNow === true) absorbed.add(`${entry.project}/${readBy.run}`);
+    const ritual = entry.links.ritual === undefined ? undefined : project?.rituals.find((candidate) => candidate.slug === entry.links.ritual);
+    const nextRun = ritual === undefined ? null : nextRunText(ritual, clock);
+    const facts: ReceiptFacts = { nextRun: nextRun === "on demand" ? null : nextRun, follow: entry.kind === "follow-up-started" ? followFacts(project, entry, hosts) : null, readBy };
+    const place = receiptPlace(project, entry);
+    const started: Action[] = readBy === null || !readBy.isNow ? [] : [{ text: "Started run", href: href({ to: "run", ws: entry.project, run: readBy.run }) }];
+    receipts.push({ kind: "receipt", id: `receipt-${entry.project}-${entry.kind}-${entry.at}-${entry.run ?? entry.item.id}`, at: entry.at, project: entry.project, entry, facts, text: receiptText(entry, facts, clock), ...place, links: [...place.links, ...started] });
+  }
+  const shown = receipts.filter((receipt) => !(receipt.entry.kind === "run-started" && receipt.entry.run !== undefined && absorbed.has(`${receipt.project}/${receipt.entry.run}`)));
+  // A run a receipt already covers has no card of its own: a decision on it, the follow-up it is, or the run an answer started. One row per run.
+  const covered = new Set(lately.filter((entry) => entry.kind.startsWith("ack-") && entry.run !== undefined).map((entry) => `${entry.project}/${entry.run ?? ""}`));
+  for (const receipt of shown) {
+    if (receipt.entry.run !== undefined) covered.add(`${receipt.project}/${receipt.entry.run}`);
+  }
+  for (const key of absorbed) covered.add(key);
+
+  const finished: DoneRun[] = projects.flatMap((project) => {
+    const needs = projectNeeds(clock, status.generatedAt, project);
+    return needs.states.flatMap((state) => {
+      const last = state.last;
+      if (last === null || !isDone(last, state.own) || now - Date.parse(last.startedAt) >= DAY || covered.has(`${project.name}/${last.run}`)) return [];
+      return [{ kind: "run" as const, id: `done-${state.project}-${state.ritual.slug}`, at: last.startedAt, card: finishedCard(clock, readRun, state, last) }];
+    });
+  });
+
+  const starts = pending
+    .filter((start) => byName.has(start.project) && start.state !== "started" && recent(start.at))
+    .toSorted((left, right) => right.at.localeCompare(left.at))
+    .map((start) => pendingRow(clock, byName, start));
+  const rest = [...shown, ...finished].toSorted((left, right) => right.at.localeCompare(left.at));
+  return [...starts, ...rest];
+}
+
 // --- the page ------------------------------------------------------------------------------
 
 function verdictTone(needs: readonly Card[]): Tone {
@@ -610,8 +876,15 @@ function newest(left: ActivityRun, right: ActivityRun): number {
   return right.startedAt.localeCompare(left.startedAt);
 }
 
-function nowRun(run: ActivityRun): NowRun {
-  return { id: run.run, title: run.label, project: run.project, href: href({ to: "run", ws: run.project, run: run.run }), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual };
+/** The line under a running row: a follow-up names its parent run, a run an answer started names the answered run. */
+function nowNote(run: ActivityRun, events: readonly ProjectActivityEntry[]): NowRun["note"] {
+  if (run.followUpOf !== null) return { text: `follow-up of ${shortRun(run.followUpOf)}`, href: href({ to: "run", ws: run.project, run: run.followUpOf }) };
+  const answered = answeredBefore(run, run.project, events);
+  return answered === null ? null : { text: "after your answer", href: href({ to: "run", ws: run.project, run: answered }) };
+}
+
+function nowRun(run: ActivityRun, events: readonly ProjectActivityEntry[]): NowRun {
+  return { id: run.run, title: run.label, project: run.project, href: href({ to: "run", ws: run.project, run: run.run }), startedAt: run.startedAt, who: run.who, kind: run.kind, manual: run.manual, note: nowNote(run, events) };
 }
 
 /** What an Overview covers: one workspace (whatever it is), or all of them without the self-test one unless it is shown. */
@@ -628,7 +901,7 @@ export function scopeProjects(status: HostStatus, scope: HomeScope): ProjectStat
   return status.projects.filter((project) => scope.includeSelftest || !isSelftest(project.name));
 }
 
-export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope = ALL_WORKSPACES): Home {
+export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope = ALL_WORKSPACES, feed: HomeFeed = NO_FEED): Home {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
   const scoped = scopeProjects(status, scope);
   const all = scoped.map((project) => projectNeeds(clock, status.generatedAt, project));
@@ -646,12 +919,9 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt))),
     ...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project)),
   ];
-  const lastNight = states
-    .filter((state) => state.last !== null && isDone(state.last, state.own) && clock.now - Date.parse(state.last.startedAt) < DAY)
-    .toSorted((left, right) => (right.last?.startedAt ?? "").localeCompare(left.last?.startedAt ?? ""))
-    .flatMap((state) => (state.last === null ? [] : [finishedCard(clock, readRun, state, state.last)]));
+  const done = doneLately(status, feed.pending, feed.activity, clock.now, { scope, readRun });
   const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today, offset: clock.offset });
-  const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run));
+  const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run, feed.activity));
 
   return {
     verdict: verdictText(needs.length),
@@ -661,7 +931,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0), vigilsDue(scoped, clock.today)),
     now,
     needs,
-    lastNight,
+    doneLately: done,
     agenda,
     health: [timerPiece(clock, status, states), syncPiece(clock, status), ...lastRunPiece(clock, states)],
   };

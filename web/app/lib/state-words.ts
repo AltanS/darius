@@ -15,6 +15,10 @@ const WEEKDAY_DAYS = 14;
 export const RUNNING: Badge = { tone: "run", label: "Running" };
 export const WAITING_FOR_YOU: Badge = { tone: "wait", label: "Waiting for you" };
 export const ASKS_YOU: Badge = { tone: "wait", label: "Asks you" };
+/** A start the web asked for that shows no run yet (0.90.0). */
+export const STARTING: Badge = { tone: "run", label: "Starting" };
+/** A start the web asked for that the CLI refused, or that shows no run after 15 minutes. */
+export const NOT_STARTED: Badge = { tone: "bad", label: "Not started" };
 export const FAILED: Badge = { tone: "bad", label: "Failed" };
 export const FAILED_SEEN: Badge = { tone: "idle", label: "Failed, seen" };
 export const ABANDONED: Badge = { tone: "idle", label: "Abandoned" };
