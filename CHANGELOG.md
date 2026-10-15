@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.99.0] - 2026-10-15
+
+### Added
+
+- The iOS startup images: the installed app on an iPhone or iPad now shows the emblem on the dark ground while it starts, instead of a blank screen. `root.tsx` links one `apple-touch-startup-image` for each of 21 portrait device sizes. The list of sizes, the file names and the media queries are in `web/app/lib/splash.ts`. The light theme keeps the dark splash, as a static image cannot follow the theme.
+- `bun run icons` in `web/` renders every icon and startup image from `web/public/favicon.svg` (`web/scripts/icons.ts`). The renderer, `@resvg/resvg-js`, is a dev dependency of `web/` only: the CLI and the server bundle never load it.
+- `test/web-assets.test.ts` checks that every file the manifest, `root.tsx` and the service worker name exists, that each PNG has its size, that no startup image is unlisted, and that the PNGs are as fresh as the emblem and the script (`web/scripts/icons.sha256`).
+
+### Changed
+
+- The five icons (`icon-192`, `icon-512`, `icon-maskable-512`, `apple-touch-icon`, `badge-72`) are rendered from the svg with the same names and sizes. Their bytes change; the look stays.
+
 ## [0.98.0] - 2026-10-15
 
 ### Added

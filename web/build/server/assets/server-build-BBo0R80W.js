@@ -12327,6 +12327,152 @@ function ClockProvider({ generatedAt, today, offset, children }) {
 	});
 }
 //#endregion
+//#region app/lib/splash.ts
+var SPLASH_SIZES = [
+	{
+		cssWidth: 440,
+		cssHeight: 956,
+		ratio: 3,
+		devices: "iPhone 17 Pro Max, 16 Pro Max"
+	},
+	{
+		cssWidth: 402,
+		cssHeight: 874,
+		ratio: 3,
+		devices: "iPhone 17, 17 Pro, 16 Pro"
+	},
+	{
+		cssWidth: 420,
+		cssHeight: 912,
+		ratio: 3,
+		devices: "iPhone Air"
+	},
+	{
+		cssWidth: 430,
+		cssHeight: 932,
+		ratio: 3,
+		devices: "iPhone 16 Plus, 15 Plus, 15 Pro Max, 14 Pro Max"
+	},
+	{
+		cssWidth: 393,
+		cssHeight: 852,
+		ratio: 3,
+		devices: "iPhone 16, 16e, 15, 15 Pro, 14 Pro"
+	},
+	{
+		cssWidth: 428,
+		cssHeight: 926,
+		ratio: 3,
+		devices: "iPhone 14 Plus, 13 Pro Max, 12 Pro Max"
+	},
+	{
+		cssWidth: 390,
+		cssHeight: 844,
+		ratio: 3,
+		devices: "iPhone 14, 13, 13 Pro, 12, 12 Pro"
+	},
+	{
+		cssWidth: 375,
+		cssHeight: 812,
+		ratio: 3,
+		devices: "iPhone 13 mini, 12 mini, 11 Pro, XS, X"
+	},
+	{
+		cssWidth: 414,
+		cssHeight: 896,
+		ratio: 3,
+		devices: "iPhone 11 Pro Max, XS Max"
+	},
+	{
+		cssWidth: 414,
+		cssHeight: 896,
+		ratio: 2,
+		devices: "iPhone 11, XR"
+	},
+	{
+		cssWidth: 414,
+		cssHeight: 736,
+		ratio: 3,
+		devices: "iPhone 8 Plus"
+	},
+	{
+		cssWidth: 375,
+		cssHeight: 667,
+		ratio: 2,
+		devices: "iPhone SE (2nd, 3rd generation), 8"
+	},
+	{
+		cssWidth: 1032,
+		cssHeight: 1376,
+		ratio: 2,
+		devices: "iPad Pro 13 inch (M4)"
+	},
+	{
+		cssWidth: 1024,
+		cssHeight: 1366,
+		ratio: 2,
+		devices: "iPad Pro 12.9 inch, iPad Air 13 inch"
+	},
+	{
+		cssWidth: 834,
+		cssHeight: 1210,
+		ratio: 2,
+		devices: "iPad Pro 11 inch (M4)"
+	},
+	{
+		cssWidth: 834,
+		cssHeight: 1194,
+		ratio: 2,
+		devices: "iPad Pro 11 inch (earlier models)"
+	},
+	{
+		cssWidth: 834,
+		cssHeight: 1112,
+		ratio: 2,
+		devices: "iPad Pro 10.5 inch, iPad Air 3"
+	},
+	{
+		cssWidth: 820,
+		cssHeight: 1180,
+		ratio: 2,
+		devices: "iPad Air 4, 5, iPad Air 11 inch, iPad 10, iPad (A16)"
+	},
+	{
+		cssWidth: 768,
+		cssHeight: 1024,
+		ratio: 2,
+		devices: "iPad 5, 6, iPad Air 2, iPad mini 4, 5"
+	},
+	{
+		cssWidth: 810,
+		cssHeight: 1080,
+		ratio: 2,
+		devices: "iPad 7, 8, 9"
+	},
+	{
+		cssWidth: 744,
+		cssHeight: 1133,
+		ratio: 2,
+		devices: "iPad mini 6"
+	}
+];
+/** The image's size in device pixels. */
+function splashPixels(size) {
+	return {
+		width: size.cssWidth * size.ratio,
+		height: size.cssHeight * size.ratio
+	};
+}
+/** The file name in `web/public`: `splash-1170x2532.png`. */
+function splashFile(size) {
+	const { width, height } = splashPixels(size);
+	return `splash-${String(width)}x${String(height)}.png`;
+}
+/** The media query that picks the image for this device, portrait. */
+function splashMedia(size) {
+	return `(device-width: ${String(size.cssWidth)}px) and (device-height: ${String(size.cssHeight)}px) and (-webkit-device-pixel-ratio: ${String(size.ratio)}) and (orientation: portrait)`;
+}
+//#endregion
 //#region app/lib/status.ts
 var cache = /* @__PURE__ */ new WeakMap();
 function statusOf(context) {
@@ -12379,7 +12525,12 @@ var links = () => [
 	{
 		rel: "apple-touch-icon",
 		href: "/apple-touch-icon.png"
-	}
+	},
+	...SPLASH_SIZES.map((size) => ({
+		rel: "apple-touch-startup-image",
+		href: `/${splashFile(size)}`,
+		media: splashMedia(size)
+	}))
 ];
 var COLOR_SCHEMES = {
 	dark: "dark",
@@ -21652,7 +21803,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CE2ik7R5.js",
+			"module": "/assets/root-DxAniHfr.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dcz7o3_7.js",
 				"/assets/jsx-runtime-DAtKG4JV.js",
@@ -21666,7 +21817,7 @@ var server_manifest_default = {
 				"/assets/receipt-CDp6S8fe.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-nRM2oqgb.css"],
+			"css": ["/assets/root-BRrwOdL1.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -22706,8 +22857,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-f16f9f3c.js",
-	"version": "f16f9f3c",
+	"url": "/assets/manifest-eba4a993.js",
+	"version": "eba4a993",
 	"sri": void 0
 };
 //#endregion

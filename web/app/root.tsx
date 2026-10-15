@@ -9,6 +9,7 @@ import { ClockProvider } from "./lib/clock.tsx";
 import { NonceContext } from "./lib/nonce.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
+import { SPLASH_SIZES, splashFile, splashMedia } from "./lib/splash.ts";
 import { statusOf } from "./lib/status.ts";
 import { shellData } from "./lib/scope.ts";
 
@@ -45,6 +46,8 @@ export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
   { rel: "manifest", href: "/manifest.webmanifest" },
   { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+  // The splash of the installed app on iOS (0.99.0): one image for each device size, dark, with the emblem. `bun run icons` renders them.
+  ...SPLASH_SIZES.map((size) => ({ rel: "apple-touch-startup-image", href: `/${splashFile(size)}`, media: splashMedia(size) })),
 ];
 
 // --- settings block: the browser chrome follows the theme (the paper ground of the light theme, the night of the dark) ---
