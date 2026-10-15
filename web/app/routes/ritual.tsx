@@ -2,6 +2,7 @@ import { data, Link } from "react-router";
 
 import type { Route } from "./+types/ritual";
 import type { HandoffAnswer, RitualHandoff } from "../../../src/web/api.ts";
+import { Starting, Timeline } from "../components/activity.tsx";
 import { KindWord } from "../components/chip.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { Markdown } from "../components/markdown.tsx";
@@ -14,6 +15,7 @@ import { useClock } from "../lib/clock.tsx";
 import { momentText, shortRun } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 import { isManual } from "../lib/kind.ts";
+import { lastDecision, runNotes } from "../lib/ritual-activity.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
 import { summaryTags } from "../lib/result.ts";
@@ -21,7 +23,23 @@ import { asksYou, atText, cadenceText, isImported, nextRunText, nextStep, report
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
-export function loader({ context, params }: Route.LoaderArgs) {
+const DAY_MS = 24 * 3_600_000;
+
+/** The activity window: 30 days, and "Show older" adds 30 more through `?days=`, up to a year. */
+const DAYS_STEP = 30;
+const DAYS_MAX = 360;
+/** The most events the Activity section shows. */
+const ACTIVITY_MAX = 200;
+/** The events "Last decision" and the History notes read: wider than the window, so a decision older than 30 days still shows. */
+const HISTORY_MAX = 1000;
+
+/** `?days=` as a number of days: a multiple of 30 from 30 to 360; anything else is 30. */
+function daysOf(value: string | null): number {
+  const days = Number(value);
+  return Number.isInteger(days) && days >= DAYS_STEP && days <= DAYS_MAX && days % DAYS_STEP === 0 ? days : DAYS_STEP;
+}
+
+export function loader({ context, params, request }: Route.LoaderArgs) {
   const ritual = context.ritual(params.ws, params.slug);
   if (ritual === null) throw data(`No ritual ${params.slug} in workspace ${params.ws}.`, { status: 404 });
   const finished = ritual.runs.find((run) => run.findingsSha !== null && !isImported(run)) ?? null;
@@ -32,7 +50,32 @@ export function loader({ context, params }: Route.LoaderArgs) {
   const detail = finished === null ? null : context.run(ritual.project, finished.run);
   // The latest report asks the operator something nobody answered yet: its questions lead the page.
   const asks = finished !== null && asksYou(finished, ritual.runs) ? (detail?.result?.questions ?? []) : [];
-  return { ritual, held, finished, next, asks, report: reportExcerpt(detail), canWrite: context.canWrite, nextRun: nextRunText(ritual.row, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }) };
+  const nextRun = nextRunText(ritual.row, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset });
+  // The trail (0.91.0): the ritual's events of the last `days` days, and the starts the web asked for that show no run.
+  const days = daysOf(new URL(request.url).searchParams.get("days"));
+  const since = new Date(Date.parse(status.generatedAt) - days * DAY_MS).toISOString();
+  const activity = context.activity(ritual.project, { ritual: params.slug, since, limit: ACTIVITY_MAX });
+  const history = context.activity(ritual.project, { ritual: params.slug, limit: HISTORY_MAX });
+  const isCapped = activity.length >= ACTIVITY_MAX;
+  const hasOlder = days < DAYS_MAX && !isCapped && history.length > activity.length;
+  const pending = context.pending(ritual.project).filter((start) => start.ritual === params.slug && start.state !== "started");
+  const clock = { offset: status.utcOffset };
+  return {
+    ritual,
+    held,
+    finished,
+    next,
+    asks,
+    report: reportExcerpt(detail),
+    canWrite: context.canWrite,
+    nextRun,
+    activity,
+    pending,
+    olderHref: hasOlder ? `?days=${days + DAYS_STEP}#activity` : null,
+    isCapped,
+    decision: lastDecision(history, ritual.runs, nextRun, clock),
+    notes: Object.fromEntries(runNotes(history, clock)),
+  };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
@@ -151,7 +194,7 @@ function modeText(mode: string): string {
 }
 
 export default function Ritual({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { ritual, held, finished, next, asks, report, canWrite, nextRun } = loaderData;
+  const { ritual, held, finished, next, asks, report, canWrite, nextRun, activity, pending, olderHref, isCapped, decision, notes } = loaderData;
   const { row, policy, project } = ritual;
   const manual = isManual(row);
   const runs = ritual.runs.map((run) => ({ ...run, project, label: row.title, slug: row.slug, kind: "ritual" as const, manual }));
@@ -194,6 +237,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
         ) : (
           <p className="lede">{`darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`}</p>
         )}
+        {decision === null ? null : <p className="lede lede-tight last-decision">Last decision: {decision}.</p>}
         {source === null ? null : <p className="lede lede-tight source-line">{source}</p>}
         {row.warnings.length === 0 ? null : (
           <div className="note-box">
@@ -221,6 +265,12 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
 
       <div className="board">
         <div className="board-main">
+          {pending.length === 0 ? null : (
+            <Section title="Starting">
+              <Starting starts={pending} project={project} />
+            </Section>
+          )}
+
           {held === null ? null : (
             <Section title="Needs you">
               <div className="card card-accent edge-wait">
@@ -260,9 +310,15 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
             </Section>
           )}
 
+          {activity.length === 0 ? null : (
+            <Section title="Activity" id="activity">
+              <Timeline entries={activity} project={project} olderHref={olderHref} isCapped={isCapped} />
+            </Section>
+          )}
+
           <Section title="History">
             <div className="panel">
-              <RunList runs={runs} showProject={false} showLabel={false} empty="This ritual has not run yet." />
+              <RunList runs={runs} showProject={false} showLabel={false} empty="This ritual has not run yet." nest notes={new Map(Object.entries(notes))} />
             </div>
           </Section>
         </div>

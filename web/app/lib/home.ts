@@ -37,7 +37,7 @@ import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate, shortRun } from "./format.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
-import { pendingText, receiptText, type ReceiptFacts } from "./receipt.ts";
+import { answerBefore, pendingText, readerOf, readsAnswers, receiptText, type ReceiptFacts } from "./receipt.ts";
 import { ASKS_YOU, datePhrase, FLAGGED, NOT_STARTED, RUNNING, STARTING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Badge, type Tone } from "./tone.ts";
 import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
@@ -607,14 +607,6 @@ export interface DoneOptions {
 
 /** Dismissals by one person of one ritual within this many milliseconds read as one: "Dismissed 3 asks". */
 const DISMISS_GROUP_MS = 2 * 60 * 1000;
-/** A run that starts this soon after an answer, by the same hand, is "Send and run now". */
-const RUN_NOW_MS = 5 * 60 * 1000;
-/** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
-const CLOCK_SKEW_MS = 2 * 60 * 1000;
-
-function isReadLine(line: string): boolean {
-  return line.startsWith("Read ");
-}
 
 /** Whether an activity entry is something a person did (or its direct result) and so belongs in a receipt. */
 function isReceiptKind(entry: ActivityEntry): boolean {
@@ -695,24 +687,11 @@ function followFacts(project: ProjectStatus | undefined, entry: ProjectActivityE
   return row.outcome === "complete" ? { state: "done", host, changed: row.result?.fixed ?? 0 } : { state: "failed", host, changed: 0 };
 }
 
-/** The run that took an answer: the first run of the ritual after it that read answers. */
-function readerOf(answer: ProjectActivityEntry, starts: readonly ProjectActivityEntry[]): ReceiptFacts["readBy"] {
-  const at = Date.parse(answer.at);
-  const reader = starts
-    .filter((start) => start.project === answer.project && start.links.ritual === answer.links.ritual && start.kind === "run-started" && start.run !== undefined && Date.parse(start.at) >= at - CLOCK_SKEW_MS && (start.detail?.some(isReadLine) ?? false))
-    .toSorted((left, right) => left.at.localeCompare(right.at))[0];
-  if (reader?.run === undefined) return null;
-  return { run: reader.run, isNow: reader.who === answer.who && Math.abs(Date.parse(reader.at) - at) <= RUN_NOW_MS };
-}
-
-/** The start line of a run, the one that carries "after your answer": the answered run it follows. */
+/** The answered run behind "after your answer": the run the newest earlier answer of the ritual was given on. */
 function answeredBefore(run: RunRow, project: string, events: readonly ProjectActivityEntry[]): string | null {
   const started = events.find((entry) => entry.project === project && entry.kind === "run-started" && entry.run === run.run);
-  if (started === undefined || !(started.detail?.some(isReadLine) ?? false)) return null;
-  const answers = events
-    .filter((entry) => entry.project === project && entry.kind === "ack-answered" && entry.links.ritual === started.links.ritual && entry.links.run !== undefined && Date.parse(entry.at) <= Date.parse(started.at) + CLOCK_SKEW_MS)
-    .toSorted((left, right) => right.at.localeCompare(left.at));
-  return answers[0]?.links.run ?? null;
+  if (started === undefined || !readsAnswers(started)) return null;
+  return answerBefore(started, events)?.links.run ?? null;
 }
 
 function pendingRow(clock: Clock, byName: ReadonlyMap<string, ProjectStatus>, start: PendingStart): DonePending {

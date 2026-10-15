@@ -2472,6 +2472,13 @@
     margin-top: 3px;
   }
 
+  /* A follow-up under its parent run in a ritual's History: the whole row steps in, no border. */
+
+  .rw-nested {
+    padding-left: 40px;
+    background: var(--color-raised);
+  }
+
   .rw-main {
     display: flex;
     flex-direction: column;

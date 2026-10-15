@@ -10614,9 +10614,38 @@ function isFolded(group) {
 }
 //#endregion
 //#region app/lib/receipt.ts
+/** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
+var CLOCK_SKEW_MS = 12e4;
+/** A run that starts this soon after an answer, by the same hand, is "Send and run now". */
+var RUN_NOW_MS = 3e5;
+/** True for the detail line a run start carries when it read answers: "Read 2 answers". */
+function readsAnswers(entry) {
+	return entry.detail?.some((line) => line.startsWith("Read ")) ?? false;
+}
+function sameRitual(left, right) {
+	return left.project === right.project && left.links.ritual === right.links.ritual;
+}
+/** The run that took an answer: the first run of the same ritual after it that read answers. `isNow` when the same hand started it right after ("Send and run now"). */
+function readerOf(answer, entries) {
+	const at = Date.parse(answer.at);
+	const reader = entries.filter((entry) => entry.kind === "run-started" && entry.run !== void 0 && sameRitual(entry, answer) && Date.parse(entry.at) >= at - CLOCK_SKEW_MS && readsAnswers(entry)).toSorted((left, right) => left.at.localeCompare(right.at))[0];
+	if (reader?.run === void 0) return null;
+	return {
+		run: reader.run,
+		isNow: reader.who === answer.who && Math.abs(Date.parse(reader.at) - at) <= RUN_NOW_MS
+	};
+}
+/** The answer a run that read answers took: the newest answer of the same ritual that came before the run started. */
+function answerBefore(start, entries) {
+	return entries.filter((entry) => entry.kind === "ack-answered" && sameRitual(entry, start) && Date.parse(entry.at) <= Date.parse(start.at) + CLOCK_SKEW_MS).toSorted((left, right) => right.at.localeCompare(left.at))[0] ?? null;
+}
+/** A sentence with each run id (26 characters) cut to its last eight, as the run list shows it. */
+function shortRuns(sentence) {
+	return sentence.replaceAll(/\b[0-9A-Z]{26}\b/gu, (run) => shortRun(run));
+}
 /** "Answered by web:altan" -> "Answered by web:altan at 09:12": the time goes after the name. */
 function withTime(entry, time) {
-	const text = entry.text.replaceAll(/\b[0-9A-Z]{26}\b/gu, (run) => shortRun(run));
+	const text = shortRuns(entry.text);
 	const marker = `by ${entry.who}`;
 	const at = text.indexOf(marker);
 	if (at < 0) return `${text} at ${time}`;
@@ -11181,13 +11210,6 @@ var NO_FEED = {
 };
 /** Dismissals by one person of one ritual within this many milliseconds read as one: "Dismissed 3 asks". */
 var DISMISS_GROUP_MS = 12e4;
-/** A run that starts this soon after an answer, by the same hand, is "Send and run now". */
-var RUN_NOW_MS = 3e5;
-/** A run forwarded to another host (`--on <host>`) writes its start line with that host's clock: allow this much before an answer, as the pending registry does (`CLOCK_SKEW_MS` in src/web/pending.ts). */
-var CLOCK_SKEW_MS = 12e4;
-function isReadLine(line) {
-	return line.startsWith("Read ");
-}
 /** Whether an activity entry is something a person did (or its direct result) and so belongs in a receipt. */
 function isReceiptKind(entry) {
 	switch (entry.kind) {
@@ -11266,7 +11288,7 @@ function receiptPlace(project, entry) {
 		links: runLink === null || own === null ? [] : [own]
 	};
 }
-function followFacts(project, entry, hosts) {
+function followFacts$1(project, entry, hosts) {
 	const row = entry.run === void 0 ? void 0 : project?.runs.find((candidate) => candidate.run === entry.run);
 	if (row === void 0) return null;
 	const host = hosts.get(`${entry.project}/${row.run}`) ?? null;
@@ -11290,21 +11312,11 @@ function followFacts(project, entry, hosts) {
 		changed: 0
 	};
 }
-/** The run that took an answer: the first run of the ritual after it that read answers. */
-function readerOf(answer, starts) {
-	const at = Date.parse(answer.at);
-	const reader = starts.filter((start) => start.project === answer.project && start.links.ritual === answer.links.ritual && start.kind === "run-started" && start.run !== void 0 && Date.parse(start.at) >= at - CLOCK_SKEW_MS && (start.detail?.some(isReadLine) ?? false)).toSorted((left, right) => left.at.localeCompare(right.at))[0];
-	if (reader?.run === void 0) return null;
-	return {
-		run: reader.run,
-		isNow: reader.who === answer.who && Math.abs(Date.parse(reader.at) - at) <= RUN_NOW_MS
-	};
-}
-/** The start line of a run, the one that carries "after your answer": the answered run it follows. */
+/** The answered run behind "after your answer": the run the newest earlier answer of the ritual was given on. */
 function answeredBefore(run, project, events) {
 	const started = events.find((entry) => entry.project === project && entry.kind === "run-started" && entry.run === run.run);
-	if (started === void 0 || !(started.detail?.some(isReadLine) ?? false)) return null;
-	return events.filter((entry) => entry.project === project && entry.kind === "ack-answered" && entry.links.ritual === started.links.ritual && entry.links.run !== void 0 && Date.parse(entry.at) <= Date.parse(started.at) + CLOCK_SKEW_MS).toSorted((left, right) => right.at.localeCompare(left.at))[0]?.links.run ?? null;
+	if (started === void 0 || !readsAnswers(started)) return null;
+	return answerBefore(started, events)?.links.run ?? null;
 }
 function pendingRow(clock, byName, start) {
 	const project = byName.get(start.project);
@@ -11395,7 +11407,7 @@ function doneLately(status, pending, events, now, options = {}) {
 		const nextRun = ritual === void 0 ? null : nextRunText(ritual, clock);
 		const facts = {
 			nextRun: nextRun === "on demand" ? null : nextRun,
-			follow: entry.kind === "follow-up-started" ? followFacts(project, entry, hosts) : null,
+			follow: entry.kind === "follow-up-started" ? followFacts$1(project, entry, hosts) : null,
 			readBy
 		};
 		const place = receiptPlace(project, entry);
@@ -13984,6 +13996,134 @@ function summaryTags(summary, isAnswered) {
 	return tags;
 }
 //#endregion
+//#region app/lib/ritual-activity.ts
+/** Entries grouped by the host's calendar day, newest day first. `entries` are newest first, as `WebContext.activity` gives them. */
+function timelineDays(entries, today, offset) {
+	const days = [];
+	for (const entry of entries) {
+		const date = hostDate(entry.at, offset);
+		const last = days.at(-1);
+		if (last !== void 0 && last.date === date) {
+			last.entries.push(entry);
+			continue;
+		}
+		days.push({
+			date,
+			label: date === today ? "Today" : dayName(`${date}T12:00:00.000Z`, 0),
+			entries: [entry]
+		});
+	}
+	return days;
+}
+/** The kinds a person decides with: these make the "Last decision". */
+var DECISIONS = /* @__PURE__ */ new Set([
+	"ack-answered",
+	"ack-dismissed",
+	"ack-note",
+	"follow-up-started"
+]);
+/** "approved Q2" out of "Follow-up of X started by web:altan: approved Q2; note: y": what the follow-up was told to do. */
+function followWhat(entry) {
+	const marker = `started by ${entry.who}: `;
+	const at = entry.text.indexOf(marker);
+	if (at < 0) return null;
+	const tail = entry.text.slice(at + marker.length);
+	const cut = tail.indexOf("; note:");
+	const what = (cut < 0 ? tail : tail.slice(0, cut)).trim();
+	return what === "" ? null : what;
+}
+/** How a follow-up run is doing, for the receipt words. */
+function followFacts(run) {
+	if (run === void 0) return null;
+	if (run.phase === "running") return {
+		state: "running",
+		host: null,
+		changed: 0
+	};
+	if (run.phase === "held") return {
+		state: "held",
+		host: null,
+		changed: 0
+	};
+	return run.outcome === "complete" ? {
+		state: "done",
+		host: null,
+		changed: run.result?.fixed ?? 0
+	} : {
+		state: "failed",
+		host: null,
+		changed: 0
+	};
+}
+/**
+* The newest decision of a ritual as one sentence: an answer, a dismissal, a
+* note, or a follow-up the operator started. "Answered by web:altan at 09:12,
+* 2 answers wait for the next run, Thu 05:00", or "Follow-up X started by
+* web:altan at 09:12: approved Q2, done". Null when nothing was decided.
+*/
+function lastDecision(entries, runs, nextRun, clock) {
+	const entry = entries.find((candidate) => DECISIONS.has(candidate.kind));
+	if (entry === void 0) return null;
+	return receiptText(entry, {
+		nextRun: nextRun === "on demand" ? null : nextRun,
+		follow: entry.kind === "follow-up-started" ? followFacts(runs.find((run) => run.run === entry.run)) : null,
+		readBy: entry.kind === "ack-answered" ? readerOf(entry, entries) : null
+	}, clock);
+}
+/** The note under a run in History, by run id: "follow-up by web:altan, approved Q2" and "read your answer of 09:12". */
+function runNotes(entries, clock) {
+	const notes = /* @__PURE__ */ new Map();
+	for (const entry of entries) {
+		if (entry.run === void 0) continue;
+		if (entry.kind === "follow-up-started") {
+			const what = followWhat(entry);
+			notes.set(entry.run, `follow-up by ${entry.who}${what === null ? "" : `, ${what}`}`);
+			continue;
+		}
+		if (entry.kind !== "run-started" || !readsAnswers(entry)) continue;
+		const answer = answerBefore(entry, entries);
+		notes.set(entry.run, answer === null ? "read an answer" : `read your answer of ${clockTime(answer.at, clock.offset)}`);
+	}
+	return notes;
+}
+/**
+* Nests a follow-up under its parent when the parent is in the list. A
+* follow-up of a follow-up goes under the first run of the chain, so the
+* list is two levels deep at most. `runs` is newest first, and so is the
+* result. A follow-up whose parent is not in the list stays on top level,
+* and so does a run in a loop of follow-ups, so no run disappears.
+*/
+function nestRuns(runs) {
+	const byId = new Map(runs.map((run) => [run.run, run]));
+	/** The first run of the chain `run` follows up, or `run` itself when the chain leaves the list or loops. */
+	const rootOf = (run) => {
+		const seen = /* @__PURE__ */ new Set([run.run]);
+		let current = run;
+		while (current.followUpOf !== null) {
+			const parent = byId.get(current.followUpOf);
+			if (parent === void 0) return current;
+			if (seen.has(parent.run)) return run;
+			seen.add(parent.run);
+			current = parent;
+		}
+		return current;
+	};
+	const children = /* @__PURE__ */ new Map();
+	const tops = [];
+	for (const run of runs) {
+		const root = rootOf(run);
+		if (root === run) {
+			tops.push(run);
+			continue;
+		}
+		children.set(root.run, [...children.get(root.run) ?? [], run]);
+	}
+	return tops.map((row) => ({
+		row,
+		children: children.get(row.run) ?? []
+	}));
+}
+//#endregion
 //#region app/components/result.tsx
 /** A small word in a chip, in its tone. The word carries the meaning; the colour only repeats it. */
 function Tag({ tag }) {
@@ -14262,14 +14402,32 @@ function ResultPanel({ project, row, result, canWrite, nextRun, canRunNow, after
 //#endregion
 //#region app/components/runs.tsx
 /** The run list, the held-question block and the latest-report row, shared by several pages. */
+/** The runs in the order the list shows them: with `nest`, each follow-up right under its parent. */
+function listed(runs, nest) {
+	if (!nest) return runs.map((run) => ({
+		run,
+		isChild: false
+	}));
+	return nestRuns(runs).flatMap(({ row, children }) => {
+		const rows = [{
+			run: row,
+			isChild: false
+		}];
+		for (const child of children) rows.push({
+			run: child,
+			isChild: true
+		});
+		return rows;
+	});
+}
 /** Runs as rows: what ran, how it ended, how long it took, who started it, when. Each row opens the run. */
-function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length }) {
+function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length, nest = false, notes }) {
 	const { offset } = useClock();
 	if (runs.length === 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: empty });
 	const named = showProject && new Set(runs.map((run) => run.project)).size > 1;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
 		bare: true,
-		children: runs.map((run, index) => {
+		children: listed(runs, nest).map(({ run, isChild }, index) => {
 			const state = runState(run, runs);
 			const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
 			const isImport = run.who === "import";
@@ -14308,7 +14466,8 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 				state,
 				meta,
 				time: showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt }) : clockTime(run.startedAt, offset),
-				className: index >= phoneShown ? "phone-extra" : void 0
+				note: notes?.get(run.run),
+				className: [index >= phoneShown ? "phone-extra" : "", isChild ? "rw-nested" : ""].filter((part) => part !== "").join(" ") || void 0
 			}, `${run.project}/${run.run}`);
 		})
 	});
@@ -16447,6 +16606,105 @@ var runs_default = withComponentProps(function Runs({ loaderData }) {
 	})] });
 });
 //#endregion
+//#region app/components/activity.tsx
+/**
+* The trail of a ritual page (0.91.0): the "Starting" card for a start the web
+* asked for that shows no run yet, and the "Activity" timeline of every event.
+* Both read data the loader passes (`context.pending`, `context.activity`),
+* never client state. Store text is drawn as text.
+*/
+/** One card for each start of this ritual that shows no run: who asked, on which host, or why it did not start. */
+function Starting({ starts, project }) {
+	const { offset } = useClock();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: starts.map((start) => {
+		const failed = start.state === "refused" || start.state === "lost";
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: `card card-accent ${failed ? "edge-bad" : "edge-run"}`,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: pendingText(start, { offset }) }), failed && start.parent !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rail-note",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: href({
+						to: "run",
+						ws: project,
+						run: start.parent
+					}),
+					children: "Try again"
+				}), " from the run page."]
+			}) : null]
+		}, start.id);
+	}) });
+}
+/** Every event of the ritual, newest first, grouped by day. An entry has its time, its sentence, its detail folded and a link to the run. */
+function Timeline({ entries, project, olderHref, isCapped }) {
+	const { today, offset } = useClock();
+	const days = timelineDays(entries, today, offset);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "card",
+		children: [
+			days.map((day) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mt-3 first:mt-0",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fu-label",
+					children: day.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+					className: "timeline",
+					children: day.entries.map((entry, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "break-words",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "text-muted",
+									children: clockTime(entry.at, offset)
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: `ink-${entry.tone}`,
+									children: shortRuns(entry.text)
+								})
+							]
+						}),
+						entry.links.run === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "rail-note",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: href({
+									to: "run",
+									ws: project,
+									run: entry.links.run
+								}),
+								children: "Open the run"
+							})
+						}),
+						entry.detail === void 0 || entry.detail.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+							summary: entry.detail.length === 1 ? "1 detail" : `${entry.detail.length} details`,
+							children: entry.detail.map((line, at) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "rail-note break-words",
+								children: line
+							}, `${at}`))
+						})
+					] }, `${entry.at}-${entry.kind}-${index}`))
+				})]
+			}, day.date)),
+			isCapped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rail-note mt-3",
+				children: [
+					"This list shows the newest ",
+					entries.length,
+					" events."
+				]
+			}) : null,
+			olderHref === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "mt-3",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: olderHref,
+					className: "st-btn st-btn-small",
+					preventScrollReset: true,
+					children: "Show older"
+				})
+			})
+		]
+	});
+}
+//#endregion
 //#region app/routes/ritual.tsx
 var ritual_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
@@ -16454,7 +16712,20 @@ var ritual_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader$12,
 	meta: () => meta$10
 });
-function loader$12({ context, params }) {
+var DAY_MS$1 = 864e5;
+/** The activity window: 30 days, and "Show older" adds 30 more through `?days=`, up to a year. */
+var DAYS_STEP = 30;
+var DAYS_MAX = 360;
+/** The most events the Activity section shows. */
+var ACTIVITY_MAX = 200;
+/** The events "Last decision" and the History notes read: wider than the window, so a decision older than 30 days still shows. */
+var HISTORY_MAX = 1e3;
+/** `?days=` as a number of days: a multiple of 30 from 30 to 360; anything else is 30. */
+function daysOf(value) {
+	const days = Number(value);
+	return Number.isInteger(days) && days >= DAYS_STEP && days <= DAYS_MAX && days % DAYS_STEP === 0 ? days : DAYS_STEP;
+}
+function loader$12({ context, params, request }) {
 	const ritual = context.ritual(params.ws, params.slug);
 	if (ritual === null) throw data(`No ritual ${params.slug} in workspace ${params.ws}.`, { status: 404 });
 	const finished = ritual.runs.find((run) => run.findingsSha !== null && !isImported(run)) ?? null;
@@ -16466,19 +16737,42 @@ function loader$12({ context, params }) {
 		offset: status.utcOffset
 	});
 	const detail = finished === null ? null : context.run(ritual.project, finished.run);
+	const asks = finished !== null && asksYou(finished, ritual.runs) ? detail?.result?.questions ?? [] : [];
+	const nextRun = nextRunText(ritual.row, {
+		now: Date.parse(status.generatedAt),
+		today: status.today,
+		offset: status.utcOffset
+	});
+	const days = daysOf(new URL(request.url).searchParams.get("days"));
+	const since = (/* @__PURE__ */ new Date(Date.parse(status.generatedAt) - days * DAY_MS$1)).toISOString();
+	const activity = context.activity(ritual.project, {
+		ritual: params.slug,
+		since,
+		limit: ACTIVITY_MAX
+	});
+	const history = context.activity(ritual.project, {
+		ritual: params.slug,
+		limit: HISTORY_MAX
+	});
+	const isCapped = activity.length >= ACTIVITY_MAX;
+	const hasOlder = days < DAYS_MAX && !isCapped && history.length > activity.length;
+	const pending = context.pending(ritual.project).filter((start) => start.ritual === params.slug && start.state !== "started");
+	const clock = { offset: status.utcOffset };
 	return {
 		ritual,
 		held,
 		finished,
 		next,
-		asks: finished !== null && asksYou(finished, ritual.runs) ? detail?.result?.questions ?? [] : [],
+		asks,
 		report: reportExcerpt(detail),
 		canWrite: context.canWrite,
-		nextRun: nextRunText(ritual.row, {
-			now: Date.parse(status.generatedAt),
-			today: status.today,
-			offset: status.utcOffset
-		})
+		nextRun,
+		activity,
+		pending,
+		olderHref: hasOlder ? `?days=${days + DAYS_STEP}#activity` : null,
+		isCapped,
+		decision: lastDecision(history, ritual.runs, nextRun, clock),
+		notes: Object.fromEntries(runNotes(history, clock))
 	};
 }
 var meta$10 = ({ data: loaded, params }) => [{ title: `${loaded?.ritual.row.title ?? "Ritual"} · ${params.ws} | darius` }];
@@ -16625,7 +16919,7 @@ function modeText(mode) {
 	return mode;
 }
 var ritual_default = withComponentProps(function Ritual({ loaderData }) {
-	const { ritual, held, finished, next, asks, report, canWrite, nextRun } = loaderData;
+	const { ritual, held, finished, next, asks, report, canWrite, nextRun, activity, pending, olderHref, isCapped, decision, notes } = loaderData;
 	const { row, policy, project } = ritual;
 	const manual = isManual(row);
 	const runs = ritual.runs.map((run) => ({
@@ -16704,6 +16998,14 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 				className: "lede",
 				children: `darius runs this ritual with ${model}, in ${policy.mode} mode: ${modeText(policy.mode)}.`
 			}),
+			decision === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "lede lede-tight last-decision",
+				children: [
+					"Last decision: ",
+					decision,
+					"."
+				]
+			}),
 			source === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "lede lede-tight source-line",
 				children: source
@@ -16740,6 +17042,13 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "board-main",
 			children: [
+				pending.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: "Starting",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Starting, {
+						starts: pending,
+						project
+					})
+				}),
 				held === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "Needs you",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -16817,6 +17126,16 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 						project
 					})
 				}),
+				activity.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+					title: "Activity",
+					id: "activity",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Timeline, {
+						entries: activity,
+						project,
+						olderHref,
+						isCapped
+					})
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "History",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -16825,7 +17144,9 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 							runs,
 							showProject: false,
 							showLabel: false,
-							empty: "This ritual has not run yet."
+							empty: "This ritual has not run yet.",
+							nest: true,
+							notes: new Map(Object.entries(notes))
 						})
 					})
 				})
@@ -20129,7 +20450,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-BT_hRV8k.js",
+			"module": "/assets/root-ZymUJSht.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20141,9 +20462,10 @@ var server_manifest_default = {
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/agenda-BKyxq_qy.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-DvCBngdi.css"],
+			"css": ["/assets/root-D6S5ryHg.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -20183,14 +20505,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CnIKd6OW.js",
+			"module": "/assets/overview-BwFY2SVj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20199,6 +20521,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js"
@@ -20222,14 +20545,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-CnIKd6OW.js",
+			"module": "/assets/overview-BwFY2SVj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20238,6 +20561,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js"
@@ -20335,13 +20659,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CjksIIc_.js",
+			"module": "/assets/rituals-CcKjoJbH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/section-C9Xmmq5G.js",
@@ -20350,6 +20674,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
@@ -20376,13 +20701,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CjksIIc_.js",
+			"module": "/assets/rituals-CcKjoJbH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/section-C9Xmmq5G.js",
@@ -20391,6 +20716,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
@@ -20551,13 +20877,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-C5_1NndN.js",
+			"module": "/assets/runs-B80M-ikE.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -20566,6 +20892,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
@@ -20591,7 +20918,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-RjtOm7k7.js",
+			"module": "/assets/ritual-DK4DiQab.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20600,8 +20927,9 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
@@ -20667,7 +20995,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-sJ-HzRNZ.js",
+			"module": "/assets/run-Dz-ozfok.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20677,7 +21005,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
@@ -20685,6 +21013,7 @@ var server_manifest_default = {
 				"/assets/crumbs-CkJOExHf.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/state-words-CdJGMvfT.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/pulse-Dm9FzUfo.js"
 			],
 			"css": [],
@@ -20908,13 +21237,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-C5_1NndN.js",
+			"module": "/assets/runs-B80M-ikE.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-D6GSiVV3.js",
+				"/assets/runs-BGv_XENX.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
@@ -20923,6 +21252,7 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
@@ -21074,8 +21404,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-01c59950.js",
-	"version": "01c59950",
+	"url": "/assets/manifest-a8352bad.js",
+	"version": "a8352bad",
 	"sri": void 0
 };
 //#endregion

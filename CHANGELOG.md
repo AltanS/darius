@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.91.0] - 2026-10-15
+
+### Added
+
+- The ritual page tells what happened to the ritual: a "Starting" card for a start that shows no run (with the CLI's sentence and a link to the parent run when it was refused or lost), a "Last decision" line under the lede, and an "Activity" section with every event of the last 30 days, newest first, grouped by day. "Show older" loads 30 more days through `?days=`.
+- History nests a follow-up under its parent run and marks a run that read an answer ("read your answer of 09:12").
+
+### Changed
+
+- The Overview and the ritual page share one rule for which run read which answer (`readerOf` and `answerBefore` in `web/app/lib/receipt.ts`). It allows the same two minutes of clock skew as the pending registry, for a run forwarded to another host.
+
 ## [0.90.0] - 2026-10-15
 
 ### Added

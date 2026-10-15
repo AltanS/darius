@@ -8,6 +8,7 @@ import { useClock } from "../lib/clock.tsx";
 import { answerCommand, clockTime, duration, hostDate, shortDate } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 import { summaryTags } from "../lib/result.ts";
+import { nestRuns } from "../lib/ritual-activity.ts";
 import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, decisionText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
@@ -29,16 +30,30 @@ interface RunListProps {
   empty: string;
   /** Rows from this one on carry `phone-extra`, so a phone can hide them behind a button. */
   phoneShown?: number;
+  /** Put a follow-up under its parent run, indented (0.91.0). Off for lists that mix rituals. */
+  nest?: boolean;
+  /** A line under a run by its id: "follow-up by web:altan, approved Q2", "read your answer of 09:12". */
+  notes?: ReadonlyMap<string, string>;
+}
+
+/** The runs in the order the list shows them: with `nest`, each follow-up right under its parent. */
+function listed(runs: readonly ActivityRun[], nest: boolean): Array<{ run: ActivityRun; isChild: boolean }> {
+  if (!nest) return runs.map((run) => ({ run, isChild: false }));
+  return nestRuns(runs).flatMap(({ row, children }) => {
+    const rows = [{ run: row, isChild: false }];
+    for (const child of children) rows.push({ run: child, isChild: true });
+    return rows;
+  });
 }
 
 /** Runs as rows: what ran, how it ended, how long it took, who started it, when. Each row opens the run. */
-export function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length }: RunListProps): React.ReactNode {
+export function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs.length, nest = false, notes }: RunListProps): React.ReactNode {
   const { offset } = useClock();
   if (runs.length === 0) return <Empty>{empty}</Empty>;
   const named = showProject && new Set(runs.map((run) => run.project)).size > 1;
   return (
     <RowList bare>
-      {runs.map((run, index) => {
+      {listed(runs, nest).map(({ run, isChild }, index) => {
         const state = runState(run, runs);
         const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
         const isImport = run.who === "import";
@@ -65,7 +80,8 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
             state={state}
             meta={meta}
             time={showLabel ? <Time iso={run.startedAt} /> : clockTime(run.startedAt, offset)}
-            className={index >= phoneShown ? "phone-extra" : undefined}
+            note={notes?.get(run.run)}
+            className={[index >= phoneShown ? "phone-extra" : "", isChild ? "rw-nested" : ""].filter((part) => part !== "").join(" ") || undefined}
           />
         );
       })}
