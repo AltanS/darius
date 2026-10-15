@@ -2,14 +2,18 @@
  * The ritual page's History and trail (0.91.0, web/app/lib/ritual-activity.ts):
  * a follow-up nests under its parent, a run that read an answer says so, the
  * timeline groups by day, and "Last decision" names the newest decision.
- * Pure data in, plain data out.
+ * The Runs list filters (0.93.0, web/app/lib/runs-filter.ts) and the words of
+ * the result chip are here too. Pure data in, plain data out.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { ActivityEntry, RunRow } from "../src/web/api.ts";
+import { ANY_RUNS, type RunsFilter } from "../web/app/lib/paths.ts";
+import { ackKindOf, summaryTags } from "../web/app/lib/result.ts";
 import { lastDecision, nestRuns, runNotes, timelineDays } from "../web/app/lib/ritual-activity.ts";
+import { filterSentence, runMatches } from "../web/app/lib/runs-filter.ts";
 
 function run(id: string, startedAt: string, extra: Partial<RunRow> = {}): RunRow {
   return { run: id, item: "ritual/report", phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: null, acknowledged: null, followUpOf: null, startedBy: "timer", ackKind: null, ...extra };
@@ -80,4 +84,81 @@ test("Last decision: a follow-up the operator started says where it stands", () 
 test("Last decision: nothing decided, nothing said; the starts and sweeps of other kinds do not count", () => {
   assert.equal(lastDecision([], [], null, CLOCK), null);
   assert.equal(lastDecision([entry("run-completed", "2026-10-15T09:12:00.000Z", { text: "Run completed" })], [], null, CLOCK), null);
+});
+
+// --- the Runs list filters (0.93.0) ----------------------------------------------------------
+
+const ASKS = { status: "attention", questions: 2, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 } as const;
+
+function find(filter: Partial<RunsFilter>, rows: readonly RunRow[]): string[] {
+  return rows.filter((one) => runMatches(one, { ...ANY_RUNS, ...filter })).map((one) => one.run);
+}
+
+const LIST: RunRow[] = [
+  run("TIMER", "2026-10-15T05:00:00.000Z"),
+  run("HAND", "2026-10-15T06:00:00.000Z", { who: "altan@host", startedBy: "cli" }),
+  run("WEB", "2026-10-15T07:00:00.000Z", { who: "web:altan", startedBy: "web" }),
+  run("FOLLOW", "2026-10-15T08:00:00.000Z", { who: "web:altan", startedBy: "web", followUpOf: "TIMER" }),
+  run("FOLLOW-TIMER", "2026-10-15T08:30:00.000Z", { followUpOf: "HAND" }),
+  run("ANSWERED", "2026-10-14T05:00:00.000Z", { result: ASKS, acknowledged: { at: "x", who: "web:altan", note: null }, ackKind: "answered" }),
+  run("DISMISSED", "2026-10-13T05:00:00.000Z", { result: ASKS, acknowledged: { at: "x", who: "web:altan", note: null }, ackKind: "dismissed" }),
+  run("OPEN", "2026-10-12T05:00:00.000Z", { result: ASKS }),
+  run("RUNNING", "2026-10-15T09:00:00.000Z", { phase: "running", outcome: null, endedAt: null }),
+  run("FAILED", "2026-10-11T05:00:00.000Z", { outcome: "failed" }),
+];
+
+test("the kind filter: a follow-up has a parent, scheduled is the timer's, manual is a hand's", () => {
+  assert.deepEqual(find({ kind: "follow-up" }, LIST), ["FOLLOW", "FOLLOW-TIMER"]);
+  assert.deepEqual(find({ kind: "scheduled" }, LIST), ["TIMER", "ANSWERED", "DISMISSED", "OPEN", "RUNNING", "FAILED"]);
+  assert.deepEqual(find({ kind: "manual" }, LIST), ["HAND", "WEB"]);
+  assert.deepEqual(find({}, LIST), LIST.map((one) => one.run), "no filter keeps every run");
+});
+
+test("the by filter reads who started the run, and it combines with the kind", () => {
+  assert.deepEqual(find({ by: "web" }, LIST), ["WEB", "FOLLOW"]);
+  assert.deepEqual(find({ by: "cli" }, LIST), ["HAND"]);
+  assert.deepEqual(find({ by: "timer", kind: "follow-up" }, LIST), ["FOLLOW-TIMER"]);
+  assert.deepEqual(find({ by: "web", kind: "scheduled" }, LIST), [], "no match is an empty list, not an error");
+});
+
+test("the ack filter: answered and dismissed read the first acknowledgement, open is an ask nobody decided on", () => {
+  assert.deepEqual(find({ ack: "answered" }, LIST), ["ANSWERED"]);
+  assert.deepEqual(find({ ack: "dismissed" }, LIST), ["DISMISSED"]);
+  assert.deepEqual(find({ ack: "open" }, LIST), ["OPEN"]);
+  const seen = run("SEEN", "2026-10-10T05:00:00.000Z", { outcome: "failed", acknowledged: { at: "x", who: "web:altan", note: null }, ackKind: "dismissed" });
+  assert.deepEqual(find({ ack: "dismissed" }, [...LIST, seen]), ["DISMISSED"], "the seen-it ack of a failed run asked no question, so it is no dismissal");
+  const older = run("OLDER", "2026-10-09T05:00:00.000Z", { result: ASKS, acknowledged: { at: "x", who: "web:altan", note: null } });
+  assert.deepEqual(find({ ack: "answered" }, [older]), ["OLDER"], "a row that was acknowledged with no kind reads as answered, as its chip does");
+  const superseded = [run("NEW", "2026-10-15T10:00:00.000Z"), run("OLD", "2026-10-14T10:00:00.000Z", { result: ASKS })];
+  assert.deepEqual(find({ ack: "open" }, superseded), ["OLD"], "an ask a newer run replaced is still one nobody decided on");
+});
+
+test("the state filter keeps its rules: a phase, or the outcome of a closed run", () => {
+  assert.deepEqual(find({ state: "running" }, LIST), ["RUNNING"]);
+  assert.deepEqual(find({ state: "failed" }, LIST), ["FAILED"]);
+  assert.deepEqual(find({ state: "complete", kind: "manual" }, LIST), ["HAND", "WEB"]);
+});
+
+test("the result chip says how the questions were decided: a dismissal is not an answer", () => {
+  const words = (ack: RunRow["ackKind"]): string[] => summaryTags(ASKS, ack === null ? null : { answered: "answered", dismissed: "dismissed", "follow-up": "follow-up started", note: "noted" }[ack]).map((tag) => tag.text);
+  assert.deepEqual(words(null), ["2 questions"]);
+  assert.deepEqual(words("answered"), ["2 questions, answered"]);
+  assert.deepEqual(words("dismissed"), ["2 questions, dismissed"]);
+  assert.deepEqual(words("follow-up"), ["2 questions, follow-up started"]);
+  assert.equal(summaryTags(ASKS, null)[0]?.tone, "wait");
+  assert.equal(summaryTags(ASKS, "answered")[0]?.tone, null, "a decided ask is quiet");
+});
+
+test("ackKindOf: a row that was acknowledged and carries no kind reads as answered", () => {
+  assert.equal(ackKindOf(run("A", "2026-10-15T05:00:00.000Z", { acknowledged: { at: "x", who: "w", note: null } })), "answered");
+  assert.equal(ackKindOf(run("B", "2026-10-15T05:00:00.000Z", { ackKind: "dismissed", acknowledged: { at: "x", who: "w", note: null } })), "dismissed");
+  assert.equal(ackKindOf(run("C", "2026-10-15T05:00:00.000Z")), null);
+});
+
+test("the filter in words", () => {
+  assert.equal(filterSentence(ANY_RUNS, "demo"), "All runs in demo, newest first.");
+  assert.equal(filterSentence({ ...ANY_RUNS, state: "held", kind: "follow-up" }, ""), "Held follow-up runs of every workspace, newest first.");
+  assert.equal(filterSentence({ ...ANY_RUNS, kind: "scheduled", by: "timer", ack: "dismissed" }, "demo"), "Scheduled runs in demo, started by the timer, dismissed, newest first.");
+  assert.equal(filterSentence({ ...ANY_RUNS, state: "running", by: "web", ack: "open", imported: true }, ""), "Runs still running of every workspace, started from the web, still open, imported runs included, newest first.");
+  assert.equal(filterSentence({ ...ANY_RUNS, state: "weird" }, "demo"), "Runs that ended weird in demo, newest first.");
 });

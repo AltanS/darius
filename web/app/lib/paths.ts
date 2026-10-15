@@ -9,6 +9,56 @@ export type Section = "vigils" | "rituals" | "findings" | "milestones" | "runs";
 
 const SECTIONS: readonly Section[] = ["vigils", "rituals", "findings", "milestones", "runs"];
 
+// --- the filters of the Runs list (0.93.0) ----------------------------------------------------
+
+/** Where a run came from: `follow-up` (`darius run follow-up`), `scheduled` (the timer), or `manual` (a hand: the web, the CLI). */
+export const RUN_KINDS = ["follow-up", "scheduled", "manual"] as const;
+/** Who started a run, as `RunRow.startedBy` says. */
+export const RUN_STARTERS = ["web", "timer", "cli"] as const;
+/** What became of the questions of a run: answered, dismissed, or still open. */
+export const RUN_ACKS = ["answered", "dismissed", "open"] as const;
+
+/** The query of the Runs list. An empty string means "any". */
+export interface RunsFilter {
+  /** `held`, `running`, or an outcome (`complete`, `failed`, `abandoned`); any other text is kept as the outcome to match. */
+  state: string;
+  /** Include the imported runs. */
+  imported: boolean;
+  kind: (typeof RUN_KINDS)[number] | "";
+  by: (typeof RUN_STARTERS)[number] | "";
+  ack: (typeof RUN_ACKS)[number] | "";
+}
+
+/** The filter that matches every run. */
+export const ANY_RUNS: RunsFilter = { state: "", imported: false, kind: "", by: "", ack: "" };
+
+function oneOf<T extends string>(words: readonly T[], text: string | null): T | "" {
+  return words.find((word) => word === text) ?? "";
+}
+
+/** The filter a query names. A value that is not one of the words is ignored, so an old or a hand-made link shows the plain list. */
+export function runsFilterOf(params: { get(name: string): string | null }): RunsFilter {
+  return {
+    state: params.get("state") ?? "",
+    imported: params.get("imported") === "1",
+    kind: oneOf(RUN_KINDS, params.get("kind")),
+    by: oneOf(RUN_STARTERS, params.get("by")),
+    ack: oneOf(RUN_ACKS, params.get("ack")),
+  };
+}
+
+/** The query of a filter: only what narrows the list, so the plain list has none. `runsFilterOf` reads it back. */
+export function runsQuery(filter: RunsFilter) {
+  const entries: Array<[string, string]> = [
+    ["state", filter.state],
+    ["kind", filter.kind],
+    ["by", filter.by],
+    ["ack", filter.ack],
+    ["imported", filter.imported ? "1" : ""],
+  ];
+  return Object.fromEntries(entries.filter(([, value]) => value !== ""));
+}
+
 export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about";
 
 export type Target =

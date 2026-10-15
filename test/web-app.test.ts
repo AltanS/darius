@@ -2531,3 +2531,87 @@ test("a parent's page says what came of it, and its trail shows the acks with th
   assert.equal(page.includes(EVIL), false);
   assert.equal(/\sstyle="/u.test(page), false);
 });
+
+// --- the Runs list filters (0.93.0) -------------------------------------------------------
+
+const L_PARENT = "01KLLLLLLLLLLLLLLLLLLLLLP1";
+const L_FOLLOW = "01KLLLLLLLLLLLLLLLLLLLLLF2";
+const L_DISMISSED = "01KLLLLLLLLLLLLLLLLLLLLLD3";
+const L_ANSWERED = "01KLLLLLLLLLLLLLLLLLLLLLA4";
+const L_OPEN = "01KLLLLLLLLLLLLLLLLLLLLLO5";
+const L_HAND = "01KLLLLLLLLLLLLLLLLLLLLLH6";
+const ASK_SUMMARY: RunResultSummary = { status: "attention", questions: 2, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
+const SEEN: Acknowledgement = { at: "2026-09-28T09:00:00.000Z", who: "web:altan", note: null };
+
+function listRow(run: string, hour: number, extra: Partial<RunRow> = {}): RunRow {
+  return { ...runRow(run, "closed", "complete"), startedAt: `2026-09-28T0${hour}:00:00.000Z`, endedAt: `2026-09-28T0${hour}:04:00.000Z`, ...extra };
+}
+
+function runsContext(): WebContext {
+  const rows: RunRow[] = [
+    listRow(L_PARENT, 1, { result: ASK_SUMMARY, acknowledged: SEEN, ackKind: "follow-up" }),
+    listRow(L_FOLLOW, 2, { who: "web:altan", startedBy: "web", followUpOf: L_PARENT }),
+    listRow(L_DISMISSED, 3, { result: ASK_SUMMARY, acknowledged: SEEN, ackKind: "dismissed" }),
+    listRow(L_ANSWERED, 4, { result: ASK_SUMMARY, acknowledged: SEEN, ackKind: "answered" }),
+    listRow(L_OPEN, 5, { result: ASK_SUMMARY }),
+    listRow(L_HAND, 6, { who: "altan@host", startedBy: "cli" }),
+  ];
+  const project = STATUS.projects[0]!;
+  return { ...context, status: () => ({ ...STATUS, projects: [{ ...project, runs: rows }] }) };
+}
+
+const hrefs = (page: string): string[] => [...page.matchAll(/class="rw-title" href="\/w\/demo\/runs\/([0-9A-Z]+)"/gu)].map((one) => one[1] ?? "");
+
+test("the Runs list filters on kind, who started it and what became of the questions", async () => {
+  const ctx = runsContext();
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs", ctx)).toSorted(), [L_ANSWERED, L_DISMISSED, L_FOLLOW, L_HAND, L_OPEN, L_PARENT].toSorted());
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?kind=follow-up", ctx)), [L_FOLLOW]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?kind=manual", ctx)), [L_HAND]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?by=web", ctx)), [L_FOLLOW]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?by=cli", ctx)), [L_HAND]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?ack=dismissed", ctx)), [L_DISMISSED]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?ack=answered", ctx)), [L_ANSWERED]);
+  assert.deepEqual(hrefs(await readPage("/w/demo/runs?ack=open", ctx)), [L_OPEN]);
+  assert.deepEqual(hrefs(await readPage("/runs?kind=follow-up&by=web", ctx)), [L_FOLLOW], "the list of every workspace takes them too");
+  assert.equal(hrefs(await readPage("/w/demo/runs?kind=nonsense&by=robot", ctx)).length, 6, "an unknown value is ignored");
+});
+
+test("an empty filter result keeps the empty state, and the filter sentence names each filter", async () => {
+  const ctx = runsContext();
+  const page = await readPage("/w/demo/runs?kind=follow-up&by=cli", ctx);
+  assert.deepEqual(hrefs(page), []);
+  assert.ok(textOf(page).includes("No run matches this filter."));
+  assert.ok(textOf(page).includes("Follow-up runs in demo, started from the command line, newest first."), textOf(page));
+});
+
+test("the filter chip rows keep the other filters and mark the one that is on", async () => {
+  const page = await readPage("/w/demo/runs?state=complete&kind=follow-up&ack=open", runsContext());
+  for (const label of ["Kind", "Started by", "Questions"]) assert.ok(page.includes(`aria-label="${label}"`), label);
+  const on = [...page.matchAll(/class="fchip fchip-on"[^>]*>([^<]*)</gu)].map((one) => one[1]);
+  assert.deepEqual(on.toSorted(), ["anyone", "complete", "follow-up", "open"]);
+  assert.ok(page.includes('href="/w/demo/runs?state=complete&amp;ack=open"'), "the kind chip 'any kind' drops only the kind");
+  assert.ok(page.includes('href="/w/demo/runs?state=complete&amp;kind=follow-up&amp;by=web&amp;ack=open"'), "a by chip keeps the rest");
+});
+
+test("a row says what became of its questions, and a follow-up names its parent with a link", async () => {
+  const page = await readPage("/w/demo/runs", runsContext());
+  const row = (id: string): string => {
+    const at = page.indexOf(`class="rw-title" href="/w/demo/runs/${id}"`);
+    return between(page, at, page.indexOf("</li>", at));
+  };
+  assert.ok(textOf(row(L_DISMISSED)).includes("2 questions, dismissed"), "a bare dismissal is not an answer");
+  assert.equal(textOf(row(L_DISMISSED)).includes("answered"), false);
+  assert.ok(textOf(row(L_ANSWERED)).includes("2 questions, answered"));
+  assert.ok(textOf(row(L_PARENT)).includes("2 questions, follow-up started"));
+  assert.ok(textOf(row(L_OPEN)).includes("2 questions") && !textOf(row(L_OPEN)).includes("2 questions,"), "an open ask has the plain chip");
+  assert.ok(textOf(row(L_FOLLOW)).includes(`follow-up of ${L_PARENT.slice(-8)}`));
+  assert.ok(row(L_FOLLOW).includes(`href="/w/demo/runs/${L_PARENT}"`), "the parent is a link");
+  assert.equal(textOf(row(L_HAND)).includes("follow-up of"), false, "only a follow-up has the line");
+  assert.ok(textOf(row(L_FOLLOW)).includes("by web:altan"), "the who stays");
+});
+
+test("the old /runs?project= address still redirects and keeps the new filters", async () => {
+  const response = await handler(new Request("http://darius.test/runs?project=demo&kind=follow-up&ack=open"), runsContext());
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("location"), "/w/demo/runs?kind=follow-up&ack=open");
+});

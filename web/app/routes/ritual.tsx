@@ -18,7 +18,7 @@ import { isManual } from "../lib/kind.ts";
 import { lastDecision, runNotes } from "../lib/ritual-activity.ts";
 import { ritualWord } from "../lib/state-words.ts";
 import { statusOf } from "../lib/status.ts";
-import { summaryTags } from "../lib/result.ts";
+import { ackKindOf, summaryTags } from "../lib/result.ts";
 import { asksYou, atText, cadenceText, isImported, nextRunText, nextStep, reportExcerpt, ritualFailure, runState, sourceText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
@@ -295,9 +295,9 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
             <Section title="Latest report" aside={<Link to={href({ to: "run", ws: project, run: finished.run })}>Read it all</Link>}>
               <div className={`card card-accent edge-${runState(finished, ritual.runs).tone}`}>
                 <Report report={report} lines={4} fades={false} />
-                {finished.result === null || summaryTags(finished.result, finished.acknowledged !== null).length === 0 ? null : (
+                {finished.result === null || summaryTags(finished.result, null).length === 0 ? null : (
                   <div className="rw-chips mt-3">
-                    <ResultChips summary={finished.result} isAnswered={finished.acknowledged !== null} />
+                    <ResultChips summary={finished.result} ack={ackKindOf(finished)} />
                   </div>
                 )}
               </div>

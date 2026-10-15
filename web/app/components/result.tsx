@@ -27,13 +27,16 @@ export function Tag({ tag }: TagProps): React.ReactNode {
 
 interface ResultChipsProps {
   summary: RunResultSummary;
-  /** Someone answered the questions (`darius run ack`). */
-  isAnswered: boolean;
+  /** What the first acknowledgement of the run is (`RunRow.ackKind`); null while nobody has decided. */
+  ack: RunRow["ackKind"];
 }
 
-/** The chips of a run row: open critical and high items, and the questions. */
-export function ResultChips({ summary, isAnswered }: ResultChipsProps): React.ReactNode {
-  return summaryTags(summary, isAnswered).map((tag) => <Tag key={tag.text} tag={tag} />);
+/** The word a chip gives to the first acknowledgement: a bare dismissal is not "answered" (0.93.0). */
+const ACK_WORDS = { answered: "answered", dismissed: "dismissed", "follow-up": "follow-up started", note: "noted" } as const satisfies Record<NonNullable<RunRow["ackKind"]>, string>;
+
+/** The chips of a run row: open critical and high items, and the questions with how they were decided. */
+export function ResultChips({ summary, ack }: ResultChipsProps): React.ReactNode {
+  return summaryTags(summary, ack === null ? null : ACK_WORDS[ack]).map((tag) => <Tag key={tag.text} tag={tag} />);
 }
 
 interface ResultQuestionsProps {

@@ -2582,6 +2582,14 @@
     overflow-wrap: anywhere;
   }
 
+  /* A link in the third line ("follow-up of <run>") sits above the stretched link of the title. */
+
+  .rw-detail a,
+  .rw-note a {
+    position: relative;
+    z-index: 1;
+  }
+
   .rw-detail {
     display: -webkit-box;
     overflow: hidden;

@@ -9278,6 +9278,48 @@ var SECTIONS = [
 	"milestones",
 	"runs"
 ];
+/** Where a run came from: `follow-up` (`darius run follow-up`), `scheduled` (the timer), or `manual` (a hand: the web, the CLI). */
+var RUN_KINDS = [
+	"follow-up",
+	"scheduled",
+	"manual"
+];
+/** Who started a run, as `RunRow.startedBy` says. */
+var RUN_STARTERS = [
+	"web",
+	"timer",
+	"cli"
+];
+/** What became of the questions of a run: answered, dismissed, or still open. */
+var RUN_ACKS = [
+	"answered",
+	"dismissed",
+	"open"
+];
+function oneOf(words, text) {
+	return words.find((word) => word === text) ?? "";
+}
+/** The filter a query names. A value that is not one of the words is ignored, so an old or a hand-made link shows the plain list. */
+function runsFilterOf(params) {
+	return {
+		state: params.get("state") ?? "",
+		imported: params.get("imported") === "1",
+		kind: oneOf(RUN_KINDS, params.get("kind")),
+		by: oneOf(RUN_STARTERS, params.get("by")),
+		ack: oneOf(RUN_ACKS, params.get("ack"))
+	};
+}
+/** The query of a filter: only what narrows the list, so the plain list has none. `runsFilterOf` reads it back. */
+function runsQuery(filter) {
+	const entries = [
+		["state", filter.state],
+		["kind", filter.kind],
+		["by", filter.by],
+		["ack", filter.ack],
+		["imported", filter.imported ? "1" : ""]
+	];
+	return Object.fromEntries(entries.filter(([, value]) => value !== ""));
+}
 function enc(text) {
 	return encodeURIComponent(text);
 }
@@ -10682,7 +10724,7 @@ var WHAT = {
 	resume: "a resume",
 	"vigil-check": "a check"
 };
-function capital(text) {
+function capital$1(text) {
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 /** The sentence of a start the web asked for and that shows no run yet. */
@@ -10690,8 +10732,8 @@ function pendingText(start, clock) {
 	const time = clockTime(start.at, clock.offset);
 	const what = WHAT[start.kind];
 	const asked = `asked ${time} by ${start.who}`;
-	if (start.state === "refused") return `${capital(what)} was not started: ${(start.sentence ?? "the command refused it").replace(/[.\s]+$/u, "")}. ${capital(asked)}.`;
-	if (start.state === "lost") return `${capital(what)} on ${start.host}, ${asked}, shows no start after 15 minutes${start.sentence === void 0 ? "" : `. Last line: ${start.sentence}`}`;
+	if (start.state === "refused") return `${capital$1(what)} was not started: ${(start.sentence ?? "the command refused it").replace(/[.\s]+$/u, "")}. ${capital$1(asked)}.`;
+	if (start.state === "lost") return `${capital$1(what)} on ${start.host}, ${asked}, shows no start after 15 minutes${start.sentence === void 0 ? "" : `. Last line: ${start.sentence}`}`;
 	return `Starting ${what} on ${start.host}, ${asked}`;
 }
 //#endregion
@@ -13969,11 +14011,17 @@ function itemsText(items) {
 function plural(count, noun) {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
+/** What the first acknowledgement of a run is. A row that was acknowledged but carries no kind (an older build, a fake) reads as answered. */
+function ackKindOf(run) {
+	return run.ackKind ?? (run.acknowledged === null ? null : "answered");
+}
 /**
 * The tags a run row shows for its result: open critical and high items,
-* and the questions, in the waiting tone until someone answered them.
+* and the questions, in the waiting tone until someone decided on them. Once
+* someone did, the tag says how: `ack` is the word ("answered", "dismissed").
+* A caller that only counts the tags passes null.
 */
-function summaryTags(summary, isAnswered) {
+function summaryTags(summary, ack) {
 	const tags = [];
 	if (summary.open.critical > 0) tags.push({
 		text: `${summary.open.critical} critical open`,
@@ -13985,12 +14033,12 @@ function summaryTags(summary, isAnswered) {
 	});
 	if (summary.questions > 0) {
 		const text = plural(summary.questions, "question");
-		tags.push(isAnswered ? {
-			text: `${text}, answered`,
-			tone: null
-		} : {
+		tags.push(ack === null ? {
 			text,
 			tone: "wait"
+		} : {
+			text: `${text}, ${ack}`,
+			tone: null
 		});
 	}
 	return tags;
@@ -14132,9 +14180,16 @@ function Tag({ tag }) {
 		children: tag.text
 	});
 }
-/** The chips of a run row: open critical and high items, and the questions. */
-function ResultChips({ summary, isAnswered }) {
-	return summaryTags(summary, isAnswered).map((tag) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag }, tag.text));
+/** The word a chip gives to the first acknowledgement: a bare dismissal is not "answered" (0.93.0). */
+var ACK_WORDS = {
+	answered: "answered",
+	dismissed: "dismissed",
+	"follow-up": "follow-up started",
+	note: "noted"
+};
+/** The chips of a run row: open critical and high items, and the questions with how they were decided. */
+function ResultChips({ summary, ack }) {
+	return summaryTags(summary, ack === null ? null : ACK_WORDS[ack]).map((tag) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { tag }, tag.text));
 }
 /**
 * The "Questions for you" card. A complete run waits for the operator's
@@ -14436,7 +14491,7 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 				took === null ? null : `took ${took}`,
 				isImport ? null : run.who === "timer" ? "by timer" : `by ${run.who}`
 			].filter((part) => part !== null);
-			const counts = run.result === null ? [] : summaryTags(run.result, run.acknowledged !== null);
+			const counts = run.result === null ? [] : summaryTags(run.result, null);
 			const chips = showLabel || counts.length > 0 || isImport ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindWord, {
 					kind: run.kind,
@@ -14444,7 +14499,7 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 				}) : null,
 				run.result === null || counts.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultChips, {
 					summary: run.result,
-					isAnswered: run.acknowledged !== null
+					ack: ackKindOf(run)
 				}),
 				isImport ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chip, {
 					color: "idle",
@@ -14466,6 +14521,14 @@ function RunList({ runs, showProject, showLabel = true, empty, phoneShown = runs
 				state,
 				meta,
 				time: showLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: run.startedAt }) : clockTime(run.startedAt, offset),
+				detail: run.followUpOf === null || isChild ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: ["follow-up of ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+					to: href({
+						to: "run",
+						ws: run.project,
+						run: run.followUpOf
+					}),
+					children: shortRun(run.followUpOf)
+				})] }),
 				note: notes?.get(run.run),
 				className: [index >= phoneShown ? "phone-extra" : "", isChild ? "rw-nested" : ""].filter((part) => part !== "").join(" ") || void 0
 			}, `${run.project}/${run.run}`);
@@ -14552,7 +14615,7 @@ function ReportRow({ project, ritual, last, report, showProject, className }) {
 		next
 	] });
 	const result = last?.result ?? null;
-	const counts = result === null ? [] : summaryTags(result, seen !== null);
+	const counts = result === null ? [] : summaryTags(result, null);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 		kind: "ritual",
 		href: last === null ? href({
@@ -14569,7 +14632,7 @@ function ReportRow({ project, ritual, last, report, showProject, className }) {
 		live: state.tone === "run",
 		chips: result === null || counts.length === 0 ? void 0 : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultChips, {
 			summary: result,
-			isAnswered: seen !== null
+			ack: last === null ? null : ackKindOf(last)
 		}),
 		state,
 		meta: showProject ? [project] : [],
@@ -15779,7 +15842,7 @@ var VIEW_WORDS = /* @__PURE__ */ new Map([
 	["all", "All findings, with the closed and fixed ones"]
 ]);
 /** The filter in words: "Findings that need you in acme-web, ritual site-check, severity high, worst first." */
-function filterText$1(query, scope) {
+function filterText(query, scope) {
 	const where = scope !== null ? ` in ${scope}` : query.project === "" ? " of every project" : ` in ${query.project}`;
 	const ritual = query.ritual === "" ? "" : `, ritual ${query.ritual}`;
 	const severity = query.severity === "" ? "" : `, severity ${query.severity}`;
@@ -15844,7 +15907,7 @@ var findings_default = withComponentProps(function Findings({ loaderData }) {
 			children: "Findings"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "page-meta",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: filterText$1(query, scope) })
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: filterText(query, scope) })
 		})]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "board",
@@ -16443,6 +16506,72 @@ function Crumbs({ title, parent, itemKind }) {
 	});
 }
 //#endregion
+//#region app/lib/runs-filter.ts
+/** True when the run closed with this outcome, or is in this phase. `held` and `running` are phases; anything else is an outcome. */
+function stateMatches(run, state) {
+	if (state === "") return true;
+	if (state === "held" || state === "running") return run.phase === state;
+	return run.phase === "closed" && run.outcome === state;
+}
+/** `follow-up`: it follows a run up. `scheduled`: no follow-up, and the timer started it. `manual`: no follow-up, and a hand started it (the web, the CLI). */
+function kindMatches(run, kind) {
+	if (kind === "") return true;
+	if (kind === "follow-up") return run.followUpOf !== null;
+	if (run.followUpOf !== null) return false;
+	return kind === "scheduled" ? run.startedBy === "timer" : run.startedBy !== "timer";
+}
+/**
+* `answered` and `dismissed` read the first acknowledgement (`ackKindOf`) of a
+* run that asked a question: the "seen it" ack of a failed run is neither.
+* `open` is a complete run that asked a question nobody answered or
+* dismissed (`isOpenAsk`): it also lists an ask that a newer run replaced,
+* since no person decided on it.
+*/
+function ackMatches(run, ack) {
+	if (ack === "") return true;
+	if (ack === "open") return isOpenAsk(run);
+	return (run.result?.questions ?? 0) > 0 && ackKindOf(run) === ack;
+}
+/** True when the run passes every part of the filter. `imported` is not here: the list drops imported runs before it filters. */
+function runMatches(run, filter) {
+	return stateMatches(run, filter.state) && kindMatches(run, filter.kind) && (filter.by === "" || run.startedBy === filter.by) && ackMatches(run, filter.ack);
+}
+var KIND_WORDS = {
+	"": "",
+	"follow-up": "follow-up ",
+	scheduled: "scheduled ",
+	manual: "manual "
+};
+var BY_WORDS = {
+	"": "",
+	web: ", started from the web",
+	timer: ", started by the timer",
+	cli: ", started from the command line"
+};
+var ACK_PHRASES = {
+	"": "",
+	answered: ", answered",
+	dismissed: ", dismissed",
+	open: ", still open"
+};
+function capital(text) {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+/** What the filter lists, by state and kind: "Held follow-up runs", "Runs still running", "All runs". */
+function subject(filter) {
+	const runs = `${KIND_WORDS[filter.kind]}runs`;
+	if (filter.state === "") return filter.kind === "" ? "All runs" : capital(runs);
+	if (filter.state === "running") return `${capital(runs)} still running`;
+	if (filter.state === "held" || filter.state === "complete" || filter.state === "failed" || filter.state === "abandoned") return `${capital(filter.state)} ${runs}`;
+	return `${capital(runs)} that ended ${filter.state}`;
+}
+/** The filter in words: "Held follow-up runs of every workspace, started from the web, answered, newest first." */
+function filterSentence(filter, project) {
+	const where = project === "" ? " of every workspace" : ` in ${project}`;
+	const imported = filter.imported ? ", imported runs included" : "";
+	return `${subject(filter)}${where}${BY_WORDS[filter.by]}${ACK_PHRASES[filter.ack]}${imported}, newest first.`;
+}
+//#endregion
 //#region app/routes/runs.tsx
 var runs_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
@@ -16457,11 +16586,6 @@ var STATES = [
 	"failed",
 	"abandoned"
 ];
-function matches(run, state) {
-	if (state === "") return true;
-	if (state === "held" || state === "running") return run.phase === state;
-	return run.phase === "closed" && run.outcome === state;
-}
 /**
 * The Runs list, for `/runs` (all workspaces) and `/w/:ws/runs` (one). The old
 * `/runs?project=<ws>` redirects to the second; its other parameters stay.
@@ -16479,8 +16603,7 @@ function loader$13({ context, request, params: route }) {
 		}), 301);
 	}
 	const project = route.ws ?? "";
-	const state = params.get("state") ?? "";
-	const withImported = params.get("imported") === "1";
+	const filter = runsFilterOf(params);
 	const status = statusOf(context);
 	if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this host.`, { status: 404 });
 	const { showSelftest } = readSettings(request.headers.get("cookie"));
@@ -16489,44 +16612,28 @@ function loader$13({ context, request, params: route }) {
 		includeSelftest: showSelftest
 	}) : status.projects;
 	return {
-		runs: activity(projects.filter((candidate) => project === "" || candidate.name === project), { withImported }).filter((run) => matches(run, state)),
+		runs: activity(projects.filter((candidate) => project === "" || candidate.name === project), { withImported: filter.imported }).filter((run) => runMatches(run, filter)),
 		project,
-		state,
-		withImported,
+		filter,
 		projects: projects.map((candidate) => candidate.name)
 	};
 }
 var meta$11 = ({ data: loaded }) => [{ title: loaded === void 0 || loaded.project === "" ? "Runs | darius" : `Runs · ${loaded.project} | darius` }];
-function runsHref(query) {
-	const extra = {};
-	if (query.state !== "") extra.state = query.state;
-	if (query.withImported) extra.imported = "1";
+/** The address of the list for a workspace ("" for all) and a filter: the query holds only what narrows it. */
+function runsHref(project, filter) {
 	return href({
 		to: "section",
-		ws: query.project === "" ? null : query.project,
+		ws: project === "" ? null : project,
 		section: "runs",
-		query: extra
+		query: runsQuery(filter)
 	});
 }
-var STATE_WORDS = /* @__PURE__ */ new Map([
-	["", "All runs"],
-	["held", "Held runs"],
-	["running", "Runs still running"],
-	["complete", "Complete runs"],
-	["failed", "Failed runs"],
-	["abandoned", "Abandoned runs"]
-]);
-/** The filter in words: "Held runs in acme-web, newest first." */
-function filterText(query) {
-	return `${STATE_WORDS.get(query.state) ?? `Runs that ended ${query.state}`}${query.project === "" ? " of every workspace" : ` in ${query.project}`}${query.withImported ? ", imported runs included" : ""}, newest first.`;
-}
 var runs_default = withComponentProps(function Runs({ loaderData }) {
-	const { runs, project, state, withImported, projects } = loaderData;
-	const query = {
-		project,
-		state,
-		withImported
-	};
+	const { runs, project, filter, projects } = loaderData;
+	const change = (part) => runsHref(project, {
+		...filter,
+		...part
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
 		className: "page-head",
 		children: [
@@ -16537,7 +16644,7 @@ var runs_default = withComponentProps(function Runs({ loaderData }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "page-meta",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: filterText(query) })
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: filterSentence(filter, project) })
 			})
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -16559,47 +16666,68 @@ var runs_default = withComponentProps(function Runs({ loaderData }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 					"aria-label": "Filter",
 					className: "filters panel panel-pad",
-					children: [project !== "" || projects.length < 2 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
-						label: "Workspace",
-						current: project,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: runsHref({
-								...query,
-								project: ""
-							}),
-							className: chipClass(project === ""),
-							"aria-current": project === "" ? "true" : void 0,
-							children: "all workspaces"
-						}), projects.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: runsHref({
-								...query,
-								project: name
-							}),
-							className: chipClass(project === name),
-							"aria-current": project === name ? "true" : void 0,
-							children: name
-						}, name))]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
-						label: "State",
-						current: state,
-						children: [["", ...STATES].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: runsHref({
-								...query,
-								state: name
-							}),
-							className: chipClass(name === state),
-							"aria-current": name === state ? "true" : void 0,
-							children: name === "" ? "any state" : name
-						}, name)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-							to: runsHref({
-								...query,
-								withImported: !withImported
-							}),
-							className: chipClass(withImported, true),
-							"aria-current": withImported ? "true" : void 0,
-							children: withImported ? "with imported runs" : "show imported runs"
-						})]
-					})]
+					children: [
+						project !== "" || projects.length < 2 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+							label: "Workspace",
+							current: project,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: runsHref("", filter),
+								className: chipClass(project === ""),
+								"aria-current": project === "" ? "true" : void 0,
+								children: "all workspaces"
+							}), projects.map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: runsHref(name, filter),
+								className: chipClass(project === name),
+								"aria-current": project === name ? "true" : void 0,
+								children: name
+							}, name))]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChipRow, {
+							label: "State",
+							current: filter.state,
+							children: [["", ...STATES].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: change({ state: name }),
+								className: chipClass(name === filter.state),
+								"aria-current": name === filter.state ? "true" : void 0,
+								children: name === "" ? "any state" : name
+							}, name)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: change({ imported: !filter.imported }),
+								className: chipClass(filter.imported, true),
+								"aria-current": filter.imported ? "true" : void 0,
+								children: filter.imported ? "with imported runs" : "show imported runs"
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "Kind",
+							current: filter.kind,
+							children: ["", ...RUN_KINDS].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: change({ kind: name }),
+								className: chipClass(name === filter.kind),
+								"aria-current": name === filter.kind ? "true" : void 0,
+								children: name === "" ? "any kind" : name
+							}, name))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "Started by",
+							current: filter.by,
+							children: ["", ...RUN_STARTERS].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: change({ by: name }),
+								className: chipClass(name === filter.by),
+								"aria-current": name === filter.by ? "true" : void 0,
+								children: name === "" ? "anyone" : name
+							}, name))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "Questions",
+							current: filter.ack,
+							children: ["", ...RUN_ACKS].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+								to: change({ ack: name }),
+								className: chipClass(name === filter.ack),
+								"aria-current": name === filter.ack ? "true" : void 0,
+								children: name === "" ? "any answer" : name
+							}, name))
+						})
+					]
 				})
 			})
 		})]
@@ -17155,11 +17283,11 @@ var ritual_default = withComponentProps(function Ritual({ loaderData }) {
 							report,
 							lines: 4,
 							fades: false
-						}), finished.result === null || summaryTags(finished.result, finished.acknowledged !== null).length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						}), finished.result === null || summaryTags(finished.result, null).length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "rw-chips mt-3",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResultChips, {
 								summary: finished.result,
-								isAnswered: finished.acknowledged !== null
+								ack: ackKindOf(finished)
 							})
 						})]
 					})
@@ -20653,7 +20781,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CJa22-q7.js",
+			"module": "/assets/root-DHxMNv5q.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20661,14 +20789,14 @@ var server_manifest_default = {
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/agenda-BKyxq_qy.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-BiDcUgJ1.css"],
+			"css": ["/assets/root-D8OEBmIq.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -20708,17 +20836,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BwFY2SVj.js",
+			"module": "/assets/overview-CHKHtuCc.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
+				"/assets/runs-D1968osE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
@@ -20726,7 +20854,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -20748,17 +20876,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-BwFY2SVj.js",
+			"module": "/assets/overview-CHKHtuCc.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
+				"/assets/runs-D1968osE.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
@@ -20766,7 +20894,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -20788,17 +20916,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-D9szRq0m.js",
+			"module": "/assets/vigils-C3bBqPWj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-C9Xmmq5G.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/section-D3iNb5V-.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/agenda-BKyxq_qy.js",
@@ -20825,17 +20953,17 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-D9szRq0m.js",
+			"module": "/assets/vigils-C3bBqPWj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-C9Xmmq5G.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/section-D3iNb5V-.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/agenda-BKyxq_qy.js",
@@ -20862,16 +20990,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CcKjoJbH.js",
+			"module": "/assets/rituals-kD8qUAWT.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
+				"/assets/runs-D1968osE.js",
 				"/assets/pulse-Dm9FzUfo.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-C9Xmmq5G.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/section-D3iNb5V-.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
@@ -20879,7 +21007,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-BKyxq_qy.js",
@@ -20904,16 +21032,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-CcKjoJbH.js",
+			"module": "/assets/rituals-kD8qUAWT.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
+				"/assets/runs-D1968osE.js",
 				"/assets/pulse-Dm9FzUfo.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-C9Xmmq5G.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/section-D3iNb5V-.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
@@ -20921,7 +21049,7 @@ var server_manifest_default = {
 				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-BKyxq_qy.js",
@@ -20946,18 +21074,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CBjOFJbA.js",
+			"module": "/assets/findings-C8l_n1LC.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/view-BIYoBeb9.js",
@@ -20982,18 +21110,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-CBjOFJbA.js",
+			"module": "/assets/findings-C8l_n1LC.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/view-BIYoBeb9.js",
@@ -21018,13 +21146,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-D0QOMDWi.js",
+			"module": "/assets/milestones-DhQjULDJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/milestones-CEnjTSZj.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/milestones-BGeRo7A0.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
@@ -21049,13 +21177,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestones-D0QOMDWi.js",
+			"module": "/assets/milestones-DhQjULDJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/milestones-CEnjTSZj.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/milestones-BGeRo7A0.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
@@ -21080,24 +21208,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-B80M-ikE.js",
+			"module": "/assets/runs-DxbVPK8k.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
+				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/runs-D1968osE.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/crumbs-CkJOExHf.js",
+				"/assets/crumbs-DVRvoTnr.js",
 				"/assets/clock-CCM6CgVg.js",
+				"/assets/state-words-CdJGMvfT.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -21121,23 +21249,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-DcztZRuz.js",
+			"module": "/assets/ritual-DxAZEkiY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/runs-D1968osE.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/crumbs-CkJOExHf.js",
-				"/assets/activity-DCh3yoDC.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/crumbs-DVRvoTnr.js",
+				"/assets/activity-C2x3v94e.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
@@ -21162,7 +21290,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigil-Ma1TQBih.js",
+			"module": "/assets/vigil-aoFZQQtU.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21173,11 +21301,11 @@ var server_manifest_default = {
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/check-now-Dc3eh8qn.js",
-				"/assets/crumbs-CkJOExHf.js",
+				"/assets/crumbs-DVRvoTnr.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/post-DvwTzYpm.js"
 			],
 			"css": [],
@@ -21199,23 +21327,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-DARNnarm.js",
+			"module": "/assets/run-DsA_Hlwt.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/runs-D1968osE.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/crumbs-CkJOExHf.js",
-				"/assets/activity-DCh3yoDC.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/crumbs-DVRvoTnr.js",
+				"/assets/activity-C2x3v94e.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/receipt-C4CmVsTS.js",
@@ -21240,7 +21368,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/milestone-BsC22X56.js",
+			"module": "/assets/milestone-CASgCHfI.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21248,12 +21376,12 @@ var server_manifest_default = {
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
-				"/assets/route-error-DUxTvXGa.js",
-				"/assets/milestones-CEnjTSZj.js",
-				"/assets/crumbs-CkJOExHf.js",
+				"/assets/route-error-kZdyhOe-.js",
+				"/assets/milestones-BGeRo7A0.js",
+				"/assets/crumbs-DVRvoTnr.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21274,12 +21402,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-Okv1VULX.js",
+			"module": "/assets/settings-Ck4N4MHt.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
-				"/assets/route-error-DUxTvXGa.js"
+				"/assets/paths-DgQ1hPI_.js",
+				"/assets/route-error-kZdyhOe-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21300,14 +21428,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-general-BcXpXaOL.js",
+			"module": "/assets/settings-general-A34PwtXh.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/settings-B-OsZEc-.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/settings-ui-ChNT_lIl.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21328,13 +21456,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-notifications-rrLlhzWZ.js",
+			"module": "/assets/settings-notifications-C-X52H4K.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/settings-ui-ChNT_lIl.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21355,7 +21483,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-backups-DFjK3m0G.js",
+			"module": "/assets/settings-backups-BU-_qxj9.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21363,9 +21491,9 @@ var server_manifest_default = {
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/settings-ui-ChNT_lIl.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21386,12 +21514,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-about-BbsZOlkl.js",
+			"module": "/assets/settings-about-Q8-r82DI.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/paths-DgQ1hPI_.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/settings-ui-ChNT_lIl.js"
 			],
 			"css": [],
@@ -21413,15 +21541,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/status-Dv6Ai5Te.js",
+			"module": "/assets/status-BGq1pG9T.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/route-error-DUxTvXGa.js"
+				"/assets/route-error-kZdyhOe-.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21442,24 +21570,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-B80M-ikE.js",
+			"module": "/assets/runs-DxbVPK8k.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js",
+				"/assets/paths-DgQ1hPI_.js",
+				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BGv_XENX.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/runs-D1968osE.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/chip-row-BMwu7pOw.js",
-				"/assets/crumbs-CkJOExHf.js",
+				"/assets/crumbs-DVRvoTnr.js",
 				"/assets/clock-CCM6CgVg.js",
+				"/assets/state-words-CdJGMvfT.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/chip-7jCbr6hC.js",
-				"/assets/state-words-CdJGMvfT.js",
-				"/assets/view-BIYoBeb9.js",
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-7IrIdshp.js",
+				"/assets/result-SIC2DpV_.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -21483,14 +21611,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/profiles-B0soUYfQ.js",
+			"module": "/assets/profiles-BtMWvt7T.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21595,12 +21723,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/not-found-CuaGQbWq.js",
+			"module": "/assets/not-found-DTwPiaBD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
-				"/assets/route-error-DUxTvXGa.js",
+				"/assets/route-error-kZdyhOe-.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
-				"/assets/paths-BIsmk22N.js"
+				"/assets/paths-DgQ1hPI_.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -21609,8 +21737,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-856a9f0c.js",
-	"version": "856a9f0c",
+	"url": "/assets/manifest-20eb6162.js",
+	"version": "20eb6162",
 	"sri": void 0
 };
 //#endregion

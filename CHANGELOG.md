@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.93.0] - 2026-10-15
+
+### Added
+
+- The Runs list filters on where a run came from (`kind=follow-up|scheduled|manual`), who started it (`by=web|timer|cli`) and what became of its questions (`ack=answered|dismissed|open`). The chips sit with the state filter, the filters live in the query, and an unknown value is ignored.
+- A follow-up row says "follow-up of <parent>" on its own line, with a link to the parent run.
+
+### Fixed
+
+- The result chip no longer says "answered" for a dismissal. It reads "answered", "dismissed", "follow-up started" or "noted" from the first acknowledgement, on the Runs list, the ritual page and the report rows.
+
 ## [0.92.0] - 2026-10-15
 
 ### Added

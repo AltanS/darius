@@ -5,7 +5,7 @@
  * relies on colour alone.
  */
 
-import type { ResultAction, ResultItem, ResultItemState, ResultMetric, ResultSeverity, ResultStatus, RunResultSummary } from "../../../src/web/api.ts";
+import type { ResultAction, ResultItem, ResultItemState, ResultMetric, ResultSeverity, ResultStatus, RunResultSummary, RunRow } from "../../../src/web/api.ts";
 import type { Tone } from "./tone.ts";
 
 /** A small word in a box; a null tone is the plain box. */
@@ -98,17 +98,24 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/** What the first acknowledgement of a run is. A row that was acknowledged but carries no kind (an older build, a fake) reads as answered. */
+export function ackKindOf(run: Pick<RunRow, "ackKind" | "acknowledged">): RunRow["ackKind"] {
+  return run.ackKind ?? (run.acknowledged === null ? null : "answered");
+}
+
 /**
  * The tags a run row shows for its result: open critical and high items,
- * and the questions, in the waiting tone until someone answered them.
+ * and the questions, in the waiting tone until someone decided on them. Once
+ * someone did, the tag says how: `ack` is the word ("answered", "dismissed").
+ * A caller that only counts the tags passes null.
  */
-export function summaryTags(summary: RunResultSummary, isAnswered: boolean): TagSpec[] {
+export function summaryTags(summary: RunResultSummary, ack: string | null): TagSpec[] {
   const tags: TagSpec[] = [];
   if (summary.open.critical > 0) tags.push({ text: `${summary.open.critical} critical open`, tone: "bad" });
   if (summary.open.high > 0) tags.push({ text: `${summary.open.high} high open`, tone: "late" });
   if (summary.questions > 0) {
     const text = plural(summary.questions, "question");
-    tags.push(isAnswered ? { text: `${text}, answered`, tone: null } : { text, tone: "wait" });
+    tags.push(ack === null ? { text, tone: "wait" } : { text: `${text}, ${ack}`, tone: null });
   }
   return tags;
 }

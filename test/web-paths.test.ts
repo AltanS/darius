@@ -56,6 +56,37 @@ test("href() and placeOf() agree for every kind of target", () => {
   }
 });
 
+const FILTERS: Array<[string, Partial<ReturnType<typeof paths.runsFilterOf>>]> = [
+  ["", {}],
+  ["state=failed", { state: "failed" }],
+  ["kind=follow-up", { kind: "follow-up" }],
+  ["kind=scheduled&by=timer", { kind: "scheduled", by: "timer" }],
+  ["kind=manual&by=web&ack=answered", { kind: "manual", by: "web", ack: "answered" }],
+  ["by=cli&ack=dismissed", { by: "cli", ack: "dismissed" }],
+  ["ack=open&state=complete&imported=1", { ack: "open", state: "complete", imported: true }],
+];
+
+test("the Runs filters parse and round-trip through the query: kind, by, ack, with state and imported", () => {
+  for (const [query, part] of FILTERS) {
+    const filter = paths.runsFilterOf(new URLSearchParams(query));
+    assert.deepEqual(filter, { ...paths.ANY_RUNS, ...part }, query);
+    const rebuilt = paths.runsQuery(filter);
+    assert.deepEqual(paths.runsFilterOf(new URLSearchParams(rebuilt)), filter, `${query} survives a round trip`);
+    assert.deepEqual([...new URLSearchParams(rebuilt).keys()].toSorted(), [...new URLSearchParams(query).keys()].toSorted(), `${query}: the query holds only what narrows the list`);
+    const address = paths.href({ to: "section", ws: "demo", section: "runs", query: rebuilt });
+    assert.deepEqual(paths.placeOf(pathnameOf(address)), { scope: "demo", kind: "section", section: "runs" }, address);
+    assert.deepEqual(paths.runsFilterOf(new URL(address, "http://darius.test").searchParams), filter, `${address} reads back`);
+  }
+  assert.equal(paths.href({ to: "section", ws: null, section: "runs", query: paths.runsQuery(paths.ANY_RUNS) }), "/runs", "the plain list has no query");
+});
+
+test("an unknown filter value or key is ignored, so an old or hand-made link shows the plain list", () => {
+  const filter = paths.runsFilterOf(new URLSearchParams("kind=nonsense&by=robot&ack=maybe&view=all&imported=yes"));
+  assert.deepEqual(filter, paths.ANY_RUNS);
+  assert.deepEqual(paths.runsQuery(filter), {});
+  assert.equal(paths.runsFilterOf(new URLSearchParams("kind=FOLLOW-UP")).kind, "", "the words are exact");
+});
+
 test("href() encodes names, and keeps a query and a hash apart from the path", () => {
   assert.equal(paths.href({ to: "overview", ws: SPACED }), "/w/my%20project");
   assert.equal(paths.href({ to: "overview", ws: PERCENT }), "/w/100%25%2Fdone");

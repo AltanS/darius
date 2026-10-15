@@ -5,9 +5,9 @@ import { Link } from "react-router";
 import type { Acknowledgement, RitualRow, RunRow } from "../../../src/web/api.ts";
 import { currentHold, heldKey } from "../lib/ask.ts";
 import { useClock } from "../lib/clock.tsx";
-import { answerCommand, clockTime, duration, hostDate, shortDate } from "../lib/format.ts";
+import { answerCommand, clockTime, duration, hostDate, shortDate, shortRun } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
-import { summaryTags } from "../lib/result.ts";
+import { ackKindOf, summaryTags } from "../lib/result.ts";
 import { nestRuns } from "../lib/ritual-activity.ts";
 import { datePhrase, railOf } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
@@ -58,12 +58,12 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
         const took = run.endedAt === null ? null : duration(run.startedAt, run.endedAt);
         const isImport = run.who === "import";
         const meta = [named ? run.project : null, took === null ? null : `took ${took}`, isImport ? null : run.who === "timer" ? "by timer" : `by ${run.who}`].filter((part) => part !== null);
-        const counts = run.result === null ? [] : summaryTags(run.result, run.acknowledged !== null);
+        const counts = run.result === null ? [] : summaryTags(run.result, null);
         const hasChips = showLabel || counts.length > 0 || isImport;
         const chips = hasChips ? (
           <>
             {showLabel ? <KindWord kind={run.kind} manual={run.manual} /> : null}
-            {run.result === null || counts.length === 0 ? null : <ResultChips summary={run.result} isAnswered={run.acknowledged !== null} />}
+            {run.result === null || counts.length === 0 ? null : <ResultChips summary={run.result} ack={ackKindOf(run)} />}
             {isImport ? <Chip color="idle">imported</Chip> : null}
           </>
         ) : undefined;
@@ -80,6 +80,7 @@ export function RunList({ runs, showProject, showLabel = true, empty, phoneShown
             state={state}
             meta={meta}
             time={showLabel ? <Time iso={run.startedAt} /> : clockTime(run.startedAt, offset)}
+            detail={run.followUpOf === null || isChild ? undefined : <>follow-up of <Link to={href({ to: "run", ws: run.project, run: run.followUpOf })}>{shortRun(run.followUpOf)}</Link></>}
             note={notes?.get(run.run)}
             className={[index >= phoneShown ? "phone-extra" : "", isChild ? "rw-nested" : ""].filter((part) => part !== "").join(" ") || undefined}
           />
@@ -203,7 +204,7 @@ export function ReportRow({ project, ritual, last, report, showProject, classNam
     </>
   );
   const result = last?.result ?? null;
-  const counts = result === null ? [] : summaryTags(result, seen !== null);
+  const counts = result === null ? [] : summaryTags(result, null);
   return (
     <Row
       kind="ritual"
@@ -211,7 +212,7 @@ export function ReportRow({ project, ritual, last, report, showProject, classNam
       title={ritual.title}
       rail={railOf(state)}
       live={state.tone === "run"}
-      chips={result === null || counts.length === 0 ? undefined : <ResultChips summary={result} isAnswered={seen !== null} />}
+      chips={result === null || counts.length === 0 ? undefined : <ResultChips summary={result} ack={last === null ? null : ackKindOf(last)} />}
       state={state}
       meta={showProject ? [project] : []}
       time={time}
