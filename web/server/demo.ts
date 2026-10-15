@@ -42,6 +42,9 @@ function run(now: number, slug: string, phase: RunRow["phase"], outcome: string 
     findingsSha: phase === "closed" && outcome === "complete" ? "demo" : null,
     result: null,
     acknowledged: null,
+    followUpOf: null,
+    startedBy: "timer",
+    ackKind: null,
     ...extra,
   };
 }
@@ -506,6 +509,7 @@ export function demoContext(base: WebContext): WebContext {
     system: () => demoSystem(Date.now()),
     backups: () => demoBackups(Date.now()),
     findings: () => Promise.resolve(demoFindings(Date.now())),
+    activity: () => [],
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
   };
 }

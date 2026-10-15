@@ -2457,6 +2457,7 @@ test("run follow-up starts a new attended run of the ritual that may run the app
   assert.equal(started?.follow_up_of, parent);
   assert.deepEqual(started?.approved, [1]);
   assert.deepEqual(started?.grants, ["git push origin main", "date"]);
+  assert.equal(started?.note, "push it", "0.88.0: the operator note is on the run.started line");
   const runDir = join(openProject(project).root, "runs", child);
   const policy = JSON.parse(readFileSync(join(runDir, "policy.json"), "utf8"));
   assert.deepEqual(policy.grants, ["git push origin main", "date"]);
@@ -2546,6 +2547,28 @@ test("run follow-up --dry-run prints the grants and the tab it would open, and w
   assert.equal(readLedger(openProject(project)).length, before);
   assert.equal(existsSync(runsDir), false, "no run dir");
   assert.deepEqual(herdrCalls().filter((line) => !line.startsWith("status")), [], "no tab");
+});
+
+test("run follow-up: the note on run.started is clipped to 500 characters, the prompt keeps it whole, and no note leaves no key (0.88.0)", async () => {
+  const project = "fu-note";
+  const parent = await seedParent(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const long = `${"word ".repeat(120)}end`;
+  const noted = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless", "--note", long]));
+  assert.equal(noted.code, 0, noted.stdout + noted.stderr);
+  const child: string = JSON.parse(noted.stdout).projects[0].rituals[0].run;
+  const note = linesOf(project, "run.started").find((line) => line.run === child)?.note;
+  assert.ok(note !== undefined, "the note is on the line");
+  assert.equal([...String(note)].length, 500, "clipped to 500 characters");
+  assert.ok(String(note).endsWith("…"), "marked as cut");
+  assert.ok(long.trim().startsWith(String(note).slice(0, 100)));
+  const prompt = readFileSync(join(openProject(project).root, "runs", child, "prompt.md"), "utf8");
+  assert.ok(prompt.includes(long.trim()), "the prompt keeps the whole note");
+
+  const bare = await withFakeHerdr({}, () => followUp(parent, project, ["--approve", "1", "--headless"]));
+  const bareRun: string = JSON.parse(bare.stdout).projects[0].rituals[0].run;
+  const started = linesOf(project, "run.started").find((line) => line.run === bareRun);
+  assert.ok(started !== undefined && !("note" in started), "no note, no key");
 });
 
 /** Why a follow-up of `run` cannot start here; fails the test when it can. */

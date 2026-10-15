@@ -12,7 +12,7 @@ import { datePhrase, dateState, lateWord, railOf, ritualWord, runWord, vigilWord
 const TODAY = "2026-09-30";
 
 function run(extra: Partial<RunRow> = {}): RunRow {
-  return { run: "r1", item: "ritual/a", phase: "closed", outcome: "complete", startedAt: "2026-09-30T01:00:00Z", endedAt: "2026-09-30T01:04:00Z", who: "timer", questions: [], findingsSha: null, result: null, acknowledged: null, ...extra };
+  return { run: "r1", item: "ritual/a", phase: "closed", outcome: "complete", startedAt: "2026-09-30T01:00:00Z", endedAt: "2026-09-30T01:04:00Z", who: "timer", questions: [], findingsSha: null, result: null, acknowledged: null, followUpOf: null, startedBy: "timer", ackKind: null, ...extra };
 }
 
 function ritual(extra: Partial<RitualRow> = {}): RitualRow {

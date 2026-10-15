@@ -279,6 +279,12 @@ export interface RunRow {
   result: RunResultSummary | null;
   /** Set once a person acknowledged the failed or abandoned run. */
   acknowledged: Acknowledgement | null;
+  /** The run this one follows up (`darius run follow-up`); null for any other run (0.88.0). */
+  followUpOf: string | null;
+  /** Who started it, from the `who` of its `run.started` line: `web:<name>`, `timer`, or anything else (0.88.0). */
+  startedBy: "web" | "timer" | "cli";
+  /** What the first acknowledgement is (0.88.0): answers, a follow-up, a dismissal, or a note alone; null until acknowledged. */
+  ackKind: "answered" | "dismissed" | "note" | "follow-up" | null;
 }
 
 /** Why a sweep failed: a wait that is expected, a check that is broken, or neither known (0.82.0). */
@@ -864,6 +870,79 @@ export interface MilestoneDetail {
   worklogs: MilestoneWorklog[];
 }
 
+// --- activity (0.88.0) ---------------------------------------------------------------------
+
+/** Who acted: a web viewer, the timer, a run, a person at the CLI, or darius itself (an import, a sweep). */
+export type ActivityActor = "web" | "timer" | "cli" | "run" | "system";
+
+/** What an activity entry is. A closed list: a new ledger type needs a deliberate entry in `src/web/activity.ts`. */
+export type ActivityKind =
+  | "run-started"
+  | "follow-up-started"
+  | "run-held"
+  | "run-answered"
+  | "run-resumed"
+  | "run-completed"
+  | "run-failed"
+  | "ack-answered"
+  | "ack-dismissed"
+  | "ack-note"
+  | "ack-follow-up"
+  | "vigil-swept"
+  | "vigil-paused"
+  | "vigil-resumed"
+  | "vigil-closed"
+  | "finding-closed"
+  | "finding-reopened"
+  | "finding-reset"
+  | "ritual-lifecycle"
+  | "ritual-rescheduled";
+
+/** The state word of an entry, in the vocabulary of the app's tones. */
+export type ActivityTone = "ok" | "wait" | "bad" | "run" | "idle";
+
+/** One event of a project, as every timeline of the app names it. Every text is untrusted: the app shows it as text. */
+export interface ActivityEntry {
+  /** The ISO time of the ledger line. */
+  at: string;
+  /** The `who` of the ledger line, as written (`web:altan`, `timer`). */
+  who: string;
+  actor: ActivityActor;
+  kind: ActivityKind;
+  /** What the event is about. A run event is about the run; its ritual or vigil is in `links`. */
+  item: { type: "ritual" | "vigil" | "finding" | "run"; id: string; title: string };
+  /** The run the event belongs to, when it has one. */
+  run?: string;
+  /** One line, with the name of who acted ("by web:altan"). Operator text in it is masked. */
+  text: string;
+  /** More lines: the answers of an ack, the checks of a sweep, the lines a follow-up was granted. */
+  detail?: string[];
+  /** Slugs and ids the page turns into links. */
+  links: { ritual?: string; run?: string; vigil?: string; finding?: string };
+  tone: ActivityTone;
+}
+
+/** An activity entry with its project, for the list over every project of this host. */
+export interface ProjectActivityEntry extends ActivityEntry {
+  project: string;
+}
+
+/** What `WebContext.activity` and `activityOf` filter by. Every field narrows the list; none means all. */
+export interface ActivityOptions {
+  /** A ritual slug: its lines, its runs and its findings. */
+  ritual?: string;
+  /** A vigil slug. */
+  vigil?: string;
+  /** A run id: the run's own lines, the follow-ups it started and the acks that name it. */
+  run?: string;
+  /** A finding key. */
+  finding?: string;
+  /** An ISO time: only entries at or after it. */
+  since?: string;
+  /** At most this many entries, the newest. */
+  limit?: number;
+}
+
 // --- the handler ---------------------------------------------------------------------------
 
 /**
@@ -892,6 +971,12 @@ export interface WebContext {
   findings(): Promise<FindingRow[]>;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
+  /**
+   * The events of one project, or of every project of this host when `project` is null (0.88.0):
+   * runs, holds, answers, acks, sweeps, pauses, findings and ritual changes, newest first.
+   * An unknown project gives an empty list.
+   */
+  activity(project: string | null, options?: ActivityOptions): ProjectActivityEntry[];
   /**
    * Whether the viewer may write through the page (0.68.0): false for the
    * loopback viewer, whose POSTs the server refuses. The page hides the

@@ -15,7 +15,7 @@ function ritual(slug: string, extra: Partial<RitualRow> = {}): RitualRow {
 }
 
 function run(item: string, startedAt: string): RunRow {
-  return { run: `01${startedAt}`, item, phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: null, acknowledged: null };
+  return { run: `01${startedAt}`, item, phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: null, acknowledged: null, followUpOf: null, startedBy: "timer", ackKind: null };
 }
 
 test("a ritual in mode off is manual; one darius runs is not", () => {

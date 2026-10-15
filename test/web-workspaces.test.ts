@@ -128,7 +128,7 @@ test("a late ritual with mode off adds nothing to the late tile", () => {
 const RESULT = { status: "attention" as const, questions: 2, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
 
 function run(id: string, item: string, startedAt: string, extra: Partial<RunRow> = {}): RunRow {
-  return { run: id, item, phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: RESULT, acknowledged: null, ...extra };
+  return { run: id, item, phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: null, result: RESULT, acknowledged: null, followUpOf: null, startedBy: "timer", ackKind: null, ...extra };
 }
 
 const REPORT = ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-05" });

@@ -42,6 +42,9 @@ function runRow(run: string, phase: RunRow["phase"], outcome: string | null): Ru
     findingsSha: phase === "closed" ? "abc" : null,
     result: null,
     acknowledged: null,
+    followUpOf: null,
+    startedBy: "timer",
+    ackKind: null,
   };
 }
 
@@ -334,6 +337,7 @@ const context: WebContext = {
   system: () => SYSTEM,
   backups: () => BACKUPS,
   findings: () => Promise.resolve(FINDINGS),
+  activity: () => [],
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
   canWrite: true,
 };

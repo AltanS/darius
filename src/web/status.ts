@@ -48,6 +48,7 @@ import type {
   VigilRow,
   VigilSweep,
 } from "./api.ts";
+import { ackKindOf, startedByOf } from "./activity.ts";
 import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
 import { workspaceIconOf } from "./workspace-icon.ts";
@@ -98,11 +99,20 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
         findingsSha: null,
         result: null,
         acknowledged: null,
+        followUpOf: null,
+        startedBy: startedByOf(line.who),
+        ackKind: null,
       };
       byRun.set(run, row);
     }
-    if (line.type === "run.acknowledged") {
-      row.acknowledged ??= { at: line.at, who: line.who, note: text(line.note) };
+    if (line.type === "run.started") {
+      row.startedBy = startedByOf(line.who);
+      row.followUpOf ??= text(line.follow_up_of);
+    } else if (line.type === "run.acknowledged") {
+      if (row.acknowledged === null) {
+        row.acknowledged = { at: line.at, who: line.who, note: text(line.note) };
+        row.ackKind = ackKindOf(line);
+      }
     } else if (line.type === "run.held") {
       row.phase = "held";
       row.holdFrom = row.questions.length;

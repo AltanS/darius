@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.88.0] - 2026-10-15
+
+### Added
+
+- The activity model: `activityOf` in `src/web/activity.ts` turns the ledger lines of a project into `ActivityEntry` rows (who, when, kind, text, links), and `WebContext.activity(project | null, options)` returns them newest first. Twenty kinds cover runs, holds, answers, acks, follow-ups, vigil sweeps, pauses and closes, finding closes, reopens and resets, and ritual changes. An `evidence` line folds into its sweep. Operator text is masked. The pages of this milestone read this list.
+- `RunRow` (in `/api/status.json` and the app) gains `followUpOf`, `startedBy` and `ackKind`.
+- `darius run follow-up --note` is also recorded on the `run.started` line as `note`, cut at 500 characters. The run prompt keeps the whole note.
+
 ## [0.87.0] - 2026-10-13
 
 ### Added

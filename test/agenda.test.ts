@@ -191,6 +191,9 @@ test("a complete run that asks the operator something shows as Asks you", () => 
     findingsSha: "x",
     result: { status: "attention", questions: 1, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 },
     acknowledged: null,
+    followUpOf: null,
+    startedBy: "timer",
+    ackKind: null,
   };
   const agenda = build([project("shop", [ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-01" })], [], [asks])]);
   assert.equal(agenda.groups[0]?.rows[0]?.state?.label, "Asks you");
@@ -272,7 +275,7 @@ test("the vigils due count is the late plus the due-today vigils, and leaves out
 const RESULT = { status: "attention" as const, questions: 1, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 0 };
 
 function run(id: string, startedAt: string, extra: Partial<RunRow> = {}): RunRow {
-  return { run: id, item: "ritual/report", phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: "x", result: RESULT, acknowledged: null, ...extra };
+  return { run: id, item: "ritual/report", phase: "closed", outcome: "complete", startedAt, endedAt: startedAt, who: "timer", questions: [], findingsSha: "x", result: RESULT, acknowledged: null, followUpOf: null, startedBy: "timer", ackKind: null, ...extra };
 }
 
 const OLD_ASKS = run("01OLD", "2026-09-29T05:00:00.000Z");

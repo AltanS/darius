@@ -13,6 +13,7 @@ function loadContext(context) {
 		system: () => context.system(),
 		backups: () => context.backups(),
 		findings: () => context.findings(),
+		activity: (project, options) => context.activity(project, options),
 		followUp: (project, run) => context.followUp(project, run)
 	};
 }

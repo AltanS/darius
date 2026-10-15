@@ -413,6 +413,15 @@ function isCandidate(doc: Document<Ritual>, ledger: LedgerLine[], now: Date): bo
   return state.isDue || state.heldRun !== undefined || state.openRun !== undefined;
 }
 
+/** The longest operator note the ledger keeps on a `run.started` line (the web form's own limit). */
+const LEDGER_NOTE_MAX = 500;
+
+/** `note` for the ledger: at most LEDGER_NOTE_MAX characters, cut at a character and marked with an ellipsis. */
+function clipNote(note: string): string {
+  const chars = [...note.trim()];
+  return chars.length <= LEDGER_NOTE_MAX ? chars.join("") : `${chars.slice(0, LEDGER_NOTE_MAX - 1).join("")}…`;
+}
+
 /** Appends run.started under the project lock, or returns the open run that blocks it. */
 function startRun(
   ctx: ProjectContext,
@@ -435,6 +444,8 @@ function startRun(
       line.grants = [...followUp.grants];
       // 0.69.0: the keys of the approved items; left out when none, so a line reads as before.
       if ((followUp.items ?? []).length > 0) line.items = [...(followUp.items ?? [])];
+      // 0.88.0: the operator's note, clipped; the ledger is append only and syncs. The prompt keeps the whole note.
+      if (followUp.note !== undefined && followUp.note.trim() !== "") line.note = clipNote(followUp.note);
     }
     appendLine(ctx.project, line);
     return { run };
