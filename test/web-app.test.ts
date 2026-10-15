@@ -338,6 +338,7 @@ const context: WebContext = {
   backups: () => BACKUPS,
   findings: () => Promise.resolve(FINDINGS),
   activity: () => [],
+  pending: () => [],
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
   canWrite: true,
 };

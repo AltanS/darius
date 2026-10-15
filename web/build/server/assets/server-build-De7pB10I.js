@@ -12028,6 +12028,34 @@ async function postJson(path, body) {
 	return parse(response.status, text);
 }
 //#endregion
+//#region app/lib/reload.ts
+/**
+* Looking again after an action (0.89.0). A POST starts a CLI process, and
+* the ledger line that shows its result lands a moment later: a run a second
+* or two, a check minutes. After any reply, a pending one and an error too,
+* the page loads its data again at these delays, so the "starting" entry or
+* the receipt shows without a manual reload.
+*/
+/** Milliseconds after the reply. */
+var RELOAD_STEPS_MS = [
+	1500,
+	5e3,
+	15e3
+];
+/**
+* A function that schedules the reloads. The timers are not tied to the
+* component: a card that unmounts when its data changes does not cancel the
+* later looks. The three steps cover a run (seconds); a check that takes
+* minutes shows its "starting" entry and then waits for the 60 s refresh of
+* the root.
+*/
+function useReloadSoon() {
+	const { revalidate } = useRevalidator();
+	return (0, import_react.useCallback)(() => {
+		for (const delay of RELOAD_STEPS_MS) setTimeout(() => void revalidate(), delay);
+	}, [revalidate]);
+}
+//#endregion
 //#region app/components/ui.tsx
 /** Small shared pieces: sections, status words, times, folds, code chips. */
 /** A title in which a date such as 2026-09-30 never breaks at its hyphens. */
@@ -12150,6 +12178,7 @@ function Facts({ facts }) {
 var NO_WRITE_HINT$2 = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
 function AckButton({ project, run, canWrite, subject }) {
 	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const id = (0, import_react.useId)();
 	const [note, setNote] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -12173,6 +12202,7 @@ function AckButton({ project, run, canWrite, subject }) {
 			note: trimmed
 		});
 		setBusy(false);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			return;
@@ -12593,10 +12623,9 @@ function QuestionList({ questions, after }) {
 */
 /** What the loopback viewer reads where the form would be. */
 var NO_WRITE_HINT$1 = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
-/** After a run starts it shows within seconds: look again after this long. */
-var RELOAD_AFTER_RUN_MS = 6e3;
 function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNow, isEarlier = false }) {
 	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const [texts, setTexts] = (0, import_react.useState)(() => questions.map(() => ""));
 	const [busy, setBusy] = (0, import_react.useState)(null);
 	const [isDone, setDone] = (0, import_react.useState)(false);
@@ -12621,6 +12650,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 			run
 		}, texts));
 		setBusy(null);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			await revalidate();
@@ -12633,7 +12663,6 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 		}
 		const told = runNowNotice(result);
 		setNotice(told);
-		if (told.child !== void 0) setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
 	};
 	const dismiss = async () => {
 		setBusy("dismiss");
@@ -12643,6 +12672,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 			run
 		}, texts));
 		setBusy(null);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			await revalidate();
@@ -12760,6 +12790,7 @@ function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNo
 */
 function EarlierAsks({ project, run, asks, canWrite, nextRun }) {
 	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [isDone, setDone] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)(null);
@@ -12772,6 +12803,7 @@ function EarlierAsks({ project, run, asks, canWrite, nextRun }) {
 			run
 		}, asks.map((ask) => ask.run)));
 		setBusy(false);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			await revalidate();
@@ -12843,6 +12875,7 @@ function EarlierAsks({ project, run, asks, canWrite, nextRun }) {
 */
 function HeldForm({ project, row }) {
 	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const hold = currentHold(row);
 	const [texts, setTexts] = (0, import_react.useState)(() => hold.map(() => ""));
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -12863,6 +12896,7 @@ function HeldForm({ project, row }) {
 			run: row.run
 		}, hold, texts));
 		setBusy(false);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			await revalidate();
@@ -12872,7 +12906,6 @@ function HeldForm({ project, row }) {
 		setNotice(told);
 		if (told.tone === "bad") return;
 		setDone(true);
-		setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 		className: "ask",
@@ -14364,6 +14397,7 @@ var overview_default = withComponentProps(function Overview({ loaderData }) {
 var NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
 function CheckNow({ project, slug, subject, canWrite, blocked, explain }) {
 	const { revalidate, state } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [started, setStarted] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)(null);
@@ -14380,6 +14414,7 @@ function CheckNow({ project, slug, subject, canWrite, blocked, explain }) {
 			slug
 		});
 		setBusy(false);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			return;
@@ -14920,6 +14955,7 @@ function Details({ row }) {
 /** The note field and the two buttons that close a finding. */
 function CloseForm({ row, onDone }) {
 	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const id = (0, import_react.useId)();
 	const [note, setNote] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -14939,6 +14975,7 @@ function CloseForm({ row, onDone }) {
 			note: trimmed
 		});
 		setBusy(false);
+		reloadSoon();
 		if (!result.ok) {
 			setError(result.error);
 			return;
@@ -16707,8 +16744,6 @@ function followUpCommand(run, project, numbers) {
 function commandQuestions(questions) {
 	return questions.flatMap((question, index) => (question.commands ?? []).length > 0 ? [index + 1] : []);
 }
-/** After a start the new run shows below within seconds: look again twice. */
-var RELOAD_AFTER_MS = [1500, 5e3];
 function toggled(set, value) {
 	const next = new Set(set);
 	if (next.has(value)) next.delete(value);
@@ -16716,7 +16751,7 @@ function toggled(set, value) {
 	return next;
 }
 function FollowUpCard({ project, run, readiness, questions, items }) {
-	const { revalidate } = useRevalidator();
+	const reloadSoon = useReloadSoon();
 	const offered = readiness.ready ? readiness.questions : [];
 	const proposals = readiness.ready ? readiness.items : [];
 	const [picked, setPicked] = (0, import_react.useState)(() => new Set(offered.length === 1 && proposals.length === 0 ? offered.map((question) => question.n) : []));
@@ -16798,6 +16833,7 @@ function FollowUpCard({ project, run, readiness, questions, items }) {
 		if (decision !== "") body.note = decision;
 		const result = await postJson("/api/run/follow-up", body);
 		setBusy(false);
+		reloadSoon();
 		setAsking(false);
 		if (!result.ok) {
 			setNotice({
@@ -16815,7 +16851,6 @@ function FollowUpCard({ project, run, readiness, questions, items }) {
 			text: `Started run ${shortRun(result.run)} on ${result.host ?? readiness.host}.`,
 			child: result.run
 		});
-		for (const delay of RELOAD_AFTER_MS) setTimeout(() => void revalidate(), delay);
 	};
 	const press = () => {
 		if (lines.length > 0) setAsking(true);
@@ -19723,24 +19758,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-DMbp-BvN.js",
+			"module": "/assets/overview-iPCvSnmH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -19762,24 +19797,24 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-DMbp-BvN.js",
+			"module": "/assets/overview-iPCvSnmH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/workspace-icon-CqdjHezg.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js"
 			],
 			"css": [],
@@ -19801,21 +19836,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-BVAIfxTU.js",
+			"module": "/assets/vigils-D9szRq0m.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CQSf6UWK.js",
+				"/assets/section-C9Xmmq5G.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/agenda-BKyxq_qy.js",
-				"/assets/check-now-CuifQQEE.js",
+				"/assets/check-now-Dc3eh8qn.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js"
 			],
@@ -19838,21 +19873,21 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigils-BVAIfxTU.js",
+			"module": "/assets/vigils-D9szRq0m.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CQSf6UWK.js",
+				"/assets/section-C9Xmmq5G.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/agenda-BKyxq_qy.js",
-				"/assets/check-now-CuifQQEE.js",
+				"/assets/check-now-Dc3eh8qn.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js"
 			],
@@ -19875,27 +19910,27 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DyFyTr6b.js",
+			"module": "/assets/rituals-D1q8teTj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CQSf6UWK.js",
+				"/assets/section-C9Xmmq5G.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-BKyxq_qy.js",
-				"/assets/check-now-CuifQQEE.js"
+				"/assets/check-now-Dc3eh8qn.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19916,27 +19951,27 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-DyFyTr6b.js",
+			"module": "/assets/rituals-D1q8teTj.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/section-CQSf6UWK.js",
+				"/assets/section-C9Xmmq5G.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/agenda-BKyxq_qy.js",
-				"/assets/check-now-CuifQQEE.js"
+				"/assets/check-now-Dc3eh8qn.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -19957,16 +19992,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Btav55-i.js",
+			"module": "/assets/findings-CBjOFJbA.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -19993,16 +20028,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/findings-Btav55-i.js",
+			"module": "/assets/findings-CBjOFJbA.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
@@ -20091,23 +20126,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-OUoh9k65.js",
+			"module": "/assets/runs-DPZH8foI.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -20131,18 +20166,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CXXhaUFb.js",
+			"module": "/assets/ritual-SfpGQy_7.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/runs-DMKsRLEz.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20170,19 +20205,19 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/vigil-uKtoBodL.js",
+			"module": "/assets/vigil-Ma1TQBih.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
-				"/assets/check-now-CuifQQEE.js",
+				"/assets/check-now-Dc3eh8qn.js",
 				"/assets/crumbs-CkJOExHf.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/paths-BIsmk22N.js",
@@ -20207,18 +20242,18 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-CR4j337x.js",
+			"module": "/assets/run-sWbDkgPg.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/paths-BIsmk22N.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/runs-DMKsRLEz.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
@@ -20448,23 +20483,23 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-OUoh9k65.js",
+			"module": "/assets/runs-DPZH8foI.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
 				"/assets/paths-BIsmk22N.js",
 				"/assets/ui-BtzGGzsP.js",
-				"/assets/runs-BZPXLsTu.js",
+				"/assets/runs-DMKsRLEz.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/chip-row-BMwu7pOw.js",
 				"/assets/crumbs-CkJOExHf.js",
 				"/assets/clock-CCM6CgVg.js",
 				"/assets/kind-CbYiwFqF.js",
-				"/assets/chip-DMBwRjCd.js",
+				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
 				"/assets/post-DvwTzYpm.js",
-				"/assets/result-Dtnt5HgU.js",
+				"/assets/result-7IrIdshp.js",
 				"/assets/markdown-Ckp0j8eW.js",
 				"/assets/pulse-Dm9FzUfo.js",
 				"/assets/row-CgOYoUJa.js"
@@ -20614,8 +20649,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-7e9212b7.js",
-	"version": "7e9212b7",
+	"url": "/assets/manifest-6898a545.js",
+	"version": "6898a545",
 	"sri": void 0
 };
 //#endregion

@@ -11,11 +11,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendLine, readLedger } from "../src/core/ledger.ts";
+import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
 import type { JsonValue, LedgerLine } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { addVigil, closeVigil, pauseVigil } from "../src/core/sweep.ts";
@@ -25,6 +25,8 @@ import { actionApi, findingApi, vigilApi, vigilCheckArgv, LOOPBACK_CHECK, SWEEP_
 import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
+import type { PushApiReply } from "../src/web/push-api.ts";
+import { pendingStarts, readRegistry } from "../src/web/pending.ts";
 import type { FollowUpReadiness } from "../src/web/api.ts";
 
 const sandbox = mkdtempSync(join(tmpdir(), "darius-action-api-test-"));
@@ -110,6 +112,16 @@ function isRecord(value: JsonValue): value is { readonly [key: string]: JsonValu
 
 function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
+}
+
+/** The body without its pending-starts `id` (0.89.0); the id must be a ULID. */
+function bodyWithoutId(body: JsonValue): JsonValue {
+  assert.ok(isRecord(body) && isText(body.id) && /^[0-9A-Z]{26}$/u.test(body.id), `the reply carries the id of its pending line: ${JSON.stringify(body)}`);
+  return Object.fromEntries(Object.entries(body).filter(([key]) => key !== "id"));
+}
+
+function replyWithoutId(reply: PushApiReply): PushApiReply {
+  return { status: reply.status, body: bodyWithoutId(reply.body) };
 }
 
 function errorOf(body: JsonValue): string {
@@ -214,7 +226,7 @@ test("ready: it starts run follow-up detached with the approved numbers, the not
   const stub = deps(READY);
   const answer = await actionApi(post({ ...VALID, approve: [3, 1, 3], note: "  push it\nnow " }), { who: "owner on phone" }, stub);
   assert.equal(answer.status, 202);
-  assert.deepEqual(answer.body, { ok: true, run: CHILD, host: "host-a" });
+  assert.deepEqual(bodyWithoutId(answer.body), { ok: true, run: CHILD, host: "host-a" });
   assert.equal(stub.started.length, 1);
   const [started] = stub.started;
   assert.deepEqual(started?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "3", "--approve", "1", "--note", "push it now", "--who", "web:owner on phone"]);
@@ -262,7 +274,7 @@ test("forwarded: when readiness ran on the ritual's host, the CLI gets --on <hos
   const stub = deps({ ...READY, host: "minibuch", via: "host-a" }, { output: `darius run follow-up: started run ${CHILD} on minibuch\n` });
   const note = `it's "done"; $(rm -rf ~) \`id\` \\`;
   const answer = await actionApi(post({ ...VALID, items: ["post-12/title"], note }), { who: "owner" }, stub);
-  assert.deepEqual(answer, { status: 202, body: { ok: true, run: CHILD, host: "minibuch" } });
+  assert.deepEqual(replyWithoutId(answer), { status: 202, body: { ok: true, run: CHILD, host: "minibuch" } });
   assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "1", "--item", "post-12/title", "--note", note, "--who", "web:owner", "--on", "minibuch"]);
   assert.deepEqual(followUpArgv({ project: "p", run: "r", approve: [], items: [], note: "n" }, { who: "w" }, undefined), ["run", "follow-up", "r", "--project", "p", "--note", "n", "--who", "web:w"], "no --on for this host");
 });
@@ -660,7 +672,7 @@ test("ack answers: they reach the CLI as --answer N=TEXT words, trimmed to one l
 test("run now: after the ack the server starts run now for the ritual of the run, detached, and answers with the new run", async () => {
   const stub = nowDeps();
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, stub);
-  assert.deepEqual(sent, { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
+  assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
   assert.equal(stub.calls.length, 1, "the ack ran first");
   assert.equal(stub.started.length, 1);
   assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner"], "the slug comes from the run's item; this host is right, so no --on");
@@ -728,7 +740,7 @@ test("run now on a ritual of another host: the ack and the run both go there wit
     },
   };
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, stub);
-  assert.deepEqual(sent, { status: 200, body: { ok: true, run: CHILD, host: "host-b" } });
+  assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, run: CHILD, host: "host-b" } });
   assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--on", "host-b", "--", ASK_NEW]);
   assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
   assert.deepEqual(order, ["ack", "run"], "the answer is there before the run starts");
@@ -761,7 +773,7 @@ test("run now: no ack, no run. A refused ack (also the second click on an acknow
   const asked = seedAsk("01JASKDOUBLE0000000000AAAA");
   const stub: ActionDeps & { started: Started[] } = { ...nowDeps(), run: runCli };
   const first = await actionApi(ackRequest({ project: PROJECT, run: asked, runNow: true, answers: [{ n: 1, text: "yes" }, { n: 2, text: "later" }] }), { who: "owner on phone" }, stub);
-  assert.deepEqual(first, { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
+  assert.deepEqual(replyWithoutId(first), { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
   const line = readLedger(openProject(PROJECT)).find((candidate) => candidate.type === "run.acknowledged" && candidate.run === asked);
   assert.deepEqual(line?.answers, [{ n: 1, text: "yes" }, { n: 2, text: "later" }]);
   assert.equal(line?.who, "web:owner on phone");
@@ -1071,7 +1083,7 @@ test("held: it writes the answers with one CLI call, run id after --, each answe
   const run = seedHeld();
   const stub = nowDeps(RESUMES);
   const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 2, text: " main\n now " }, { n: 1, text: "--force, yes" }], resume: true }), { who: "owner on phone" }, stub);
-  assert.deepEqual(sent, { status: 200, body: { ok: true, resumed: true, run: "01JHELD00000000000000000AA", host: "host-a" } });
+  assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, resumed: true, run: "01JHELD00000000000000000AA", host: "host-a" } });
   assert.deepEqual(stub.calls, [["run", "answer", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--answer", "2=main now", "--answer", "1=--force, yes", "--", run]]);
   assert.equal(stub.started.length, 1);
   assert.deepEqual(stub.started[0]?.argv, ["run", "resume", run, "--project", PROJECT, "--who", "web:owner on phone"], "this host is right, so no --on");
@@ -1366,7 +1378,7 @@ test("check: it starts the sweep of that vigil with the project, --json and the 
   const began = Date.now();
   const answer = await vigilApi(checkRequest(CHECK), { who: "owner on phone" }, stub);
   assert.equal(answer.status, 202);
-  assert.deepEqual(answer.body, { ok: true, started: true, host: "host-a" });
+  assert.deepEqual(bodyWithoutId(answer.body), { ok: true, started: true, host: "host-a" });
   assert.ok(Date.now() - began < 250, "the sweep is still running; the POST did not wait for it");
   assert.equal(stub.started.length, 1);
   assert.deepEqual(stub.started[0]?.argv, ["vigil", "sweep", "armed", "--project", PROJECT, "--json", "--who", "web:owner on phone"]);
@@ -1399,4 +1411,92 @@ test("check: a started line wins over a fast exit, a CLI that could not start is
   const slow = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps({ output: "" }));
   assert.equal(slow.status, 202);
   assert.ok(isRecord(slow.body) && slow.body.pending === true && slow.body.host === "host-a" && isText(slow.body.message), JSON.stringify(slow.body));
+});
+
+// --- pending starts (0.89.0) ---------------------------------------------------------------
+
+/** The registry line of the request a reply named. */
+function pendingLine(reply: { body: JsonValue }): ReturnType<typeof readRegistry>["requests"][number] {
+  assert.ok(isRecord(reply.body) && isText(reply.body.id), JSON.stringify(reply.body));
+  const id = reply.body.id;
+  const line = readRegistry().requests.find((request) => request.id === id);
+  assert.ok(line !== undefined, `the registry holds a line for ${id}`);
+  return line;
+}
+
+test("pending: a follow-up writes its line after the spawn, with the log and its offset, and the reply carries the id", async () => {
+  const stub = deps(READY);
+  const answer = await actionApi(post({ ...VALID, approve: [3] }), { who: "owner on phone" }, stub);
+  const line = pendingLine(answer);
+  assert.equal(line.kind, "follow-up");
+  assert.equal(line.who, "web:owner on phone");
+  assert.equal(line.project, PROJECT);
+  assert.equal(line.parent, RUN);
+  assert.equal(line.host, "host-a");
+  assert.equal(line.log, stub.started[0]?.log);
+  assert.ok(line.offset >= 0);
+  assert.equal(readRegistry().requests.filter((request) => request.id === line.id).length, 1);
+});
+
+test("pending: run now, resume and a vigil check each write their own line and name it in the reply", async () => {
+  const now = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, nowDeps());
+  const nowLine = pendingLine(now);
+  assert.deepEqual([nowLine.kind, nowLine.ritual, nowLine.parent, nowLine.who, nowLine.host], ["run-now", "daily", ASK_NEW, "web:owner", hostId()]);
+
+  const run = seedHeld();
+  const resumed = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, nowDeps(RESUMES));
+  const resumeLine = pendingLine(resumed);
+  assert.deepEqual([resumeLine.kind, resumeLine.ritual, resumeLine.parent], ["resume", "daily", run]);
+  assert.ok(resumeLine.log.endsWith(join("runs", run, "resume.log")));
+
+  const check = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps());
+  const checkLine = pendingLine(check);
+  assert.deepEqual([checkLine.kind, checkLine.vigil, checkLine.who], ["vigil-check", "armed", "web:owner"]);
+  assert.ok(checkLine.log.endsWith(join("sweeps", "armed.log")));
+});
+
+test("pending: a pending reply (nothing came in time) carries the id too, and so does a refusal", async () => {
+  const slow = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "" }));
+  assert.equal(slow.status, 202);
+  assert.equal(pendingLine(slow).kind, "follow-up");
+  const refused = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "darius run follow-up: the checkout is dirty\n", code: 1 }));
+  assert.equal(refused.status, 409);
+  assert.equal(pendingLine(refused).kind, "follow-up");
+});
+
+test("pending: the end of the spawn is recorded, and a refused start resolves to refused with the CLI's sentence", async () => {
+  const refused = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "darius run follow-up: the checkout is dirty\n", code: 1 }));
+  const id = pendingLine(refused).id;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(readRegistry().ended.get(id), 1);
+  const state = pendingStarts(PROJECT, (name) => readLedger(openProject(name))).find((start) => start.id === id);
+  assert.equal(state?.state, "refused");
+  assert.equal(state?.sentence, "the checkout is dirty");
+});
+
+test("pending: a spawn that throws writes no line, and a registry that cannot be written does not fail the action", async () => {
+  const before = readRegistry().requests.length;
+  const broken: ActionDeps = {
+    ...deps(READY),
+    start: () => {
+      throw new Error("spawn ENOENT");
+    },
+  };
+  const failed = await actionApi(post(VALID), { who: "owner" }, broken);
+  assert.equal(failed.status, 500);
+  assert.equal(readRegistry().requests.length, before, "no spawn, no line");
+
+  // The registry directory is a file: the write fails, the follow-up still starts.
+  const dir = join(process.env.DARIUS_STATE_DIR ?? "", "web");
+  const moved = `${dir}-moved`;
+  renameSync(dir, moved);
+  writeFileSync(dir, "not a directory");
+  try {
+    const answer = await actionApi(post(VALID), { who: "owner" }, deps(READY));
+    assert.equal(answer.status, 202);
+    assert.ok(isRecord(answer.body) && isText(answer.body.id), "the reply still carries an id");
+  } finally {
+    rmSync(dir, { force: true });
+    renameSync(moved, dir);
+  }
 });

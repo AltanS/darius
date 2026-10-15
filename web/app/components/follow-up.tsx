@@ -19,10 +19,11 @@
  */
 
 import { useState } from "react";
-import { Link, useRevalidator } from "react-router";
+import { Link } from "react-router";
 
 import type { FollowUpReadiness, ResultItem, ResultQuestion } from "../../../src/web/api.ts";
 import { shortRun } from "../lib/format.ts";
+import { useReloadSoon } from "../lib/reload.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { Command } from "./command.tsx";
@@ -59,9 +60,6 @@ function commandQuestions(questions: readonly ResultQuestion[]): number[] {
 /** The body of `POST /api/run/follow-up` (src/web/action-api.ts): question numbers, item keys, a note. */
 type FollowUpPost = { project: string; run: string; approve: readonly number[]; items?: readonly string[]; note?: string };
 
-/** After a start the new run shows below within seconds: look again twice. */
-const RELOAD_AFTER_MS = [1500, 5000];
-
 function toggled<T>(set: ReadonlySet<T>, value: T): Set<T> {
   const next = new Set(set);
   if (next.has(value)) next.delete(value);
@@ -70,7 +68,7 @@ function toggled<T>(set: ReadonlySet<T>, value: T): Set<T> {
 }
 
 export function FollowUpCard({ project, run, readiness, questions, items }: FollowUpCardProps): React.ReactNode {
-  const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const offered = readiness.ready ? readiness.questions : [];
   const proposals = readiness.ready ? readiness.items : [];
   const [picked, setPicked] = useState<ReadonlySet<number>>(() => new Set(offered.length === 1 && proposals.length === 0 ? offered.map((question) => question.n) : []));
@@ -135,6 +133,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
     if (decision !== "") body.note = decision;
     const result = await postJson("/api/run/follow-up", body);
     setBusy(false);
+    reloadSoon();
     setAsking(false);
     if (!result.ok) {
       setNotice({ tone: "bad", text: `Not started. ${result.error}` });
@@ -145,7 +144,6 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
     } else {
       setNotice({ tone: "ok", text: `Started run ${shortRun(result.run)} on ${result.host ?? readiness.host}.`, child: result.run });
     }
-    for (const delay of RELOAD_AFTER_MS) setTimeout(() => void revalidate(), delay);
   };
 
   const press = (): void => {

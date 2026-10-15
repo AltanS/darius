@@ -22,6 +22,7 @@ export function loadContext(context: WebContext): AppLoadContext {
     backups: () => context.backups(),
     findings: () => context.findings(),
     activity: (project, options) => context.activity(project, options),
+    pending: (project) => context.pending(project),
     followUp: (project, run) => context.followUp(project, run),
   };
 }

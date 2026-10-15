@@ -16,6 +16,7 @@ import { useClock } from "../lib/clock.tsx";
 import { hostDate, shortDate } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
+import { useReloadSoon } from "../lib/reload.ts";
 import { itemStateTag, severityTone } from "../lib/result.ts";
 import type { Badge } from "../lib/tone.ts";
 import { Chip } from "./chip.tsx";
@@ -69,6 +70,7 @@ interface CloseFormProps {
 /** The note field and the two buttons that close a finding. */
 function CloseForm({ row, onDone }: CloseFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const id = useId();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,6 +84,7 @@ function CloseForm({ row, onDone }: CloseFormProps): React.ReactNode {
     const base = { project: row.project, ritual: row.ritual, key: row.key };
     const result = await postJson("/api/finding/close", trimmed === "" ? base : { ...base, note: trimmed });
     setBusy(false);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       return;

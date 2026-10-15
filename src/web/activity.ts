@@ -18,7 +18,7 @@
 
 import { maskSecrets } from "../core/mask-secrets.ts";
 import type { JsonValue, LedgerLine } from "../core/model.ts";
-import type { ActivityActor, ActivityEntry, ActivityKind, ActivityOptions, ActivityTone, RunRow } from "./api.ts";
+import type { ActivityActor, ActivityEntry, ActivityKind, ActivityOptions, ActivityTone, PendingStart, RunRow } from "./api.ts";
 
 /** `activityOf` options: the filters of the contract, and the title lookup that keeps the function free of reads. */
 interface ActivityInput extends ActivityOptions {
@@ -337,4 +337,59 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
   }
   entries.reverse();
   return input.limit === undefined ? entries : entries.slice(0, Math.max(0, input.limit));
+}
+
+// --- starts the web asked for (0.89.0) -----------------------------------------------------
+
+/** What a pending start is called in a sentence: "Follow-up of 01ABC", "Check of queue". */
+function startLabel(start: PendingStart): string {
+  if (start.kind === "follow-up") return `Follow-up of ${start.parent ?? "a run"}`;
+  if (start.kind === "resume") return `Resume of ${start.parent ?? "a run"}`;
+  if (start.kind === "vigil-check") return `Check of ${start.vigil ?? "a vigil"}`;
+  return `Run now of ${start.ritual ?? "a ritual"}`;
+}
+
+/** The entry of one pending start that has not started; null for a started one (the ledger line is its entry). */
+function pendingEntry(start: PendingStart, input: ActivityInput): ActivityEntry | null {
+  if (start.state === "started") return null;
+  const label = startLabel(start);
+  const sentence = start.sentence === undefined ? null : maskSecrets(start.sentence);
+  let built: Built;
+  if (start.state === "refused") built = { kind: "start-refused", text: `${label} refused for ${start.who}${sentence === null ? "" : `: ${sentence}`}`, tone: "bad" };
+  else if (start.state === "lost") built = { kind: "start-lost", text: `${label} asked by ${start.who} on ${start.host}: no start seen after 15 minutes${sentence === null ? "" : `; last line: ${sentence}`}`, tone: "bad" };
+  else built = { kind: "start-requested", text: `${label} asked by ${start.who} on ${start.host}: starting`, tone: "wait" };
+  const links: ActivityEntry["links"] = {};
+  if (start.ritual !== undefined) links.ritual = start.ritual;
+  if (start.vigil !== undefined) links.vigil = start.vigil;
+  const title = (type: "ritual" | "vigil", slug: string): string => input.titleOf?.(type, slug) ?? slug;
+  let item: ActivityEntry["item"];
+  if (start.kind === "vigil-check" && start.vigil !== undefined) item = { type: "vigil", id: start.vigil, title: title("vigil", start.vigil) };
+  else if (start.kind === "run-now" && start.ritual !== undefined) item = { type: "ritual", id: start.ritual, title: title("ritual", start.ritual) };
+  else item = { type: "run", id: start.parent ?? start.id, title: start.ritual === undefined ? (start.parent ?? "run") : title("ritual", start.ritual) };
+  const entry: ActivityEntry = { at: start.at, who: start.who, actor: actorOf(start.who), kind: built.kind, item, text: built.text, links, tone: built.tone };
+  if (start.parent !== undefined && start.kind !== "run-now") {
+    entry.run = start.parent;
+    links.run = start.parent;
+  }
+  return entry;
+}
+
+/**
+ * The entries for the starts the web asked for that show no start: `starting`,
+ * `refused` and `lost`. A started one has its own ledger entry. Filtered like
+ * `activityOf`: by ritual, vigil, run and `since`; a finding filter drops them.
+ */
+export function pendingActivity(starts: readonly PendingStart[], input: ActivityInput = {}): ActivityEntry[] {
+  const entries: ActivityEntry[] = [];
+  for (const start of starts) {
+    const entry = pendingEntry(start, input);
+    if (entry === null) continue;
+    if (input.ritual !== undefined && entry.links.ritual !== input.ritual) continue;
+    if (input.vigil !== undefined && entry.links.vigil !== input.vigil) continue;
+    if (input.run !== undefined && entry.run !== input.run) continue;
+    if (input.finding !== undefined) continue;
+    if (input.since !== undefined && entry.at < input.since) continue;
+    entries.push(entry);
+  }
+  return entries.toSorted((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0));
 }

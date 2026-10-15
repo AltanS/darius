@@ -15,6 +15,7 @@ import { useId, useState } from "react";
 import { useRevalidator } from "react-router";
 
 import { postJson } from "../lib/post.ts";
+import { useReloadSoon } from "../lib/reload.ts";
 import { Fold } from "./ui.tsx";
 
 /** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
@@ -31,6 +32,7 @@ interface AckButtonProps {
 
 export function AckButton({ project, run, canWrite, subject }: AckButtonProps): React.ReactNode {
   const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const id = useId();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,6 +47,7 @@ export function AckButton({ project, run, canWrite, subject }: AckButtonProps): 
     const trimmed = note.trim();
     const result = await postJson("/api/run/ack", trimmed === "" ? { project, run } : { project, run, note: trimmed });
     setBusy(false);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       return;

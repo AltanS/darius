@@ -2,6 +2,16 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.89.0] - 2026-10-15
+
+### Added
+
+- Pending starts: a start that the web app requested (the follow-up, "Send and run now", "Answer and resume", "Check now") is written to the host-local registry `<state dir>/web/pending-starts.jsonl` once its process is spawned, and the POST reply carries the `id`. The registry is never synced. `WebContext.pending` lists the entries of the last 24 hours as `starting`, `started`, `refused` (with the CLI's sentence) or `lost` (no start after 15 minutes, with the last log line). The activity list gains the kinds `start-requested`, `start-refused` and `start-lost`.
+
+### Changed
+
+- Every web form that posts to these endpoints loads the page again at 1.5 s, 5 s and 15 s after any reply, a pending one and an error too. Before, only a started follow-up or run did, once.
+
 ## [0.88.0] - 2026-10-15
 
 ### Added

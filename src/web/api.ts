@@ -896,7 +896,10 @@ export type ActivityKind =
   | "finding-reopened"
   | "finding-reset"
   | "ritual-lifecycle"
-  | "ritual-rescheduled";
+  | "ritual-rescheduled"
+  | "start-requested"
+  | "start-refused"
+  | "start-lost";
 
 /** The state word of an entry, in the vocabulary of the app's tones. */
 export type ActivityTone = "ok" | "wait" | "bad" | "run" | "idle";
@@ -943,6 +946,40 @@ export interface ActivityOptions {
   limit?: number;
 }
 
+// --- pending starts (0.89.0) ---------------------------------------------------------------
+
+/** What the web asked the CLI to start. */
+export type PendingKind = "follow-up" | "run-now" | "resume" | "vigil-check";
+
+/**
+ * `starting`: no sign in the ledger yet, and the request is younger than 15 minutes.
+ * `started`: the ledger shows the run, the resume or the sweep. `refused`: the CLI ended
+ * without starting, or a sweep ran and skipped; `sentence` says why. `lost`: no sign after
+ * 15 minutes; `sentence` is the last line of its log.
+ */
+export type PendingState = "starting" | "started" | "refused" | "lost";
+
+/** A start the web app requested on this host, from `<state dir>/web/pending-starts.jsonl`. The sentence is untrusted text, masked. */
+export interface PendingStart {
+  id: string;
+  /** When the web asked. */
+  at: string;
+  /** The `who` the CLI was given: `web:<viewer>`. */
+  who: string;
+  kind: PendingKind;
+  project: string;
+  ritual?: string;
+  vigil?: string;
+  /** The run it follows up or resumes; for run now, the run whose ack asked for it. */
+  parent?: string;
+  /** The host that runs it. */
+  host: string;
+  state: PendingState;
+  /** The run, once started. */
+  run?: string;
+  sentence?: string;
+}
+
 // --- the handler ---------------------------------------------------------------------------
 
 /**
@@ -977,6 +1014,11 @@ export interface WebContext {
    * An unknown project gives an empty list.
    */
   activity(project: string | null, options?: ActivityOptions): ProjectActivityEntry[];
+  /**
+   * The starts the web app requested on this host in the last 24 hours (0.89.0), newest first, for one
+   * project or all: starting, started, refused or lost. Reads only. An unknown project gives an empty list.
+   */
+  pending(project: string | null): PendingStart[];
   /**
    * Whether the viewer may write through the page (0.68.0): false for the
    * loopback viewer, whose POSTs the server refuses. The page hides the

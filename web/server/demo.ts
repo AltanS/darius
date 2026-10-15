@@ -510,6 +510,7 @@ export function demoContext(base: WebContext): WebContext {
     backups: () => demoBackups(Date.now()),
     findings: () => Promise.resolve(demoFindings(Date.now())),
     activity: () => [],
+    pending: () => [],
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
   };
 }

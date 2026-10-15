@@ -13,6 +13,7 @@ import { useState } from "react";
 import { useRevalidator } from "react-router";
 
 import { postJson } from "../lib/post.ts";
+import { useReloadSoon } from "../lib/reload.ts";
 
 /** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
 const NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
@@ -32,6 +33,7 @@ interface CheckNowProps {
 
 export function CheckNow({ project, slug, subject, canWrite, blocked, explain }: CheckNowProps): React.ReactNode {
   const { revalidate, state } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const [busy, setBusy] = useState(false);
   const [started, setStarted] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +45,7 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain }:
     setError(null);
     const result = await postJson("/api/vigil/check", { project, slug });
     setBusy(false);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       return;

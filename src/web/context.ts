@@ -6,16 +6,17 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { ActivityOptions, FindingRow, ProjectActivityEntry, WebContext } from "./api.ts";
+import type { ActivityOptions, FindingRow, PendingStart, ProjectActivityEntry, WebContext } from "./api.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
-import type { Ritual, Vigil } from "../core/model.ts";
+import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { listProjects, openProject } from "../core/store.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
 import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
-import { activityOf } from "./activity.ts";
+import { activityOf, pendingActivity } from "./activity.ts";
 import { collectBackups } from "./backups.ts";
+import { pendingStarts } from "./pending.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
 
@@ -42,12 +43,28 @@ export function collectFindingRows(): FindingRow[] {
   });
 }
 
+/** A reader of project ledgers that reads each one once. It throws for a project that cannot be read. */
+function cachedLedgers(): (name: string) => LedgerLine[] {
+  const ledgers = new Map<string, LedgerLine[]>();
+  return (name) => {
+    let lines = ledgers.get(name);
+    if (lines === undefined) {
+      lines = readLedger(openProject(name));
+      ledgers.set(name, lines);
+    }
+    return lines;
+  };
+}
+
 /**
  * The activity of one project, or of every project of this host (0.88.0), newest first.
  * A project that cannot be read adds none. Titles of rituals and vigils come from the store.
+ * Since 0.89.0 the starts the web asked for that show no start yet (starting, refused, lost) are in it.
  */
 export function collectActivity(project: string | null, options: ActivityOptions = {}): ProjectActivityEntry[] {
   const names = project === null ? listProjects() : listProjects().filter((name) => name === project);
+  const ledgerOf = cachedLedgers();
+  const starts = pendingStarts(project, (name) => (names.includes(name) ? safeLedger(ledgerOf, name) : []));
   const entries = names.flatMap((name): ProjectActivityEntry[] => {
     try {
       const store = openProject(name);
@@ -59,13 +76,39 @@ export function collectActivity(project: string | null, options: ActivityOptions
         return titles.get(key);
       };
       // Each project gives at most `limit` entries: the merged newest `limit` come from those.
-      return activityOf(name, readLedger(store), { ...options, titleOf }).map((entry) => Object.assign({ project: name }, entry));
+      const own = activityOf(name, ledgerOf(name), { ...options, titleOf });
+      const waiting = pendingActivity(starts.filter((start) => start.project === name), { ...options, titleOf });
+      const merged = [...own, ...waiting].toSorted(newestFirst);
+      const cut = options.limit === undefined ? merged : merged.slice(0, Math.max(0, options.limit));
+      return cut.map((entry) => Object.assign({ project: name }, entry));
     } catch {
       return [];
     }
   });
-  const merged = project === null ? entries.toSorted((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0)) : entries;
+  const merged = project === null ? entries.toSorted(newestFirst) : entries;
   return options.limit === undefined ? merged : merged.slice(0, Math.max(0, options.limit));
+}
+
+function newestFirst(left: { at: string }, right: { at: string }): number {
+  if (left.at < right.at) return 1;
+  return left.at > right.at ? -1 : 0;
+}
+
+/** The ledger of a project, or nothing when it cannot be read. */
+function safeLedger(ledgerOf: (name: string) => LedgerLine[], name: string): LedgerLine[] {
+  try {
+    return ledgerOf(name);
+  } catch {
+    return [];
+  }
+}
+
+/** The starts the web asked for on this host in the last 24 hours (0.89.0), for one project or all. */
+export function collectPending(project: string | null): PendingStart[] {
+  const names = new Set(listProjects());
+  if (project !== null && !names.has(project)) return [];
+  const ledgerOf = cachedLedgers();
+  return pendingStarts(project, (name) => (names.has(name) ? safeLedger(ledgerOf, name) : []));
 }
 
 export function newNonce(): string {
@@ -87,6 +130,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     backups: () => collectBackups(),
     findings: () => Promise.resolve(collectFindingRows()),
     activity: (project, options) => collectActivity(project, options),
+    pending: (project) => collectPending(project),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),
   };
 }

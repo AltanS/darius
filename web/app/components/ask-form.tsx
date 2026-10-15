@@ -23,15 +23,13 @@ import type { ResultQuestion, RunRow } from "../../../src/web/api.ts";
 import { ANSWERS_TOO_LONG, answersOf, askBody, currentHold, earlierBody, heldBody, isTooLong, recommendedText, resumeNotice, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
+import { useReloadSoon } from "../lib/reload.ts";
 import { dismissAllText, earlierText } from "../lib/view.ts";
 import { QuestionList } from "./questions.tsx";
 import { Fold } from "./ui.tsx";
 
 /** What the loopback viewer reads where the form would be. */
 const NO_WRITE_HINT = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
-
-/** After a run starts it shows within seconds: look again after this long. */
-const RELOAD_AFTER_RUN_MS = 6000;
 
 interface AskFormProps {
   project: string;
@@ -51,6 +49,7 @@ interface AskFormProps {
 
 export function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNow, isEarlier = false }: AskFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const [texts, setTexts] = useState<readonly string[]>(() => questions.map(() => ""));
   const [busy, setBusy] = useState<"send" | "now" | "dismiss" | null>(null);
   const [isDone, setDone] = useState(false);
@@ -76,6 +75,7 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
     setError(null);
     const result = await postJson("/api/run/ack", askBody(runNow ? "now" : "send", { project, run }, texts));
     setBusy(null);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       // A refusal (answered meanwhile, already dismissed) means the list is stale: load it again.
@@ -89,8 +89,6 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
     }
     const told = runNowNotice(result);
     setNotice(told);
-    // A run that started shows within seconds; a refusal stays on the card, where it is read.
-    if (told.child !== undefined) setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
   };
 
   const dismiss = async (): Promise<void> => {
@@ -98,6 +96,7 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
     setError(null);
     const result = await postJson("/api/run/ack", askBody("dismiss", { project, run }, texts));
     setBusy(null);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       await revalidate();
@@ -205,6 +204,7 @@ interface EarlierAsksProps {
  */
 export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAsksProps): React.ReactNode {
   const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const [busy, setBusy] = useState(false);
   const [isDone, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,6 +215,7 @@ export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAs
     setError(null);
     const result = await postJson("/api/run/ack-earlier", earlierBody({ project, run }, asks.map((ask) => ask.run)));
     setBusy(false);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       await revalidate();
@@ -271,6 +272,7 @@ interface HeldFormProps {
  */
 export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
+  const reloadSoon = useReloadSoon();
   const hold = currentHold(row);
   const [texts, setTexts] = useState<readonly string[]>(() => hold.map(() => ""));
   const [busy, setBusy] = useState(false);
@@ -286,6 +288,7 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
     setError(null);
     const result = await postJson("/api/run/answer", heldBody({ project, run: row.run }, hold, texts));
     setBusy(false);
+    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       // A refusal (the run was answered or went on meanwhile) means the card is stale: load it again.
@@ -297,8 +300,6 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
     // A refused resume keeps the answers saved and the form open: the operator can retry (the server takes answers again while the run is held).
     if (told.tone === "bad") return;
     setDone(true);
-    // A run that went on leaves Needs you within seconds.
-    setTimeout(() => void revalidate(), RELOAD_AFTER_RUN_MS);
   };
 
   return (
