@@ -41,7 +41,6 @@ import type {
   RitualDetail,
   RitualRow,
   RunDetail,
-  RunEvent,
   RunResult,
   RunRow,
   VigilDetail,
@@ -51,6 +50,7 @@ import type {
 import { ackKindOf, startedByOf } from "./activity.ts";
 import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
+import { originOf, readersOf } from "./run-origin.ts";
 import { workspaceIconOf } from "./workspace-icon.ts";
 
 export type { HostStatus, ProjectStatus, RitualRow, RunRow, VigilRow } from "./api.ts";
@@ -393,25 +393,13 @@ export function runFindings(projectName: string, run: string): { row: RunRow; fi
   return { row, findings: row.findingsSha === null ? null : getBlobText(project, row.findingsSha) };
 }
 
-function eventDetail(line: LedgerLine): string | null {
-  if (line.type === "run.held") return textList(line.questions).join(" / ") || null;
-  if (line.type === "run.answered") return text(line.text);
-  if (line.type === "run.resumed") return line.fresh === true ? "in a new session" : "in the same session";
-  if (line.type === "run.completed") return text(line.outcome);
-  if (line.type === "run.acknowledged") return text(line.note);
-  return text(line.reason) ?? text(line.note);
-}
-
-/** One run with its ledger events and parsed findings; null when the project or the run is unknown. */
+/** One run with its origin, its parsed findings and the follow-ups that came of it; null when the project or the run is unknown. */
 export function runDetail(projectName: string, run: string): RunDetail | null {
   if (!listProjects().includes(projectName)) return null;
   const project = openProject(projectName);
   const ledger = readLedger(project);
   const row = runRows(ledger).find((candidate) => candidate.run === run);
   if (row === undefined) return null;
-  const events: RunEvent[] = ledger
-    .filter((line) => line.run === run && line.type.startsWith("run."))
-    .map((line) => ({ at: line.at, who: line.who, type: line.type, detail: eventDetail(line) }));
   const findings = row.findingsSha === null ? null : getBlobText(project, row.findingsSha);
   const [itemKind = "", itemSlug = ""] = row.item.split("/");
   const result = runResult(project, ledger, run);
@@ -428,11 +416,12 @@ export function runDetail(projectName: string, run: string): RunDetail | null {
     row,
     itemKind,
     itemSlug,
-    events,
     findings: findings === null ? null : parseMarkdown(findings),
     result,
     followUpOf: followUpOf(ledger, run) ?? null,
     followUps: followUpsOf(ledger, run),
+    origin: originOf(ledger, run),
+    readBy: readersOf(ledger, run),
     children,
     skillHash: text(ledger.find((line) => line.run === run && line.type === "run.started")?.skill_hash),
   };

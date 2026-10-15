@@ -16704,6 +16704,59 @@ function Timeline({ entries, project, olderHref, isCapped }) {
 		]
 	});
 }
+/** A sentence of the run page's header with its run as a link: "Follow-up of <run>, started by web:altan at 09:12." */
+function SentenceLine({ sentence, project }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "break-words",
+		children: [
+			sentence.before,
+			sentence.run === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+				to: href({
+					to: "run",
+					ws: project,
+					run: sentence.run
+				}),
+				children: sentence.linkText
+			}),
+			sentence.after
+		]
+	});
+}
+/** The events of one run, oldest first: the sentence, the answers of an ack in full, and the other detail behind a fold. */
+function RunTrail({ lines }) {
+	const { today, offset } = useClock();
+	if (lines.length === 0) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "timeline",
+		children: lines.map((line, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "break-words",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "text-muted",
+						children: momentText(line.at, today, offset)
+					}),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: `ink-${line.tone}`,
+						children: line.text
+					})
+				]
+			}),
+			line.inline.map((text, at) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rail-note break-words",
+				children: text
+			}, `${at}`)),
+			line.folded.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+				summary: line.folded.length === 1 ? "1 detail" : `${line.folded.length} details`,
+				children: line.folded.map((text, at) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "rail-note break-words",
+					children: text
+				}, `${at}`))
+			})
+		] }, `${line.at}-${index}`))
+	});
+}
 //#endregion
 //#region app/routes/ritual.tsx
 var ritual_exports = /* @__PURE__ */ __exportAll({
@@ -17777,6 +17830,141 @@ function FollowUpCard({ project, run, readiness, questions, items }) {
 	});
 }
 //#endregion
+//#region app/lib/run-origin.ts
+var NONE = {
+	leads: [],
+	approved: null,
+	grants: [],
+	note: null
+};
+/** "Q2, item seo-3" out of the approved question numbers and item keys. */
+function approvedText(questions, items) {
+	const parts = [...questions.map((n) => `Q${String(n)}`), ...items.map((key) => `item ${key}`)];
+	return parts.length === 0 ? null : parts.join(", ");
+}
+/** The newest answer of each run an origin read, in the order the runs first appear. */
+function answerRuns(answers) {
+	const newest = /* @__PURE__ */ new Map();
+	for (const answer of answers) {
+		const known = newest.get(answer.run);
+		if (known === void 0 || answer.at > known) newest.set(answer.run, answer.at);
+	}
+	return [...newest].map(([run, at]) => ({
+		run,
+		at
+	}));
+}
+/**
+* The header of a run: "Follow-up of <parent>, started by web:altan at 09:12.",
+* what it was approved to do, the lines it was granted and the note. A run
+* that read an answer says which: "Started after your answer of 08:50 on run
+* <run>." (read when it started) or "Resumed with your answer of 08:50 on run
+* <run>." (read when it was resumed). A run the timer or a hand started, with
+* no answer read, has nothing to say here.
+*/
+function originView(origin, startedAt, clock) {
+	const when = momentText(startedAt, clock.today, clock.offset);
+	if (origin.kind === "follow-up" && origin.run !== void 0) {
+		const approved = origin.approved;
+		return {
+			leads: [{
+				before: "Follow-up of ",
+				run: origin.run,
+				linkText: shortRun(origin.run),
+				after: `, started by ${origin.who} at ${when}.`
+			}],
+			approved: approved === void 0 ? null : approvedText(approved.questions, approved.items),
+			grants: approved?.grants ?? [],
+			note: approved?.note ?? null
+		};
+	}
+	const answered = origin.kind === "follow-up" ? [] : answerRuns(origin.answersRead ?? []);
+	if (answered.length > 0) {
+		const opening = origin.kind === "after-answer" ? "Started after" : "Resumed with";
+		const leads = answered.map(({ run, at }) => ({
+			before: `${opening} your answer of ${momentText(at, clock.today, clock.offset)} on run `,
+			run,
+			linkText: shortRun(run),
+			after: "."
+		}));
+		return {
+			...NONE,
+			leads
+		};
+	}
+	if (origin.kind === "resume") return {
+		...NONE,
+		leads: [{
+			before: `Resumed by ${origin.who} at ${when}.`,
+			run: null,
+			linkText: "",
+			after: ""
+		}]
+	};
+	return NONE;
+}
+/** "done 09:40, 2 changed": how a follow-up ended, with the count of what it changed. */
+function childTail(child, clock) {
+	const { row } = child;
+	if (row.phase === "running") return ", running";
+	if (row.phase === "held") return ", waiting for you";
+	const end = row.endedAt === null ? "" : ` ${momentText(row.endedAt, clock.today, clock.offset)}`;
+	if (row.outcome !== "complete") return `, ${row.outcome ?? "closed"}${end}`;
+	const changed = row.result?.fixed ?? 0;
+	return `, done${end}${changed > 0 ? `, ${String(changed)} changed` : ""}`;
+}
+/** A moment as the page says it: the time today, "Thu 05:00" within the last week, the date and time otherwise. */
+function recent(iso, clock) {
+	const days = dayGap(hostDate(iso, clock.offset), clock.today);
+	if (days === 0) return clockTime(iso, clock.offset);
+	if (days > 0 && days < 7) return `${dayName(iso, clock.offset).split(" ")[0] ?? ""} ${clockTime(iso, clock.offset)}`;
+	return momentText(iso, clock.today, clock.offset);
+}
+/**
+* What came of a run: "Then: follow-up <run>, done 09:40, 2 changed" for each
+* follow-up, and "Your answer was read by the run of Thu 05:00" for each run
+* that took one of its answers.
+*/
+function thenLines(children, readBy, clock) {
+	const lines = children.map((child) => ({
+		before: "Then: ",
+		run: child.row.run,
+		linkText: `follow-up ${shortRun(child.row.run)}`,
+		after: childTail(child, clock)
+	}));
+	for (const reader of readBy) lines.push({
+		before: "Your answer was read by ",
+		run: reader.run,
+		linkText: `the run of ${recent(reader.at, clock)}`,
+		after: ""
+	});
+	return lines;
+}
+var DISMISSED = /^Dismissed by (.+?) as older than run (\S+)$/u;
+var CHOSEN = /^Follow-up (\S+) chosen by (.+?)((?:; note: .*)?)$/u;
+/** The sentence of an event on the run page: an ack says what it did, and every run id is cut to its last eight characters. */
+function trailText(entry) {
+	const dismissed = DISMISSED.exec(entry.text);
+	if (dismissed !== null) return `Dismissed by ${dismissed[1] ?? entry.who} (earlier than ${shortRun(dismissed[2] ?? "")})`;
+	const chosen = CHOSEN.exec(entry.text);
+	if (chosen !== null) return `Follow-up ${shortRun(chosen[1] ?? "")} started instead of answering, by ${chosen[2] ?? entry.who}${chosen[3] ?? ""}`;
+	return shortRuns(entry.text);
+}
+/** The events of one run as lines, oldest first (`entries` come newest first, as `WebContext.activity` gives them). */
+function trailLines(entries) {
+	return entries.toReversed().map((entry) => {
+		const detail = entry.detail ?? [];
+		const isAnswer = entry.kind === "ack-answered";
+		return {
+			at: entry.at,
+			text: trailText(entry),
+			tone: entry.tone,
+			inline: isAnswer ? detail : [],
+			folded: isAnswer ? [] : detail
+		};
+	});
+}
+//#endregion
 //#region app/routes/run.tsx
 var run_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => RouteError,
@@ -17784,6 +17972,8 @@ var run_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader$10,
 	meta: () => meta$8
 });
+/** The most events of one run the page reads: a run has a handful, so this is only a bound. */
+var TRAIL_MAX = 200;
 async function loader$10({ context, params }) {
 	const run = context.run(params.ws, params.run);
 	if (run === null) throw data(`No run ${params.run} in workspace ${params.ws}.`, { status: 404 });
@@ -17804,8 +17994,19 @@ async function loader$10({ context, params }) {
 		...child,
 		state: runState(child.row, project?.runs ?? [])
 	}));
+	const clock = {
+		today: status.today,
+		offset: status.utcOffset
+	};
+	const trail = trailLines(context.activity(run.project, {
+		run: run.row.run,
+		limit: TRAIL_MAX
+	}).filter((entry) => entry.run === run.row.run));
 	return {
 		run,
+		origin: originView(run.origin, run.row.startedAt, clock),
+		came: thenLines(children, run.readBy, clock),
+		trail,
 		kind: itemKind(run.row.item),
 		slug: itemSlug(run.row.item),
 		manual: itemManual(run.row.item, ritual),
@@ -17826,7 +18027,7 @@ async function loader$10({ context, params }) {
 }
 var meta$8 = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 var run_default = withComponentProps(function Run({ loaderData }) {
-	const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
+	const { run, origin, came, trail, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
 	const { row, project } = run;
 	const badge = stuck === null ? state : {
 		tone: "late",
@@ -17869,15 +18070,36 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateWord, { state: badge }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["started ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: row.startedAt })] }),
 					took === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["took ", took] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: row.who === "timer" ? "by timer" : `by ${row.who}` }),
-					run.followUpOf === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["follows up ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-						to: href({
-							to: "run",
-							ws: project,
-							run: run.followUpOf
-						}),
-						children: ["run ", shortRun(run.followUpOf)]
-					})] })
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: row.who === "timer" ? "by timer" : `by ${row.who}` })
+				]
+			}),
+			origin.leads.length === 0 && origin.approved === null && origin.grants.length === 0 && origin.note === null && came.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "origin",
+				children: [
+					origin.leads.map((lead) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SentenceLine, {
+						sentence: lead,
+						project
+					}, `${lead.before}${lead.run ?? ""}`)),
+					origin.approved === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+						"Approved: ",
+						origin.approved,
+						"."
+					] }),
+					origin.grants.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Fold, {
+						summary: origin.grants.length === 1 ? "Granted line" : `Granted lines (${origin.grants.length})`,
+						children: origin.grants.map((grant, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "break-all",
+							children: grant
+						}) }, `${index}`))
+					}),
+					origin.note === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "break-words",
+						children: ["Note: ", origin.note]
+					}),
+					came.map((sentence) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SentenceLine, {
+						sentence,
+						project
+					}, `${sentence.before}${sentence.run ?? ""}`))
 				]
 			}),
 			stuck === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -18053,26 +18275,7 @@ var run_default = withComponentProps(function Run({ loaderData }) {
 								}, child))
 							})
 						}]
-					] }), run.events.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-						className: "timeline",
-						children: run.events.map((event, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "flex flex-wrap items-baseline gap-x-3",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-								className: "text-gold-hi",
-								children: event.type
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "text-sm text-muted",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Time, { iso: event.at }),
-									", ",
-									event.who
-								]
-							})]
-						}), event.detail === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "mt-0.5 break-words",
-							children: event.detail
-						})] }, `${index}`))
-					})]
+					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunTrail, { lines: trail })]
 				})
 			})
 		})]
@@ -20450,7 +20653,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-ZymUJSht.js",
+			"module": "/assets/root-CJa22-q7.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20465,7 +20668,7 @@ var server_manifest_default = {
 				"/assets/receipt-C4CmVsTS.js",
 				"/assets/settings-B-OsZEc-.js"
 			],
-			"css": ["/assets/root-D6S5ryHg.css"],
+			"css": ["/assets/root-BiDcUgJ1.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -20918,7 +21121,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-DK4DiQab.js",
+			"module": "/assets/ritual-DcztZRuz.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -20927,7 +21130,6 @@ var server_manifest_default = {
 				"/assets/chip-7jCbr6hC.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/view-BIYoBeb9.js",
-				"/assets/receipt-C4CmVsTS.js",
 				"/assets/ui-BtzGGzsP.js",
 				"/assets/runs-BGv_XENX.js",
 				"/assets/result-7IrIdshp.js",
@@ -20935,7 +21137,9 @@ var server_manifest_default = {
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/crumbs-CkJOExHf.js",
+				"/assets/activity-DCh3yoDC.js",
 				"/assets/kind-CbYiwFqF.js",
+				"/assets/receipt-C4CmVsTS.js",
 				"/assets/post-DvwTzYpm.js",
 				"/assets/pulse-Dm9FzUfo.js"
 			],
@@ -20995,7 +21199,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-Dz-ozfok.js",
+			"module": "/assets/run-DARNnarm.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dkr90-oZ.js",
 				"/assets/jsx-runtime-Bpruz7Fm.js",
@@ -21011,6 +21215,7 @@ var server_manifest_default = {
 				"/assets/row-CgOYoUJa.js",
 				"/assets/route-error-DUxTvXGa.js",
 				"/assets/crumbs-CkJOExHf.js",
+				"/assets/activity-DCh3yoDC.js",
 				"/assets/kind-CbYiwFqF.js",
 				"/assets/state-words-CdJGMvfT.js",
 				"/assets/receipt-C4CmVsTS.js",
@@ -21404,8 +21609,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-a8352bad.js",
-	"version": "a8352bad",
+	"url": "/assets/manifest-856a9f0c.js",
+	"version": "856a9f0c",
 	"sri": void 0
 };
 //#endregion

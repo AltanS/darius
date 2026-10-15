@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -230,10 +230,6 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
     row,
     itemKind: "ritual",
     itemSlug: "daily-report",
-    events: [
-      { at: row.startedAt, who: "timer", type: "run.started", detail: null },
-      { at: row.startedAt, who: "claude:x", type: "run.completed", detail: row.outcome },
-    ],
     findings:
       row.findingsSha === null
         ? null
@@ -246,6 +242,8 @@ function runDetail(row: RunRow, result: RunResult | null = null): RunDetail {
           ],
     followUpOf: null,
     followUps: [],
+    origin: { kind: "schedule", who: "timer" },
+    readBy: [],
     children: [],
     skillHash: null,
   };
@@ -323,6 +321,12 @@ const VIGIL: VigilDetail = {
   body: [{ kind: "paragraph", lines: [[{ kind: "text", text: `Check the page ${EVIL}` }]] }],
 };
 
+/** The events of the DONE run as the activity model gives them (newest first). */
+const DONE_TRAIL: ActivityEntry[] = [
+  { at: "2026-09-28T08:04:30.000Z", who: "claude:x", actor: "cli", kind: "run-completed", item: { type: "run", id: DONE, title: "Daily report" }, run: DONE, text: "Run completed", links: { ritual: "daily-report", run: DONE }, tone: "ok" },
+  { at: "2026-09-28T08:00:00.000Z", who: "timer", actor: "timer", kind: "run-started", item: { type: "run", id: DONE, title: "Daily report" }, run: DONE, text: "Run started by timer", links: { ritual: "daily-report", run: DONE }, tone: "run" },
+];
+
 const context: WebContext = {
   viewer: "owner on phone",
   nonce: NONCE,
@@ -337,7 +341,7 @@ const context: WebContext = {
   system: () => SYSTEM,
   backups: () => BACKUPS,
   findings: () => Promise.resolve(FINDINGS),
-  activity: () => [],
+  activity: (_project, options) => (options?.run === DONE ? DONE_TRAIL : []),
   pending: () => [],
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
   canWrite: true,
@@ -407,7 +411,7 @@ const PAGES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/settings/backups", ["Settings", "Backups", "Back up now"]],
   ["/settings/about", ["Settings", "About", "testhost"]],
   ["/w/demo/rituals/daily-report", ["Rules", "git fetch", "git push", "Be brief.", "Read the log", "darius due", "History", "report mode"]],
-  [`/w/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "run.completed", "5 min", "Complete"]],
+  [`/w/demo/runs/${DONE}`, ["Findings heading", "site-a", "2281", '<ol start="3">', "Run completed", "Run started by timer", "5 min", "Complete"]],
   [`/w/demo/runs/${HELD}`, ["Needs you", "which branch?", `darius run answer ${HELD} 2 &quot;your answer&quot; --project demo`]],
 ];
 
@@ -1232,7 +1236,7 @@ const WITH_COMMANDS: RunResult = {
 };
 
 /** The asks run with a question that lists commands, and the readiness given; `calls` counts the readiness checks. */
-function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: string; followUps?: string[] } = {}): WebContext & { calls: string[] } {
+function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: string; followUps?: string[]; origin?: RunOrigin } = {}): WebContext & { calls: string[] } {
   const base = asksContext(null);
   const calls: string[] = [];
   return {
@@ -1241,7 +1245,9 @@ function followUpContext(readiness: FollowUpReadiness, links: { followUpOf?: str
     run: (name, run) => {
       const detail = base.run(name, run);
       if (detail === null || run !== ASKS) return detail;
-      return { ...detail, result: WITH_COMMANDS, followUpOf: links.followUpOf ?? null, followUps: links.followUps ?? [] };
+      const linked: RunDetail = { ...detail, result: WITH_COMMANDS, followUpOf: links.followUpOf ?? null, followUps: links.followUps ?? [] };
+      if (links.origin !== undefined) linked.origin = links.origin;
+      return linked;
     },
     followUp: (project, run) => {
       calls.push(`${project}/${run}`);
@@ -1307,8 +1313,8 @@ test("the ritual runs on another host: ready there, the button names it; off the
 
 test("a follow-up links its parent, and the parent lists its follow-ups", async () => {
   const off: FollowUpReadiness = { ready: false, host: "host-a", reason: "x" };
-  const child = await readPage(`/w/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT }));
-  assert.match(child, new RegExp(`follows up <a[^>]*href="/w/demo/runs/${PARENT}"[^>]*>run ${PARENT.slice(-8)}</a>`, "u"));
+  const child = await readPage(`/w/demo/runs/${ASKS}`, followUpContext(off, { followUpOf: PARENT, origin: { kind: "follow-up", run: PARENT, who: "web:altan" } }));
+  assert.match(child, new RegExp(`Follow-up of <a[^>]*href="/w/demo/runs/${PARENT}"[^>]*>${PARENT.slice(-8)}</a>, started by web:altan`, "u"));
   const parent = await readPage(`/w/demo/runs/${ASKS}`, followUpContext(off, { followUps: [CHILD] }));
   assert.match(textOf(parent), new RegExp(`Follow-ups${CHILD.slice(-8)}`, "u"));
   assert.ok(parent.includes(`href="/w/demo/runs/${CHILD}"`));
@@ -2454,4 +2460,74 @@ test("Done lately draws the receipts from the activity and the starts, and a rel
   assert.ok(first.includes("Answered by web:owner at 10:40, 1 answer waits for the next run"));
   assert.ok(first.indexOf("Starting a follow-up") < first.indexOf("Answered by web:owner at"), "starts without a run come first");
   assert.equal(first.includes(EVIL), false);
+});
+
+// --- the run page's links (0.92.0) -------------------------------------------------------
+
+const CHILD_RUN = "01KDDDDDDDDDDDDDDDDDDDDDDD";
+const READER_RUN = "01KEEEEEEEEEEEEEEEEEEEEEEE";
+
+function trailEntry(kind: ActivityEntry["kind"], at: string, text: string, run: string, extra: Partial<ActivityEntry> = {}): ActivityEntry {
+  return { at, who: "web:altan", actor: "web", kind, item: { type: "run", id: run, title: "Daily report" }, run, text, links: { ritual: "daily-report", run }, tone: "ok", ...extra };
+}
+
+function linkContext(): WebContext {
+  const childRow: RunRow = { ...runRow(CHILD_RUN, "closed", "complete"), who: "web:altan", startedBy: "web", followUpOf: DONE, startedAt: "2026-09-28T09:12:00.000Z", endedAt: "2026-09-28T09:40:00.000Z" };
+  const childDetail: RunDetail = {
+    ...runDetail(childRow),
+    followUpOf: DONE,
+    origin: { kind: "follow-up", run: DONE, who: "web:altan", approved: { questions: [2], items: ["seo-3"], grants: ["git push --tags"], note: `careful ${EVIL}` } },
+  };
+  const parentDetail: RunDetail = {
+    ...runDetail(RUNS[2]!),
+    followUps: [CHILD_RUN],
+    children: [{ row: { ...childRow, result: { status: "ok", questions: 0, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed: 2 } }, approved: [2], items: ["seo-3"], result: null }],
+    readBy: [{ run: READER_RUN, at: "2026-09-28T07:00:00.000Z" }],
+  };
+  const afterAnswer: RunDetail = { ...runDetail({ ...runRow(READER_RUN, "closed", "complete"), who: "web:altan" }), origin: { kind: "after-answer", who: "web:altan", answersRead: [{ run: DONE, at: "2026-09-28T08:50:00.000Z", who: "web:altan" }] } };
+  const parentTrail = [
+    trailEntry("ack-follow-up", "2026-09-28T09:12:00.000Z", `Follow-up ${CHILD_RUN} chosen by web:altan`, DONE, { tone: "run" }),
+    trailEntry("ack-dismissed", "2026-09-28T09:00:00.000Z", `Dismissed by web:altan as older than run ${CHILD_RUN}`, DONE, { tone: "idle" }),
+    trailEntry("ack-answered", "2026-09-28T08:50:00.000Z", "Answered by web:altan", DONE, { detail: ["Q1: yes", `Q2: no ${EVIL}`] }),
+    ...DONE_TRAIL,
+  ];
+  return {
+    ...context,
+    run: (project, run) => (project !== "demo" ? null : run === CHILD_RUN ? childDetail : run === READER_RUN ? afterAnswer : run === DONE ? parentDetail : context.run(project, run)),
+    activity: (_project, options) => (options?.run === DONE ? parentTrail : []),
+  };
+}
+
+test("a follow-up's page says where it came from, what was approved and granted, and the note", async () => {
+  const page = await readPage(`/w/demo/runs/${CHILD_RUN}`, linkContext());
+  const text = textOf(page);
+  assert.ok(text.includes(`Follow-up of ${DONE.slice(-8)}, started by web:altan at`), text);
+  assert.ok(page.includes(`href="/w/demo/runs/${DONE}"`), "the parent is a link");
+  assert.ok(text.includes("Approved: Q2, item seo-3."));
+  assert.ok(text.includes("Granted line") && text.includes("git push --tags"));
+  assert.ok(text.includes("Note: careful &lt;script&gt;alert(1)&lt;/script&gt;"), "the note is text");
+  assert.equal(page.includes(EVIL), false);
+  assert.equal(text.includes("follows up"), false, "the old one-word line is gone");
+});
+
+test("a run that read an answer links the answered run; a plain run has no origin lines", async () => {
+  const after = textOf(await readPage(`/w/demo/runs/${READER_RUN}`, linkContext()));
+  assert.ok(after.includes("Started after your answer of") && after.includes(`on run ${DONE.slice(-8)}.`), after);
+  const plain = await readPage(`/w/demo/runs/${HELD}`, linkContext());
+  assert.equal(plain.includes('class="origin"'), false, "nothing to say, nothing drawn");
+  assert.equal(textOf(plain).includes("Approved:"), false);
+});
+
+test("a parent's page says what came of it, and its trail shows the acks with their answers", async () => {
+  const page = await readPage(`/w/demo/runs/${DONE}`, linkContext());
+  const text = textOf(page);
+  assert.ok(text.includes(`Then: follow-up ${CHILD_RUN.slice(-8)}, done`) && text.includes("2 changed"), text);
+  assert.ok(text.includes("Your answer was read by the run of"));
+  assert.ok(page.includes(`href="/w/demo/runs/${READER_RUN}"`), "the reader is a link");
+  assert.ok(text.includes("Answered by web:altan") && text.includes("Q1: yes") && text.includes("Q2: no &lt;script&gt;"), "the answers show in full");
+  assert.ok(text.includes(`Dismissed by web:altan (earlier than ${CHILD_RUN.slice(-8)})`));
+  assert.ok(text.includes(`Follow-up ${CHILD_RUN.slice(-8)} started instead of answering`));
+  assert.ok(text.indexOf("Run started by timer") < text.indexOf("Run completed") && text.indexOf("Run completed") < text.indexOf("Answered by"), "oldest first");
+  assert.equal(page.includes(EVIL), false);
+  assert.equal(/\sstyle="/u.test(page), false);
 });

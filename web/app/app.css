@@ -223,6 +223,21 @@
     color: var(--color-parchment);
   }
 
+  /* Where a run came from and what came of it: one sentence a line, under the status line. */
+
+  .origin {
+    display: grid;
+    gap: 4px;
+    max-width: 75ch;
+    margin-top: 12px;
+    font-size: 15px;
+    color: var(--color-parchment);
+  }
+
+  .origin .fold {
+    margin: 2px 0;
+  }
+
   .title-link,
   .title-link:hover {
     color: inherit;

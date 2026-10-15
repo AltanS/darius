@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.92.0] - 2026-10-15
+
+### Added
+
+- The run page shows both directions of every link. A follow-up says "Follow-up of <parent>, started by web:altan at 09:12", then what was approved ("Approved: Q2, item seo-3."), the granted lines (folded) and the note. A run that read an answer says which run was answered. A parent says "Then: follow-up <run>, done 09:40, 2 changed" and "Your answer was read by the run of Thu 05:00", with links.
+- `RunDetail.origin` (follow-up, after-answer, resume, schedule or manual, with the approval and the answers read) and `RunDetail.readBy`.
+
+### Changed
+
+- The run timeline reads the activity entries of the run, oldest first. An ack shows its answers in full, a dismissal says "earlier than <run>", and a follow-up chosen instead of an answer says so.
+- `RunDetail.events`, `RunEvent` and the private `eventDetail` are gone. Nothing outside the web app read them.
+
 ## [0.91.0] - 2026-10-15
 
 ### Added

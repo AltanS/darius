@@ -1,6 +1,7 @@
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/run";
+import { RunTrail, SentenceLine } from "../components/activity.tsx";
 import { KindWord } from "../components/chip.tsx";
 import { Crumbs } from "../components/crumbs.tsx";
 import { FollowUpCard } from "../components/follow-up.tsx";
@@ -8,15 +9,19 @@ import { Markdown } from "../components/markdown.tsx";
 import { Actions, Items, ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
-import { Empty, Facts, Section, Status, Time, TitleText } from "../components/ui.tsx";
+import { Empty, Facts, Fold, Section, Status, Time, TitleText } from "../components/ui.tsx";
 import { duration, shortRun } from "../lib/format.ts";
 import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
+import { originView, thenLines, trailLines } from "../lib/run-origin.ts";
 import { statusOf } from "../lib/status.ts";
 import { resultTone, resultWord } from "../lib/result.ts";
 import { excerpt, itemLabel, itemSlug, nextRunText, nextStep, runFailure, runState, stuckFor, stuckText } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
+
+/** The most events of one run the page reads: a run has a handful, so this is only a bound. */
+const TRAIL_MAX = 200;
 
 export async function loader({ context, params }: Route.LoaderArgs) {
   const run = context.run(params.ws, params.run);
@@ -39,13 +44,16 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const followUp = checked !== null && (hasCommands || (hasProposals && isFollowable) || checked.ready) ? checked : null;
   // Each follow-up with its state word against the runs of the project (0.69.0).
   const children = run.children.map((child) => ({ ...child, state: runState(child.row, project?.runs ?? []) }));
-  return { run, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite, nextRun: nextRunText(ritual, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }), canRunNow: run.row.item.startsWith("ritual/") };
+  // Where the run came from, what came of it, and its own events (0.92.0), from the ledger and the activity model.
+  const clock = { today: status.today, offset: status.utcOffset };
+  const trail = trailLines(context.activity(run.project, { run: run.row.run, limit: TRAIL_MAX }).filter((entry) => entry.run === run.row.run));
+  return { run, origin: originView(run.origin, run.row.startedAt, clock), came: thenLines(children, run.readBy, clock), trail, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite, nextRun: nextRunText(ritual, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }), canRunNow: run.row.item.startsWith("ritual/") };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
+  const { run, origin, came, trail, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
   const { row, project } = run;
   const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.
@@ -78,12 +86,28 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
           </span>
           {took === null ? null : <span>took {took}</span>}
           <span>{row.who === "timer" ? "by timer" : `by ${row.who}`}</span>
-          {run.followUpOf === null ? null : (
-            <span>
-              follows up <Link to={href({ to: "run", ws: project, run: run.followUpOf })}>run {shortRun(run.followUpOf)}</Link>
-            </span>
-          )}
         </p>
+        {origin.leads.length === 0 && origin.approved === null && origin.grants.length === 0 && origin.note === null && came.length === 0 ? null : (
+          <div className="origin">
+            {origin.leads.map((lead) => (
+              <SentenceLine key={`${lead.before}${lead.run ?? ""}`} sentence={lead} project={project} />
+            ))}
+            {origin.approved === null ? null : <p>Approved: {origin.approved}.</p>}
+            {origin.grants.length === 0 ? null : (
+              <Fold summary={origin.grants.length === 1 ? "Granted line" : `Granted lines (${origin.grants.length})`}>
+                {origin.grants.map((grant, index) => (
+                  <p key={`${index}`}>
+                    <code className="break-all">{grant}</code>
+                  </p>
+                ))}
+              </Fold>
+            )}
+            {origin.note === null ? null : <p className="break-words">Note: {origin.note}</p>}
+            {came.map((sentence) => (
+              <SentenceLine key={`${sentence.before}${sentence.run ?? ""}`} sentence={sentence} project={project} />
+            ))}
+          </div>
+        )}
         {stuck === null ? null : <p className="page-warn tone-late">{stuckText(stuck)}</p>}
       </header>
 
@@ -208,21 +232,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                       ]),
                 ]}
               />
-              {run.events.length === 0 ? null : (
-                <ol className="timeline">
-                  {run.events.map((event, index) => (
-                    <li key={`${index}`}>
-                      <p className="flex flex-wrap items-baseline gap-x-3">
-                        <code className="text-gold-hi">{event.type}</code>
-                        <span className="text-sm text-muted">
-                          <Time iso={event.at} />, {event.who}
-                        </span>
-                      </p>
-                      {event.detail === null ? null : <p className="mt-0.5 break-words">{event.detail}</p>}
-                    </li>
-                  ))}
-                </ol>
-              )}
+              <RunTrail lines={trail} />
             </div>
           </Section>
         </aside>

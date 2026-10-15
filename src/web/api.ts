@@ -736,22 +736,12 @@ export interface RitualDetail {
   handoff: RitualHandoff | null;
 }
 
-export interface RunEvent {
-  at: string;
-  who: string;
-  /** The ledger type, for example `run.started` or `run.held`. */
-  type: string;
-  /** A short human line for the event (the outcome, a question, a reason), or null. */
-  detail: string | null;
-}
-
 export interface RunDetail {
   project: string;
   row: RunRow;
   /** The ritual or vigil slug from `row.item`. */
   itemKind: string;
   itemSlug: string;
-  events: RunEvent[];
   /** Null when the run has no findings (yet). The result block is cut out of them. */
   findings: MdBlock[] | null;
   /** The whole result block; null when the run handed in none. */
@@ -760,10 +750,57 @@ export interface RunDetail {
   followUpOf: string | null;
   /** The runs that follow this one up, oldest first. */
   followUps: string[];
+  /** Where the run came from (0.92.0), read from its `run.started` line and the acks it read. */
+  origin: RunOrigin;
+  /** The runs that took this run's answers (0.92.0), oldest first, one entry for each run. */
+  readBy: RunReader[];
   /** The same follow-ups with what each did (0.69.0), oldest first: the parent page shows them. */
   children: FollowUpChild[];
   /** The sha256 hex of the ritual skill's SKILL.md at launch (0.56.0); null for a run that recorded none. */
   skillHash: string | null;
+}
+
+/**
+ * Where a run came from (0.92.0). `follow-up`: `darius run follow-up` started it (`run` is the parent).
+ * `after-answer`: its start line lists `answers_read`, so it took the answers of an earlier run (`answersRead`).
+ * `resume`: the ledger holds a `run.resumed` line for it and no start line, so only the resume is known.
+ * `schedule`: the timer started it. `manual`: a person or a script started it.
+ */
+export interface RunOrigin {
+  kind: "follow-up" | "after-answer" | "resume" | "schedule" | "manual";
+  /** The parent of a follow-up. */
+  run?: string;
+  /** The `who` of the line that started the run. */
+  who: string;
+  /** What a follow-up was told to do. Operator text in it is masked. */
+  approved?: RunApproval;
+  /** The acks the run read, from its start line and its fresh resumes: whose run, when, who answered. Set for any origin but a follow-up, which never takes an answer. */
+  answersRead?: RunAnswerRead[];
+}
+
+/** What the operator approved when a follow-up started. */
+export interface RunApproval {
+  /** The numbers of the approved questions. */
+  questions: number[];
+  /** The keys of the approved items. */
+  items: string[];
+  /** The command lines the follow-up was granted. */
+  grants: string[];
+  /** The operator's note; null when there was none. */
+  note: string | null;
+}
+
+/** An answer a run read: the run it answers, when it was given and who gave it. */
+export interface RunAnswerRead {
+  run: string;
+  at: string;
+  who: string;
+}
+
+/** A run that took answers of another run, and when it started reading them. */
+export interface RunReader {
+  run: string;
+  at: string;
 }
 
 /** A follow-up of a run as its parent's page shows it (0.69.0): its row, what the operator approved, and its result. */

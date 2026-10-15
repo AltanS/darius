@@ -230,9 +230,10 @@ test("the app's data: ritual and run details with events and findings blocks; un
   assert.equal(ritual?.runs.length, 2);
   const detail = context.run("web-demo", run);
   assert.deepEqual([detail?.itemKind, detail?.itemSlug, detail?.row.outcome], ["ritual", "daily-report", "complete"]);
-  assert.deepEqual(detail?.events.map((event) => [event.type, event.detail]), [["run.started", null], ["run.completed", "complete"]]);
+  assert.deepEqual(context.activity("web-demo", { run }).filter((entry) => entry.run === run).map((entry) => entry.kind), ["run-completed", "run-started"]);
+  assert.deepEqual([detail?.origin.kind, detail?.readBy], ["schedule", []]);
   assert.deepEqual(detail?.findings?.[0], { kind: "heading", level: 1, content: [{ kind: "text", text: "Report" }] });
-  assert.deepEqual(context.run("web-demo", held)?.events.map((event) => event.detail), [null, "may I <push>?"]);
+  assert.deepEqual(context.activity("web-demo", { run: held }).filter((entry) => entry.run === held).map((entry) => [entry.kind, entry.detail]), [["run-held", ["may I <push>?"]], ["run-started", undefined]]);
   assert.equal(context.run("web-demo", "NOPE"), null);
   assert.equal(context.run("ghost", run), null);
   assert.equal(context.ritual("web-demo", "nope"), null);
@@ -276,8 +277,8 @@ test("a failed run: runRows and RitualRow.failedToday carry who acknowledged it;
   assert.match(row?.acknowledged?.at ?? "", /^\d{4}-\d\d-\d\dT/u);
   assert.deepEqual(ritualOf(), { run: failed, acknowledged: row?.acknowledged });
   assert.deepEqual(
-    webContext("this host").run("web-ack", failed)?.events.map((event) => [event.type, event.detail]),
-    [["run.started", null], ["run.completed", "failed"], ["run.acknowledged", "known outage"]],
+    webContext("this host").activity("web-ack", { run: failed }).map((entry) => [entry.kind, entry.text]),
+    [["ack-note", "Noted by tester: known outage"], ["run-failed", "Run failed"], ["run-started", "Run started by timer"]],
   );
   assert.equal(webContext("this host").ritual("web-ack", "nightly")?.row.failedToday?.run, failed);
 });
