@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.100.2] - 2026-10-17
+
+### Changed
+
+- The Work Loop skills are shorter (12.5k to 11.3k words). Only `darius-work` checks that darius is installed; the skills it forks no longer repeat it. Claim and takeover detail, history notes, the inner workings of the exit gate, and the git-mode branches of `darius-commit` are gone: the CLI prints them on refusal. `darius-worklog` hands distill to `darius-dream`, which now holds the distill gates.
+- `darius-work-verify` runs `darius verify <spec>` once instead of one `verify-item` per item. It skips ticked items unless `--recheck`, and reads the checklist with `darius show --json` instead of the spec file.
+- The `tree` verb summary says to ask the user before `tree resolve`.
+
+### Fixed
+
+- evals: git runs in the eval sandbox. The sandbox masks `/usr/bin/git` where the `git-credential-*` helpers link to it, so the plugin carries its own copy of git.
+
 ## [0.100.1] - 2026-10-17
 
 ### Fixed
