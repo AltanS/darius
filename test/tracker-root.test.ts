@@ -24,7 +24,7 @@ process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
 delete process.env.DARIUS_PROJECT;
 
-const { doctorNotes, removeOwnTreeLink, resolveTrackerRoot, resolveTreeArg, treeLinkState, treeRelative } = await import("../src/core/tracker-root.ts");
+const { doctorNotes, removeOwnTreeLink, resolveTrackerRoot, resolveTreeArg, specKey, treeLinkState, treeRelative } = await import("../src/core/tracker-root.ts");
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 let dirs = 0;
@@ -116,6 +116,12 @@ test("path forms: tracker-relative, the old .tracker/ form, and absolute store o
   // A checkout file keeps its meaning.
   writeFileSync(join(checkout, "README.md"), "# readme\n");
   assert.equal(resolveTreeArg("README.md", checkout), join(checkout, "README.md"));
+
+  // The spec key is the same for every form.
+  for (const form of ["M1-alpha/01-one.md", ".tracker/M1-alpha/01-one.md", "./.tracker/M1-alpha/01-one.md", file, join(checkout, ".tracker", "M1-alpha", "01-one.md")]) {
+    assert.equal(specKey(form, where), "M1-alpha/01-one.md", form);
+  }
+  assert.equal(specKey("/somewhere/else.md", where), "/somewhere/else.md");
 
   // Git mode: relative to the cwd, as always.
   const gitMode = join(SANDBOX, "git-paths");

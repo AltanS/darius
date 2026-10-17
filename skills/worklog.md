@@ -15,7 +15,7 @@ A line that starts with `!darius ...` is a shell command. Run it with Bash and u
 ### `open`, start a new thread
 `!darius worklog open <milestone-slug> --spec <spec-path> [--message "<text>"]`
 A worklog belongs to a milestone. `open` needs a slug that names an active milestone folder (`M68-framework-quality` or `framework-quality`) and refuses any other slug, and an archived milestone. Findings with no milestone go in a plain doc in the repo, not in the tracker tree.
-**One thread per spec.** List the active threads first and reuse the one whose `specPath` matches. `specPath` is tracker-relative in store mode, whatever form you typed.
+**One thread per spec.** List the active threads first and reuse the one whose `specPath` matches. `specPath` is tracker-relative in store mode, whatever form you typed. In git mode it shows as stored, `M1-x/01-y.md` or `.tracker/M1-x/01-y.md`: both name one spec, so compare them without the `.tracker/` prefix.
 `open --spec` refuses a spec another live session claimed. `--takeover` overrides it; use it only when the user says so. A `--session` that is not the env session id is refused. `--as-other-session` lets you act for it, and the CLI records that on the thread.
 Returns the generated `thread-id`. The slug becomes the filename (`<slug>.md`) and the thread label; `--message` becomes the thread's first entry and is what the index shows as the file's hook, so make it describe the work. Slugs starting with `00-` are refused, see `index`.
 

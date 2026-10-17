@@ -49,14 +49,14 @@ export function removeHost(host: Host): void {
   rmSync(host.root, { recursive: true, force: true });
 }
 
-/** Runs the darius CLI. `extraEnv` adds to the host env (a value of undefined removes it). */
-export function darius(host: Host, argv: string[], cwd: string, extraEnv: Record<string, string | undefined> = {}): Run {
+/** Runs the darius CLI. `extraEnv` adds to the host env (a value of undefined removes it). `input` goes to stdin. */
+export function darius(host: Host, argv: string[], cwd: string, extraEnv: Record<string, string | undefined> = {}, input = ""): Run {
   const env: NodeJS.ProcessEnv = { ...host.env, DARIUS_RUNTIME: "node" };
   for (const [name, value] of Object.entries(extraEnv)) {
     if (value === undefined) delete env[name];
     else env[name] = value;
   }
-  const result = spawnSync(BIN, argv, { cwd, env, encoding: "utf8", timeout: 60_000 });
+  const result = spawnSync(BIN, argv, { cwd, env, encoding: "utf8", timeout: 60_000, input });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 

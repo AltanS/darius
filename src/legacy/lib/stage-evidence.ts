@@ -40,7 +40,7 @@ export class StageRefusal extends Error {
 
 /** The checkout that holds a tracker (src/legacy/lib/tracker-root.ts). */
 export { projectRootOf } from "./tracker-root.ts";
-import { resolveTreeRef } from "./tracker-root.ts";
+import { resolveTreeRef, specKey } from "./tracker-root.ts";
 
 /** True when `cwd` is inside a git work tree. */
 export function inGitRepo(cwd: string): boolean {
@@ -166,7 +166,8 @@ export function ledgerVerdict(trackerRoot: string, specPath: string, since: stri
   if (open.length === 0) {
     return { ok: false, reason: `no passing ledger line can vouch for ${spec}: it has no checklist item that is not skipped\n  next: darius spec check ${displaySpec(spec)}` };
   }
-  const lines = readLedger(trackerRoot).filter((e) => e.spec === spec);
+  const key = specKey(trackerRoot, spec);
+  const lines = readLedger(trackerRoot).filter((e) => specKey(trackerRoot, e.spec) === key);
   const sinceMs = atMs(since);
 
   // The latest line per item; on a tie the later line in the file wins.

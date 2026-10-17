@@ -172,6 +172,19 @@ export function treeRelative(input: string, where: { trackerRoot: string; checko
   return rel === "." ? "" : rel;
 }
 
+/**
+ * The one key of a spec: the tracker-relative path with `/` separators and no
+ * `.tracker/` prefix (`M1-x/01-y.md`), whichever form names it. The twin of
+ * `specKey` in src/legacy/lib/tracker-root.ts; both give the same key. Every
+ * place that matches a thread, claim or ledger line to a spec compares these
+ * keys. Stored forms are never rewritten: an old thread keeps `.tracker/...`.
+ * A reference that names nothing in the tree comes back trimmed.
+ */
+export function specKey(input: string, where: { trackerRoot: string; checkout: string }): string {
+  const trimmed = input.trim();
+  return (treeRelative(trimmed, where) ?? trimmed).split("\\").join("/");
+}
+
 /** Folders of the tree that hold no specs. */
 const NON_SPEC_DIRS: ReadonlySet<string> = new Set(["archive", "worklog"]);
 
