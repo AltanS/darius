@@ -5,7 +5,8 @@
  * Exit codes follow the probe contract: 0 the spec passes, 1 it has
  * problems (each one listed) or the file does not exist, 2 usage (no path).
  *
- * JSON: `{ ok, risk, riskReasons, problems, reviewGate, reviewRequired, counsel }`.
+ * JSON: `{ ok, risk, riskReasons, problems, reviewGate, reviewRequired, counsel, warnings }`.
+ * `warnings` (0.102.0) never blocks: a spec with more than 5 open items warns.
  * `riskReasons` holds `{ pattern, class, line, text }`, one per matching
  * pattern and line.
  */
@@ -25,6 +26,7 @@ function formatText(path: string, result: SpecCheckResult): string {
     lines.push("PROBLEMS:");
     for (const problem of result.problems) lines.push(`  - ${problem}`);
   }
+  for (const warning of result.warnings) lines.push(`WARN: ${warning}`);
   const review = result.reviewRequired ? "required" : result.risk === "high" ? "off (review_gate: off)" : "not needed";
   lines.push(`REVIEW: ${review}`);
   if (result.counsel !== null) lines.push(`COUNSEL: ${result.counsel}`);

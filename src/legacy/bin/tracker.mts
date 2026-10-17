@@ -102,6 +102,7 @@ import {
   parkThread,
   isWorklogIndexFile,
   scanWorklogDir,
+  parseWorklogMarkdown,
   threadArtifactPaths,
   WORKLOG_STAGES,
   type WorklogStage,
@@ -191,7 +192,7 @@ import {
 import { discoverAgents } from "../lib/agent-discovery.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runDelegation } from "../lib/delegation.ts";
-import { runHookDrift, runHookStop } from "../lib/hooks.ts";
+import { prunePendingSync, runHookDrift, runHookStop } from "../lib/hooks.ts";
 import { usageFor, wantsHelp } from "../lib/usage.ts";
 
 /** Verbs that print their own usage for `--help`. */
@@ -2224,10 +2225,26 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
     });
     const forced = values.force ? " (forced)" : "";
     process.stdout.write(`darius worklog set-stage: ${threadId} → ${stage}${forced}\n`);
+    if (stage === "committed") prunePendingFor(trackerRoot, worklogPath, threadId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`darius worklog set-stage: ${message}\n`);
     process.exit(err instanceof StageRefusal ? err.exitCode : 1);
+  }
+}
+
+/**
+ * After `set-stage committed` (0.102.0): the thread's artifacts are in the
+ * commit, so their `.pending-sync` lines go. Fails soft: the stamp is written.
+ */
+function prunePendingFor(trackerRoot: string, worklogPath: string, threadId: string): void {
+  try {
+    const thread = parseWorklogMarkdown(readFileSync(worklogPath, "utf-8")).threads.find((t) => t.threadId === threadId);
+    if (thread === undefined) return;
+    const removed = prunePendingSync(trackerRoot, threadArtifactPaths(thread, projectRootOf(trackerRoot)));
+    if (removed > 0) process.stdout.write(`darius worklog set-stage: removed ${removed} line(s) from .pending-sync\n`);
+  } catch {
+    // The drift ledger is advice; a failure here never undoes the stamp.
   }
 }
 

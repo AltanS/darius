@@ -18,13 +18,13 @@ const USAGE: Record<string, string[]> = {
   add: [
     "Usage: darius add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]",
     `       darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN|NN-name>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
-    "  Scaffolded Commands fail on purpose. Replace them with real checks.",
+    "  Scaffolded Commands fail on purpose. Replace them with real checks. Keep a spec to at most 5 checklist items.",
     "  --depends-on takes a path such as M2-name/01-spec.md, a bare number such as 02, or a file name without .md such as 02-name, for a spec of this milestone.",
   ],
   "add milestone": ["Usage: darius add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]"],
   "add spec": [
     `Usage: darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN|NN-name>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
-    "  Scaffolded Commands fail on purpose. Replace them with real checks.",
+    "  Scaffolded Commands fail on purpose. Replace them with real checks. Keep a spec to at most 5 checklist items.",
     "  --manual scaffolds operator decisions instead, and needs a named owner and an expiry.",
     "  --depends-on takes a path such as M2-name/01-spec.md, a bare number such as 02, or a file name without .md such as 02-name, for a spec of this milestone.",
   ],

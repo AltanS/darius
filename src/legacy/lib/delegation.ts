@@ -57,6 +57,11 @@ export type DelegationInput = {
    *  out-of-domain. Agents follow this hint in `next_agent` of their return.
    *  Must match shape: /^[a-z0-9-]+(:[a-z0-9-]+)?$/, see AGENT_NAME_RE */
   out_of_domain_hint?: string;
+
+  /** Optional (0.102.0): the most tool calls the agent may spend. At the
+   *  budget it appends a `Budget:` note and returns `status: blocked` with
+   *  notes that start with `turn_budget:`. A positive integer. */
+  turn_budget?: number;
 };
 
 export type VerificationItem = {
@@ -148,6 +153,9 @@ export function validateInput(raw: unknown): ValidationResult {
   }
   if (v.out_of_domain_hint !== undefined && (typeof v.out_of_domain_hint !== "string" || !AGENT_NAME_RE.test(v.out_of_domain_hint))) {
     errors.push("out_of_domain_hint: must be a valid agent name (e.g. 'plugin:agent' or 'bare-name')");
+  }
+  if (v.turn_budget !== undefined && !(typeof v.turn_budget === "number" && Number.isInteger(v.turn_budget) && v.turn_budget > 0)) {
+    errors.push("turn_budget: must be a positive integer when present");
   }
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
