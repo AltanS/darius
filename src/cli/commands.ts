@@ -40,6 +40,7 @@ import { treeCommand } from "./tree.ts";
 import { tuiCommand } from "./tui.ts";
 import { updateCommand } from "./update.ts";
 import { vigilCommand } from "./vigil.ts";
+import { workCommand } from "./work.ts";
 
 const COMMANDS: readonly Command[] = [
   dueCommand,
@@ -70,6 +71,7 @@ const COMMANDS: readonly Command[] = [
   tuiCommand,
   updateCommand,
   vigilCommand,
+  workCommand,
 ];
 
 /** Registers every command above. src/cli.ts calls this once, at startup. */

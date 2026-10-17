@@ -132,7 +132,12 @@ export interface SpecCheckResult {
   reviewRequired: boolean;
   /** The spec's `counsel:` stamp, or null. */
   counsel: string | null;
+  /** Added field (0.102.0): advice that never blocks, such as a spec with too many items. */
+  warnings: string[];
 }
+
+/** A spec with more checklist items than this (not skipped) gets a warning (0.102.0). */
+export const SPEC_ITEM_LIMIT = 5;
 
 /** The parts of the vendored legacy CLI that spec check reuses. */
 export interface SpecGrammar {
@@ -338,6 +343,14 @@ function commandProblems(name: string, item: LegacyItem, grammar: SpecGrammar): 
   const absolute = grammar.absolutePathsIn(command);
   if (absolute.length > 0) problems.push(`${name}: the Command names an absolute path (${absolute.join(", ")}); use a path relative to the repo root`);
   return problems;
+}
+
+/** The warnings of a spec body: more than SPEC_ITEM_LIMIT items that are not skipped. Never a problem. */
+function sizeWarnings(body: string, grammar: SpecGrammar): string[] {
+  const fencedItems = fencedItemIndexes(body);
+  const open = grammar.parseChecklist(body).filter((item) => !fencedItems.has(item.index) && item.state !== "skipped");
+  if (open.length <= SPEC_ITEM_LIMIT) return [];
+  return [`${String(open.length)} items; split specs over ${String(SPEC_ITEM_LIMIT)} items`];
 }
 
 function checkItems(body: string, grammar: SpecGrammar): string[] {
@@ -642,6 +655,7 @@ export function checkSpecText(text: string, specPath: string, trackerRoot: strin
     reviewGate: gate,
     reviewRequired: risk === "high" && gate === "auto",
     counsel: scalar(data["counsel"]),
+    warnings: sizeWarnings(body, grammar),
   };
 }
 

@@ -92,7 +92,7 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
 - A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file with its reason; do not fix it.
 - A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.
-- The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself, not a worker.
+- The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself (at most 5 items each), not a worker.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first.
 - In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
 - Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
@@ -135,7 +135,7 @@ A snapshot is a dated tar.gz of this host's store, in a local folder and optiona
 - Settings: \`snapshot config set <key> <value>\` and \`unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
 - Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
-- Exit 1: refused. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
+- Exit 3 from a snapshot verb: the bucket could not be reached; the local snapshot is fine.
 - \`darius restore\` only when the operator asks. Other hosts: \`snapshot config push\`.
 
 ## Example

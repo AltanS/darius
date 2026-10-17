@@ -156,14 +156,14 @@ test("mark and verify-item refusals end with the exact command", { skip: NO_GIT 
   refusedWithNext(d(host, ["verify-item", "M1-alpha/03-manual.md", "0"], repo.dir), 'darius mark M1-alpha/03-manual.md 0 --verified --evidence "', "no pair");
 });
 
-test("spec check lists its next command on a failing spec; the JSON has no new field", { skip: NO_GIT }, () => {
+test("spec check lists its next command on a failing spec; the JSON adds only warnings (0.102.0)", { skip: NO_GIT }, () => {
   const bad = join(repo.tree, "M1-alpha", "04-bad.md");
   writeFileSync(bad, specText("Bad").replace("  - Command: `test -f out.txt`\n  - Expected: `exit 0`\n", ""));
   const text = d(host, ["spec", "check", "M1-alpha/04-bad.md"], repo.dir);
   assert.equal(text.code, 1);
   assert.equal(last(text.stdout), "next: fix the problems above, then run: darius spec check M1-alpha/04-bad.md");
   const json = JSON.parse(d(host, ["spec", "check", "M1-alpha/04-bad.md", "--json"], repo.dir).stdout);
-  assert.deepEqual(Object.keys(json).toSorted(), ["counsel", "ok", "problems", "reviewGate", "reviewRequired", "risk", "riskReasons"]);
+  assert.deepEqual(Object.keys(json).toSorted(), ["counsel", "ok", "problems", "reviewGate", "reviewRequired", "risk", "riskReasons", "warnings"]);
 });
 
 test("counsel-gate with a missing spec or transcript names the tracker-relative form", { skip: NO_GIT }, () => {

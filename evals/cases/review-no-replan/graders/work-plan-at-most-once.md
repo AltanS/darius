@@ -1,17 +1,17 @@
 ---
-type: tool_used
-tool: Skill
-input_match: 'work-plan'
-min: 0
-max: 1
+type: regex
+pattern: '(?:"command":"[^"\n]*darius work plan|"skill":"[^"\n]*work-plan")[^\n]*"parent_tool_use_id":null(?:(?!darius worklog dispatch|set-stage \S+ dispatched)[\s\S])*(?:"command":"[^"\n]*darius work plan|"skill":"[^"\n]*work-plan")[^\n]*"parent_tool_use_id":null'
+target: trace
+match: not_contains
 ---
-EXPECTED TO FAIL on the current skills. This is the point of the case.
+The loop plans at most once before it dispatches. work-plan returns `review_required` for the
+high-risk spec with the tasks prepared. The driver runs the reviewer and the gate, and on `ready`
+dispatches from the saved tasks. A second plan before the dispatch would repeat the commit-first
+gate, `next` and the spec check for no new information. A plan after the commit is the normal
+next round of the loop, so it is allowed.
 
-work-plan returns `review_required` for the high-risk spec. The driver runs the reviewer and the
-gate. Then `skills/work.md` says "re-invoke work-plan", so the plan runs a second time. That second
-run repeats the commit-first gate, `next` and the spec check, and costs a forked sonnet run for
-no new information. The fix lets the driver go on from the gate's STATUS without a second plan,
-or lets the second plan skip what it already did. When that lands, this grader passes with no edit.
-
-The match is on the Skill input, which holds the skill name (`darius:darius-work-plan` or
-`darius-work-plan`). The first skill call is `darius-work`, which does not match `work-plan`.
+A plan is a main-thread Bash call that runs `darius work plan`, or a main-thread Skill call of
+`darius-work-plan`. Both count together. Each trace line is one message, and a main-thread message
+has `"parent_tool_use_id":null`, so the `darius work plan` call inside a forked `darius-work-plan`
+is not counted twice. The pattern matches two such plans with no dispatch between them; it must
+not match.

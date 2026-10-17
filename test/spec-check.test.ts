@@ -266,7 +266,7 @@ test("spec check exit codes and JSON shape, under both runtimes", () => {
     const ok = cli(["spec", "check", ".tracker/M1-t/01-ok.md", "--json"], root, runtime);
     assert.equal(ok.code, 0, `${runtime}: ${ok.stderr}`);
     const okJson = JSON.parse(ok.stdout);
-    assert.deepEqual(Object.keys(okJson).toSorted(), ["counsel", "ok", "problems", "reviewGate", "reviewRequired", "risk", "riskReasons"]);
+    assert.deepEqual(Object.keys(okJson).toSorted(), ["counsel", "ok", "problems", "reviewGate", "reviewRequired", "risk", "riskReasons", "warnings"]);
     assert.equal(okJson.ok, true);
     assert.equal(okJson.risk, "low");
     assert.equal(okJson.reviewGate, "off");

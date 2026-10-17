@@ -11,6 +11,8 @@
  * marker (src/legacy/lib/tracker-root.ts); the checkout has no `.tracker`.
  *
  * Write rule: `hook-drift` writes `.tracker/.pending-sync` and nothing else.
+ * `prunePendingSync` removes lines from it: `worklog set-stage committed`
+ * calls it for the artifacts of the committed thread (0.102.0).
  * `hook-stop` writes no file of its own; the bounce budget it spends lives in
  * `.tracker/.loop-bounces.json`, which `runLoopCheck` keeps (the same file the
  * shell gate reached through `darius loop-check --bounce`).
@@ -222,6 +224,23 @@ function logPending(tracker: string, rel: string): boolean {
   if (lines.includes(rel)) return false;
   appendFileSync(pending, `${rel}\n`);
   return true;
+}
+
+/**
+ * Removes the lines of `<tracker>/.pending-sync` that name one of `paths`
+ * (repo-relative), and returns how many it removed. A file that is not there
+ * stays absent. A committed thread's artifacts are in the commit now, so they
+ * are no longer drift (0.102.0).
+ */
+export function prunePendingSync(tracker: string, paths: readonly string[]): number {
+  const pending = join(tracker, ".pending-sync");
+  if (paths.length === 0 || !existsSync(pending)) return 0;
+  const drop = new Set(paths);
+  const lines = readFileSync(pending, "utf8").split("\n").filter((line) => line !== "");
+  const kept = lines.filter((line) => !drop.has(line));
+  if (kept.length === lines.length) return 0;
+  writeFileSync(pending, kept.length === 0 ? "" : `${kept.join("\n")}\n`);
+  return lines.length - kept.length;
 }
 
 /** What the drift check does for one PostToolUse payload. Returns the path it logged, or null. */
