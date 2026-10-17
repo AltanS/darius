@@ -29,7 +29,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { checkSpecFile, loadSpecGrammar, type RiskReason } from "../core/spec-check.ts";
-import { resolveTrackerRoot, resolveTreeArg, type TrackerWhere } from "../core/tracker-root.ts";
+import { resolveTrackerRoot, resolveTreeArg, specKey, type TrackerWhere } from "../core/tracker-root.ts";
 import {
   clip,
   firstLine,
@@ -166,20 +166,27 @@ function treeHere(verb: string): Extract<TrackerWhere, { trackerRoot: string }> 
   return where;
 }
 
-/** True when two spec references name the same file. */
-function sameSpec(a: string, b: string): boolean {
+/**
+ * The spec key of a reference (`specKey` in src/core/tracker-root.ts): the
+ * tracker-relative path, whichever form names the spec. A bare name or a path
+ * that exists from the cwd resolves to the file first.
+ */
+function keyOf(spec: string): string {
   const cwd = process.cwd();
-  return resolveTreeArg(a, cwd) === resolveTreeArg(b, cwd);
+  const where = resolveTrackerRoot(cwd);
+  if (where.mode === "none") return spec.trim();
+  const resolved = specKey(resolveTreeArg(spec, cwd, where), where);
+  return existsSync(join(where.trackerRoot, resolved)) ? resolved : specKey(spec, where);
 }
 
-/**
- * The spec name the work verbs hand on: tracker-relative in store mode, and
- * `.tracker/...` in git mode, the one form every git-mode verb reads back
- * (`set-stage verified` resolves a thread's spec against the checkout).
- */
-function specName(where: Extract<TrackerWhere, { trackerRoot: string }>, spec: string): string {
-  const absolute = resolveTreeArg(spec, process.cwd());
-  return relative(where.mode === "store" ? where.trackerRoot : where.checkout, absolute).split("\\").join("/");
+/** True when two spec references name the same spec, in any form a thread or a caller uses. */
+function sameSpec(a: string, b: string): boolean {
+  return keyOf(a) === keyOf(b);
+}
+
+/** The spec name the work verbs hand on: the spec key, tracker-relative in both modes. */
+function specName(spec: string): string {
+  return keyOf(spec);
 }
 
 /** `<milestone>/_counsel/<spec-slug>.md` below the tree, where the review transcript lives. */
@@ -527,7 +534,7 @@ async function runPlan(args: ParsedArgs): Promise<number> {
 
   const listing = childJson<SpecListing[]>(runDarius(["list", "specs", "--json", ...sessionArgs(state.session)]), "list specs");
   const picked = candidateSpecs(state, next, listing, batch);
-  for (const pick of picked) pick.spec = specName(where, pick.spec);
+  for (const pick of picked) pick.spec = specName(pick.spec);
   const checked = await checkCandidates(state, picked, override);
   if ("stop" in checked) {
     const { status, ...rest } = checked.stop;

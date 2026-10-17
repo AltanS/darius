@@ -21,6 +21,7 @@ import {
   repoStylePath,
   resolvePathArg,
   resolveTreeRef,
+  specKey,
 } from "../lib/tracker-root.ts";
 import { canonicalSpecRef } from "../lib/session-claims.ts";
 import { toLedgerSpecPath } from "../lib/verification/ledger.ts";
@@ -88,6 +89,39 @@ describe("store mode (the router set the override)", () => {
     expect(resolvePathArg("../.tracker/M1-alpha/01-one.md", join(checkout, "src"))).toBe(file);
     writeFileSync(join(checkout, "README.md"), "# readme\n");
     expect(resolvePathArg("README.md", checkout)).toBe(join(checkout, "README.md"));
+  });
+});
+
+describe("specKey", () => {
+  const FORMS = ["M1-alpha/01-one.md", ".tracker/M1-alpha/01-one.md", "./M1-alpha/01-one.md", "./.tracker/M1-alpha/01-one.md", " M1-alpha/01-one.md "];
+
+  it("gives one tracker-relative key in store mode", () => {
+    storeMode();
+    const file = join(tree, "M1-alpha", "01-one.md");
+    for (const form of [...FORMS, file, join(checkout, ".tracker", "M1-alpha", "01-one.md")]) {
+      expect(specKey(tree, form)).toBe("M1-alpha/01-one.md");
+    }
+  });
+
+  it("gives the same key in git mode, and resolves a tracker-relative thread spec to its file", () => {
+    const repo = join(root, "repo");
+    const gitTree = join(repo, ".tracker");
+    mkdirSync(join(gitTree, "M1-alpha"), { recursive: true });
+    const file = join(gitTree, "M1-alpha", "01-one.md");
+    writeFileSync(file, "---\nupdated: 2026-10-08\n---\n# One\n");
+    for (const form of [...FORMS, file, "M1-alpha\\01-one.md"]) {
+      expect(specKey(gitTree, form)).toBe("M1-alpha/01-one.md");
+    }
+    // The checkout form resolved before; the tracker-relative form is new.
+    expect(resolveTreeRef(gitTree, ".tracker/M1-alpha/01-one.md")).toBe(file);
+    expect(resolveTreeRef(gitTree, "M1-alpha/01-one.md")).toBe(file);
+    expect(resolveTreeRef(gitTree, "M1-alpha/gone.md")).toBe(join(repo, "M1-alpha", "gone.md"));
+    expect(resolveTreeRef(gitTree, "../outside.md")).toBe(join(root, "outside.md"));
+  });
+
+  it("keeps a reference that names nothing in the tree", () => {
+    storeMode();
+    expect(specKey(tree, "/somewhere/else.md")).toBe("/somewhere/else.md");
   });
 });
 

@@ -234,11 +234,33 @@ export function missingPathMessage(arg: string, kind: string, cwd: string = proc
 }
 
 /**
+ * The one key of a spec: the tracker-relative path with `/` separators and no
+ * `.tracker/` prefix (`M1-x/01-y.md`), whichever form names it: `M1-x/01-y.md`,
+ * `.tracker/M1-x/01-y.md`, either with `./` or `../` before it, or an absolute
+ * path inside the tree or through the checkout. A reference that names
+ * nothing in the tree comes back trimmed, with `/` separators. Every place
+ * that matches a thread, claim or ledger line to a spec compares these keys.
+ * Stored forms are never rewritten: an old thread keeps `.tracker/...` and
+ * still matches.
+ */
+export function specKey(trackerRoot: string, ref: string): string {
+  const trimmed = ref.trim();
+  const checkout = isStoreTree(trackerRoot) ? (storeTreeOverride()?.checkoutRoot ?? null) : dirname(resolve(trackerRoot));
+  return (trackerRelative(trimmed, trackerRoot, checkout) ?? trimmed).split("\\").join("/");
+}
+
+/**
  * The absolute file a stored reference names (a thread's `spec:`, a
- * `depends_on` entry): relative to the checkout in git mode, as before; in
- * store mode any of the forms `resolvePathArg` takes, read from the checkout.
+ * `depends_on` entry). Git mode: relative to the checkout, as before, and
+ * when no such file exists, the spec key read from the tree (a thread that
+ * names `M1-x/01-y.md`). Store mode: any of the forms `resolvePathArg` takes,
+ * read from the checkout.
  */
 export function resolveTreeRef(trackerRoot: string, ref: string): string {
   if (isStoreTree(trackerRoot)) return resolvePathArg(ref, projectRootOf(trackerRoot));
-  return isAbsolute(ref) ? ref : resolve(dirname(resolve(trackerRoot)), ref);
+  const fromCheckout = isAbsolute(ref) ? ref : resolve(dirname(resolve(trackerRoot)), ref);
+  if (existsSync(fromCheckout)) return fromCheckout;
+  const key = specKey(trackerRoot, ref);
+  const inTree = key === "" || isAbsolute(key) || key.startsWith("..") ? null : join(resolve(trackerRoot), key);
+  return inTree !== null && existsSync(inTree) ? inTree : fromCheckout;
 }
