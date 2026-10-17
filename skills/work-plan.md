@@ -55,18 +55,10 @@ Recognized flags:
      The driver routes this to `/darius-enrich` to fix the spec, then re-plans. The checks are: every checklist item has a `Command:` and an `Expected:` in the verify grammar, or is manual (`Expected: manual (...)` or a shell no-op Command) with a `- Manual: <reason>` line; every `depends_on` target exists; a high-risk spec has a `## Rollback` section with text.
    - **`reviewRequired: false`** (low risk, or `review_gate: off`) → no review; proceed.
    - **`reviewRequired: true`** → read `counsel`, the spec's stamp:
-     - `<ISO>` or `overridden` → a review stamp exists; proceed. The stamp is tied to the spec text, and `spec check` does not see a later edit. If `worklog dispatch` later refuses with "changed since its review", return `STATUS: review_required` for that spec.
+     - `<ISO>` or `overridden` → a review stamp exists; proceed. The stamp is tied to the spec text, and `spec check` does not see a later edit. If `worklog dispatch` later refuses with "changed since its review", treat the spec as **no stamp**.
      - `rejected` (no `--override`) → return `STATUS: blocked / REASON: review rejected / SPEC: {path} / TRANSCRIPT: {path}`. The driver classifies it (see `/darius-work` **Review Handling**).
      - `exhausted` (no `--override`) → return `STATUS: counsel_exhausted` and run nothing. Only `--override "<reason>"` clears it.
-     - **no stamp** → the review must run, but spawning the reviewer belongs to the driver, not this forked skill. Compose a self-contained brief (goal, approach, tasks, verification, dependencies, rollback, and the files and code the spec names), readable without the spec. Return immediately:
-       ```
-       STATUS: review_required
-       SPEC: {path}
-       RISK_REASONS:
-         - {pattern} ({class}) line {line}: {text}
-       BRIEF: |
-         {the composed brief}
-       ```
+     - **no stamp** → the review must run, but spawning the reviewer belongs to the driver, not this forked skill. Do NOT return yet. Record it as "needs review" with its `riskReasons`, compose a self-contained brief (goal, approach, tasks, verification, dependencies, rollback, and the files and code the spec names), readable without the spec. Go on to steps 4 to 7 for it. Step 8 returns `review_required`.
    - **`--override "<reason>"`**: skip the review for this spec with the CLI:
      `!darius counsel-gate --spec <spec-path> --override "<reason>"`
      It stamps the spec and logs the reason. Refuse without a non-empty reason. Never write `counsel:`, `counsel_override:` or `counsel: addressed` into frontmatter by hand: dispatch refuses a stamp the CLI did not write.
@@ -96,6 +88,8 @@ Recognized flags:
    Surface the selection to the user: include a visible line in the TASKS output: `AGENT_SELECTION: <invocable>, <one-line reason why this agent's description matched>`.
 
 8. **Return structured result**:
+
+   If a selected spec is "needs review", return `STATUS: review_required` instead of `ready`, plus `SPEC`, `RISK_REASONS` (`- {pattern} ({class}) line {line}: {text}`) and `BRIEF: |` before the usual `TASKS:` block. In batch mode, name the first such spec. The driver reviews, then dispatches from `TASKS`.
 
    Single-task:
    ```
