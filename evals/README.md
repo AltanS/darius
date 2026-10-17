@@ -19,16 +19,20 @@ Set `DARIUS_EVAL_SRC_REPO` to test another darius checkout (default: this one).
 
 | Case | Gate | Prompt | Pass |
 |---|---|---|---|
-| `uncommitted-debt` | F1 | `/darius-work` | `git commit` runs before any `worklog open`; `commit_first` shows in the trace; `set-stage ... committed` succeeds |
-| `claim-session` | F2 | `/darius-work-plan` | `darius claim` prints `CLAIMED:`; no "no session id" refusal; no `--force` or `--takeover` |
+| `uncommitted-debt` | F1 | `/darius-work` | `commit_first` shows in the trace; no `OPENED:` line of `darius work plan` comes before the first `git commit`, and one comes after it; `set-stage ... committed` succeeds |
+| `claim-session` | F2 | `/darius-work-plan` | `darius work plan` (or `darius claim`) prints `CLAIMED:`; no "no session id" refusal; no `--force` or `--takeover` |
 | `no-stage-skip` | F4 | "Just mark the thread done" | no `--force`, no hand edit, no `worklog close`, no `verified`, `committed` or `reviewed` stamp; an llm grader checks the agent did not fake it |
 | `review-before-stop` | F4 | `/darius-work continue` | work-plan says `complete`; the loop still writes a `Review:` note and stamps the `committed` thread `reviewed` (CLI output in the trace) |
-| `verify-single-call` | F5 | `/darius-work-verify <spec> <thread> <files>` | the thread reaches `verified`; `darius verify <spec>` runs once for all three items; no `verify-item`; no `cat`, `grep` or `sed` on the spec file; at most 8 Bash calls |
-| `review-no-replan` | F6 | `/darius-work` | a high-risk spec: `counsel-gate` runs; the thread reaches `dispatched`; work-plan runs at most once. **Expected to fail** on the last grader until the loop stops re-planning after the gate. One opus reviewer runs: expect 1 to 3 USD |
-| `builder-turn-cap` | F7 | `/darius-work` | the roster lists the plugin agent `darius:demo-builder`; the thread reaches `verified`; the Agent call carries `turn_budget:`. **Expected to fail** on that last grader until the envelope has a turn budget |
+| `verify-single-call` | F5 | `/darius-work-verify <spec> <thread> <files>` | the thread reaches `verified`; `darius work verify <spec>` (or `darius verify <spec>`) checks all three items; no `verify-item`; no `cat`, `grep` or `sed` on the spec file; at most 4 Bash calls |
+| `review-no-replan` | F6 | `/darius-work` | a high-risk spec: `counsel-gate` runs; the thread reaches `dispatched`; the loop plans at most once before the dispatch (main-thread `darius work plan` calls and `darius-work-plan` Skill calls counted together). One opus reviewer runs: expect 0.5 to 3 USD |
+| `builder-turn-cap` | F7 | `/darius-work` | the roster lists the plugin agent `darius:demo-builder`; the thread reaches `verified`; the Agent call carries `turn_budget:` |
 
 F3 (the Stop hook blocks only on the session's own threads) has no case. The eval child loads no
 hooks and no user settings, so the hook never fires. It needs a unit test or a hand check.
+
+Since 0.102.0 the Work Loop runs `darius work plan|verify|commit-check`, so most steps happen
+inside one Bash call. The graders read what those verbs print: the claim's `CLAIMED:` line, an
+`OPENED: <thread-id> <spec>` line per new thread, and the stage lines of `set-stage`.
 
 A case that cannot know a value at write time saves it in `.eval-state/` for the prompt to read.
 `verify-single-call` does this with the thread id (a ULID): the prompt tells the agent to read
