@@ -231,17 +231,20 @@ test("pendingStarts lists the last 24 hours, newest first, for one project or al
   process.env.DARIUS_STATE_DIR = join(dir, "state");
   try {
     const log = logFile(STARTED_TEXT);
-    const first = recordPending(input({ project: "alpha", at: "2026-10-15T09:00:00.000Z", log, ritual: "daily" }));
-    const second = recordPending(input({ project: "beta", at: "2026-10-15T09:30:00.000Z", log, ritual: "daily" }));
+    // Times relative to the clock: a write compacts requests older than 24 hours by the real time.
+    const base = Date.now() - 60 * 60_000;
+    const at = (offsetMs: number): string => new Date(base + offsetMs).toISOString();
+    const first = recordPending(input({ project: "alpha", at: at(0), log, ritual: "daily" }));
+    const second = recordPending(input({ project: "beta", at: at(30 * 60_000), log, ritual: "daily" }));
     const views: string[] = [];
     const view = (name: string): LedgerLine[] => {
       views.push(name);
-      return name === "beta" ? [{ ...ledgerLine("run.started", "web:altan", "2026-10-15T09:30:05.000Z", { item: "ritual/daily", run: CHILD, follow_up_of: PARENT }), project: "beta" }] : [];
+      return name === "beta" ? [{ ...ledgerLine("run.started", "web:altan", at(30 * 60_000 + 5_000), { item: "ritual/daily", run: CHILD, follow_up_of: PARENT }), project: "beta" }] : [];
     };
-    const all = pendingStarts(null, view, new Date("2026-10-15T10:00:00.000Z"));
+    const all = pendingStarts(null, view, new Date(at(60 * 60_000)));
     assert.deepEqual(all.map((one) => [one.id, one.state]), [[second, "started"], [first, "lost"]]);
-    assert.deepEqual(pendingStarts("alpha", view, new Date("2026-10-15T10:00:00.000Z")).map((one) => one.id), [first]);
-    assert.deepEqual(pendingStarts("alpha", view, new Date("2026-10-17T10:00:00.000Z")), [], "older than 24 hours");
+    assert.deepEqual(pendingStarts("alpha", view, new Date(at(60 * 60_000))).map((one) => one.id), [first]);
+    assert.deepEqual(pendingStarts("alpha", view, new Date(at(49 * 60 * 60_000))), [], "older than 24 hours");
     assert.deepEqual(pendingStarts("nope", view), []);
   } finally {
     process.env.DARIUS_STATE_DIR = join(sandbox, "state");
