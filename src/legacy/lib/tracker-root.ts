@@ -17,7 +17,7 @@
  * to the checkout (`.tracker/M1-x/01-y.md`).
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const TRACKER_ROOT_ENV = "DARIUS_TRACKER_ROOT";
@@ -121,22 +121,86 @@ function afterTrackerSegment(path: string): string | null {
 }
 
 /**
- * The absolute file a path argument names. Git mode: relative to `cwd`, as
- * always. Store mode accepts three forms:
+ * The tracker-relative path (`M1-x/01-y.md`, `""` for the root) a path
+ * argument names, or null when it is an absolute path outside the tree.
+ * Takes the tracker-relative form, the `.tracker/` form (also with `./`,
+ * `../` or an absolute checkout path before it) and an absolute tree path.
+ */
+export function trackerRelative(arg: string, trackerRoot: string, checkoutRoot: string | null): string | null {
+  const trimmed = arg.trim();
+  if (isAbsolute(trimmed)) {
+    const direct = inside(resolve(trackerRoot), resolve(trimmed));
+    if (direct !== null) return direct;
+    const real = inside(realOrResolved(trackerRoot), realOrResolved(trimmed));
+    if (real !== null) return real;
+    const rel = checkoutRoot === null ? null : inside(checkoutRoot, resolve(trimmed));
+    return rel === null ? null : afterTrackerSegment(rel);
+  }
+  const after = afterTrackerSegment(trimmed);
+  if (after !== null) return after;
+  const rel = trimmed.replace(/^(?:\.\/)+/u, "").replace(/\/+$/u, "");
+  return rel === "." ? "" : rel;
+}
+
+/** Folders of the tree that hold no specs. */
+const NON_SPEC_DIRS: ReadonlySet<string> = new Set(["archive", "worklog"]);
+
+/**
+ * The specs a bare file name (`01-y.md`) names: one tracker-relative path
+ * per milestone folder that holds it, sorted. Empty for a name with a `/`
+ * or without `.md`.
+ */
+export function bareSpecMatches(trackerRoot: string, name: string): string[] {
+  if (name === "" || name.includes("/") || !name.endsWith(".md")) return [];
+  const found: string[] = [];
+  try {
+    for (const entry of readdirSync(trackerRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("_") || NON_SPEC_DIRS.has(entry.name)) continue;
+      if (existsSync(join(trackerRoot, entry.name, name))) found.push(`${entry.name}/${name}`);
+    }
+  } catch {
+    return [];
+  }
+  return found.sort();
+}
+
+/** The file of tracker-relative `rel` when it exists, or the one spec a bare name names; else null. */
+function findInTree(trackerRoot: string, rel: string): string | null {
+  if (rel === "") return trackerRoot;
+  const joined = join(trackerRoot, rel);
+  if (existsSync(joined)) return joined;
+  const bare = bareSpecMatches(trackerRoot, rel);
+  return bare.length === 1 ? join(trackerRoot, bare[0] ?? rel) : null;
+}
+
+/**
+ * The absolute file a path argument names. Every verb that takes a spec,
+ * milestone or tree path comes here (0.100.3). The forms:
  *
  *   M1-x/01-y.md               tracker-relative
- *   .tracker/M1-x/01-y.md      the old link form (also `./`, `../.tracker/`,
+ *   01-y.md                    a bare name, when exactly one milestone holds it
+ *   .tracker/M1-x/01-y.md      the old form (also `./`, `../.tracker/`,
  *                              or absolute through the checkout): the prefix is stripped
- *   /abs/store/tracker/M1-x/…  an absolute store path, as is
+ *   /abs/…/M1-x/01-y.md        an absolute path inside the tree
  *
  * A relative path with no `.tracker` segment that exists from `cwd` keeps
- * that meaning; else it is read from the tree.
+ * that meaning (a repo file, for `scan`). Else it is read from the tree: the
+ * store tree in store mode, the nearest `.tracker/` in git mode. A path that
+ * names nothing comes back as a path that does not exist; the verb then
+ * says so with {@link missingPathMessage}.
  */
 export function resolvePathArg(arg: string, cwd: string = process.cwd()): string {
   const override = storeTreeOverride();
-  if (override === null) return resolve(cwd, arg);
-  const tree = override.trackerRoot;
   const trimmed = arg.trim();
+  if (override === null) {
+    const direct = resolve(cwd, trimmed);
+    if (existsSync(direct)) return direct;
+    const folder = findTrackerRoot(cwd);
+    if (folder === null) return direct;
+    const rel = trackerRelative(trimmed, folder, dirname(folder));
+    return (rel === null ? null : findInTree(folder, rel)) ?? direct;
+  }
+  const tree = override.trackerRoot;
   if (isAbsolute(trimmed)) {
     if (inside(tree, resolve(trimmed)) !== null) return resolve(trimmed);
     const checkout = override.checkoutRoot;
@@ -145,10 +209,28 @@ export function resolvePathArg(arg: string, cwd: string = process.cwd()): string
     return after === null ? resolve(trimmed) : join(tree, after);
   }
   const after = afterTrackerSegment(trimmed);
-  if (after !== null) return join(tree, after);
+  if (after !== null) return findInTree(tree, after) ?? join(tree, after);
   const fromCwd = resolve(cwd, trimmed);
   if (existsSync(fromCwd)) return fromCwd;
-  return join(tree, trimmed.replace(/^(?:\.\/)+/u, ""));
+  const rel = trimmed.replace(/^(?:\.\/)+/u, "");
+  return findInTree(tree, rel) ?? join(tree, rel);
+}
+
+/**
+ * The text after `<verb>: ` when a path argument names nothing. `kind` is
+ * the noun (`file`, `spec`). The text names the tracker-relative form it
+ * looked for, the tracker root, and the next command. A bare name that
+ * several milestones hold lists them all.
+ */
+export function missingPathMessage(arg: string, kind: string, cwd: string = process.cwd()): string {
+  const tree = findTrackerRoot(cwd);
+  if (tree === null) return `${kind} not found: ${arg.trim()} (no .tracker/ here or above)`;
+  const rel = trackerRelative(arg, tree, isStoreTree(tree) ? projectRootOf(tree) : dirname(tree)) ?? arg.trim();
+  const same = bareSpecMatches(tree, rel);
+  if (same.length > 1) {
+    return `${kind} name is ambiguous: ${rel} matches ${same.join(", ")} (tracker root ${tree})\n  next: run the same command with one of those paths`;
+  }
+  return `${kind} not found: ${rel} (tracker root ${tree}; paths are tracker-relative, e.g. M1-x/01-y.md)\n  next: darius list specs`;
 }
 
 /**

@@ -125,6 +125,16 @@ function atMs(value: string | undefined): number {
   return Number.isFinite(ms) ? ms : Number.NaN;
 }
 
+/** A ledger spec key (`.tracker/M1-x/01-y.md`) as the tracker-relative path the verbs take. */
+function displaySpec(spec: string): string {
+  return spec.replace(/^\.tracker\//u, "");
+}
+
+/** The index of the first `#3` or `#3 (fail)` entry of a list. */
+function firstIndex(entries: string[]): string {
+  return /\d+/u.exec(entries[0] ?? "")?.[0] ?? "0";
+}
+
 export type LedgerVerdict =
   | { ok: true; passing: number }
   | { ok: false; reason: string };
@@ -150,11 +160,11 @@ export function ledgerVerdict(trackerRoot: string, specPath: string, since: stri
   const spec = toLedgerSpecPath(trackerRoot, absSpec);
   const items = specItems(absSpec);
   if (items === null) {
-    return { ok: false, reason: `cannot read spec ${spec}, so no ledger line can vouch for it` };
+    return { ok: false, reason: `cannot read spec ${spec}, so no ledger line can vouch for it\n  next: darius spec check ${displaySpec(spec)}` };
   }
   const open = items.filter((item) => item.state !== "skipped");
   if (open.length === 0) {
-    return { ok: false, reason: `no passing ledger line can vouch for ${spec}: it has no checklist item that is not skipped` };
+    return { ok: false, reason: `no passing ledger line can vouch for ${spec}: it has no checklist item that is not skipped\n  next: darius spec check ${displaySpec(spec)}` };
   }
   const lines = readLedger(trackerRoot).filter((e) => e.spec === spec);
   const sinceMs = atMs(since);
@@ -183,14 +193,15 @@ export function ledgerVerdict(trackerRoot: string, specPath: string, since: stri
     }
   }
   if (failing.length > 0) {
-    return { ok: false, reason: `spec ${spec} has items whose latest ledger result failed: ${failing.join(", ")}` };
+    return { ok: false, reason: `spec ${spec} has items whose latest ledger result failed: ${failing.join(", ")}\n  next: darius verify-item ${displaySpec(spec)} ${firstIndex(failing)}` };
   }
   if (missing.length > 0) {
     return {
       ok: false,
       reason:
         `no passing ledger line for ${spec} since ${since} on items ${missing.join(", ")}. ` +
-        'Run `darius verify-item <spec> <idx>` for each (or `darius mark <spec> <idx> --verified --evidence "..."` for a manual item) first',
+        'Run `darius verify-item <spec> <idx>` for each (or `darius mark <spec> <idx> --verified --evidence "..."` for a manual item) first\n' +
+        `  next: darius verify-item ${displaySpec(spec)} ${firstIndex(missing)}`,
     };
   }
   return { ok: true, passing: open.length };

@@ -14,7 +14,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
+import { join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
 import { expandShortSpecRef, isShortSpecRef } from "./dep-ref.ts";
 import {
@@ -37,6 +37,7 @@ import { countVigilCommands } from "./vigil-health.ts";
 import type { VerificationMethod } from "./verification/ledger.ts";
 import { rebuildIndexDoc } from "./index-rebuilder.ts";
 import { todayIso, isIsoDate, parseCadence, rollByCadence } from "./dates.ts";
+import { trackerRelative } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
 // Template root (relative to THIS file's location at runtime)
@@ -1739,7 +1740,8 @@ function findMilestoneBySlug(trackerRoot: string, slug: string): string | null {
  */
 export function resolveMilestonePath(trackerRoot: string, milestoneArgRaw: string): string {
   // `.tracker/M1-x/` names the folder too (0.78.0: store mode has no `.tracker` path).
-  const milestoneArg = milestoneArgRaw.replace(/^(?:.*\/)?\.tracker\//, "").replace(/\/+$/, "") || milestoneArgRaw;
+  const fromTree = isAbsolute(milestoneArgRaw) ? trackerRelative(milestoneArgRaw, trackerRoot, null) : null;
+  const milestoneArg = fromTree || milestoneArgRaw.replace(/^(?:.*\/)?\.tracker\//, "").replace(/\/+$/, "") || milestoneArgRaw;
   // Direct match (full folder name)
   const directPath = join(trackerRoot, milestoneArg);
   if (existsSync(directPath)) return directPath;

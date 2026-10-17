@@ -242,7 +242,7 @@ describe("claim / release CLI", () => {
   it("refuses a ref that names no spec (0.76.0)", () => {
     const { exitCode, stderr } = runTracker(["claim", "scratch/not-a-spec.md"], "sessA");
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("no spec at scratch/not-a-spec.md");
+    expect(stderr).toContain("spec not found: scratch/not-a-spec.md");
     expect(existsSync(join(trackerRoot, ".session-claims.json"))).toBe(false);
   });
 

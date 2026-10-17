@@ -253,7 +253,7 @@ test("a tracker verb that fails with no .tracker/ names darius init", () => {
   const dir = repo(at, "empty");
   const result = darius(at, ["next"], dir);
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /no \.tracker\/ here or above\. Run darius init in the repo root to create one\./u);
+  assert.match(result.stderr, /has no \.darius\.toml and no \.tracker\/ above it.*cd into the repo that holds the tracker.*To start a tracker in this directory instead: darius init/u);
 });
 
 test("projectNameFrom keeps a valid dir name and turns other runs of characters into '-'", () => {
