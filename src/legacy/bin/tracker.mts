@@ -222,7 +222,7 @@ export async function main(argv: string[]): Promise<number> {
     if (!code.startsWith("ERR_PARSE_ARGS_")) throw error;
     const unknown = /^Unknown option '(--?[^']+)'/u.exec(error.message);
     const text = unknown === null ? error.message : `unknown option ${unknown[1] ?? ""}`;
-    // The usage of the verb ends the message, so the next try is the right one (0.100.3).
+    // The usage of the verb ends the message, so the next try is the right one (0.101.0).
     const usage = usageFor(argv)?.[0]?.replace(/^Usage: /u, "usage: ");
     process.stderr.write(`darius ${argv[0] ?? ""}: ${text}\n${usage === undefined ? "" : `  ${usage}\n`}`);
     return 2;
@@ -1961,7 +1961,7 @@ function runWorklogOpen(args: string[]): void {
   });
 
   // The first positional is the milestone slug (required). A tracker path of the
-  // folder (`.tracker/M1-x/`, `M1-x/`) names it too (0.100.3).
+  // folder (`.tracker/M1-x/`, `M1-x/`) names it too (0.101.0).
   const slugArg = positionals[0];
   const slug = slugArg === undefined ? undefined : (trackerRelative(slugArg, findTrackerRoot(process.cwd()) ?? process.cwd(), null) ?? slugArg);
 

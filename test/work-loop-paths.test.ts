@@ -1,5 +1,5 @@
 /**
- * One path resolver for the Work Loop verbs (0.100.3).
+ * One path resolver for the Work Loop verbs (0.101.0).
  *
  * Real transcripts showed agents running `darius show M2-x/02-y.md` in a
  * git-mode repo and getting `file not found: <cwd>/M2-x/02-y.md`, because the

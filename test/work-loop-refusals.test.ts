@@ -1,5 +1,5 @@
 /**
- * Refusals print the next command (0.100.3).
+ * Refusals print the next command (0.101.0).
  *
  * Real Work Loop transcripts showed agents that hit a refusal and then guessed
  * the fix: `worklog park` flags in four tries, `darius spec show`, a `.tracker`

@@ -175,7 +175,7 @@ function findInTree(trackerRoot: string, rel: string): string | null {
 
 /**
  * The absolute file a path argument names. Every verb that takes a spec,
- * milestone or tree path comes here (0.100.3). The forms:
+ * milestone or tree path comes here (0.101.0). The forms:
  *
  *   M1-x/01-y.md               tracker-relative
  *   01-y.md                    a bare name, when exactly one milestone holds it

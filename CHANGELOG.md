@@ -2,6 +2,24 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.101.0] - 2026-10-17
+
+### Added
+
+- A bare spec name (`02-y.md`) works wherever a spec path does, when exactly one milestone holds it. Two holders are refused, and the error lists both.
+- Every refusal of a Work Loop verb ends with a `next:` line that names the command to run next. A gate bypass (`--force`, `--takeover`, `--as-other-session`, `--override`) never appears there. It appears only on a separate `only if the user says so:` line.
+- evals: `verify-single-call`, `review-no-replan` and `builder-turn-cap`. `builder-turn-cap` fails until the delegation has a turn budget.
+
+### Changed
+
+- `darius-work-plan` opens and claims the thread before it returns `review_required`, and returns the full `TASKS` block. After `counsel-gate` says `ready`, `darius-work` dispatches from the saved `TASKS` and does not run the plan again.
+
+### Fixed
+
+- In git mode, a tracker-relative path (`M1-x/01-y.md`) is found from anywhere in the checkout, not only from the `.tracker/` folder. One resolver serves `show`, `verify`, `verify-item`, `mark`, `set-status`, `counsel-gate`, `claim`, `release`, `worklog open` and `spec check`.
+- A path that names nothing says which form the CLI expected and where the tracker root is. A directory with no tracker says so, and tells you to `cd` into the repo.
+- `darius spec show` and other unknown verbs name the nearest valid verbs.
+
 ## [0.100.2] - 2026-10-17
 
 ### Changed

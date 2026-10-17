@@ -220,7 +220,7 @@ export const NO_SESSION_MESSAGE =
 
 /**
  * The refusal of a verb that writes a claim without a session id: what is
- * missing, how to give a session, and the way out for a stuck thread (0.100.3).
+ * missing, how to give a session, and the way out for a stuck thread (0.101.0).
  * `ref` is the spec the verb was given (a placeholder when it had none).
  */
 export function noSessionRefusal(command: string, ref: string | undefined): string {
@@ -468,7 +468,7 @@ export function canonicalSpecRef(opts: { trackerRoot: string; ref: string; cwd?:
     const inside = insideTracker(trackerRoot, candidate);
     if (inside !== null) return inside;
   }
-  // A bare name (`02-y.md`) names the one spec of that name in the tree (0.100.3).
+  // A bare name (`02-y.md`) names the one spec of that name in the tree (0.101.0).
   const bare = bareSpecMatches(trackerRoot, trimmed);
   return bare.length === 1 ? (bare[0] ?? null) : null;
 }

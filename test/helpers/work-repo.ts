@@ -1,5 +1,5 @@
 /**
- * Sandboxed repos for the Work Loop tests (0.100.3): a store-mode repo and a
+ * Sandboxed repos for the Work Loop tests (0.101.0): a store-mode repo and a
  * git-mode repo, each with two milestones. Every call gets its own state and
  * config dirs under a throwaway root, so a test never reads or writes the
  * operator's real store.

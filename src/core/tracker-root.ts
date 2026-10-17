@@ -204,7 +204,7 @@ function findInTree(trackerRoot: string, rel: string): string | null {
 }
 
 /**
- * The absolute file a path argument names (0.100.3: one resolver for every
+ * The absolute file a path argument names (0.101.0: one resolver for every
  * mode). The forms: tracker-relative (`M1-x/01-y.md`), a bare name
  * (`01-y.md`, when exactly one milestone holds it), the old `.tracker/` form
  * and an absolute path inside the tree. A relative path with no `.tracker`
@@ -248,7 +248,7 @@ export function missingTreePathMessage(input: string, kind: string, cwd: string,
 }
 
 /**
- * Why `cwd` has no tracker, in one sentence with the fix (0.100.3). The case
+ * Why `cwd` has no tracker, in one sentence with the fix (0.101.0). The case
  * of an agent that runs from a directory outside the project: no marker
  * above it, or a marker of a project whose tracker lives elsewhere.
  */
