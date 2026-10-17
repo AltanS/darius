@@ -68,6 +68,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "overwrite",
   "yes",
   "runs-only",
+  "skip-commit-first",
 ]);
 
 /** Flags every command accepts: `src/cli.ts` reads them before the command runs. */

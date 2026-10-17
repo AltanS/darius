@@ -20,7 +20,7 @@ import { VERSION } from "../src/version.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 const RUNTIMES = ["node", "bun"] as const;
-const SESSION_VERBS = ["due", "finding", "init", "marker", "milestone", "ritual", "run", "spec", "tree"];
+const SESSION_VERBS = ["due", "finding", "init", "marker", "milestone", "ritual", "run", "spec", "tree", "work"];
 /** The next release adds a few lines to the generated skill; keep room under the hard limit. */
 const SKILL_HEADROOM_BYTES = 7000;
 
@@ -81,7 +81,7 @@ test("the skill names may_extra, hold_extra, marker check --resolved and marker 
   const text = darius(env, ["skill"]).stdout;
   assert.match(text, /`may_extra` and `hold_extra`/u);
   assert.match(text, /`marker check --resolved <slug>`/u);
-  assert.match(text, /; marker factor \[--write\] moves rules that rituals share into \[policies\.\*\] \|/u);
+  assert.match(text, /; marker factor \[--write\] moves shared rules into \[policies\.\*\] \|/u);
   assert.match(text, /input to the skill with `args`/u);
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });
@@ -169,7 +169,7 @@ test("the skill teaches backups: the snapshot verbs, the secret on stdin only, a
   assert.match(text, /printf %s "\$SECRET" \| darius snapshot credentials set --key-id ID/u);
   assert.match(text, /Never put the secret in a command line, a flag, or a file in the repo\./u);
   assert.match(text, /snapshot list \[--remote\]/u);
-  assert.match(text, /Exit 3: the bucket could not be reached/u);
+  assert.match(text, /Exit 3 from a snapshot verb: the bucket could not be reached/u);
 });
 
 test("install writes the file and prints its path; a second install writes nothing", () => {
