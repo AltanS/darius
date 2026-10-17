@@ -2,6 +2,24 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.102.0] - 2026-10-17
+
+### Added
+
+- `darius work plan [--batch N] [--skip-commit-first] [--override "<reason>"] [--session <id>] [--json]` does the planning steps of the Work Loop in one call: the commit-first gate, `next`, the dependency gate, `spec check`, the review stamp, the worklog context, the claim, the thread and the roster. It answers `status` (`ready`, `commit_first`, `spec_invalid`, `review_required`, `blocked`, `counsel_exhausted`, `complete`) and the tasks ready to delegate.
+- `darius work verify <spec> --thread <id> --touched <a,b> [--timeout <s>] [--json]` runs the artifact and stub scans, `verify` on the whole spec, the index rebuild, the Artifacts entry and `set-stage verified`. It answers `pass`, `fail` (exit 1, with a reason and findings) or `manual`.
+- `darius work commit-check <spec>... [--json]` lists the scoped threads, the paths to `git add`, the refusals, the `.pending-sync` warning and the `Tracker:` progress trailer. It writes nothing but the index.
+- The delegation envelope takes an optional `turn_budget`, a positive whole number; `darius delegation validate` checks it.
+- `darius spec check --json` has a `warnings` array. A spec with more than 5 items that are not skipped warns. A warning never blocks.
+
+### Changed
+
+- `/darius-work` runs the three `work` verbs in the main thread instead of the forked skills. The reviewer gets the spec path, the risk reasons and the checklist, and reads the spec itself. The envelope sends `turn_budget: 60`; a builder at its budget returns `blocked`, and the loop hands the thread on at most twice.
+- `darius-work-plan`, `darius-work-verify` and `darius-commit` are thin wrappers around the verbs (326, 320 and 330 words, from 1468, 682 and 765).
+- `worklog set-stage committed` drops the thread's artifacts from `.pending-sync`.
+- `/darius-enrich` and `add spec` say: at most 5 checklist items per spec.
+- evals: the graders read the `work` verbs. `builder-turn-cap` passes now.
+
 ## [0.101.0] - 2026-10-17
 
 ### Added
