@@ -775,7 +775,8 @@ function runNext(args: string[]): void {
       `darius next: REFUSED: every ready spec is claimed by another live session: ` +
         `${skippedClaimed.map((c) => `${c.spec} (${c.session ?? "unknown"})`).join(", ")}. ` +
         "Wait, or re-run with --force.\n" +
-        "  next: darius claim --list   (who holds them); or take one anyway: darius next --force\n",
+        "  next: darius claim --list   (who holds them)\n" +
+        "  only if the user says so: darius next --force\n",
     );
     process.exit(1);
   }
@@ -1030,7 +1031,8 @@ function runMark(args: string[]): void {
   if (override !== undefined && (override === "" || state !== "verified")) {
     process.stderr.write(
       'darius mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n' +
-        `  next: darius mark ${specPath} ${taskIdxStr} --verified --override "<why the check cannot run>" --evidence "<what was checked>"\n`,
+        `  next: darius verify-item ${specPath} ${taskIdxStr}\n` +
+        `  only if the check cannot run here (no network, missing service): darius mark ${specPath} ${taskIdxStr} --verified --override "<why it cannot run>" --evidence "<what was checked>"\n`,
     );
     process.exit(1);
   }
@@ -1064,9 +1066,8 @@ function runMark(args: string[]): void {
     process.stderr.write(
       `darius mark: REFUSED: task ${taskIndex} has a runnable check (${JSON.stringify(targetItem?.command ?? "")}). ` +
         "Run it instead:\n" +
-        `  darius verify-item ${specPath} ${taskIndex}\n` +
-        "  If it truly cannot run here, mark it with a reason and evidence:\n" +
-        `  darius mark ${specPath} ${taskIndex} --verified --override "<why it cannot run>" --evidence "<what was checked>"\n`,
+        `  next: darius verify-item ${specPath} ${taskIndex}\n` +
+        `  only if the check cannot run here (no network, missing service): darius mark ${specPath} ${taskIndex} --verified --override "<why it cannot run>" --evidence "<what was checked>"\n`,
     );
     process.exit(1);
   }
@@ -1080,7 +1081,8 @@ function runMark(args: string[]): void {
   if (override !== undefined && (evidence === undefined || evidence === "")) {
     process.stderr.write(
       `darius mark: --override needs --evidence "<what was checked, how, by whom>" too\n` +
-        `  next: darius mark ${specPath} ${taskIndex} --verified --override ${JSON.stringify(override)} --evidence "<what was checked, how, by whom>"\n`,
+        `  next: darius verify-item ${specPath} ${taskIndex}\n` +
+        `  only if the check cannot run here (no network, missing service): darius mark ${specPath} ${taskIndex} --verified --override ${JSON.stringify(override)} --evidence "<what was checked, how, by whom>"\n`,
     );
     process.exit(1);
   }
@@ -2021,6 +2023,7 @@ function runWorklogOpen(args: string[]): void {
       force: values.takeover === true,
       command: "worklog open",
       overrideFlag: "--takeover",
+      args,
     });
     if (blocked) process.exit(1);
   }
@@ -2268,6 +2271,7 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
       sessionFlag: acting.session ?? undefined,
       force: values.force,
       command: "worklog dispatch",
+      args,
     });
     if (blocked) process.exit(1);
     // The review gate (0.76.0) is not a claim: --force does not skip it.
@@ -3654,7 +3658,8 @@ function runClaim(args: string[]): void {
     process.stderr.write(
       `  That session is presumed live. Pick another spec, or re-run with --takeover ` +
         `if you know it is gone.\n` +
-        `  next: darius next   (a free spec); or, if that session is gone: darius claim ${refArg} --takeover --session ${session}\n`,
+        `  next: darius next   (a free spec)\n` +
+        `  only if the user says so: darius claim ${refArg} --takeover --session ${session}\n`,
     );
     if (values.json) {
       process.stdout.write(
@@ -3817,7 +3822,8 @@ function runRelease(args: string[]): void {
     process.stderr.write(
       `darius release: REFUSED — ${ref} is claimed by another live ${other} ` +
         `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}). Use --force to release it anyway.\n` +
-        `  next: darius release ${refArg} --force --session ${session}\n`,
+        `  next: darius claim --list   (who holds it)\n` +
+        `  only if the user says so: darius release ${refArg} --force --session ${session}\n`,
     );
     process.exit(1);
   }
@@ -3860,6 +3866,8 @@ function claimGate(opts: {
   command: string;
   /** The flag that overrides a live claim, named in the refusal (default `--force`). */
   overrideFlag?: string;
+  /** The arguments of the verb, to print the command again in the refusal. */
+  args: readonly string[];
 }): boolean {
   const { trackerRoot, specRef, sessionFlag, force, command } = opts;
   const overrideFlag = opts.overrideFlag ?? "--force";
@@ -3892,7 +3900,8 @@ function claimGate(opts: {
   process.stderr.write(
     `  Another session is working this spec on the same checkout. Pick different work, ` +
       `or re-run with ${overrideFlag}.\n` +
-      `  next: darius next   (a free spec); or run the same command again with ${overrideFlag}\n`,
+      `  next: darius next   (a free spec)\n` +
+      `  only if the user says so: darius ${command} ${opts.args.map(shellWord).join(" ")} ${overrideFlag}\n`,
   );
   return true;
 }
@@ -3921,7 +3930,8 @@ function sessionForWrite(
       process.stderr.write(
         `darius ${command}: REFUSED: --session ${fromFlag} is not this session (${env}). ` +
           "Pass --as-other-session to act for it; that is recorded.\n" +
-          `  next: darius ${command} ${args.map(shellWord).join(" ")} --as-other-session\n`,
+          `  next: run the same command without --session, so it acts for this session (${env})\n` +
+          `  only if the user says so: darius ${command} ${args.map(shellWord).join(" ")} --as-other-session\n`,
       );
       process.exit(1);
     }
@@ -3962,7 +3972,8 @@ async function reviewGateBlocks(trackerRoot: string, specRef: string, command: s
   if (check.ok) return false;
   process.stderr.write(
     `darius ${command}: REFUSED: ${check.reason}\n` +
-      `  next: darius counsel-gate <review-transcript> --spec ${spec}   (or: darius counsel-gate --spec ${spec} --override "<reason>")\n`,
+      `  next: darius counsel-gate <review-transcript> --spec ${spec}\n` +
+      `  only if the user says so: darius counsel-gate --spec ${spec} --override "<reason>"\n`,
   );
   return true;
 }

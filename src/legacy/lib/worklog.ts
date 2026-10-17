@@ -356,7 +356,10 @@ export function setStage(opts: SetStageOpts): void {
   const force = opts.force === true;
   const reason = opts.reason?.trim() ?? "";
   if (force && reason === "") {
-    throw new StageRefusal(`--force needs a non-empty --reason\n  next: darius worklog set-stage ${threadId} ${stage} --force --reason "<why>"`);
+    throw new StageRefusal(
+      `--force needs a non-empty --reason\n  next: darius worklog set-stage ${threadId} ${stage}\n` +
+        `  only if the user says so: darius worklog set-stage ${threadId} ${stage} --force --reason "<why>"`,
+    );
   }
   const noCode = opts.noCode?.trim();
   if (noCode !== undefined && (noCode === "" || stage !== "committed")) {
@@ -446,7 +449,8 @@ function checkVerified(thread: WorklogThread, trackerRoot: string): void {
   if (!thread.specPath) {
     throw new StageRefusal(
       `cannot move to verified: thread ${thread.threadId} names no spec, so no ledger line can vouch for it\n` +
-        `  next: darius worklog set-stage ${thread.threadId} verified --force --reason "<why no spec>"`,
+        `  next: darius worklog park ${thread.threadId} --reason "<why>"\n` +
+        `  only if the user says so: darius worklog set-stage ${thread.threadId} verified --force --reason "<why no spec>"`,
     );
   }
   const since = latestStamp(thread, "dispatched")?.at ?? thread.openedAt;
@@ -462,7 +466,8 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
     throw new StageRefusal(
       `cannot move to committed: ${repoRoot} is not a git checkout. ` +
         "Pass --no-git to record the stage without a commit\n" +
-        `  next: darius worklog set-stage ${thread.threadId} committed --no-git`,
+        `  next: cd into the git checkout of the project, then run the same command\n` +
+        `  only if the project has no git checkout: darius worklog set-stage ${thread.threadId} committed --no-git`,
       3,
     );
   }
@@ -513,7 +518,8 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
   if (fromSha === null) {
     throw new StageRefusal(
       `cannot move to committed: the dispatch commit ${from} is not in this checkout, so the commit range cannot be checked\n` +
-        `  next: darius worklog set-stage ${thread.threadId} committed --force --reason "<why the range cannot be checked>"`,
+        `  next: fetch or check out the branch that holds ${from}, then run the same command\n` +
+        `  only if the user says so: darius worklog set-stage ${thread.threadId} committed --force --reason "<why the range cannot be checked>"`,
       3,
     );
   }
@@ -521,7 +527,7 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
     throw new StageRefusal(
       `cannot move to committed: no commit since dispatch (${sha.slice(0, 12)}). ` +
         'Commit the work first, or pass --no-code "<reason>" for a spec that changes no code\n' +
-        `  next: darius worklog set-stage ${thread.threadId} committed --no-code "<reason>"`,
+        `  next: commit the work, then run: darius worklog set-stage ${thread.threadId} committed`,
     );
   }
   const touched = changedPaths(repoRoot, fromSha, sha);
