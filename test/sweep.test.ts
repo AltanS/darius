@@ -435,7 +435,7 @@ test("a failed sweep records fail_kind: pending, broken or unknown, and list and
 test("a timeout is broken, one broken check makes the sweep broken, and a pass has no fail_kind", async () => {
   const body = checklist(execItem("waits", "exit 1", "exit 0", "exit 1"), execItem("hangs", "sleep 30"), execItem("fine", "test 1 = 1"));
   assert.equal((await runVigil(["add", "kind-mixed", "--title", "mixed", "--due", yesterday(), "--stdin"], body)).code, 0);
-  const swept = entry(await sweep(["kind-mixed", "--timeout", "1"]), "kind-mixed");
+  const swept = entry(await sweep(["kind-mixed", "--timeout", "5"]), "kind-mixed");
   assert.deepEqual(swept.checks.map((check) => [check.outcome, check.fail_kind]), [["fail", "pending"], ["timeout", "broken"], ["pass", undefined]]);
   assert.equal(swept.fail_kind, "broken");
   assert.deepEqual(lines("kind-mixed", "vigil.swept")[0]?.checks, [

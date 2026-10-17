@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.103.0] - 2026-10-17
+
+### Added
+
+- A spec may set `turn_budget: <n>` in its frontmatter. `darius work plan --json` passes it per task as `turnBudget` (60 when absent; a bad value warns and falls back to 60). `darius-work` hands it to the builder.
+- evals: `turn-budget-continuation` proves that a builder stops at its budget, writes the `Budget:` note, and that the driver finishes the spec with fresh agents.
+
+### Changed
+
+- `darius-work` names the exact `worklog append` command for the `Budget:` note, and keeps the same budget on a continuation.
+
+### Fixed
+
+- In git mode a thread that names its spec tracker-relative (`M1-x/01-y.md`) is found by `set-stage verified`, `work plan`, `work verify` and `work commit-check`. Every place that matches a thread, claim or ledger line to a spec compares one spec key. Stored worklogs and ledger lines are not rewritten.
+- tests: the sweep timeout test allows 5 seconds, so a loaded machine no longer times out the checks that should pass or fail.
+
 ## [0.102.0] - 2026-10-17
 
 ### Added
