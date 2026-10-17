@@ -68,9 +68,9 @@ counsel_transcript: <counselTranscript>   # optional
 turn_budget: <turnBudget>
 ```
 
-Add these two lines for the builder under the envelope: "Count your tool calls. At the budget, stop: append a worklog note `Budget: done <what>, left <what>` and return `status: blocked` with notes that start with `turn_budget:`."
+Add these lines for the builder under the envelope: "Count your tool calls. After `turn_budget` calls, stop. Make one more call: `darius worklog append <thread_id> --section note --message \"Budget: done <what>, left <what>\"`. Then return `status: blocked` with notes that start with `turn_budget:`."
 
-Agents return `status: complete | blocked | out-of-domain` (+ artifacts, notes). On `out-of-domain`, re-delegate to the named `next_agent` on the same thread: run `worklog dispatch` again with the new agent. On a `turn_budget:` return, run `worklog dispatch` again on the same thread and hand a fresh agent of the same type the same envelope plus the `Budget:` note. At most 2 such continuations per thread; then park it with a reason and tell the user. For `--batch`, emit all Task calls in a single message; collect all results before Stage 3.
+Agents return `status: complete | blocked | out-of-domain` (+ artifacts, notes). On `out-of-domain`, re-delegate to the named `next_agent` on the same thread: run `worklog dispatch` again with the new agent. On a `turn_budget:` return, run `worklog dispatch` again on the same thread and hand a fresh agent of the same type the same envelope, with the same `turn_budget`, plus the `Budget:` note. At most 2 such continuations per thread; then park it with a reason and tell the user. For `--batch`, emit all Task calls in a single message; collect all results before Stage 3.
 
 ## Stage 3: Verify
 
