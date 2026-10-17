@@ -23,6 +23,7 @@ interface PlanTask {
   threadId: string;
   stage: string;
   agent: string | null;
+  turnBudget: number;
   verification: { command: string; expected: string }[];
   worklogPath: string;
 }
@@ -316,5 +317,24 @@ test("delegation validate takes an optional positive whole turn_budget", () => {
     const run = at(bad);
     assert.equal(run.code, 1, bad);
     assert.match(run.stderr, /turn_budget: must be a positive integer when present/u);
+  }
+});
+
+test("work plan passes the spec's turn_budget per task, 60 when absent, and warns on a bad value", () => {
+  const repo = makeWorkRepo(host, "store", "turn-budget");
+  const planWith = (frontmatter: string[]): Planned => {
+    writeFileSync(join(repo.tree, repo.alpha1), specWith("Budget", [runnable("out.txt")], frontmatter));
+    return plan(repo);
+  };
+  const absent = planWith([]);
+  assert.equal(absent.answer.tasks[0]?.turnBudget, 60);
+  assert.deepEqual(absent.answer.warnings, []);
+  const set = planWith(["turn_budget: 3"]);
+  assert.equal(set.answer.tasks[0]?.turnBudget, 3);
+  assert.deepEqual(set.answer.warnings, []);
+  for (const bad of ["0", "-2", "1.5", "many"]) {
+    const answer = planWith([`turn_budget: ${bad}`]).answer;
+    assert.equal(answer.tasks[0]?.turnBudget, 60, bad);
+    assert.match(answer.warnings[0] ?? "", /turn_budget must be a positive whole number/u, bad);
   }
 });

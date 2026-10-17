@@ -33,7 +33,7 @@ $ARGUMENTS
 
 Run `darius work plan --json` (add `--batch N`, 2 to 5, when the user asks for several things). It runs the commit-first gate, `next`, the dependency gate, `spec check`, the review stamp, the worklog context, the claim, the thread (opened at `planned`, or reused) and the roster. Read `status`:
 
-- `ready` → Stage 2 with `tasks[]`. Each task has `spec`, `specAbsPath`, `milestone`, `task`, `threadId`, `worklogPath`, `agent`, `verification`, `priorArtifacts`, `counselTranscript`. `context` lists the open threads of the milestone with their last note.
+- `ready` → Stage 2 with `tasks[]`. Each task has `spec`, `specAbsPath`, `milestone`, `task`, `threadId`, `worklogPath`, `agent`, `turnBudget` (60 unless the spec sets `turn_budget:`), `verification`, `priorArtifacts`, `counselTranscript`. `context` lists the open threads of the milestone with their last note.
 - `commit_first` → `specs` are verified but not committed. Do Stage 4 for them, then plan again. Never pass `--skip-commit-first` unless the user defers the commit.
 - `spec_invalid` → invoke `/darius-enrich` with `specs` and `problems`, then plan again.
 - `complete` → nothing left to plan. `pending` lists open threads that still owe a stage. A thread at `committed` still owes Stage 5: review it, log the `Review:` note, then `set-stage <thread-id> reviewed`.
@@ -65,7 +65,7 @@ verification:
     expected: <"exit 0" | stdout contains "X" | stdout matches /re/ | file exists path>
 prior_artifacts: [<paths>]
 counsel_transcript: <counselTranscript>   # optional
-turn_budget: 60
+turn_budget: <turnBudget>
 ```
 
 Add these two lines for the builder under the envelope: "Count your tool calls. At the budget, stop: append a worklog note `Budget: done <what>, left <what>` and return `status: blocked` with notes that start with `turn_budget:`."

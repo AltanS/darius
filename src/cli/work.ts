@@ -28,7 +28,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { checkSpecFile, loadSpecGrammar, type RiskReason } from "../core/spec-check.ts";
+import { checkSpecFile, loadSpecGrammar, type LegacyFrontmatter, type RiskReason } from "../core/spec-check.ts";
 import { resolveTrackerRoot, resolveTreeArg, type TrackerWhere } from "../core/tracker-root.ts";
 import {
   clip,
@@ -201,6 +201,7 @@ interface Candidate {
   milestone: string;
   task: string;
   agent: string | null;
+  turnBudget: number;
   needsReview: boolean;
 }
 
@@ -213,6 +214,7 @@ interface PlannedTask {
   stage: string;
   worklogPath: string;
   agent: string | null;
+  turnBudget: number;
   verification: { command: string; expected: string }[];
   priorArtifacts: string[];
   counselTranscript: string | null;
@@ -281,7 +283,7 @@ function planText(payload: PlanAnswer): string[] {
   for (const problem of payload.problems ?? []) lines.push(`PROBLEM: ${problem}`);
   if (payload.review !== undefined) lines.push(`REVIEW: ${payload.review.spec} transcript=${payload.review.transcriptPath}`, ...payload.review.riskReasons.map((reason) => `  risk: ${reason}`));
   for (const task of payload.tasks) {
-    lines.push(`TASK: ${task.spec} thread=${task.threadId} stage=${task.stage} agent=${task.agent ?? "(pick from AGENTS)"}`);
+    lines.push(`TASK: ${task.spec} thread=${task.threadId} stage=${task.stage} agent=${task.agent ?? "(pick from AGENTS)"} turn_budget=${String(task.turnBudget)}`);
     lines.push(`  item: ${task.task}`);
     for (const check of task.verification) lines.push(`  verify: ${check.command} -> ${check.expected}`);
   }
@@ -328,15 +330,35 @@ function isText(value: string | number | boolean | readonly string[] | DebtLine 
   return typeof value === "string";
 }
 
-/** The `agent:` frontmatter value of a spec, or null. */
-async function frontmatterAgent(specAbs: string): Promise<string | null> {
+/** The turn budget a task gets when its spec sets none. */
+const DEFAULT_TURN_BUDGET = 60;
+
+/** A spec's frontmatter, or an empty object when it cannot be read. */
+async function frontmatterOf(specAbs: string): Promise<LegacyFrontmatter> {
   try {
     const grammar = await loadSpecGrammar();
-    const value = grammar.parseFrontmatter(readFileSync(specAbs, "utf8")).data["agent"];
-    return isText(value) && value.trim() !== "" ? value.trim() : null;
+    return grammar.parseFrontmatter(readFileSync(specAbs, "utf8")).data;
   } catch {
-    return null;
+    return {};
   }
+}
+
+/** The `agent:` frontmatter value of a spec, or null. */
+function frontmatterAgent(data: LegacyFrontmatter): string | null {
+  const value = data["agent"];
+  return isText(value) && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * The `turn_budget:` frontmatter value of a spec: a positive whole number, else
+ * the default. A value that is not one adds a warning and falls back.
+ */
+function frontmatterTurnBudget(data: LegacyFrontmatter, spec: string, warnings: string[]): number {
+  const value = data["turn_budget"];
+  if (value === undefined) return DEFAULT_TURN_BUDGET;
+  if (Number.isInteger(value) && Number(value) > 0) return Number(value);
+  warnings.push(`${spec}: turn_budget must be a positive whole number, got "${String(value)}"; using ${String(DEFAULT_TURN_BUDGET)}`);
+  return DEFAULT_TURN_BUDGET;
 }
 
 /** Steps 1 and 2: the specs to plan. Specs waiting on dependencies go to `blocked`. */
@@ -419,7 +441,8 @@ async function checkCandidates(state: PlanState, picked: readonly { spec: string
         review ??= reviewInfo;
       }
     }
-    candidates.push({ ...pick, specAbsPath, agent: await frontmatterAgent(specAbsPath), needsReview });
+    const data = await frontmatterOf(specAbsPath);
+    candidates.push({ ...pick, specAbsPath, agent: frontmatterAgent(data), turnBudget: frontmatterTurnBudget(data, pick.spec, state.warnings), needsReview });
   }
   return { candidates, review };
 }
@@ -556,6 +579,7 @@ async function runPlan(args: ParsedArgs): Promise<number> {
       stage: thread.stage ?? "planned",
       worklogPath: join(where.trackerRoot, "worklog", thread.worklogFile),
       agent: pickAgent(candidate.agent, agents),
+      turnBudget: candidate.turnBudget,
       verification: view.tasks.filter(isOpenTask).flatMap((task) => (task.command !== null && task.expected !== null ? [{ command: task.command, expected: task.expected }] : [])),
       priorArtifacts: legacy.artifactPathsOf(thread.artifacts ?? [], where.checkout),
       counselTranscript: existsSync(transcript) ? transcript : null,
