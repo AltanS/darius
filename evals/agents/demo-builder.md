@@ -12,4 +12,4 @@ spec asks for. Run the verification commands in the envelope. Then answer with
 `status: complete`, the artifact paths and one line of notes. If you cannot finish, answer with
 `status: blocked` and say why.
 
-Never touch the tracker tree. Never write a secret.
+Never edit the tracker tree by hand. Write worklog notes only with `darius worklog append`. Never write a secret.

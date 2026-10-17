@@ -26,6 +26,7 @@ Set `DARIUS_EVAL_SRC_REPO` to test another darius checkout (default: this one).
 | `verify-single-call` | F5 | `/darius-work-verify <spec> <thread> <files>` | the thread reaches `verified`; `darius work verify <spec>` (or `darius verify <spec>`) checks all three items; no `verify-item`; no `cat`, `grep` or `sed` on the spec file; at most 4 Bash calls |
 | `review-no-replan` | F6 | `/darius-work` | a high-risk spec: `counsel-gate` runs; the thread reaches `dispatched`; the loop plans at most once before the dispatch (main-thread `darius work plan` calls and `darius-work-plan` Skill calls counted together). One opus reviewer runs: expect 0.5 to 3 USD |
 | `builder-turn-cap` | F7 | `/darius-work` | the roster lists the plugin agent `darius:demo-builder`; the thread reaches `verified`; the Agent call carries `turn_budget:` |
+| `turn-budget-continuation` | F8 | `/darius-work` | a spec with `turn_budget: 3` and 8 files, one Write call each: a `Budget:` note is appended through `worklog append`; the Agent tool runs 2 to 4 times and `worklog dispatch` at least twice (the continuation); no builder makes more than 4 tool calls (a regex with a back-reference on `parent_tool_use_id`); the thread reaches `verified`. Costs about 0.25 USD a run |
 
 F3 (the Stop hook blocks only on the session's own threads) has no case. The eval child loads no
 hooks and no user settings, so the hook never fires. It needs a unit test or a hand check.
