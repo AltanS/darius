@@ -14,7 +14,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { expandBareSpecNumber } from "./dep-ref.ts";
+import { expandShortSpecRef } from "./dep-ref.ts";
 import { parseHeader } from "./legacy-header.ts";
 import { trackerDirOfCheckout } from "./tracker-root.ts";
 
@@ -261,11 +261,11 @@ export function readLegacyMilestonesAt(root: string): LegacyMilestones {
   const states = new Map<string, SpecState>();
   for (const { drafts } of read) for (const draft of drafts) for (const key of draft.keys) states.set(key, draft.state);
   for (const { milestone, drafts } of read) {
-    // A bare number (`02`) names the spec with that number in the same milestone.
+    // A bare number (`02`) or a stem (`02-name`) names a spec of the same milestone.
     const files = drafts.map((draft) => draft.keys.at(-1) ?? "");
     for (const draft of drafts) {
       if (draft.deps.length === 0) continue;
-      const deps = draft.deps.map((entry) => expandBareSpecNumber(entry, files));
+      const deps = draft.deps.map((entry) => expandShortSpecRef(entry, files));
       draft.spec.dependsOn = deps.map((entry) => depSlug(entry, milestone.id));
       const unmet = deps.some((entry) => {
         const normal = entry.replace(/^\.\//u, "");

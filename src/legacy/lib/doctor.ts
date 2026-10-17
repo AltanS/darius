@@ -70,7 +70,7 @@ import { rebuildIndex } from "./tracker-writer.ts";
 import { CURRENT_SCHEMA_VERSION } from "./version.ts";
 import { discoverAgents } from "./agent-discovery.ts";
 import { hasUnhashedStamp } from "./counsel-stamp.ts";
-import { expandBareSpecNumber } from "./dep-ref.ts";
+import { expandShortSpecRef } from "./dep-ref.ts";
 import { repoStylePath, resolveTreeRef } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ export function runDoctor(opts: {
 
       const siblingFiles = specs.map((spec) => basename(spec));
       for (const dep of depsOn) {
-        const depNorm = expandBareSpecNumber(dep, siblingFiles).replace(/^\.\//, "");
+        const depNorm = expandShortSpecRef(dep, siblingFiles).replace(/^\.\//, "");
         const isResolvable =
           allSpecRelPaths.has(depNorm) ||
           allSpecRelPaths.has(basename(depNorm)) ||

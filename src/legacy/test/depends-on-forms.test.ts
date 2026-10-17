@@ -1,6 +1,6 @@
 /**
  * The `depends_on` forms a spec may use: block lists, flat inline lists
- * (`[02, 03]`) and bare sibling numbers (`02`). Nested lists stay refused,
+ * (`[02, 03]`) and bare sibling numbers (`02`) and sibling file names (`02-name`). Nested lists stay refused,
  * with a message that names the problem and shows the fix.
  */
 
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { FrontmatterParseError, parseFrontmatter } from "../lib/markdown/frontmatter.ts";
 import { readTrackerState } from "../lib/tracker-reader.ts";
 import { addMilestone, addSpec, initTracker } from "../lib/tracker-writer.ts";
-import { expandBareSpecNumber, isBareSpecNumber } from "../lib/dep-ref.ts";
+import { expandShortSpecRef, isShortSpecRef } from "../lib/dep-ref.ts";
 
 const frontmatter = (line: string) => `---\nupdated: 2026-06-10\n${line}\n---\n\nbody\n`;
 
@@ -58,21 +58,35 @@ describe("bare spec numbers", () => {
   const files = ["01-first.md", "02-second.md", "10-tenth.md", "10-twin.md"];
 
   it("detects a bare number", () => {
-    expect(isBareSpecNumber("02")).toBe(true);
-    expect(isBareSpecNumber("2")).toBe(true);
-    expect(isBareSpecNumber("02-second.md")).toBe(false);
-    expect(isBareSpecNumber("M1-x/02-second.md")).toBe(false);
+    expect(isShortSpecRef("02")).toBe(true);
+    expect(isShortSpecRef("2")).toBe(true);
+    expect(isShortSpecRef("02-second.md")).toBe(false);
+    expect(isShortSpecRef("M1-x/02-second.md")).toBe(false);
+  });
+
+  it("detects a sibling stem, and no other name", () => {
+    expect(isShortSpecRef("02-second")).toBe(true);
+    expect(isShortSpecRef("M1-x/02-second")).toBe(false);
+    expect(isShortSpecRef("second")).toBe(false);
+    expect(isShortSpecRef("02-")).toBe(false);
+  });
+
+  it("expands a sibling stem to its file, and leaves a stem with no file unchanged", () => {
+    expect(expandShortSpecRef("02-second", files)).toBe("02-second.md");
+    expect(expandShortSpecRef("10-twin", files)).toBe("10-twin.md");
+    expect(expandShortSpecRef("02-other", files)).toBe("02-other");
+    expect(expandShortSpecRef("M1-x/02-second", files)).toBe("M1-x/02-second");
   });
 
   it("expands 02 and 2 to the one file with that number", () => {
-    expect(expandBareSpecNumber("02", files)).toBe("02-second.md");
-    expect(expandBareSpecNumber("2", files)).toBe("02-second.md");
+    expect(expandShortSpecRef("02", files)).toBe("02-second.md");
+    expect(expandShortSpecRef("2", files)).toBe("02-second.md");
   });
 
   it("leaves an unknown number, an ambiguous number and a path unchanged", () => {
-    expect(expandBareSpecNumber("07", files)).toBe("07");
-    expect(expandBareSpecNumber("10", files)).toBe("10");
-    expect(expandBareSpecNumber("M1-x/02-second.md", files)).toBe("M1-x/02-second.md");
+    expect(expandShortSpecRef("07", files)).toBe("07");
+    expect(expandShortSpecRef("10", files)).toBe("10");
+    expect(expandShortSpecRef("M1-x/02-second.md", files)).toBe("M1-x/02-second.md");
   });
 });
 
@@ -124,6 +138,35 @@ describe("depends_on in a tracker", () => {
     if (result.kind !== "created") return;
     const raw = readFileSync(result.filePath, "utf-8");
     expect(raw).toContain("depends_on:\n  - M1-demo/01-first.md\n  - M1-demo/01-first.md\n");
+  });
+
+  it("a sibling stem waits on the sibling until it is Complete", () => {
+    write("01-first.md", spec("depends_on: []", " "));
+    write("02-second.md", spec("depends_on: [01-first]", " "));
+    expect(effective()["02-second.md"]).toBe("Waiting");
+
+    write("01-first.md", spec("depends_on: []", "x"));
+    expect(effective()["02-second.md"]).toBe("Not Started");
+  });
+
+  it("a sibling stem that names no file keeps the spec waiting", () => {
+    write("01-first.md", spec("depends_on: [01-gone]", " "));
+    expect(effective()["01-first.md"]).toBe("Waiting");
+  });
+
+  it("add spec --depends-on writes a tracker-relative path for a sibling stem", () => {
+    write("01-first.md", spec("depends_on: []", "x"));
+    const result = addSpec({ trackerRoot, milestoneArg: "demo", name: "Third", template: "generic", dependsOn: ["01-first"] });
+    expect(result.kind).toBe("created");
+    if (result.kind !== "created") return;
+    expect(readFileSync(result.filePath, "utf-8")).toContain("depends_on:\n  - M1-demo/01-first.md\n");
+  });
+
+  it("add spec --depends-on refuses a stem that names no file", () => {
+    write("01-first.md", spec("depends_on: []", "x"));
+    expect(() => addSpec({ trackerRoot, milestoneArg: "demo", name: "Third", template: "generic", dependsOn: ["01-gone"] })).toThrow(
+      /--depends-on 01-gone: expected a spec file named 01-gone\.md in M1-demo/u,
+    );
   });
 
   it("add spec --depends-on refuses a number that names no spec", () => {

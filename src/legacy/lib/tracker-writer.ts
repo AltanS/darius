@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
-import { expandBareSpecNumber, isBareSpecNumber } from "./dep-ref.ts";
+import { expandShortSpecRef, isShortSpecRef } from "./dep-ref.ts";
 import {
   parseFrontmatter,
   serializeFrontmatter,
@@ -273,19 +273,20 @@ export type AddSpecResult =
   | { kind: "exists"; filePath: string };
 
 /**
- * `--depends-on` values as stored paths. A bare number (`02`) becomes the
- * tracker-relative path of the spec with that number in this milestone, e.g.
+ * `--depends-on` values as stored paths. A bare number (`02`) or a stem (`02-name`) becomes the
+ * tracker-relative path of that spec in this milestone, e.g.
  * `M3-name/02-other.md`; any other value is stored as given. A number that
- * names no spec, or two, is an error: the spec would wait on nothing.
+ * names no spec (or, for a number, two) is an error: the spec would wait on nothing.
  */
 function resolveDependsOnArgs(milestonePath: string, values: readonly string[]): string[] {
   const files = readdirSync(milestonePath).filter((file) => file.endsWith(".md"));
   return values.map((value) => {
-    if (!isBareSpecNumber(value)) return value;
-    const file = expandBareSpecNumber(value, files);
+    if (!isShortSpecRef(value)) return value;
+    const file = expandShortSpecRef(value, files);
     if (file === value) {
+      const expected = /^\d+$/u.test(value.trim()) ? `exactly one spec numbered ${value}` : `a spec file named ${value}.md`;
       throw new Error(
-        `--depends-on ${value}: expected exactly one spec numbered ${value} in ${basename(milestonePath)}; pass a path such as ${basename(milestonePath)}/01-name.md`,
+        `--depends-on ${value}: expected ${expected} in ${basename(milestonePath)}; pass a path such as ${basename(milestonePath)}/01-name.md`,
       );
     }
     return `${basename(milestonePath)}/${file}`;

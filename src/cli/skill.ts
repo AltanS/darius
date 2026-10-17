@@ -88,7 +88,7 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and the checkout has no .tracker; \`darius root\` prints the tree. Spec paths are tracker-relative (\`M1-x/01-y.md\`); \`.tracker/...\` still works. None of it is in git.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first; \`onboard\` only when the operator asks.
 - Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a README or a spec file.
-- A \`depends_on\` entry is a spec path or a bare number (\`02\`, same milestone).
+- A \`depends_on\` entry is a spec path, or \`02\` or \`02-name\` for a spec of the same milestone.
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
 - A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file with its reason; do not fix it.
 - A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.

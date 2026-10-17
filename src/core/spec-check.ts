@@ -31,7 +31,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { expandBareSpecNumber, isBareSpecNumber } from "./dep-ref.ts";
+import { expandShortSpecRef, isShortSpecRef } from "./dep-ref.ts";
 import { UsageError } from "./model.ts";
 import { resolveTrackerRoot, resolveTreeArg, TRACKER_ROOT_ENV } from "./tracker-root.ts";
 
@@ -259,9 +259,9 @@ function findTrackerAbove(start: string): string | null {
 
 /** True when `dep` names an existing spec, in any of the forms the legacy reader accepts. */
 export function dependencyExists(dep: string, specPath: string, trackerRoot: string | null): boolean {
-  // A bare number (`02`) names the spec with that number in the same milestone.
-  const siblings = isBareSpecNumber(dep) ? readdirSync(dirname(specPath)) : [];
-  const normalized = expandBareSpecNumber(dep, siblings).replace(/^\.\//u, "");
+  // A bare number (`02`) or a stem (`02-name`) names a spec of the same milestone.
+  const siblings = isShortSpecRef(dep) ? readdirSync(dirname(specPath)) : [];
+  const normalized = expandShortSpecRef(dep, siblings).replace(/^\.\//u, "");
   const candidates = [resolve(dirname(specPath), normalized)];
   // `.tracker/M1-x/...` also names a file of a store tree, which has no `.tracker` parent (0.78.0).
   if (trackerRoot !== null) candidates.push(resolve(trackerRoot, normalized), resolve(dirname(trackerRoot), normalized), resolve(trackerRoot, normalized.replace(/^\.tracker\//u, "")));

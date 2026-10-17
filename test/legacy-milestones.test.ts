@@ -134,6 +134,21 @@ test("an inline depends_on list and a bare number are read: the spec waits on th
   assert.equal(short?.status, "In Progress");
 });
 
+test("a sibling file name without .md is read: the spec waits on the sibling", () => {
+  const root = checkout({
+    "M23-stem/00-README.md": "---\nname: Stem\n---\n",
+    "M23-stem/01-base.md": "---\ndepends_on: []\n---\n\n# Base\n\n- [x] a\n",
+    "M23-stem/02-next.md": "---\ndepends_on: [01-base]\n---\n\n# Next\n\n- [ ] a\n",
+    "M23-stem/03-gone.md": "---\ndepends_on: [01-base, 09-gone]\n---\n\n# Gone\n\n- [ ] a\n",
+  });
+  const [stem] = readLegacyMilestones(root).milestones;
+  const next = stem?.specs.find((spec) => spec.number === 2);
+  assert.deepEqual(next?.dependsOn, ["m23-01-base"], "a stem becomes the sibling's slug");
+  assert.notEqual(next?.status, "Waiting", "01-base is Complete");
+  const gone = stem?.specs.find((spec) => spec.number === 3);
+  assert.equal(gone?.status, "Waiting", "09-gone names no spec");
+});
+
 test("older trackers: S<n>- spec names and a README-less milestone", () => {
   const root = checkout({ "M5-old/S1-first.md": "# First\n\n- [x] a\n", "M5-old/S2-second.md": "# Second\n\n- [x] a\n" });
   const [milestone] = readLegacyMilestones(root).milestones;

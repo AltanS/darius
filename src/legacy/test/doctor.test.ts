@@ -244,5 +244,14 @@ depends_on:
       expect(dangling).toHaveLength(1);
       expect(dangling[0]!.detail).toContain("07");
     });
+
+    it("resolves a sibling file name without .md, and reports one with no file", () => {
+      writeFileSync(join(milestonePath, "01-first.md"), VALID_SPEC, "utf-8");
+      writeFileSync(join(milestonePath, "02-second.md"), INLINE_SEQUENCE_SPEC("01-first, 01-gone"), "utf-8");
+
+      const dangling = runDoctor({ trackerRoot }).findings.filter((f) => f.kind === "dangling-dep");
+      expect(dangling).toHaveLength(1);
+      expect(dangling[0]!.detail).toContain("01-gone");
+    });
   });
 });

@@ -11,7 +11,7 @@ import { parseFrontmatter } from "./markdown/frontmatter.ts";
 import { parseSpec } from "./documents/spec.ts";
 import type { SpecView, SpecStatusType } from "./documents/spec.ts";
 import { isDue, daysBetween } from "./dates.ts";
-import { expandBareSpecNumber } from "./dep-ref.ts";
+import { expandShortSpecRef } from "./dep-ref.ts";
 import { displayPath } from "./tracker-root.ts";
 
 // ---------------------------------------------------------------------------
@@ -572,8 +572,8 @@ function resolveDependencies(milestones: MilestoneEntry[]): void {
 
       // Check if any dependency is not Complete
       const unmetDeps = depsOn.filter((dep) => {
-        // A bare number (`02`) names the spec with that number in the same milestone.
-        const normalized = expandBareSpecNumber(dep, siblingFiles).replace(/^\.\//, "");
+        // A bare number (`02`) or a stem (`02-name`) names a spec of the same milestone.
+        const normalized = expandShortSpecRef(dep, siblingFiles).replace(/^\.\//, "");
         // Try exact match first, then basename-only match
         const depStatus =
           statusMap.get(normalized) ??

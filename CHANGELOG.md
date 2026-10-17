@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.100.1] - 2026-10-17
+
+### Fixed
+
+- `depends_on` resolves a sibling file name without `.md`. An entry such as `01-one-new-sheet` names the file `01-one-new-sheet.md` in the same milestone. Before, the reader, `spec check`, `doctor` and the native milestone reader all reported it as missing. A stem with no matching file, or one that matches a file of another milestone only, is still missing.
+- `add spec --depends-on 01-name` stores the tracker-relative path (`M3-name/01-name.md`), and is refused when the milestone has no such file. The help text, the generated skill rule and the enrich skill name the form.
+
 ## [0.100.0] - 2026-10-15
 
 ### Added

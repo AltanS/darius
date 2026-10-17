@@ -110,6 +110,21 @@ test("depends_on takes an inline list and bare sibling numbers", () => {
   assert.deepEqual(missing.problems, ["depends_on: 07 does not exist"]);
 });
 
+test("depends_on takes a sibling file name without .md, and not one from another milestone", () => {
+  const root = checkout();
+  mkdirSync(join(root, ".tracker", "M2-o"), { recursive: true });
+  writeFileSync(join(root, ".tracker", "M1-t", "00-base.md"), spec(GOOD_ITEM));
+  writeFileSync(join(root, ".tracker", "M2-o", "03-elsewhere.md"), spec(GOOD_ITEM));
+  const stem = check(spec(GOOD_ITEM, "name: T\ndepends_on: [00-base]"), root);
+  assert.equal(stem.ok, true, stem.problems.join("; "));
+  const inline = check(spec(GOOD_ITEM, "name: T\ndepends_on: [00-base, 02]"), root);
+  assert.deepEqual(inline.problems, ["depends_on: 02 does not exist"]);
+  const gone = check(spec(GOOD_ITEM, "name: T\ndepends_on: [00-gone]"), root);
+  assert.deepEqual(gone.problems, ["depends_on: 00-gone does not exist"]);
+  const other = check(spec(GOOD_ITEM, "name: T\ndepends_on: [03-elsewhere]"), root);
+  assert.deepEqual(other.problems, ["depends_on: 03-elsewhere does not exist"]);
+});
+
 test("a nested depends_on list fails with the block-form hint", () => {
   const result = check(spec(GOOD_ITEM, "name: T\ndepends_on: [[02]]"));
   assert.equal(result.ok, false);

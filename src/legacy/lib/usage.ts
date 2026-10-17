@@ -17,16 +17,16 @@ const USAGE: Record<string, string[]> = {
   next: ["Usage: darius next [--session <id>] [--force]"],
   add: [
     "Usage: darius add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]",
-    `       darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
+    `       darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN|NN-name>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
     "  Scaffolded Commands fail on purpose. Replace them with real checks.",
-    "  --depends-on takes a path such as M2-name/01-spec.md, or a bare number such as 02 for the spec with that number in this milestone.",
+    "  --depends-on takes a path such as M2-name/01-spec.md, a bare number such as 02, or a file name without .md such as 02-name, for a spec of this milestone.",
   ],
   "add milestone": ["Usage: darius add milestone --name <name> --slug <slug> --owner <email> [--target <date>] [--number N]"],
   "add spec": [
-    `Usage: darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
+    `Usage: darius add spec --milestone <slug> --name <name> --template <${TEMPLATES}> [--depends-on <path|NN|NN-name>...] [--agent <name>] [--manual --owner <who> --expires <YYYY-MM-DD>]`,
     "  Scaffolded Commands fail on purpose. Replace them with real checks.",
     "  --manual scaffolds operator decisions instead, and needs a named owner and an expiry.",
-    "  --depends-on takes a path such as M2-name/01-spec.md, or a bare number such as 02 for the spec with that number in this milestone.",
+    "  --depends-on takes a path such as M2-name/01-spec.md, a bare number such as 02, or a file name without .md such as 02-name, for a spec of this milestone.",
   ],
   mark: [
     'Usage: darius mark <spec-path> <task-idx> --verified|--in-progress|--blocked|--skipped|--pending [--evidence "..."] [--override "<why the check cannot run>"]',
