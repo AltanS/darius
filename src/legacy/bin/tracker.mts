@@ -171,7 +171,7 @@ import {
   formatDuration,
   claimsPath,
   TtlParseError,
-  NO_SESSION_MESSAGE,
+  noSessionRefusal,
   CLAIMS_FILENAME,
   type ClaimStatus,
   type ClaimsDoc,
@@ -222,7 +222,9 @@ export async function main(argv: string[]): Promise<number> {
     if (!code.startsWith("ERR_PARSE_ARGS_")) throw error;
     const unknown = /^Unknown option '(--?[^']+)'/u.exec(error.message);
     const text = unknown === null ? error.message : `unknown option ${unknown[1] ?? ""}`;
-    process.stderr.write(`darius ${argv[0] ?? ""}: ${text}\n`);
+    // The usage of the verb ends the message, so the next try is the right one (0.100.3).
+    const usage = usageFor(argv)?.[0]?.replace(/^Usage: /u, "usage: ");
+    process.stderr.write(`darius ${argv[0] ?? ""}: ${text}\n${usage === undefined ? "" : `  ${usage}\n`}`);
     return 2;
   }
 }
@@ -772,7 +774,8 @@ function runNext(args: string[]): void {
     process.stderr.write(
       `darius next: REFUSED: every ready spec is claimed by another live session: ` +
         `${skippedClaimed.map((c) => `${c.spec} (${c.session ?? "unknown"})`).join(", ")}. ` +
-        "Wait, or re-run with --force.\n",
+        "Wait, or re-run with --force.\n" +
+        "  next: darius claim --list   (who holds them); or take one anyway: darius next --force\n",
     );
     process.exit(1);
   }
@@ -1017,7 +1020,8 @@ function runMark(args: string[]): void {
 
   if (evidence !== undefined && evidence !== "" && state !== "verified") {
     process.stderr.write(
-      `darius mark: --evidence only applies to --verified (got --${state})\n`,
+      `darius mark: --evidence only applies to --verified (got --${state})\n` +
+        `  next: darius mark ${specPath} ${taskIdxStr} --${state}\n`,
     );
     process.exit(1);
   }
@@ -1025,7 +1029,8 @@ function runMark(args: string[]): void {
   const override = values.override?.trim();
   if (override !== undefined && (override === "" || state !== "verified")) {
     process.stderr.write(
-      'darius mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n',
+      'darius mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n' +
+        `  next: darius mark ${specPath} ${taskIdxStr} --verified --override "<why the check cannot run>" --evidence "<what was checked>"\n`,
     );
     process.exit(1);
   }
@@ -1067,13 +1072,15 @@ function runMark(args: string[]): void {
   }
   if (override !== undefined && !runnable) {
     process.stderr.write(
-      `darius mark: --override is for a runnable check; task ${taskIndex} is manual. Use --evidence "..." alone\n`,
+      `darius mark: --override is for a runnable check; task ${taskIndex} is manual. Use --evidence "..." alone\n` +
+        `  next: darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom>"\n`,
     );
     process.exit(1);
   }
   if (override !== undefined && (evidence === undefined || evidence === "")) {
     process.stderr.write(
-      `darius mark: --override needs --evidence "<what was checked, how, by whom>" too\n`,
+      `darius mark: --override needs --evidence "<what was checked, how, by whom>" too\n` +
+        `  next: darius mark ${specPath} ${taskIndex} --verified --override ${JSON.stringify(override)} --evidence "<what was checked, how, by whom>"\n`,
     );
     process.exit(1);
   }
@@ -1121,7 +1128,7 @@ function runMark(args: string[]): void {
     process.stdout.write(`darius mark: task ${taskIndex} marked as ${state} in ${specPath}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius mark: ${message}\n`);
+    process.stderr.write(`darius mark: ${message}\n  next: darius show ${specPath} --json   (the tasks and their indexes)\n`);
     process.exit(1);
   }
 }
@@ -1481,7 +1488,7 @@ function runVerify(args: string[]): void {
     view = parseSpec(raw, absPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius verify: parse error: ${message}\n`);
+    process.stderr.write(`darius verify: parse error: ${message}\n  next: darius spec check ${specPath}\n`);
     process.exit(1);
   }
 
@@ -1665,6 +1672,7 @@ function runVerify(args: string[]): void {
     for (const f of failures) {
       process.stderr.write(`  [${f.index}] ${f.label}: ${f.reason}\n`);
     }
+    process.stderr.write(`  next: fix the cause, then run: darius verify ${specPath}\n`);
   }
 
   if (failures.length > 0 || regressions.length > 0 || timeouts.length > 0) {
@@ -1720,14 +1728,15 @@ function runVerifyItem(args: string[]): void {
     view = parseSpec(raw, absPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius verify-item: parse error: ${message}\n`);
+    process.stderr.write(`darius verify-item: parse error: ${message}\n  next: darius spec check ${specPath}\n`);
     process.exit(1);
   }
 
   const item = view.checklistItems.find((i) => i.index === taskIndex);
   if (!item) {
     process.stderr.write(
-      `darius verify-item: task index ${taskIndex} not found (${view.checklistItems.length} items)\n`,
+      `darius verify-item: task index ${taskIndex} not found (${view.checklistItems.length} items; indexes start at 0)\n` +
+        `  next: darius show ${specPath} --json   (lists the tasks and their indexes)\n`,
     );
     process.exit(1);
   }
@@ -1766,7 +1775,10 @@ function runVerifyItem(args: string[]): void {
       );
       return;
     }
-    process.stderr.write(`darius verify-item: task ${taskIndex} has no Command/Expected pair\n`);
+    process.stderr.write(
+      `darius verify-item: task ${taskIndex} has no Command/Expected pair\n` +
+        `  next: darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom>"\n`,
+    );
     process.exit(1);
   }
 
@@ -1821,7 +1833,7 @@ function runVerifyItem(args: string[]): void {
       `darius verify-item: task ${taskIndex} NOT verified — ${result.reason}\n`,
     );
     process.stderr.write(
-      `  darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
+      `  next: darius mark ${specPath} ${taskIndex} --verified --evidence "<what was checked, how, by whom/which agent, tier>"\n`,
     );
     process.exit(1);
   }
@@ -1850,7 +1862,8 @@ function runVerifyItem(args: string[]): void {
 
   if (result.outcome === "timeout") {
     process.stderr.write(
-      `darius verify-item: task ${taskIndex} TIMED OUT after ${timeoutMs / 1000}s — ${result.reason}\n`,
+      `darius verify-item: task ${taskIndex} TIMED OUT after ${timeoutMs / 1000}s — ${result.reason}\n` +
+        `  next: darius verify-item ${specPath} ${taskIndex} --timeout ${Math.max(600, Math.ceil((timeoutMs / 1000) * 2))}\n`,
     );
     process.exit(1);
   }
@@ -1866,7 +1879,10 @@ function runVerifyItem(args: string[]): void {
     process.exit(1);
   }
 
-  process.stderr.write(`darius verify-item: task ${taskIndex} failed: ${result.reason}\n`);
+  process.stderr.write(
+    `darius verify-item: task ${taskIndex} failed: ${result.reason}\n` +
+      `  next: fix the cause, then run: darius verify-item ${specPath} ${taskIndex}\n`,
+  );
   process.exit(1);
 }
 
@@ -1974,7 +1990,8 @@ function runWorklogOpen(args: string[]): void {
     process.stderr.write(
       `darius worklog open: "${fileName}" is a generated index name — ` +
         "00- files are excluded from every worklog listing, so this thread " +
-        "would be unreachable. Pick a slug that does not start with 00-.\n",
+        "would be unreachable. Pick a slug that does not start with 00-.\n" +
+        "  next: darius list milestones   (milestone slugs), then darius worklog open <milestone-slug>\n",
     );
     process.exit(1);
   }
@@ -1985,13 +2002,14 @@ function runWorklogOpen(args: string[]): void {
     process.stderr.write(
       `darius worklog open: "${slug}" names no milestone in .tracker/. ` +
         "A worklog belongs to a milestone: add it first (darius add milestone <name>), " +
-        "or put findings in a plain doc in the repo.\n",
+        "or put findings in a plain doc in the repo.\n" +
+        "  next: darius list milestones   (to see the slugs); or: darius add milestone --name <name> --slug <slug> --owner <email>\n",
     );
     process.exit(1);
   }
 
   const worklogPath = join(worklogDir, fileName);
-  const acting = sessionForWrite("worklog open", values.session, values["as-other-session"] === true);
+  const acting = sessionForWrite("worklog open", values.session, values["as-other-session"] === true, args);
 
   // Opening a thread on a spec is taking the work (0.76.0): a live claim by
   // another session refuses it, as `claim` does. --takeover overrides.
@@ -2060,7 +2078,7 @@ function runWorklogAppend(args: string[]): void {
   // Find the worklog file for this thread
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog append: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog append: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
     process.exit(1);
   }
 
@@ -2074,7 +2092,8 @@ function runWorklogAppend(args: string[]): void {
     process.stdout.write(`darius worklog append: appended to ${threadId}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius worklog append: ${message}\n`);
+    const next = message.startsWith("artifact refused") ? `  next: darius worklog append ${threadId} --section artifact --message "<project-relative path>"\n` : "";
+    process.stderr.write(`darius worklog append: ${message}\n${next}`);
     process.exit(1);
   }
 }
@@ -2107,7 +2126,7 @@ function runWorklogClose(args: string[]): void {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog close: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog close: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
     process.exit(1);
   }
 
@@ -2174,7 +2193,7 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog set-stage: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog set-stage: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
     process.exit(1);
   }
 
@@ -2233,11 +2252,11 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog dispatch: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog dispatch: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
     process.exit(1);
   }
 
-  const acting = sessionForWrite("worklog dispatch", values.session, values["as-other-session"] === true);
+  const acting = sessionForWrite("worklog dispatch", values.session, values["as-other-session"] === true, args);
 
   // Dispatch is the other place work is handed out. A thread with no `spec:`
   // has nothing to collide on and passes straight through.
@@ -2294,7 +2313,7 @@ function runWorklogPark(args: string[]): void {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog park: thread not found: ${threadId}\n`);
+    process.stderr.write(`darius worklog park: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
     process.exit(1);
   }
 
@@ -2930,13 +2949,17 @@ async function runCounselGate(args: string[]): Promise<void> {
       counsel = parseCounselTranscript(raw);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`darius counsel-gate: parse error: ${message}\n`);
+      process.stderr.write(
+        `darius counsel-gate: parse error: ${message}\n` +
+          `  next: fix the transcript, then run: darius counsel-gate ${transcriptArg}${values.spec ? ` --spec ${values.spec}` : ""} --json\n`,
+      );
       process.exit(1);
     }
 
     if (counsel.advisors.length === 0) {
       process.stderr.write(
-        `darius counsel-gate: no advisor verdicts found in ${transcriptPath}\n`,
+        `darius counsel-gate: no advisor verdicts found in ${transcriptPath}\n` +
+          `  next: add a \`\`\`darius-review block to the transcript, then run: darius counsel-gate ${transcriptArg}${values.spec ? ` --spec ${values.spec}` : ""} --json\n`,
       );
       process.exit(1);
     }
@@ -3418,7 +3441,7 @@ function runUncommittedVerified(args: string[]): void {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius uncommitted-verified: git status failed: ${message}\n`);
+    process.stderr.write(`darius uncommitted-verified: git status failed: ${message}\n  next: cd ${projectRoot} && darius uncommitted-verified\n`);
     process.exit(1);
   }
 
@@ -3469,14 +3492,14 @@ function runUncommittedVerified(args: string[]): void {
  * message. Used by the two commands that WRITE claims — a claim naming no
  * session is worse than no claim at all.
  */
-function requireClaimContext(sessionFlag: string | undefined, command: string): {
+function requireClaimContext(sessionFlag: string | undefined, command: string, ref?: string): {
   trackerRoot: string;
   session: string;
 } {
   const trackerRoot = requireTrackerRoot();
   const session = resolveSessionId(sessionFlag);
   if (session === null) {
-    process.stderr.write(`darius ${command}: ${NO_SESSION_MESSAGE}\n`);
+    process.stderr.write(`darius ${command}: ${noSessionRefusal(command, ref)}\n`);
     process.exit(1);
   }
   return { trackerRoot, session };
@@ -3576,11 +3599,11 @@ function runClaim(args: string[]): void {
     ttlMs = parseTtl(values.ttl);
   } catch (err) {
     const message = err instanceof TtlParseError ? err.message : String(err);
-    process.stderr.write(`darius claim: ${message}\n`);
+    process.stderr.write(`darius claim: ${message}\n  next: darius claim ${refArg} --ttl 8h\n`);
     process.exit(1);
   }
 
-  const { trackerRoot, session } = requireClaimContext(values.session, "claim");
+  const { trackerRoot, session } = requireClaimContext(values.session, "claim", refArg);
   const ref = canonicalSpecRef({ trackerRoot, ref: refArg });
   if (ref === null) {
     process.stderr.write(`darius claim: ${missingPathMessage(refArg, "spec")}\n`);
@@ -3630,7 +3653,8 @@ function runClaim(args: string[]): void {
     );
     process.stderr.write(
       `  That session is presumed live. Pick another spec, or re-run with --takeover ` +
-        `if you know it is gone.\n`,
+        `if you know it is gone.\n` +
+        `  next: darius next   (a free spec); or, if that session is gone: darius claim ${refArg} --takeover --session ${session}\n`,
     );
     if (values.json) {
       process.stdout.write(
@@ -3752,7 +3776,7 @@ function runRelease(args: string[]): void {
     process.exit(2);
   }
 
-  const { trackerRoot, session } = requireClaimContext(values.session, "release");
+  const { trackerRoot, session } = requireClaimContext(values.session, "release", refArg);
   const ref = normalizeClaimRef({ trackerRoot, ref: refArg });
   if (canonicalSpecRef({ trackerRoot, ref: refArg }) === null && readClaims(trackerRoot).claims[ref] === undefined) {
     process.stderr.write(`darius release: ${missingPathMessage(refArg, "spec or claim")}\n`);
@@ -3792,7 +3816,8 @@ function runRelease(args: string[]): void {
   if (action === "refused") {
     process.stderr.write(
       `darius release: REFUSED — ${ref} is claimed by another live ${other} ` +
-        `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}). Use --force to release it anyway.\n`,
+        `(claimed ${previous.ageLabel} ago, ${previous.expiryLabel}). Use --force to release it anyway.\n` +
+        `  next: darius release ${refArg} --force --session ${session}\n`,
     );
     process.exit(1);
   }
@@ -3866,9 +3891,15 @@ function claimGate(opts: {
   );
   process.stderr.write(
     `  Another session is working this spec on the same checkout. Pick different work, ` +
-      `or re-run with ${overrideFlag}.\n`,
+      `or re-run with ${overrideFlag}.\n` +
+      `  next: darius next   (a free spec); or run the same command again with ${overrideFlag}\n`,
   );
   return true;
+}
+
+/** One shell word for a command line printed in a refusal. */
+function shellWord(word: string): string {
+  return /^[\w@%+=:,./-]+$/u.test(word) ? word : JSON.stringify(word);
 }
 
 /**
@@ -3881,6 +3912,7 @@ function sessionForWrite(
   command: string,
   flag: string | undefined,
   asOther: boolean,
+  args: readonly string[],
 ): { session: string | null; acting: string | null } {
   const env = resolveSessionId(undefined);
   const fromFlag = flag?.trim() ?? "";
@@ -3888,7 +3920,8 @@ function sessionForWrite(
     if (!asOther) {
       process.stderr.write(
         `darius ${command}: REFUSED: --session ${fromFlag} is not this session (${env}). ` +
-          "Pass --as-other-session to act for it; that is recorded.\n",
+          "Pass --as-other-session to act for it; that is recorded.\n" +
+          `  next: darius ${command} ${args.map(shellWord).join(" ")} --as-other-session\n`,
       );
       process.exit(1);
     }
@@ -3921,13 +3954,16 @@ async function reviewGateBlocks(trackerRoot: string, specRef: string, command: s
     reviewRequired = (await mod.checkSpecFile(absSpec, process.cwd())).result.reviewRequired;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`darius ${command}: REFUSED: spec check failed on ${spec}: ${message}\n`);
+    process.stderr.write(`darius ${command}: REFUSED: spec check failed on ${spec}: ${message}\n  next: darius spec check ${spec}\n`);
     return true;
   }
   if (!reviewRequired) return false;
   const check = checkCounselStamp(trackerRoot, spec, absSpec);
   if (check.ok) return false;
-  process.stderr.write(`darius ${command}: REFUSED: ${check.reason}\n`);
+  process.stderr.write(
+    `darius ${command}: REFUSED: ${check.reason}\n` +
+      `  next: darius counsel-gate <review-transcript> --spec ${spec}   (or: darius counsel-gate --spec ${spec} --override "<reason>")\n`,
+  );
   return true;
 }
 

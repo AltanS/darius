@@ -28,6 +28,7 @@ function formatText(path: string, result: SpecCheckResult): string {
   const review = result.reviewRequired ? "required" : result.risk === "high" ? "off (review_gate: off)" : "not needed";
   lines.push(`REVIEW: ${review}`);
   if (result.counsel !== null) lines.push(`COUNSEL: ${result.counsel}`);
+  if (!result.ok) lines.push(`next: fix the problems above, then run: darius spec check ${path}`);
   return lines.join("\n");
 }
 
@@ -53,6 +54,8 @@ export const specCommand: Command = {
   usage: "spec check <spec> [--json]",
   async run(args) {
     if (args.positional[0] === "check") return runCheck(args);
-    throw new UsageError(USAGE);
+    const word = args.positional[0];
+    if (word === undefined) throw new UsageError(USAGE);
+    throw new UsageError(`spec: unknown verb "${word}". Valid: darius spec check <spec> [--json] (check a spec); darius show <spec> [--json] (print a spec)`);
   },
 };

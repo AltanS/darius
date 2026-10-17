@@ -218,6 +218,19 @@ export const NO_SESSION_MESSAGE =
   `no session id — pass --session <id> or set $${SESSION_ENV_VAR} ($${LEGACY_SESSION_ENV_VAR} also works). ` +
   `A claim that names no session cannot tell the next session who to go ask.`;
 
+/**
+ * The refusal of a verb that writes a claim without a session id: what is
+ * missing, how to give a session, and the way out for a stuck thread (0.100.3).
+ * `ref` is the spec the verb was given (a placeholder when it had none).
+ */
+export function noSessionRefusal(command: string, ref: string | undefined): string {
+  return (
+    `no session id. A claim that names no session cannot tell the next session who to go ask.\n` +
+    `  to give up on the thread: darius worklog park <thread-id> --reason "<why>"\n` +
+    `  next: darius ${command} ${ref ?? "<spec>"} --session <id>   (or set ${SESSION_ENV_VAR} and run the same command)`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // TTL
 // ---------------------------------------------------------------------------

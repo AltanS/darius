@@ -223,6 +223,22 @@ export function openThread(opts: OpenThreadOpts): string {
   return threadId;
 }
 
+/** The error for a thread id that no worklog holds; it ends with the command that lists the live ones. */
+function threadNotFound(threadId: string): Error {
+  return new Error(`Thread not found: ${threadId}\n  next: darius worklog list --active --json`);
+}
+
+/** The stage after `stage` in the Work Loop (`planned` for a thread with none). */
+function nextStageOf(stage: WorklogStage | undefined): WorklogStage {
+  const at = stage === undefined ? -1 : WORKLOG_STAGES.indexOf(stage);
+  return WORKLOG_STAGES[Math.min(at + 1, WORKLOG_STAGES.length - 1)] ?? "planned";
+}
+
+/** The command that starts a new thread in place of a closed one. */
+function reopenCommand(thread: { label: string; specPath?: string | undefined }): string {
+  return `darius worklog open ${thread.label}${thread.specPath ? ` --spec ${thread.specPath}` : ""} --session <id>`;
+}
+
 export type AppendThreadOpts = {
   worklogPath: string;
   threadId: string;
@@ -240,7 +256,7 @@ export function appendThread(opts: AppendThreadOpts): void {
     const doc = readDocForMutation(worklogPath);
     const thread = doc.threads.find((t) => t.threadId === threadId);
     if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
+      throw threadNotFound(threadId);
     }
 
     const kind = sectionToKind(section);
@@ -276,14 +292,15 @@ export function closeThread(opts: CloseThreadOpts): void {
     const doc = readDocForMutation(worklogPath);
     const thread = doc.threads.find((t) => t.threadId === threadId);
     if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
+      throw threadNotFound(threadId);
     }
     // 0.79.1: `done` ends the Work Loop, so a staged thread must be reviewed
     // first. A thread without a stage (a plain note thread) closes as before.
     if (status === "done" && thread.stage !== undefined && thread.stage !== "reviewed") {
       throw new Error(
         `${threadId} is at stage ${thread.stage}; --status done needs stage reviewed. ` +
-          "Finish the loop first, or park it (worklog park) or close it as blocked or cancelled",
+          "Finish the loop first, or park it (worklog park) or close it as blocked or cancelled\n" +
+          `  next: darius worklog set-stage ${threadId} ${nextStageOf(thread.stage)}; to give up instead: darius worklog park ${threadId} --reason "<why>"`,
       );
     }
 
@@ -339,11 +356,14 @@ export function setStage(opts: SetStageOpts): void {
   const force = opts.force === true;
   const reason = opts.reason?.trim() ?? "";
   if (force && reason === "") {
-    throw new StageRefusal("--force needs a non-empty --reason");
+    throw new StageRefusal(`--force needs a non-empty --reason\n  next: darius worklog set-stage ${threadId} ${stage} --force --reason "<why>"`);
   }
   const noCode = opts.noCode?.trim();
   if (noCode !== undefined && (noCode === "" || stage !== "committed")) {
-    throw new StageRefusal('--no-code needs a non-empty reason and applies to committed only: --no-code "<why no code changed>"');
+    throw new StageRefusal(
+      '--no-code needs a non-empty reason and applies to committed only: --no-code "<why no code changed>"\n' +
+        `  next: darius worklog set-stage ${threadId} committed --no-code "<why no code changed>"`,
+    );
   }
   assertMarkerValue("session", opts.session ?? undefined);
   const trackerRoot = opts.trackerRoot ?? dirname(dirname(worklogPath));
@@ -353,17 +373,18 @@ export function setStage(opts: SetStageOpts): void {
     const doc = readDocForMutation(worklogPath);
     const thread = doc.threads.find((t) => t.threadId === threadId);
     if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
+      throw threadNotFound(threadId);
     }
     if (thread.closedAt) {
-      throw new Error(`Thread is closed: ${threadId} (stage changes are not allowed)`);
+      throw new Error(`Thread is closed: ${threadId} (stage changes are not allowed)\n  next: ${reopenCommand(thread)}`);
     }
 
     const current = thread.stage === undefined ? -1 : WORKLOG_STAGES.indexOf(thread.stage);
     const requested = WORKLOG_STAGES.indexOf(stage);
     if (requested < current) {
       throw new Error(
-        `Backward stage transition rejected: ${thread.stage} → ${stage} (thread ${threadId})`,
+        `Backward stage transition rejected: ${thread.stage} → ${stage} (thread ${threadId})\n` +
+          `  next: darius worklog set-stage ${threadId} ${nextStageOf(thread.stage)}`,
       );
     }
     if (requested === current) {
@@ -385,7 +406,8 @@ export function setStage(opts: SetStageOpts): void {
       if (skipped.length > 0) {
         throw new StageRefusal(
           `cannot move ${thread.stage ?? "(no stage)"} → ${stage}: it skips ${skipped.join(", ")}. ` +
-            `Each of those stages needs its own evidence (thread ${threadId})`,
+            `Each of those stages needs its own evidence (thread ${threadId})\n` +
+            `  next: darius worklog set-stage ${threadId} ${skipped[0] ?? nextStageOf(thread.stage)}`,
         );
       }
       if (stage === "verified") checkVerified(thread, trackerRoot);
@@ -423,7 +445,8 @@ export function latestStamp(thread: { stamps?: StageStamp[] }, stage: WorklogSta
 function checkVerified(thread: WorklogThread, trackerRoot: string): void {
   if (!thread.specPath) {
     throw new StageRefusal(
-      `cannot move to verified: thread ${thread.threadId} names no spec, so no ledger line can vouch for it`,
+      `cannot move to verified: thread ${thread.threadId} names no spec, so no ledger line can vouch for it\n` +
+        `  next: darius worklog set-stage ${thread.threadId} verified --force --reason "<why no spec>"`,
     );
   }
   const since = latestStamp(thread, "dispatched")?.at ?? thread.openedAt;
@@ -438,17 +461,18 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
     if (opts.noGit) return NO_GIT_HEAD;
     throw new StageRefusal(
       `cannot move to committed: ${repoRoot} is not a git checkout. ` +
-        "Pass --no-git to record the stage without a commit",
+        "Pass --no-git to record the stage without a commit\n" +
+        `  next: darius worklog set-stage ${thread.threadId} committed --no-git`,
       3,
     );
   }
   const ref = opts.commit ?? "HEAD";
   const sha = resolveCommit(repoRoot, ref);
   if (sha === null) {
-    throw new StageRefusal(`cannot move to committed: ${ref} names no commit`);
+    throw new StageRefusal(`cannot move to committed: ${ref} names no commit\n  next: darius worklog set-stage ${thread.threadId} committed --commit <sha>`);
   }
   if (!isAncestorOfHead(repoRoot, sha)) {
-    throw new StageRefusal(`cannot move to committed: ${sha} is not an ancestor of HEAD`);
+    throw new StageRefusal(`cannot move to committed: ${sha} is not an ancestor of HEAD\n  next: darius worklog set-stage ${thread.threadId} committed --commit <sha on this branch>`);
   }
   // One artifact entry may list several paths, split on commas and newlines
   // only, normalised against the project root (0.76.0).
@@ -460,14 +484,16 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
   if (dirty.length > 0) {
     throw new StageRefusal(
       `cannot move to committed: these artifacts are dirty or untracked: ${dirty.join(", ")}. ` +
-        "Commit them first",
+        "Commit them first\n" +
+        `  next: git add ${dirty.join(" ")} && git commit -m "<message>", then darius worklog set-stage ${thread.threadId} committed`,
     );
   }
   const noCode = opts.noCode?.trim();
   if (noCode !== undefined) {
     if (artifacts.length > 0) {
       throw new StageRefusal(
-        `cannot move to committed with --no-code: thread ${thread.threadId} records artifacts (${artifacts.join(", ")}), so code changed`,
+        `cannot move to committed with --no-code: thread ${thread.threadId} records artifacts (${artifacts.join(", ")}), so code changed\n` +
+          `  next: darius worklog set-stage ${thread.threadId} committed`,
       );
     }
     return sha;
@@ -476,7 +502,8 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
     throw new StageRefusal(
       `cannot move to committed: thread ${thread.threadId} records no artifacts. ` +
         `Add them with \`darius worklog append ${thread.threadId} --section artifact --message "<path>"\`, ` +
-        'or pass --no-code "<reason>" for a spec that changes no code',
+        'or pass --no-code "<reason>" for a spec that changes no code\n' +
+        `  next: darius worklog append ${thread.threadId} --section artifact --message "<path>"`,
     );
   }
   // The range from the dispatch (else the opening) to the commit must touch an artifact.
@@ -485,14 +512,16 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
   const fromSha = resolveCommit(repoRoot, from);
   if (fromSha === null) {
     throw new StageRefusal(
-      `cannot move to committed: the dispatch commit ${from} is not in this checkout, so the commit range cannot be checked`,
+      `cannot move to committed: the dispatch commit ${from} is not in this checkout, so the commit range cannot be checked\n` +
+        `  next: darius worklog set-stage ${thread.threadId} committed --force --reason "<why the range cannot be checked>"`,
       3,
     );
   }
   if (fromSha === sha) {
     throw new StageRefusal(
       `cannot move to committed: no commit since dispatch (${sha.slice(0, 12)}). ` +
-        'Commit the work first, or pass --no-code "<reason>" for a spec that changes no code',
+        'Commit the work first, or pass --no-code "<reason>" for a spec that changes no code\n' +
+        `  next: darius worklog set-stage ${thread.threadId} committed --no-code "<reason>"`,
     );
   }
   const touched = changedPaths(repoRoot, fromSha, sha);
@@ -503,7 +532,8 @@ function checkCommitted(thread: WorklogThread, repoRoot: string, opts: SetStageO
   if (!artifacts.some((a) => touched.some((p) => gitPathMatches(p, a, prefix)))) {
     throw new StageRefusal(
       `cannot move to committed: the commits ${fromSha.slice(0, 12)}..${sha.slice(0, 12)} touch none of the artifacts ` +
-        `(${artifacts.join(", ")})`,
+        `(${artifacts.join(", ")})\n` +
+        `  next: darius worklog append ${thread.threadId} --section artifact --message "<a file the commits touched>"`,
     );
   }
   return sha;
@@ -599,7 +629,8 @@ function checkReviewed(thread: WorklogThread): void {
     throw new StageRefusal(
       `cannot move to reviewed: thread ${thread.threadId} has no note starting with "${REVIEW_NOTE_PREFIX}" ` +
         `with at least ${REVIEW_MIN_WORDS} words of text, written after it was committed. Add one with ` +
-        `\`darius worklog append ${thread.threadId} --section note --message "Review: ..."\``,
+        `\`darius worklog append ${thread.threadId} --section note --message "Review: ..."\`\n` +
+        `  next: darius worklog append ${thread.threadId} --section note --message "Review: <what you checked and found>"`,
     );
   }
 }
@@ -653,14 +684,15 @@ export function dispatchThread(opts: DispatchThreadOpts): void {
     const doc = readDocForMutation(worklogPath);
     const thread = doc.threads.find((t) => t.threadId === threadId);
     if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
+      throw threadNotFound(threadId);
     }
     if (thread.closedAt) {
-      throw new Error(`Thread is closed: ${threadId} (cannot dispatch)`);
+      throw new Error(`Thread is closed: ${threadId} (cannot dispatch)\n  next: ${reopenCommand(thread)}`);
     }
     if (thread.stage !== undefined && thread.stage !== "planned" && thread.stage !== "dispatched") {
       throw new Error(
-        `Backward stage transition rejected: ${thread.stage} → dispatched (thread ${threadId})`,
+        `Backward stage transition rejected: ${thread.stage} → dispatched (thread ${threadId})\n` +
+          `  next: darius worklog set-stage ${threadId} ${nextStageOf(thread.stage)}`,
       );
     }
 
@@ -689,17 +721,17 @@ export type ParkThreadOpts = {
 export function parkThread(opts: ParkThreadOpts): void {
   const { worklogPath, threadId, reason } = opts;
   if (!reason.trim()) {
-    throw new Error("park requires a non-empty reason");
+    throw new Error(`park requires a non-empty reason\n  next: darius worklog park ${threadId} --reason "<why this work is being deferred>"`);
   }
 
   withLock(worklogPath, () => {
     const doc = readDocForMutation(worklogPath);
     const thread = doc.threads.find((t) => t.threadId === threadId);
     if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
+      throw threadNotFound(threadId);
     }
     if (thread.closedAt) {
-      throw new Error(`Thread is already closed: ${threadId}`);
+      throw new Error(`Thread is already closed: ${threadId}\n  next: darius worklog list --active --json`);
     }
 
     thread.entries.push({
