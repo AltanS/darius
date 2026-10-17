@@ -21,6 +21,10 @@ seed_darius_on_path() {
   dir="$HOME/.local/state/nix/profile/bin"
   mkdir -p "$dir"
   ln -sf "$wrapper" "$dir/darius"
+  # The plugin's own copy of git sits next to the wrapper (build-plugin.sh). The sandbox may
+  # deny the system git, so the child needs this one on its profile PATH too.
+  [ -x "$(dirname "$wrapper")/git" ] && ln -sf "$(dirname "$wrapper")/git" "$dir/git"
+  return 0
 }
 
 # A scratch git repo in store mode: .darius.toml with kinds = ["ritual",

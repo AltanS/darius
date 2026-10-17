@@ -40,6 +40,13 @@ CLAUDE_CONFIG_DIR="$stage/claude" DARIUS_STATE_DIR="$stage/state" DARIUS_CONFIG_
 cp -R "$stage/claude/skills" "$OUT/skills"
 
 install -m 0755 "$HERE/lib/darius-wrapper.sh" "$OUT/bin/darius"
+
+# A private copy of git. The eval sandbox denies /usr/bin/git on hosts where the git-credential-*
+# helpers are links to it (Fedora Atomic), and masks it with /dev/null. The copy lives in the
+# plugin dir, which the child may read and run. See evals/README.md.
+real_git="$(readlink -f "$(command -v git)")"
+[ -f "$real_git" ] || { echo "build-plugin.sh: no git binary on PATH" >&2; exit 1; }
+install -m 0755 "$real_git" "$OUT/bin/git"
 cp -R "$HERE/cases" "$OUT/cases"
 cp -R "$HERE/lib" "$OUT/lib"
 

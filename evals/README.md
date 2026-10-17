@@ -52,6 +52,13 @@ that pass `PATH` through, `run.sh` puts the wrapper first anyway.
 `run.sh` also swaps `HOME` for a clean dir that links only `~/.claude` and `~/.claude.json`. The
 eval sandbox refuses Bash while `~/.aws` holds a symlink (sops-nix makes them).
 
+The eval sandbox lists `/usr/bin/git` as a credential file and masks it with `/dev/null`. This
+happens on hosts where `git-credential-*` in `/usr/libexec/git-core` are links to `/usr/bin/git`
+(Fedora Atomic). Every `git` call in the child then fails with "Permission denied", and darius
+reports `spawnSync git EACCES`. `build-plugin.sh` therefore puts a private copy of git in the
+plugin's `bin/`, and the scaffold links it into the child's profile `bin` next to the wrapper. The
+`.bashrc: Permission denied` line on each Bash call is a separate sandbox message. It is harmless.
+
 Never run a scaffold by hand with your real `HOME`. `seed.sh` refuses.
 
 ## Reading a result
