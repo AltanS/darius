@@ -10,12 +10,6 @@ allowed-tools: Bash, Skill
 
 # Sync Tracker
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 Detect items implemented manually (without `/darius-work`) and update the tracker to match reality.
 
 A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output. Spec paths are tracker-relative (`M2-api-layer/01-auth.md`). Item indexes in `verify-item`, `mark` and `--apply <spec>:<idx>` are 0-based: the first item is `0`. Find the tree with `darius root --json` (`trackerRoot`).

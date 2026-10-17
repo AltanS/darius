@@ -8,12 +8,6 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Structural Review
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 Deep structural analysis for dead code, unused exports, and incomplete refactors. Called by `/work` (spec/milestone completion) and `/archive` (gate check).
 
 A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output.

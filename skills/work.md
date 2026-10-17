@@ -48,9 +48,7 @@ Match each task to an expert agent from `available_agents` in the work-plan outp
 Before each Task call (or before you start the work yourself), stamp the dispatch. It arms the exit gate and logs the selection:
 `darius worklog dispatch <thread-id> --agent <invocable> --reason "<one-line reason>"`
 
-Dispatch exits 1 if the thread's spec is claimed by another live session on this checkout (`--force` overrides, loudly). `worklog open --spec` refuses the same way (`--takeover` overrides). Don't force past it, another session is working that spec; take different work. `darius next --json` already skips claimed specs and lists them in `skippedClaimed`. A `--session` that is not your own is refused unless you pass `--as-other-session`, and the CLI records that. Use it only when the user asks you to act for another session. After Stage 4 commits (or when a thread is parked), drop your own claim: `darius release <spec-path>`.
-
-**One thread per spec.** Work-plan opens it. Before you open another, check `darius worklog list --active --json` for a thread with the same `specPath`, and reuse it. Never open a second thread for the same spec.
+If dispatch refuses because another live session claimed the spec, take different work. Never pass `--force`, `--takeover` or `--as-other-session` unless the user says so. After Stage 4 commits (or when a thread is parked), drop your own claim: `darius release <spec-path>`.
 
 Delegate with the typed envelope (canonical schema: `darius delegation`):
 
@@ -98,7 +96,7 @@ After spec/milestone completion, invoke `/darius-enrich` if the work revealed su
 
 ## Exit Gate
 
-A Stop hook guards your turn end. It blocks only on threads your session owns (`worklog open` and `dispatch` record the session) that sit in a pre-terminal stage: `planned`, `dispatched`, `verified` or `committed`. `reviewed`, closed and parked threads are done. The bounce names the literal next action. Do it, or park the thread with a reason. Each thread may bounce a stop 2 times per 24 h; after that the hook reports it and lets the stop through, while your other threads still block. Threads of other sessions, or of none, show in one notice line and never block. Stage stamps ride the skills you already call. Never hand-edit a stage to silence the gate. Each stage needs its evidence, so a stage cannot be skipped.
+A Stop hook blocks your turn end while a thread your session owns sits before `reviewed`. Do the action it names, or park the thread with a reason. Never hand-edit or force a stage to silence it.
 
 ## Review Handling
 
@@ -120,10 +118,6 @@ Every spec gets `darius spec check` (no model) in work-plan. Only a high-risk sp
 
 A review stamp is tied to the spec text. If the spec text changes after the review (an enrich, a hand edit), the stamp no longer matches, and dispatch refuses. Ticking a checklist box is not a change. `worklog dispatch` says "changed since its review" when this happens. Run the review again (spawn the reviewer, write the transcript, run `counsel-gate`), or override with a reason.
 
-Older transcripts with four advisor verdicts still parse; `counsel-gate` reads them as before.
-
 ## Hygiene
 
-**Recovering tree files** (store mode). A file edit or a delete in the tracker tree is a version in the store, so nothing is lost. `darius tree log <path>` lists the versions of a file or folder, newest first. `darius tree restore <path> [--at <sha|ledger-id>] [--dry-run]` brings one back. Without `--at` it undoes the newest removal. It refuses when the working copy holds another version, unless `--force`. When two hosts changed a file and no merge could join it, `darius doctor` lists the conflict. `darius tree resolve <path>` keeps the current version and closes the conflict. Ask the user before you resolve. In git mode git has the history.
-
-Worklogs are shared with other hosts and agents (committed, or synced through the darius store), never write secrets into them; instruct implementing agents to scrub command output. Reference worklog findings in your reports. Tracker state reads go through the CLI (`darius status|show|next --json`), not the Read tool. Checklist indexes in `mark`, `verify-item` and `verify` are 0-based: the first item is `0`. Paths are tracker-relative (`M2-api-layer/01-auth.md`). Detect the mode with `darius root --json`; git mode is deprecated and behaves differently only where a skill says so.
+Worklogs are shared with other hosts and agents (committed, or synced through the darius store), never write secrets into them; instruct implementing agents to scrub command output. Reference worklog findings in your reports. Tracker state reads go through the CLI (`darius status|show|next --json`), not the Read tool. Checklist indexes in `mark`, `verify-item` and `verify` are 0-based: the first item is `0`. Paths are tracker-relative (`M2-api-layer/01-auth.md`).

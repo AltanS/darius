@@ -9,12 +9,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
 
 # Enrich Tracker
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 Reflect on what recent implementation work revealed and propose updates to tracker specs, new tasks discovered, tasks that turned out unnecessary, verification items that need updating, scope changes, or new specs/dependencies that emerged. Also produces **Lessons** when a milestone completes.
 
 Invoked manually, by the Work Loop driver (`/darius-work` Stage 6, after a review block exposes a genuine gap, and after `STATUS: spec_invalid` from the spec check), and automatically by `archive` at milestone completion.

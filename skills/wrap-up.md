@@ -10,12 +10,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 
 # Wrap Up
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 End-of-session skill: rebuild index from spec reality, close stale worklog threads, commit everything atomically.
 
 A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output. Spec paths are tracker-relative (`M1-x/01-y.md`). Find the tree with `darius root --json` (`trackerRoot`).
