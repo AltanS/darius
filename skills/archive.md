@@ -10,12 +10,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 
 # Archive Completed Milestones
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 Consolidate completed milestones into archive documents, clean up the active dashboard, and preserve the full audit trail (overview, spec content, review transcripts, lessons).
 
 A line that starts with `!darius ...` is a shell command. Run it with Bash and use its output. Paths are tracker-relative (`M3-cart/00-README.md`, `archive/M3-cart.md`). To read or write a file of the tree, join the path to `trackerRoot` from `darius root --json`. Git mode (`mode: "git"`, deprecated) keeps the tree in `.tracker/` of the checkout.

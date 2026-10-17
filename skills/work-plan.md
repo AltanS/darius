@@ -9,12 +9,6 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 
 # Work Plan
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 Find the next actionable implementation task (or a batch of independent tasks) and prepare everything needed before delegation.
 
 A line that starts with `!darius ...` in this skill is a shell command. Run it with Bash and use its output. Paths in specs and in darius verbs are tracker-relative (`M2-api-layer/01-auth.md`). To read a tree file, take `absPath` from `next --json`, `show --json` or `list specs --json`, or `trackerRoot` from `darius root --json`. Checklist indexes are 0-based.
@@ -45,7 +39,7 @@ Recognized flags:
 
 2. **Dependency gate**: For each candidate, check `depends_on` from `darius show --json`. A spec is ready only if every dependency's status is `Complete`. Record blocked-on-deps separately.
 
-3. **Spec check and review gate** (always on since darius 0.74.0):
+3. **Spec check and review gate**:
 
    For every candidate spec run the deterministic check. It uses no model:
    `!darius spec check <spec-path> --json`
@@ -77,7 +71,7 @@ Recognized flags:
      `!darius counsel-gate --spec <spec-path> --override "<reason>"`
      It stamps the spec and logs the reason. Refuse without a non-empty reason. Never write `counsel:`, `counsel_override:` or `counsel: addressed` into frontmatter by hand: dispatch refuses a stamp the CLI did not write.
 
-   **Important**: the risk and the verdict are owned by the CLI, never by you. Risk comes from a fixed pattern list (`RISK_PATTERNS` in darius); frontmatter `risk: high` raises it, and nothing lowers it. Never edit a spec to make it look low risk. `review_gate: off` in `config.yml` of the tracker root skips the reviewer; the old `counsel_gate:` key, `on` or `off`, now reads as `auto`.
+   **Important**: the risk and the verdict are owned by the CLI, never by you. Risk comes from a fixed pattern list (`RISK_PATTERNS` in darius); frontmatter `risk: high` raises it, and nothing lowers it. Never edit a spec to make it look low risk. `review_gate: off` in `config.yml` of the tracker root skips the reviewer.
 
 4. **Parallel-safety check** (batch mode only): at most one task per spec per batch. Warn if two selected specs touch overlapping file paths.
 
@@ -87,11 +81,11 @@ Recognized flags:
 
 6. **Create worklog thread(s)**: one per selected spec, never two for the same spec:
    `!darius worklog open <milestone-slug> --spec <spec-path> --message "<task description>" --stage planned`
-   Returns the generated `thread-id`. It refuses a spec another live session claimed (`--takeover` overrides; do not use it unless the user says so). A `--session` that is not this session is refused unless `--as-other-session` is given. The `--stage planned` stamp arms the Work Loop exit gate: from this moment the thread must progress (`dispatched` → `verified` → `committed` → `reviewed`) or be explicitly parked, the driving agent cannot silently end the turn on it.
+   Returns the generated `thread-id`. It refuses a spec another live session claimed (`--takeover` overrides; do not use it unless the user says so). The `--stage planned` stamp arms the Work Loop exit gate: from this moment the thread must progress (`dispatched` → `verified` → `committed` → `reviewed`) or be explicitly parked, the driving agent cannot silently end the turn on it.
 
    Then **claim the spec**, one per selected task, on shared checkouts:
    `!darius claim <spec-path>`
-   Advisory and expiring (default TTL 8h; `--ttl`). Session id comes from `--session <id>`, else `$CLAUDE_CODE_SESSION_ID` (Claude Code sets it), else the older `$CLAUDE_SESSION_ID`, without one the claim is refused, so drop the task from the plan rather than claiming anonymously. A live claim by another session is refused naming it (`--takeover` overrides, only when the user says so); a stale one is taken over automatically with a notice. Release with `darius release <spec-path>` when the spec's work lands or is parked.
+   If the claim is refused, drop the task from the plan. Never pass `--takeover` or `--as-other-session` unless the user says so. Release with `darius release <spec-path>` when the spec's work lands or is parked.
 
 7. **Determine agent** per task by fetching the live agent roster via `darius agents --json`:
    `!darius agents --json`
@@ -131,6 +125,6 @@ Recognized flags:
      - SPEC: {spec-path}  REASON: {review rejected | spec invalid | depends_on: M2-api/01-auth.md | blocked item}
    ```
 
-If legacy v1 structure detected (flat specs at root), return `STATUS: blocked, REASON: Legacy v1 structure, run `darius doctor --fix`. Never write code, this skill only plans and prepares. The review transcript path is stable (`{MILESTONE}/_counsel/{spec-slug}.md` below the tracker root, a plain file): reference it so enrich/archive can locate transcripts without re-inferring.
+Never write code, this skill only plans and prepares. The review transcript path is stable (`{MILESTONE}/_counsel/{spec-slug}.md` below the tracker root, a plain file): reference it so enrich/archive can locate transcripts without re-inferring.
 
 **Repo-relative paths in spec files.** The envelope fields above (`SPEC_ABS_PATH`, `WORKLOG_PATH`, `COUNSEL_TRANSCRIPT`) are runtime pointers and stay absolute. But any path the implementing agent writes *into the committed spec*, `Command:`/`Expected:` lines and prose, MUST be repo-relative (e.g. `src/x.ts`), never `/home/you/repo/...`. Verification runs from the repo root and the tracker tree is shared with other hosts, so absolute paths leak the author's home-dir layout and won't run on other machines. Carry this rule into the `VERIFICATION.command` strings you emit.

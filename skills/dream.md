@@ -9,12 +9,6 @@ allowed-tools: Read, Bash
 
 # Dream, Distill Dead Worklogs Into Anchor Stubs
 
-**Before anything else**, run this line with Bash. If it prints a message, show the message to the user and stop.
-
-```bash
-command -v darius >/dev/null || { echo "darius is not installed. Install it: bash <(curl -fsSL https://raw.githubusercontent.com/AltanS/darius/main/scripts/install.sh)"; exit 1; }
-```
-
 A worklog that has gone quiet is still worth something, but not at full size. Dreaming replaces it with an **anchor stub**: the handful of facts a future agent would otherwise have to rediscover, small enough to read on sight. Nothing is lost, `distill` copies the original to `archive/worklog-raw/<file>` in the tracker tree and stamps the stub with the source digest before writing.
 
 **You author content. The CLI owns the files.** Never Write, Edit, or `rm` a worklog file, and never write the `<!-- distilled: ... -->` stamp yourself. Every change goes through `worklog distill`, which enforces the eligibility gates, preserves the raw copy, and swaps atomically.
@@ -30,6 +24,8 @@ The line below starts with `!`. In a skill, `!` followed by a backticked command
 The JSON above is the work queue: one row per worklog file with `eligible`, a machine `reason`, and a human `detail`. Work **only** the rows where `eligible` is `true`.
 
 Ineligible rows are not failures and are never argued with, `open-threads`, `milestone-active`, `not-archived`, `too-recent` and `already-distilled` each name a real reason the file is still live. Carry them into the report with their reason; do not reach for `--force`.
+
+The CLI checks the gates in this order: the file exists and is not a `00-` index (`not-found`, `index-file`); zero open threads (`open-threads`); for a milestone-named file (`M<N>-...`), the milestone directory is gone and `archive/<slug>.md` exists (`milestone-active`, `not-archived`); for a cross-cutting file, last activity is older than `--min-age-days` (`too-recent`); not already stamped (`already-distilled`). To check one file, run `darius worklog distill <file> --check [--min-age-days N]`. It prints the reason, exits 0 when eligible and 1 when not. `--list` surveys the whole directory, so never combine it with `--check` or a `<file>`. A stub over 4 KB warns but still writes. If the raw copy exists and differs from the file, distill refuses with no override: report it, do not fix it.
 
 `--min-age-days N` passes straight through (default 14) and only loosens the age gate for cross-cutting, milestone-less files. It cannot make an active milestone or an open thread eligible.
 
