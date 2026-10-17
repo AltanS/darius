@@ -179,7 +179,7 @@ import {
 } from "../lib/session-claims.ts";
 import { atomicWriteFileSync } from "../lib/atomic.ts";
 import { StageRefusal, gitPrefix } from "../lib/stage-evidence.ts";
-import { displayPath, findTrackerRoot, isStoreTree, projectRootOf, resolvePathArg } from "../lib/tracker-root.ts";
+import { displayPath, findTrackerRoot, isStoreTree, missingPathMessage, projectRootOf, resolvePathArg, trackerRelative } from "../lib/tracker-root.ts";
 import { hostName } from "../lib/host-stamp.ts";
 import {
   appendCounselLog,
@@ -458,7 +458,7 @@ function runShow(args: string[]): void {
   const filePath = resolvePathArg(pathArg);
 
   if (!existsSync(filePath)) {
-    process.stderr.write(`darius show: file not found: ${filePath}\n`);
+    process.stderr.write(`darius show: ${missingPathMessage(pathArg, "file")}\n`);
     process.exit(1);
   }
 
@@ -1032,6 +1032,10 @@ function runMark(args: string[]): void {
 
   const trackerRoot = requireTrackerRoot();
   const absSpecPath = resolvePathArg(specPath);
+  if (!existsSync(absSpecPath)) {
+    process.stderr.write(`darius mark: ${missingPathMessage(specPath, "spec")}\n`);
+    process.exit(1);
+  }
 
   // Read the item's Command so a trivial one can be refused BEFORE the file is
   // written. Parsed straight from raw frontmatter + checklist rather than
@@ -1186,10 +1190,15 @@ function runSetStatus(args: string[]): void {
   }
 
   const trackerRoot = requireTrackerRoot();
+  const absTarget = resolvePathArg(target);
+  if (!existsSync(absTarget)) {
+    process.stderr.write(`darius set-status: ${missingPathMessage(target, "spec or milestone")}\n`);
+    process.exit(1);
+  }
 
   try {
     setStatus({
-      target: resolvePathArg(target),
+      target: absTarget,
       status: statusArg as SpecStatus | MilestoneOverrideStatus,
       trackerRoot,
     });
@@ -1458,7 +1467,7 @@ function runVerify(args: string[]): void {
 
   const absPath = resolvePathArg(specPath);
   if (!existsSync(absPath)) {
-    process.stderr.write(`darius verify: spec not found: ${absPath}\n`);
+    process.stderr.write(`darius verify: ${missingPathMessage(specPath, "spec")}\n`);
     process.exit(1);
   }
 
@@ -1696,7 +1705,7 @@ function runVerifyItem(args: string[]): void {
 
   const absPath = resolvePathArg(specPath);
   if (!existsSync(absPath)) {
-    process.stderr.write(`darius verify-item: spec not found: ${absPath}\n`);
+    process.stderr.write(`darius verify-item: ${missingPathMessage(specPath, "spec")}\n`);
     process.exit(1);
   }
 
@@ -1933,8 +1942,10 @@ function runWorklogOpen(args: string[]): void {
     allowPositionals: true,
   });
 
-  // The first positional is the milestone slug (required)
-  const slug = positionals[0];
+  // The first positional is the milestone slug (required). A tracker path of the
+  // folder (`.tracker/M1-x/`, `M1-x/`) names it too (0.100.3).
+  const slugArg = positionals[0];
+  const slug = slugArg === undefined ? undefined : (trackerRelative(slugArg, findTrackerRoot(process.cwd()) ?? process.cwd(), null) ?? slugArg);
 
   // Only `planned` is a legal opening stage — later stages are reached via
   // set-stage/dispatch as the Work Loop progresses.
@@ -2857,7 +2868,7 @@ async function runCounselGate(args: string[]): Promise<void> {
 
   const transcriptPath = resolvePathArg(transcriptArg);
   if (!existsSync(transcriptPath)) {
-    process.stderr.write(`darius counsel-gate: transcript not found: ${transcriptPath}\n`);
+    process.stderr.write(`darius counsel-gate: ${missingPathMessage(transcriptArg, "transcript")}\n`);
     process.exit(1);
   }
 
@@ -2997,7 +3008,7 @@ function runCounselOverride(specArg: string | undefined, reasonArg: string, json
   const trackerRoot = requireTrackerRoot();
   const spec = canonicalSpecRef({ trackerRoot, ref: specArg });
   if (spec === null) {
-    process.stderr.write(`darius counsel-gate: --spec not found in .tracker/: ${specArg}\n`);
+    process.stderr.write(`darius counsel-gate: ${missingPathMessage(specArg, "spec")}\n`);
     process.exit(1);
   }
   const absSpec = join(trackerRoot, spec);
@@ -3162,7 +3173,7 @@ function writeCounselFrontmatter(
   transcript: { transcript: string; sha256: string; specSha256: string },
 ): void {
   if (!existsSync(specPath)) {
-    process.stderr.write(`darius counsel-gate: --spec not found: ${specPath}\n`);
+    process.stderr.write(`darius counsel-gate: ${missingPathMessage(specPath, "spec")}\n`);
     process.exit(1);
   }
 
@@ -3572,7 +3583,7 @@ function runClaim(args: string[]): void {
   const { trackerRoot, session } = requireClaimContext(values.session, "claim");
   const ref = canonicalSpecRef({ trackerRoot, ref: refArg });
   if (ref === null) {
-    process.stderr.write(`darius claim: no spec at ${refArg} in .tracker/. A claim names an existing spec.\n`);
+    process.stderr.write(`darius claim: ${missingPathMessage(refArg, "spec")}\n`);
     process.exit(1);
   }
   // With --json stdout carries the JSON only; the human lines go to stderr.
@@ -3744,7 +3755,7 @@ function runRelease(args: string[]): void {
   const { trackerRoot, session } = requireClaimContext(values.session, "release");
   const ref = normalizeClaimRef({ trackerRoot, ref: refArg });
   if (canonicalSpecRef({ trackerRoot, ref: refArg }) === null && readClaims(trackerRoot).claims[ref] === undefined) {
-    process.stderr.write(`darius release: no spec at ${refArg} in .tracker/, and no claim under that name.\n`);
+    process.stderr.write(`darius release: ${missingPathMessage(refArg, "spec or claim")}\n`);
     process.exit(1);
   }
   const now = new Date();

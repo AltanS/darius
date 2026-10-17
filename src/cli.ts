@@ -26,7 +26,7 @@ import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } fr
 import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
-import { applyEngineEnv, doctorNotes, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
+import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
 import { errorMessage, isBun } from "./runtime.ts";
@@ -375,7 +375,7 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
   process.once("exit", (code) => {
     finish();
     if (code === 1 && !storeTree && argv[0] !== "delegation" && findTrackerDir(process.cwd()) === null) {
-      console.error("darius: no .tracker/ here or above. Run darius init in the repo root to create one.");
+      console.error(`darius: ${noTreeReason(process.cwd())}. To start a tracker in this directory instead: darius init`);
     }
   });
   try {

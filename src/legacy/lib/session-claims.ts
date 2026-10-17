@@ -35,7 +35,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWriteFileSync } from "./atomic.ts";
 import { hostName } from "./host-stamp.ts";
 import { withLock } from "./worklog.ts";
-import { isStoreTree, projectRootOf, resolveTreeRef } from "./tracker-root.ts";
+import { bareSpecMatches, isStoreTree, projectRootOf, resolveTreeRef } from "./tracker-root.ts";
 
 export const CLAIMS_FILENAME = ".session-claims.json";
 
@@ -418,6 +418,7 @@ export function formatClaimLine(status: ClaimStatus, host: string = hostName()):
  *   1. relative to `cwd` (what a human types), unless `cwd` is null
  *   2. relative to the repo root (`.tracker/M1-x/02-y.md`, a thread's `spec:`)
  *   3. relative to `.tracker/` (`M1-x/02-y.md`)
+ *   4. a bare name (`02-y.md`) that exactly one milestone folder holds
  *
  * A ref that resolves to nothing, or to a file outside `.tracker/`, is kept
  * verbatim (minus `./`). `claim` and `release` refuse such a ref; readers
@@ -454,7 +455,9 @@ export function canonicalSpecRef(opts: { trackerRoot: string; ref: string; cwd?:
     const inside = insideTracker(trackerRoot, candidate);
     if (inside !== null) return inside;
   }
-  return null;
+  // A bare name (`02-y.md`) names the one spec of that name in the tree (0.100.3).
+  const bare = bareSpecMatches(trackerRoot, trimmed);
+  return bare.length === 1 ? (bare[0] ?? null) : null;
 }
 
 function isFileSafe(path: string): boolean {

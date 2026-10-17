@@ -17,7 +17,7 @@
  * never a link that points anywhere else.
  */
 
-import { lstatSync, readFileSync, readlinkSync, realpathSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { findMarker } from "./marker.ts";
@@ -172,21 +172,97 @@ export function treeRelative(input: string, where: { trackerRoot: string; checko
   return rel === "." ? "" : rel;
 }
 
+/** Folders of the tree that hold no specs. */
+const NON_SPEC_DIRS: ReadonlySet<string> = new Set(["archive", "worklog"]);
+
 /**
- * The absolute file a path argument names. Store mode: through
- * `treeRelative`, unless the path exists from `cwd` and has no `.tracker`
- * segment. Git and none mode: relative to `cwd`, as always.
+ * The specs a bare file name (`01-y.md`) names: one tracker-relative path
+ * per milestone folder that holds it, sorted. Empty for a name with a `/`
+ * or without `.md`.
+ */
+export function bareSpecMatches(trackerRoot: string, name: string): string[] {
+  if (name === "" || name.includes("/") || !name.endsWith(".md")) return [];
+  const found: string[] = [];
+  try {
+    for (const entry of readdirSync(trackerRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("_") || NON_SPEC_DIRS.has(entry.name)) continue;
+      if (lstatSync(join(trackerRoot, entry.name, name), { throwIfNoEntry: false }) !== undefined) found.push(`${entry.name}/${name}`);
+    }
+  } catch {
+    return [];
+  }
+  return found.toSorted();
+}
+
+/** The file of tracker-relative `rel` when it exists, or the one spec a bare name names; else null. */
+function findInTree(trackerRoot: string, rel: string): string | null {
+  if (rel === "") return trackerRoot;
+  const joined = join(trackerRoot, rel);
+  if (lstatSync(joined, { throwIfNoEntry: false }) !== undefined) return joined;
+  const bare = bareSpecMatches(trackerRoot, rel);
+  return bare.length === 1 ? join(trackerRoot, bare[0] ?? rel) : null;
+}
+
+/**
+ * The absolute file a path argument names (0.100.3: one resolver for every
+ * mode). The forms: tracker-relative (`M1-x/01-y.md`), a bare name
+ * (`01-y.md`, when exactly one milestone holds it), the old `.tracker/` form
+ * and an absolute path inside the tree. A relative path with no `.tracker`
+ * segment that exists from `cwd` keeps that meaning. Else it is read from the
+ * tree. Store mode never looks at a `.tracker` path in the checkout. Without
+ * a tree, or for a name that matches nothing, the answer is a path that
+ * does not exist; the verb says so with `missingTreePathMessage`.
  */
 export function resolveTreeArg(input: string, cwd: string, where: TrackerWhere = resolveTrackerRoot(cwd)): string {
-  if (where.mode !== "store") return resolve(cwd, input);
   const trimmed = input.trim();
+  if (where.mode === "none") return resolve(cwd, trimmed);
+  if (where.mode === "git") {
+    const direct = resolve(cwd, trimmed);
+    if (lstatSync(direct, { throwIfNoEntry: false }) !== undefined) return direct;
+    const gitRel = treeRelative(trimmed, where);
+    return (gitRel === null ? null : findInTree(where.trackerRoot, gitRel)) ?? direct;
+  }
   if (!isAbsolute(trimmed) && afterTrackerSegment(trimmed) === null) {
     const fromCwd = resolve(cwd, trimmed);
     if (lstatSync(fromCwd, { throwIfNoEntry: false }) !== undefined) return fromCwd;
   }
   const rel = treeRelative(trimmed, where);
   if (rel === null) return resolve(cwd, trimmed);
-  return rel === "" ? where.trackerRoot : join(where.trackerRoot, rel);
+  return findInTree(where.trackerRoot, rel) ?? join(where.trackerRoot, rel);
+}
+
+/**
+ * The text after `<verb>: ` when a path argument names nothing. It names
+ * the tracker-relative form it looked for, the tracker root and the next
+ * command. A bare name that several milestones hold lists them all. With no
+ * tree it names the directory that has none.
+ */
+export function missingTreePathMessage(input: string, kind: string, cwd: string, where: TrackerWhere = resolveTrackerRoot(cwd)): string {
+  if (where.mode === "none") return `${kind} not found: ${input.trim()} (${noTreeReason(cwd)})`;
+  const rel = treeRelative(input, where) ?? input.trim();
+  const same = bareSpecMatches(where.trackerRoot, rel);
+  if (same.length > 1) {
+    return `${kind} name is ambiguous: ${rel} matches ${same.join(", ")} (tracker root ${where.trackerRoot})\n  next: run the same command with one of those paths`;
+  }
+  return `${kind} not found: ${rel} (tracker root ${where.trackerRoot}; paths are tracker-relative, e.g. M1-x/01-y.md)\n  next: darius list specs`;
+}
+
+/**
+ * Why `cwd` has no tracker, in one sentence with the fix (0.100.3). The case
+ * of an agent that runs from a directory outside the project: no marker
+ * above it, or a marker of a project whose tracker lives elsewhere.
+ */
+export function noTreeReason(cwd: string): string {
+  let marker: ReturnType<typeof findMarker> = null;
+  try {
+    marker = findMarker(cwd);
+  } catch {
+    // A marker that does not parse is reported by the verbs that need it.
+  }
+  if (marker === null) {
+    return `${resolve(cwd)} has no .darius.toml and no .tracker/ above it, so this is not a darius project; cd into the repo that holds the tracker, then run: darius root`;
+  }
+  return `${marker.dir} is the darius project ${marker.project} but has no tracker: no .tracker/ folder and "milestone" is not in kinds; cd into the repo that holds the tracker (a clone below this directory?), then run: darius root`;
 }
 
 /**
