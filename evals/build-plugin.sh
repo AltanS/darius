@@ -12,6 +12,7 @@
 #   bin/darius                   the wrapper on PATH (lib/darius-wrapper.sh)
 #   cases/                       a copy of evals/cases, the plugin's eval dir
 #   lib/                         a copy of evals/lib, sourced by the scaffold scripts
+#   agents/demo-builder.md       a small plugin agent, for the delegation cases
 #
 # DARIUS_EVAL_SRC_REPO picks the darius checkout to test (default: this repo).
 set -euo pipefail
@@ -49,5 +50,9 @@ real_git="$(readlink -f "$(command -v git)")"
 install -m 0755 "$real_git" "$OUT/bin/git"
 cp -R "$HERE/cases" "$OUT/cases"
 cp -R "$HERE/lib" "$OUT/lib"
+
+# A plugin agent for the delegation cases. Claude Code names it darius:demo-builder. The roster
+# (`darius agents --json`) reads installed plugins, which this one is not: see seed_plugin_roster.
+cp -R "$HERE/agents" "$OUT/agents"
 
 echo "built $OUT (darius $version, $(find "$OUT/skills" -name SKILL.md | wc -l) skills)"
