@@ -88,7 +88,6 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and the checkout has no .tracker; \`darius root\` prints the tree. Spec paths are tracker-relative (\`M1-x/01-y.md\`); \`.tracker/...\` still works. None of it is in git.
 - A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first; \`onboard\` only when the operator asks.
 - Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a README or a spec file.
-- Tree history: \`tree log <path>\` lists versions. \`tree restore <path> [--at ...] [--dry-run]\` brings one back. \`tree resolve <path>\` closes a conflict, only after asking the user.
 - A \`depends_on\` entry is a spec path, or \`02\` or \`02-name\` for a spec of the same milestone.
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
 - A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file with its reason; do not fix it.
@@ -138,6 +137,15 @@ A snapshot is a dated tar.gz of this host's store, in a local folder and optiona
 - Never put the secret in a command line, a flag, or a file in the repo.
 - Exit 1: refused. Exit 2: an unknown key, or a secret on a terminal. Exit 3: the bucket could not be reached; the local snapshot is fine.
 - \`darius restore\` only when the operator asks. Other hosts: \`snapshot config push\`.
+
+## Example
+
+Start a run by hand, then complete it with its findings:
+
+    darius run start weekly-report --json
+    darius run complete <run> --outcome complete --json --findings-stdin <<'EOF'
+    ...findings...
+    EOF
 `;
 
 function tableCell(text: string): string {
