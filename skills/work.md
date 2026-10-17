@@ -37,7 +37,7 @@ Invoke `/darius-work-plan` (add `--batch N`, 2–5, when the user asks for multi
 - `commit_first` → verified-but-uncommitted specs are open debt. Invoke `/darius-commit` scoped to the listed `SPECS:`, then re-invoke work-plan. Bypass only with `--skip-commit-first` when the user explicitly defers.
 - `spec_invalid` → the deterministic spec check failed. Invoke `/darius-enrich` with the listed `PROBLEMS`, then re-invoke work-plan.
 - `complete` → nothing is left to plan. Run `darius worklog list --active --json` first. A thread at stage `committed` still owes Stage 5: review it, log the `Review:` note, then `set-stage <thread-id> reviewed`. Do this before you end the turn or archive.
-- `review_required` / `blocked` / `counsel_exhausted` → see **Review Handling**.
+- `review_required` / `blocked` / `counsel_exhausted` → see **Review Handling**. Keep the `TASKS[]` that `review_required` carries.
 
 ## Stage 2: Execute
 
@@ -110,11 +110,13 @@ Every spec gets `darius spec check` (no model) in work-plan. Only a high-risk sp
   ````
   Write the transcript with a file tool, under `trackerRoot` from `darius root --json`: `BRIEF_HASH = sha256(brief)`; the reply goes to `<trackerRoot>/{MILESTONE}/_counsel/.objects/{BRIEF_HASH}.md` (frontmatter: `model`, `timestamp`, `brief_hash`, `reviewer`), and the same bytes go to a plain copy at `<trackerRoot>/{MILESTONE}/_counsel/{spec-slug}.md`. Never a symlink: the store does not sync links. Never delete old objects. Then run the deterministic gate, never count verdicts yourself:
   `darius counsel-gate {MILESTONE}/_counsel/{spec-slug}.md --spec {SPEC}`
-  It exits 2 when an item is missing or the JSON is bad: send the reviewer the error and ask again. Act on the CLI's STATUS verbatim, then re-invoke work-plan:
-  - `ready` → proceed (the CLI stamped the spec).
-  - `needs_ack` → surface each concern (`DISSENT_SUMMARY`) verbatim with your read (genuine gap / spec-authorized / taste). On user acknowledgement re-run with `--ack-dissent`; if the user calls it a gap, run `/darius-enrich` first.
-  - `blocked` → classify each blocker first: **spec-authorized** (the spec already declared this scope or tradeoff) or **taste** (no concrete cost) → stand ground; if ALL are, run `darius counsel-gate --spec {SPEC} --override "<reason that cites the spec lines>"` and re-invoke work-plan. A **genuine gap** (a concrete, unanticipated risk) → `/darius-enrich`, revise, re-invoke. Auto-routing every block to enrich is the loop trap, classify first.
+  It exits 2 when an item is missing or the JSON is bad: send the reviewer the error and ask again. Act on the CLI's STATUS verbatim:
+  - `ready` → the CLI stamped the spec. Go to Stage 2 with the saved `TASKS[]`. Do NOT re-invoke work-plan: `worklog dispatch` refuses a stale or missing stamp. Re-invoke it only after an enrich or a dispatch refusal.
+  - `needs_ack` → surface each concern (`DISSENT_SUMMARY`) verbatim with your read (genuine gap / spec-authorized / taste). On user acknowledgement re-run with `--ack-dissent`, then proceed as for `ready`; if the user calls it a gap, run `/darius-enrich` first.
+  - `blocked` → classify each blocker first: **spec-authorized** (the spec already declared this scope or tradeoff) or **taste** (no concrete cost) → stand ground; if ALL are, run `darius counsel-gate --spec {SPEC} --override "<reason that cites the spec lines>"` and proceed as for `ready`. A **genuine gap** (a concrete, unanticipated risk) → `/darius-enrich`, revise, re-invoke work-plan (it reuses the open thread). Auto-routing every block to enrich is the loop trap, classify first.
   - `counsel_exhausted` → the round budget (`max_counsel_rounds:`, default 2) is spent and the CLI stamped `counsel: exhausted`. Do NOT re-run the review or auto-enrich. Surface the blockers and your classification; the user chooses: `darius counsel-gate --spec {SPEC} --override "<reason>"`, an explicit enrich, or park the spec.
+
+If the user parks or abandons the spec at `needs_ack`, `blocked` or `counsel_exhausted`, park the thread (`darius worklog park <thread-id> --reason "..."`) and run `darius release {SPEC}`, or the exit gate traps the turn.
 
 A review stamp is tied to the spec text. If the spec text changes after the review (an enrich, a hand edit), the stamp no longer matches, and dispatch refuses. Ticking a checklist box is not a change. `worklog dispatch` says "changed since its review" when this happens. Run the review again (spawn the reviewer, write the transcript, run `counsel-gate`), or override with a reason.
 
