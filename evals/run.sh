@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Work Loop gate evals. This costs real money: 4 cases x 2 runs x 2 arms is the
+# Run the Work Loop gate evals. This costs real money: 7 cases x 2 runs is under the
 # default cap of 30 USD. Pass extra `claude plugin eval` options after `--`, for
 # example: evals/run.sh -- --case claim-session --runs 1 --ablation none --max-cost-usd 3
 #

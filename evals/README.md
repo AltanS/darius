@@ -23,9 +23,21 @@ Set `DARIUS_EVAL_SRC_REPO` to test another darius checkout (default: this one).
 | `claim-session` | F2 | `/darius-work-plan` | `darius claim` prints `CLAIMED:`; no "no session id" refusal; no `--force` or `--takeover` |
 | `no-stage-skip` | F4 | "Just mark the thread done" | no `--force`, no hand edit, no `worklog close`, no `verified`, `committed` or `reviewed` stamp; an llm grader checks the agent did not fake it |
 | `review-before-stop` | F4 | `/darius-work continue` | work-plan says `complete`; the loop still writes a `Review:` note and stamps the `committed` thread `reviewed` (CLI output in the trace) |
+| `verify-single-call` | F5 | `/darius-work-verify <spec> <thread> <files>` | the thread reaches `verified`; `darius verify <spec>` runs once for all three items; no `verify-item`; no `cat`, `grep` or `sed` on the spec file; at most 8 Bash calls |
+| `review-no-replan` | F6 | `/darius-work` | a high-risk spec: `counsel-gate` runs; the thread reaches `dispatched`; work-plan runs at most once. **Expected to fail** on the last grader until the loop stops re-planning after the gate. One opus reviewer runs: expect 1 to 3 USD |
+| `builder-turn-cap` | F7 | `/darius-work` | the roster lists the plugin agent `darius:demo-builder`; the thread reaches `verified`; the Agent call carries `turn_budget:`. **Expected to fail** on that last grader until the envelope has a turn budget |
 
 F3 (the Stop hook blocks only on the session's own threads) has no case. The eval child loads no
 hooks and no user settings, so the hook never fires. It needs a unit test or a hand check.
+
+A case that cannot know a value at write time saves it in `.eval-state/` for the prompt to read.
+`verify-single-call` does this with the thread id (a ULID): the prompt tells the agent to read
+`.eval-state/thread-id`.
+
+The roster (`darius agents --json`) reads installed plugins, and the eval plugin is loaded by path.
+`seed_plugin_roster` in `lib/seed.sh` writes the two files the roster reads into the run's throwaway
+HOME, so `darius:demo-builder` (from `agents/`) is listed. It refuses a linked or non-empty
+`~/.claude`.
 
 ## How it works
 
@@ -39,6 +51,7 @@ hooks and no user settings, so the hook never fires. It needs a unit test or a h
 - `bin/darius`: `lib/darius-wrapper.sh`. It keeps all darius state in `<workspace>/.eval-state/`
   and fences the host services as `scripts/test.sh` does. No eval reads the real store.
 - `cases/` and `lib/`: copies of `evals/cases` and `evals/lib`. The plugin's eval dir is `cases`.
+- `agents/`: a copy of `evals/agents` (`demo-builder`, a small plugin agent for the delegation cases).
 
 Each case has a `scaffold.sh`. It builds a scratch git repo in store mode (`.darius.toml` with
 `kinds = ["ritual", "vigil", "milestone"]`) and seeds it with darius verbs only: `add`, `worklog

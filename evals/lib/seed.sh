@@ -121,3 +121,26 @@ seed_thread() {
   fi
   printf '%s\n' "$id"
 }
+
+# seed_plugin_roster : make `darius agents --json` list the eval plugin's agent (darius:demo-builder).
+# The roster reads installed_plugins.json and the enabledPlugins of settings.json under $HOME/.claude.
+# The eval plugin is loaded by path and is in neither, so the scaffold writes both into the run's
+# throwaway HOME. It refuses a HOME/.claude that is a link (run.sh links the real one for login)
+# or that already holds either file, so a real config is never written.
+seed_plugin_roster() {
+  local wrapper plugin_dir cfg
+  wrapper="$(readlink -f "$(command -v darius)")"
+  plugin_dir="$(dirname "$(dirname "$wrapper")")"
+  cfg="$HOME/.claude"
+  if [ -L "$cfg" ] || [ -e "$cfg/settings.json" ] || [ -e "$cfg/plugins/installed_plugins.json" ]; then
+    echo "seed.sh: $cfg is a link or already holds plugin state. Not writing the roster." >&2
+    return 1
+  fi
+  mkdir -p "$cfg/plugins"
+  printf '{"version":2,"plugins":{"darius@eval":[{"installPath":"%s"}]}}\n' "$plugin_dir" > "$cfg/plugins/installed_plugins.json"
+  printf '{"enabledPlugins":{"darius@eval":true}}\n' > "$cfg/settings.json"
+  darius agents --json | grep -q 'darius:demo-builder' || {
+    echo "seed.sh: the roster does not list darius:demo-builder" >&2
+    return 1
+  }
+}
