@@ -38,6 +38,28 @@ export function loader({ context, request }: Route.LoaderArgs) {
 
 export type RootData = Awaited<ReturnType<typeof loader>>;
 
+/** The frame data on screen: what the frame keeps when a read gets no answer. */
+let lastRoot: RootData | null = null;
+
+/**
+ * The frame data in the browser: the server's, or, when the read gets no
+ * answer and the worker has no copy, the data on screen. Then the frame,
+ * the strip and the tabs stay, and the page's own boundary says
+ * "No connection." with Retry (route-error.tsx). The root reads in its own
+ * request because of this; the server work is the same.
+ */
+export async function clientLoader({ serverLoader }: Route.ClientLoaderArgs) {
+  try {
+    const data = await serverLoader();
+    lastRoot = data;
+    return data;
+  } catch (cause) {
+    if (lastRoot === null || !isNetworkError(cause)) throw cause;
+    markStale(null);
+    return lastRoot;
+  }
+}
+
 // Places and the tab badges count what needs the operator, so they reload with every page.
 export function shouldRevalidate(): boolean {
   return true;
@@ -187,6 +209,9 @@ function useProbe(generatedAt: string): void {
 }
 
 export default function App({ loaderData }: Route.ComponentProps): React.ReactNode {
+  useEffect(() => {
+    lastRoot = loaderData;
+  }, [loaderData]);
   useServiceWorker(loaderData.version);
   useRefresh(loaderData.generatedAt);
   useProbe(loaderData.generatedAt);

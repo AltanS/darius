@@ -1603,6 +1603,8 @@ test("the app can be installed, get push notices and open offline: manifest, ico
   const home = await readPage("/all", context);
   assert.match(home, /<link [^>]*rel="manifest" href="\/manifest.webmanifest"/u);
   assert.match(home, /<link [^>]*rel="apple-touch-icon" href="\/apple-touch-icon.png"/u);
+  assert.match(home, /<div class="conn-slot" role="status"><\/div>/u, "the live region of the connection strip is in the page, empty while connected");
+  assert.match(home, /"routeDiscovery":\{"mode":"initial"/u, "the whole route manifest ships with the page, so the worker can save every route's files");
 });
 
 test("Coming up and Waiting on an event: dated vigils join the agenda, event vigils wait apart, the same on both pages", async () => {

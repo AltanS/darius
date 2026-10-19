@@ -257,7 +257,7 @@ function networkFirst(event, route) {
 
 // --- the page asks ---
 
-/** The page loaded before this worker took it over: save its files and the page now. */
+/** The page asks at boot: save the shell files it names, and the page itself when it names one (it loaded before this worker took it over). */
 async function warm(page, files) {
   const shell = await caches.open(SHELL_CACHE);
   for (const file of files) {
@@ -265,7 +265,7 @@ async function warm(page, files) {
     const response = await fetch(file).catch(() => null);
     if (response !== null && isStorable(response)) await shell.put(file, response);
   }
-  if (routeOf("GET", page, "navigate", self.location.origin) !== "page") return;
+  if (page === "" || routeOf("GET", page, "navigate", self.location.origin) !== "page") return;
   const response = await fetch(page, { headers: { accept: "text/html" } }).catch(() => null);
   if (response !== null && isStorable(response)) await keep(page, "page", response);
 }
