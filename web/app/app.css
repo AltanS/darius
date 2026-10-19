@@ -1473,6 +1473,56 @@
     }
   }
 
+  /* The overview strip (UX revision, overview): one wrapping line of square, number and word. No borders, no tiles, the same markup
+   * on a phone and a desktop. Each item is a link; its hit area is 44 px tall by padding, not by a box. */
+
+  .pulse-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 8px;
+    margin: 0 0 20px;
+  }
+
+  .pulse-line .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 8px 0 0;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .pulse-line a.pill:hover {
+    text-decoration: none;
+  }
+
+  .pulse-line a.pill:hover .pill-l {
+    color: var(--color-gold-hi);
+  }
+
+  .pulse-line .pill-dot,
+  .pulse-line .pill-kind {
+    position: static;
+    flex: none;
+    margin: 0;
+  }
+
+  .pulse-line .pill-n {
+    font-size: 16px;
+  }
+
+  .pulse-line .pill-l {
+    font-size: 14px;
+  }
+
+  @media (min-width: 1024px) {
+    .pulse-line {
+      gap: 0 16px;
+      margin-bottom: 28px;
+    }
+  }
+
   /* The board: on a phone the two columns dissolve and the sections take the order of the day. */
 
   .board.board-home .board-main,
@@ -2641,7 +2691,9 @@
   /* The Next line under the home verdict. */
 
   .nextup {
-    display: block;
+    display: flex;
+    align-items: center;
+    min-width: 0;
     padding: 12px 0;
     font-size: 15px;
     line-height: 1.45;
@@ -2660,22 +2712,30 @@
   }
 
   .nextup-l {
+    flex: none;
     margin-right: 8px;
     font: 600 13px/1 var(--font-sans);
     color: var(--color-muted);
   }
 
   .nextup-icon {
-    display: inline-block;
+    flex: none;
     margin-right: 6px;
-    vertical-align: -3px;
   }
 
+  /* One line: a long title ends in an ellipsis and the day stays in view. The ritual page has the full title. */
+
   .nextup-t {
-    overflow-wrap: break-word;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .nextup-w {
+    flex: none;
+    white-space: nowrap;
     color: var(--color-muted);
   }
 
