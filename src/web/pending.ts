@@ -21,7 +21,9 @@
  *
  * `pendingStarts` turns the lines into states, from the ledger and the log:
  *
- *   started  the ledger shows the run, the resume or the sweep this request asked for
+ *   started  the ledger shows the run, the resume or the sweep this request asked for;
+ *            for a run, a resume or a follow-up, the log's "started run <id>" line is enough
+ *            (a forwarded start writes its ledger line on the other host, and sync is late)
  *   refused  the spawn ended without a start, or a sweep ran and skipped
  *   starting no sign yet, and the request is younger than 15 minutes
  *   lost     no sign after 15 minutes (a late line still turns it into `started`)
@@ -39,7 +41,7 @@ import { stateDir } from "../core/paths.ts";
 import { withFileLock } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { lastSentence } from "../runner/follow-up-ready.ts";
-import type { PendingKind, PendingStart } from "./api.ts";
+import type { PendingKind, PendingPollEntry, PendingStart } from "./api.ts";
 
 /** How long a request may show `starting` before it is `lost`. */
 export const STARTING_MS = 15 * 60 * 1000;
@@ -231,6 +233,11 @@ function shownSentence(sentence: string): string {
   return chars.length <= SENTENCE_MAX ? masked : `${chars.slice(0, SENTENCE_MAX - 1).join("")}…`;
 }
 
+/** Where an ask came from, as one plain word: the web app writes `web:<viewer>`; anything else is "other". */
+export function askedFrom(who: string): "web" | "other" {
+  return who.startsWith("web:") ? "web" : "other";
+}
+
 function whoMatches(lineWho: string, who: string): boolean {
   return lineWho === who || lineWho.startsWith(`${who} `);
 }
@@ -276,7 +283,7 @@ function answer(request: PendingRequest, lines: readonly LedgerLine[], logRun: s
  * recorded end of the spawn (undefined while it is not known to have ended).
  */
 export function resolvePending(request: PendingRequest, input: { lines: readonly LedgerLine[]; output: string; ended: number | null | undefined; now: number; isForwarded?: boolean }): PendingStart {
-  const base: PendingStart = { id: request.id, at: request.at, who: request.who, kind: request.kind, project: request.project, host: request.host, state: "starting" };
+  const base: PendingStart = { id: request.id, at: request.at, who: request.who, from: askedFrom(request.who), kind: request.kind, project: request.project, host: request.host, state: "starting" };
   if (request.ritual !== undefined) base.ritual = request.ritual;
   if (request.vigil !== undefined) base.vigil = request.vigil;
   if (request.parent !== undefined) base.parent = request.parent;
@@ -287,6 +294,8 @@ export function resolvePending(request: PendingRequest, input: { lines: readonly
     const run = found.run;
     return run === undefined ? { ...base, state: "started" } : { ...base, state: "started", run };
   }
+  // The log already says which run started. For a forwarded start its ledger line lives on the other host until sync.
+  if (logRun !== null && request.kind !== "vigil-check") return { ...base, state: "started", run: logRun };
   const sentence = request.kind === "vigil-check" ? (skipDetail(input.output) ?? lastSentence(input.output)) : lastSentence(input.output);
   if (request.kind === "vigil-check" && input.ended !== undefined && skipDetail(input.output) !== null) return { ...base, state: "refused", sentence: shownSentence(sentence) };
   const hasStarted = STARTED_LINE.test(input.output);
@@ -311,6 +320,34 @@ export function pendingStarts(project: string | null, ledgerView: LedgerView, no
     resolvePending(request, { lines: ledgerView(request.project), output: logSince(request.log, request.offset), ended: registry.ended.get(request.id), now: now.getTime(), isForwarded: request.host !== here }),
   );
   return states.toSorted((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0));
+}
+
+/**
+ * The listed entries only (`GET /api/pending?ids=`), in the order asked, each resolved like `pendingStarts`.
+ * It reads the registry and the ledgers of the listed entries' projects, nothing else. An id the registry
+ * does not hold (never written, or older than 24 hours) is `unknown`.
+ */
+export function pollStarts(ids: readonly string[], ledgerView: LedgerView, now: Date = new Date()): PendingPollEntry[] {
+  const registry = readRegistry();
+  const byId = new Map(registry.requests.map((request) => [request.id, request]));
+  const here = hostId();
+  const ledgers = new Map<string, readonly LedgerLine[]>();
+  const ledgerOf = (project: string): readonly LedgerLine[] => {
+    let lines = ledgers.get(project);
+    if (lines === undefined) {
+      lines = ledgerView(project);
+      ledgers.set(project, lines);
+    }
+    return lines;
+  };
+  return ids.map((id): PendingPollEntry => {
+    const request = byId.get(id);
+    if (request === undefined || !(now.getTime() - Date.parse(request.at) < KEEP_MS)) return { id, state: "unknown" };
+    const start = resolvePending(request, { lines: ledgerOf(request.project), output: logSince(request.log, request.offset), ended: registry.ended.get(id), now: now.getTime(), isForwarded: request.host !== here });
+    const entry: PendingPollEntry = { id, state: start.state, host: start.host, at: start.at, kind: start.kind, project: start.project, item: start.vigil ?? start.ritual ?? "" };
+    if (start.run !== undefined) entry.run = start.run;
+    return entry;
+  });
 }
 
 /**

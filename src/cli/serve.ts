@@ -7,7 +7,9 @@
  * service `darius-web.service`.
  *
  *   GET /healthz             "ok", without an access check
- *   GET /api/status.json     the status as JSON
+ *   GET /api/status.json     the status as JSON (always a fresh read)
+ *   GET /api/pending?ids=a,b the states of those pending starts, nothing else
+ *                            (0.104.0, src/web/action-api.ts, pendingApi)
  *   /api/push/...            the notification button's endpoints
  *                            (src/web/push-api.ts)
  *   /api/snapshots/...       the backup controls: run now, settings, key
@@ -58,11 +60,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { gzipSync } from "node:zlib";
+
 import { errorMessage } from "../runtime.ts";
 import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
-import { ACTION_API_PREFIX, FINDING_API_PREFIX, VIGIL_API_PREFIX, actionApi, findingApi, vigilApi } from "../web/action-api.ts";
+import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREFIX, actionApi, findingApi, pendingApi, vigilApi } from "../web/action-api.ts";
 import type { WebHandler } from "../web/api.ts";
-import { webContext } from "../web/context.ts";
+import { clearStatusCache, useStatusCache, webContext } from "../web/context.ts";
 import { plainPage, renderForbidden, renderWrongHost } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
@@ -279,7 +283,42 @@ export async function respond(method: string, url: URL, requestHeaders: Headers,
   return answer;
 }
 
-function send(response: ServerResponse, answer: WebReply, isHead: boolean): void {
+/** A body shorter than this is sent as it is: gzip would save little. */
+export const GZIP_MIN_BYTES = 1024;
+
+function isCompressible(type: string): boolean {
+  return type.startsWith("text/") || type.startsWith("application/json") || type.includes("+json") || type.startsWith("image/svg+xml");
+}
+
+/** Whether an `Accept-Encoding` header allows gzip: the token is there and its q is not 0. */
+export function acceptsGzip(header: string | null | undefined): boolean {
+  if (header === null || header === undefined) return false;
+  return header.split(",").some((part) => {
+    const [token, ...params] = part.trim().toLowerCase().split(";");
+    if (token?.trim() !== "gzip") return false;
+    const q = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
+    return q === undefined || Number(q.slice(2)) > 0;
+  });
+}
+
+/**
+ * The reply with its body gzipped (level 6) when the caller accepts it and the body is text, JSON or a
+ * turbo-stream payload (`text/x-script`) of more than GZIP_MIN_BYTES. Such a reply always says
+ * `Vary: Accept-Encoding`. A 304, a HEAD, a body that is already encoded and a binary type stay as they are.
+ */
+export function compressedReply(answer: WebReply, acceptEncoding: string | null | undefined, isHead: boolean): WebReply {
+  const type = answer.headers.get("content-type") ?? "";
+  if (!isCompressible(type)) return answer;
+  answer.headers.append("vary", "Accept-Encoding");
+  if (isHead || answer.status === 304 || answer.status === 204 || answer.headers.has("content-encoding") || !acceptsGzip(acceptEncoding)) return answer;
+  const bytes = answer.body instanceof Uint8Array ? answer.body : Buffer.from(answer.body, "utf8");
+  if (bytes.length <= GZIP_MIN_BYTES) return answer;
+  answer.headers.set("content-encoding", "gzip");
+  return { status: answer.status, headers: answer.headers, body: gzipSync(bytes, { level: 6 }) };
+}
+
+function send(response: ServerResponse, original: WebReply, isHead: boolean, acceptEncoding?: string): void {
+  const answer = compressedReply(original, acceptEncoding, isHead);
   answer.headers.set("x-content-type-options", "nosniff");
   answer.headers.set("referrer-policy", "no-referrer");
   answer.headers.delete("content-length");
@@ -321,28 +360,37 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").slice(0, MAX_BODY + 1);
 }
 
+/** A write POST changed the store: the next page read must not come from the status cache. */
+function afterWrite(method: string | undefined): void {
+  if (method === "POST") clearStatusCache();
+}
+
 async function handle(request: IncomingMessage, response: ServerResponse, gate: Gate, app: WebApp): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "darius.invalid"}`);
   const isHead = request.method === "HEAD";
+  const acceptEncoding = request.headers["accept-encoding"];
+  const sendTo = (answer: WebReply): void => {
+    send(response, answer, isHead, Array.isArray(acceptEncoding) ? acceptEncoding.join(", ") : acceptEncoding);
+  };
   try {
     if (url.pathname === "/healthz") {
-      send(response, reply(200, "text/plain", "ok\n"), isHead);
+      sendTo(reply(200, "text/plain", "ok\n"));
       return;
     }
     if (!(await gate.hosts.allows(request.headers.host))) {
       const host = request.headers.host ?? "";
       console.error(`darius serve: refused ${url.pathname}: Host '${host.slice(0, 100)}' does not name this host (to allow it, add it to DARIUS_WEB_HOSTS)`);
-      send(response, reply(421, "text/html", renderWrongHost(host.slice(0, 100))), isHead);
+      sendTo(reply(421, "text/html", renderWrongHost(host.slice(0, 100))));
       return;
     }
     const access = await authorizeRequest(request.socket.remoteAddress ?? "", headersOf(request), await gateFor(gate));
     if (!access.allowed) {
       console.error(`darius serve: refused ${url.pathname}: ${access.reason}`);
-      send(response, reply(403, "text/html", renderForbidden(access.reason)), isHead);
+      sendTo(reply(403, "text/html", renderForbidden(access.reason)));
       return;
     }
     if (app.isStale()) {
-      send(response, reply(503, "text/html", plainPage("restarting", "darius was updated on this host, so the page restarts.", "Reload in a few seconds.")), isHead);
+      sendTo(reply(503, "text/html", plainPage("restarting", "darius was updated on this host, so the page restarts.", "Reload in a few seconds.")));
       console.error("darius serve: another version or web build is on disk; exiting so the service restarts with it");
       app.restart = true;
       process.emit("SIGTERM");
@@ -351,37 +399,48 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
     if (url.pathname.startsWith(PUSH_API_PREFIX)) {
       const body = await readBody(request);
       const answer = pushApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, access.who);
-      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
+      return;
+    }
+    if (url.pathname === PENDING_API_PATH) {
+      const answer = pendingApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body: "", query: url.search });
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
     if (url.pathname.startsWith(ACTION_API_PREFIX)) {
       const body = await readBody(request);
       const answer = await actionApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body, query: url.search }, { who: access.who, local: access.local === true });
-      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      afterWrite(request.method);
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
     if (url.pathname.startsWith(FINDING_API_PREFIX)) {
       const body = await readBody(request);
       const answer = await findingApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, { who: access.who, local: access.local === true });
-      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      afterWrite(request.method);
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
     if (url.pathname.startsWith(VIGIL_API_PREFIX)) {
       const body = await readBody(request);
       const answer = await vigilApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body }, { who: access.who, local: access.local === true });
-      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      afterWrite(request.method);
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
     if (url.pathname.startsWith(SNAPSHOT_API_PREFIX)) {
       const body = await readBody(request);
       const answer = await snapshotApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body });
-      send(response, reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"), isHead);
+      afterWrite(request.method);
+      sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
-    send(response, await respond(request.method ?? "GET", url, headersOf(request), access.who, app, access.local === true), isHead);
+    sendTo(await respond(request.method ?? "GET", url, headersOf(request), access.who, app, access.local === true));
   } catch (cause) {
+    // A write that threw may have changed the store before it did.
+    afterWrite(request.method);
     console.error(`darius serve: ${url.pathname}: ${errorMessage(cause)}`);
-    send(response, reply(500, "text/plain", "darius could not answer; see the journal\n"), isHead);
+    sendTo(reply(500, "text/plain", "darius could not answer; see the journal\n"));
   }
 }
 
@@ -429,6 +488,7 @@ export const serveCommand: Command = {
     const gate: Gate = { hosts: new HostCheck({ binds: binds === "auto" ? [] : binds }), allow: new Set(), whois: cachedWhois(tailscaleWhois), proxy: proxyTrust() };
     const app = new WebApp();
     const servers: Server[] = [];
+    useStatusCache(true);
     let stopRetry: () => void = noRetry;
     try {
       if (binds === "auto") stopRetry = await listenAuto(port, gate, app, servers);
@@ -436,6 +496,7 @@ export const serveCommand: Command = {
     } catch (cause) {
       console.error(`darius serve: ${errorMessage(cause)}`);
       for (const server of servers) server.close();
+      useStatusCache(false);
       return 1;
     }
     const loaded = await app.load();
@@ -451,6 +512,7 @@ export const serveCommand: Command = {
     return new Promise((resolve) => {
       const stop = (): void => {
         stopRetry();
+        useStatusCache(false);
         const code = app.restart ? 75 : 0;
         let open = servers.length;
         if (open === 0) resolve(code);

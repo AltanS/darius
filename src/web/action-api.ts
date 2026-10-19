@@ -3,7 +3,8 @@
  *
  *   POST /api/run/follow-up   body { project, run, approve: [N, ...], items?: [KEY, ...], note? }
  *                             (approve may be [] when items or the note carry the decision, 0.65.0, 0.69.0)
- *                             202 { ok: true, run, host } | 202 { ok: true, pending: true, message }
+ *                             202 { ok: true, run, host, id, at }
+ *                             | 202 { ok: true, pending: true, host, id, at, message }
  *                             | 409 or 503 { ok: false, error }
  *
  * It starts `darius run follow-up <run> --approve N ... --item KEY ... --who
@@ -64,8 +65,8 @@
  *
  *   POST /api/run/ack         body { project, run, note?, answers?: [{n, text}], runNow?: bool }
  *                             200 { ok: true }
- *                             | 200 { ok: true, run, host }            (runNow: the run started)
- *                             | 200 { ok: true, pending: true, message } (runNow: not started yet)
+ *                             | 200 { ok: true, run, host, id, at }     (runNow: the run started)
+ *                             | 200 { ok: true, pending: true, host, id, at, message } (runNow: not started yet)
  *                             | 200 { ok: true, runNow: { error } }    (the ack is written, the run did not start)
  *                             | 400 or 409 { ok: false, error }        (nothing is written)
  *   POST /api/run/ack-earlier body { project, run, runs: [ID, ...] }
@@ -87,8 +88,8 @@
  * A held run is answered and resumed from its card (0.80.0):
  *
  *   POST /api/run/answer      body { project, run, answers: [{n, text}], resume: true }
- *                             200 { ok: true, resumed: true, run, host }
- *                             | 200 { ok: true, pending: true, message }
+ *                             200 { ok: true, resumed: true, run, host, id, at }
+ *                             | 200 { ok: true, pending: true, host, id, at, message }
  *                             | 200 { ok: true, resume: { error } }  (answers written, resume refused)
  *                             | 400 or 409 { ok: false, error }      (nothing is written)
  *
@@ -131,13 +132,16 @@
  * reason, dispatch, one-vigil check, separate states"):
  *
  *   POST /api/vigil/check     body { project, slug }
- *                             202 { ok: true, started: true, host }
- *                             | 202 { ok: true, pending: true, host, message }
+ *                             202 { ok: true, started: true, host, id, at }
+ *                             | 202 { ok: true, pending: true, host, id, at, message }
+ *                             | 409 { ok: false, error, retryAt, lastCheckedAt }  (inside the cooldown)
  *                             | 400, 404, 409 or 500 { ok: false, error }
  *
  * It starts `darius vigil sweep <slug> --project P --json --who "web:<who>"`
  * detached, with its output in `<project>/sweeps/<slug>.log`, and does not
- * wait for the sweep. It waits at most CHECK_WAIT_MS for what the CLI prints
+ * wait for the sweep. Inside the 2 minute cooldown (the newest `vigil.swept` line
+ * that is no skip) it answers 409 with `retryAt` and `lastCheckedAt` before it
+ * spawns anything. It waits at most CHECK_WAIT_MS for what the CLI prints
  * at once: the "started" line once the vigil's lease is taken (202 names the
  * host), or a refusal (the daily sweep runs, another check runs, the 2 minute
  * cooldown), which comes back as 409 with the CLI's own sentence. The CLI
@@ -158,14 +162,14 @@ import { answerProblem, type QuestionAnswer } from "../core/answers.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
 import { isSlug, itemRef, listProjects, openProject } from "../core/store.ts";
-import { vigilStatus } from "../core/sweep.ts";
+import { SWEEP_COOLDOWN_MS, vigilStatus } from "../core/sweep.ts";
 import { ritualHost } from "../core/workdir.ts";
 import { ITEMS_MAX } from "../runner/follow-up.ts";
 import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
 import { viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
-import type { FollowUpReadiness } from "./api.ts";
-import { markEnded, recordPending, type PendingInput } from "./pending.ts";
+import type { FollowUpReadiness, PendingPollEntry } from "./api.ts";
+import { markEnded, pollStarts, recordPending, type LedgerView, type PendingInput } from "./pending.ts";
 import { MAX_BODY, isSameOrigin, type PushApiReply } from "./push-api.ts";
 
 export const ACTION_API_PREFIX = "/api/run/";
@@ -191,7 +195,7 @@ const BODY_KEYS: ReadonlySet<string> = new Set(["project", "run", "approve", "it
 /** An item key a run gave has at most 120 characters (src/core/result.ts, KEY_MAX). */
 const ITEM_KEY_MAX = 120;
 /** How long the POST waits for the follow-up to start or end (0.69.0). */
-export const OUTCOME_WAIT_MS = 10_000;
+export const OUTCOME_WAIT_MS = 2_500;
 const OUTCOME_POLL_MS = 100;
 /** The stderr line of `darius run follow-up` once the run started (src/cli/run-due.ts, STARTED_PREFIX). */
 const STARTED_LINE = /^darius run follow-up: started run ([0-9A-Z]{26}) on (\S+)$/mu;
@@ -334,10 +338,27 @@ function fail(status: number, error: string, id?: string): PushApiReply {
   return { status, body: id === undefined ? { ok: false, error } : { ok: false, error, id } };
 }
 
-/** `body` with the pending-starts `id` added, when there is one. */
-function withId(body: { [key: string]: JsonValue }, id: string | undefined): { [key: string]: JsonValue } {
-  if (id !== undefined) body.id = id;
+/** `body` with the pending-starts `id` and the time asked added, when there is an entry. */
+function withAsked(body: { [key: string]: JsonValue }, ask: Asked | undefined): { [key: string]: JsonValue } {
+  if (ask !== undefined) Object.assign(body, { id: ask.id, at: ask.at });
   return body;
+}
+
+/** What every start reply names, started or pending: the registry entry, the host that runs it, and when it was asked (ISO). */
+interface Asked {
+  id: string;
+  host: string;
+  at: string;
+}
+
+/** The sentence for a start the host has not confirmed within the wait. It is the normal reply of a slow start. */
+export function pendingMessage(host: string): string {
+  return `${host} has not confirmed the start yet. It shows in Now when it starts.`;
+}
+
+/** The sentence for a start the CLI refused or could not make. A trailing full stop of the reason is dropped, the sentence adds its own. */
+export function refusedMessage(host: string, reason: string): string {
+  return `${host} did not start it: ${reason.replace(/[.\s]+$/u, "")}.`;
 }
 
 /** Records in the pending-starts registry that the spawn `id` ended, whatever its code (src/web/pending.ts). */
@@ -432,6 +453,42 @@ export async function actionApi(request: ActionRequest, viewer: ActionViewer, de
   return fail(404, "no such endpoint");
 }
 
+/** The path of the light poll of pending starts (`pendingApi`). */
+export const PENDING_API_PATH = "/api/pending";
+/** At most this many ids in one poll. */
+export const PENDING_IDS_MAX = 50;
+const PENDING_ID = /^[0-9A-Z]{26}$/u;
+
+/** The ledger of a project for the poll: empty for a project that is unknown or cannot be read. */
+const pollLedger: LedgerView = (name) => {
+  try {
+    return listProjects().includes(name) ? readLedger(openProject(name)) : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * `GET /api/pending?ids=<id>,<id>` (the light poll): the state of those registry entries only, as
+ * `{ ok: true, starts: [{ id, state, host, run?, at, kind, project, item }] }`, in the order asked. An id the
+ * registry does not hold is `{ id, state: "unknown" }`. It reads the registry and the ledgers of the listed
+ * entries' projects and nothing else, so it answers fast. Like the readiness read it has no Origin check,
+ * since it changes nothing, and it refuses a cross-site caller. The loopback viewer may read it too.
+ */
+export function pendingApi(request: ActionRequest, ledgerView: LedgerView = pollLedger): PushApiReply {
+  if (request.method !== "GET" && request.method !== "HEAD") return fail(405, "GET only");
+  if (request.headers.get("sec-fetch-site") === "cross-site") return fail(403, "the request must come from the darius page");
+  const raw = new URLSearchParams(request.query ?? "").get("ids") ?? "";
+  const ids = [...new Set(raw.split(",").filter((id) => id !== ""))];
+  if (ids.length === 0) return { status: 200, body: { ok: true, starts: [] } };
+  if (ids.length > PENDING_IDS_MAX) return fail(400, `ids: at most ${String(PENDING_IDS_MAX)}`);
+  if (!ids.every((id) => PENDING_ID.test(id))) return fail(400, "ids must be start ids");
+  const starts: PendingPollEntry[] = pollStarts(ids, ledgerView);
+  // PendingPollEntry holds only strings; the round trip makes it a JSON value.
+  const json: JsonValue = JSON.parse(JSON.stringify(starts));
+  return { status: 200, body: { ok: true, starts: json } };
+}
+
 /**
  * `GET /api/run/follow-up/ready?project=&run=` (0.98.0): whether a follow-up of the run can start now, as
  * `FollowUpReadiness`. It keeps the guards of the POST except the Origin check, which protects a write, and
@@ -491,7 +548,7 @@ async function startFollowUp(request: ActionRequest, viewer: ActionViewer, deps:
   if (slug !== undefined) pending.ritual = slug;
   const id = recordPending(pending);
   watchEnd(id, started);
-  return outcomeReply(await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS }), ready.host, id);
+  return outcomeReply(await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS }), { id, host: ready.host, at });
 }
 
 /**
@@ -544,17 +601,13 @@ export async function waitForOutcome(started: StartedFollowUp, at: { log: string
 }
 
 /** The answer for an outcome: 202 with the run, 409 or 503 with the CLI's sentence, or 202 pending with a message. */
-function outcomeReply(outcome: FollowUpOutcome, host: string, id: string): PushApiReply {
-  if ("started" in outcome) return { status: 202, body: { ok: true, run: outcome.started, host: outcome.host, id } };
-  if ("pending" in outcome) {
-    const message = `The follow-up did not start within ${String(OUTCOME_WAIT_MS / 1000)} s and may still start on ${host}. Its output is in runs/<run>/follow-up.log on this host.`;
-    return { status: 202, body: { ok: true, pending: true, message, id } };
-  }
+function outcomeReply(outcome: FollowUpOutcome, asked: Asked): PushApiReply {
+  const { id, host, at } = asked;
+  if ("started" in outcome) return { status: 202, body: { ok: true, run: outcome.started, host: outcome.host, id, at } };
+  if ("pending" in outcome) return { status: 202, body: { ok: true, pending: true, host, id, at, message: pendingMessage(host) } };
   const isSsh = outcome.ended === SSH_EXIT || outcome.ended === null;
   const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
-  if (isSsh) return fail(503, `${host} did not answer: ${sentence}`, id);
-  if (outcome.ended === 0) return fail(409, `the follow-up ended without starting a run: ${sentence}`, id);
-  return fail(409, sentence, id);
+  return fail(isSsh ? 503 : 409, refusedMessage(host, sentence), id);
 }
 
 // --- acknowledge a run (0.68.0, answers and run now 0.80.0) -------------------------------
@@ -664,11 +717,11 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
   }
   if (answer.code !== 0) return fail(409, answer.error);
   if (!body.runNow || slug === undefined) return { status: 200, body: { ok: true } };
-  return runNowReply(await startRunNow(body, slug, viewer, deps, on));
+  return runNowReply(await startRunNow(body, slug, viewer, deps, on), on ?? hostId());
 }
 
 /** What a detached run verb did within the wait: the run started, is still starting, or could not start. */
-type RunNowOutcome = (Exclude<FollowUpOutcome, { ended: number | null }> | { ended: number | null; sentence: string; forwarded: boolean } | { failed: string }) & { id?: string };
+type RunNowOutcome = (Exclude<FollowUpOutcome, { ended: number | null }> | { ended: number | null; sentence: string; forwarded: boolean } | { failed: string }) & { ask?: Asked };
 
 /** The part of a pending-starts line that only the spawn knows: when it was asked, its log and the log's size before. */
 interface Spawned {
@@ -686,7 +739,7 @@ interface Spawned {
  */
 async function spawnWatched(
   deps: ActionDeps,
-  watch: { project: string; run: string; logName: string; line: RegExp; record: (spawned: Spawned) => string },
+  watch: { project: string; run: string; logName: string; line: RegExp; host: string; record: (spawned: Spawned) => string },
   build: () => { argv: string[]; on: string | undefined } | { failed: string },
 ): Promise<RunNowOutcome> {
   let started: StartedFollowUp;
@@ -704,12 +757,13 @@ async function spawnWatched(
     offset = existsSync(log) ? statSync(log).size : 0;
     started = deps.start(made.argv, log);
   } catch (cause) {
-    return { failed: `the run could not be started: ${errorMessage(cause)}` };
+    return { failed: refusedMessage(watch.host, errorMessage(cause)) };
   }
   const id = watch.record({ at: asked, log, offset });
+  const ask: Asked = { id, host: watch.host, at: asked };
   watchEnd(id, started);
   const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? OUTCOME_WAIT_MS, line: watch.line });
-  return "ended" in outcome ? { ...outcome, forwarded: on !== undefined, id } : { ...outcome, id };
+  return "ended" in outcome ? { ...outcome, forwarded: on !== undefined, ask } : { ...outcome, ask };
 }
 
 /** The host a ritual's verb goes to with `--on`, or why it cannot go. Undefined when this host is right. */
@@ -720,33 +774,28 @@ function targetHost(deps: ActionDeps, project: string, slug: string): { on: stri
 }
 
 function startRunNow(body: { project: string; run: string }, slug: string, viewer: ActionViewer, deps: ActionDeps, on: string | undefined): Promise<RunNowOutcome> {
-  const record = (spawned: Spawned): string => recordPending({ ...spawned, who: `web:${viewer.who}`, kind: "run-now", project: body.project, ritual: slug, parent: body.run, host: on ?? hostId() });
-  return spawnWatched(deps, { project: body.project, run: body.run, logName: "run-now.log", line: NOW_STARTED_LINE, record }, () => {
+  const host = on ?? hostId();
+  const record = (spawned: Spawned): string => recordPending({ ...spawned, who: `web:${viewer.who}`, kind: "run-now", project: body.project, ritual: slug, parent: body.run, host });
+  return spawnWatched(deps, { project: body.project, run: body.run, logName: "run-now.log", line: NOW_STARTED_LINE, host, record }, () => {
     const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
     if (on !== undefined) argv.push("--on", on);
     return { argv, on };
   });
 }
 
-/** The reason a verb that did not start a run gives: its sentence, or the ssh failure when it went over ssh. */
-function endedReason(outcome: { ended: number | null; sentence: string; forwarded: boolean }): string {
+/** The refusal a verb that did not start a run gives: its sentence, or the ssh failure when it went over ssh. */
+function endedReason(outcome: { ended: number | null; sentence: string; forwarded: boolean }, host: string): string {
   const sentence = outcome.sentence === "" ? `darius ended with exit code ${String(outcome.ended)} and no message` : outcome.sentence;
-  // ssh is only in play with --on; without it, exit 255 or a signal is the CLI's own.
-  const isSsh = outcome.forwarded && (outcome.ended === SSH_EXIT || outcome.ended === null);
-  if (isSsh) return `the ritual's host did not answer: ${sentence}`;
-  return outcome.ended === 0 ? `no run started: ${sentence}` : sentence;
+  return refusedMessage(host, sentence);
 }
 
 /** The answer for "run now": the ack worked, so it is always 200; the run's own fate is in the body. */
-function runNowReply(outcome: RunNowOutcome): PushApiReply {
-  const id = outcome.id;
+function runNowReply(outcome: RunNowOutcome, host: string): PushApiReply {
+  const ask = outcome.ask;
   if ("failed" in outcome) return { status: 200, body: { ok: true, runNow: { error: outcome.failed } } };
-  if ("started" in outcome) return { status: 200, body: withId({ ok: true, run: outcome.started, host: outcome.host }, id) };
-  if ("pending" in outcome) {
-    const message = `Your answer is saved. The run did not start within ${String(OUTCOME_WAIT_MS / 1000)} s and may still start. Its output is in runs/<run>/run-now.log on this host.`;
-    return { status: 200, body: withId({ ok: true, pending: true, message }, id) };
-  }
-  return { status: 200, body: withId({ ok: true, runNow: { error: endedReason(outcome) } }, id) };
+  if ("started" in outcome) return { status: 200, body: withAsked({ ok: true, run: outcome.started, host: outcome.host }, ask) };
+  if ("pending" in outcome) return { status: 200, body: withAsked({ ok: true, pending: true, host, message: pendingMessage(host) }, ask) };
+  return { status: 200, body: withAsked({ ok: true, runNow: { error: endedReason(outcome, host) } }, ask) };
 }
 
 // --- answer and resume a held run (0.80.0) -------------------------------------------------
@@ -804,20 +853,18 @@ async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: Ac
   if (written.code !== 0) return fail(409, written.error);
   const resumeArgv = ["resume", body.run, "--project", body.project, "--who", who];
   if (host.on !== undefined) resumeArgv.push("--on", host.on);
-  const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "resume", project: body.project, ritual: slug, parent: body.run, host: host.on ?? hostId() });
-  return resumeReply(await spawnWatched(deps, { project: body.project, run: body.run, logName: "resume.log", line: RESUME_STARTED_LINE, record }, () => ({ argv: ["run", ...resumeArgv], on: host.on })));
+  const where = host.on ?? hostId();
+  const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "resume", project: body.project, ritual: slug, parent: body.run, host: where });
+  return resumeReply(await spawnWatched(deps, { project: body.project, run: body.run, logName: "resume.log", line: RESUME_STARTED_LINE, host: where, record }, () => ({ argv: ["run", ...resumeArgv], on: host.on })), where);
 }
 
 /** The answer after the answers were written: the run went on, is still starting, or the resume was refused. The answers are never rolled back. */
-function resumeReply(outcome: RunNowOutcome): PushApiReply {
-  const id = outcome.id;
+function resumeReply(outcome: RunNowOutcome, host: string): PushApiReply {
+  const ask = outcome.ask;
   if ("failed" in outcome) return { status: 200, body: { ok: true, resume: { error: outcome.failed } } };
-  if ("started" in outcome) return { status: 200, body: withId({ ok: true, resumed: true, run: outcome.started, host: outcome.host }, id) };
-  if ("pending" in outcome) {
-    const message = `Your answers are saved. The run did not go on within ${String(OUTCOME_WAIT_MS / 1000)} s and may still resume. Its output is in runs/<run>/resume.log on this host.`;
-    return { status: 200, body: withId({ ok: true, pending: true, message }, id) };
-  }
-  return { status: 200, body: withId({ ok: true, resume: { error: endedReason(outcome) } }, id) };
+  if ("started" in outcome) return { status: 200, body: withAsked({ ok: true, resumed: true, run: outcome.started, host: outcome.host }, ask) };
+  if ("pending" in outcome) return { status: 200, body: withAsked({ ok: true, pending: true, host, message: pendingMessage(host) }, ask) };
+  return { status: 200, body: withAsked({ ok: true, resume: { error: endedReason(outcome, host) } }, ask) };
 }
 
 // --- dismiss earlier asks (0.80.0) ---------------------------------------------------------
@@ -972,7 +1019,7 @@ export async function findingApi(request: ActionRequest, viewer: ActionViewer, d
 
 const CHECK_KEYS: ReadonlySet<string> = new Set(["project", "slug"]);
 /** How long the POST waits for the CLI's "started" line or its refusal. A lease on a bucket takes a round trip or two. */
-export const CHECK_WAIT_MS = 5_000;
+export const CHECK_WAIT_MS = 1_500;
 /** The stderr line of `darius vigil sweep <slug>` once its lease is held (src/cli/vigil.ts, SWEEP_STARTED_PREFIX). */
 export const SWEEP_STARTED_LINE = /^darius vigil sweep: started (\S+) on (\S+)$/mu;
 /** A sweep log grows with each check; past this size the next check starts it afresh. */
@@ -1020,15 +1067,35 @@ function checkSentence(output: string): string {
 }
 
 /** The answer for a check: 202 once it started, 409 with the CLI's refusal, or 202 pending when nothing came in time. */
-function checkReply(outcome: FollowUpOutcome, output: () => string, id: string): PushApiReply {
-  if ("started" in outcome) return { status: 202, body: { ok: true, started: true, host: outcome.host, id } };
-  if ("pending" in outcome) {
-    const message = `The check did not report within ${String(CHECK_WAIT_MS / 1000)} s and may still start on ${hostId()}. Reload in a moment.`;
-    return { status: 202, body: { ok: true, pending: true, host: hostId(), message, id } };
-  }
-  if (outcome.ended === null) return fail(500, "the check could not be started", id);
+function checkReply(outcome: FollowUpOutcome, output: () => string, asked: Asked): PushApiReply {
+  const { id, host, at } = asked;
+  if ("started" in outcome) return { status: 202, body: { ok: true, started: true, host: outcome.host, id, at } };
+  if ("pending" in outcome) return { status: 202, body: { ok: true, pending: true, host, id, at, message: pendingMessage(host) } };
+  if (outcome.ended === null) return fail(500, refusedMessage(host, "the check could not be started"), id);
   const sentence = checkSentence(output());
-  return fail(409, sentence === "" ? `the check ended with exit code ${String(outcome.ended)} and no message` : sentence, id);
+  return fail(409, refusedMessage(host, sentence === "" ? `the check ended with exit code ${String(outcome.ended)} and no message` : sentence), id);
+}
+
+/** `HH:MM` on this host's clock. */
+function clockTime(at: number): string {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * A repeat check inside the cooldown, answered before anything is spawned (the CLI would refuse it with a
+ * sentence about `--force`, which the web cannot pass). The rule is the CLI's `cooldownLeftMs`: the newest
+ * `vigil.swept` line that is not a skip. The body carries both times so a client can word its own sentence.
+ */
+export function cooldownReply(lines: readonly LedgerLine[], now: number): PushApiReply | null {
+  const last = lines.findLast((line) => line.type === "vigil.swept" && line.outcome !== "skipped");
+  if (last === undefined) return null;
+  const checked = Date.parse(last.at);
+  const retry = checked + SWEEP_COOLDOWN_MS;
+  if (Number.isNaN(checked) || retry <= now) return null;
+  const minutes = Math.max(1, Math.round((now - checked) / 60_000));
+  const error = `Checked ${String(minutes)} min ago. Check again at ${clockTime(retry)}.`;
+  return { status: 409, body: { ok: false, error, retryAt: new Date(retry).toISOString(), lastCheckedAt: last.at } };
 }
 
 /** One request under VIGIL_API_PREFIX, already past the access check. */
@@ -1041,9 +1108,12 @@ export async function vigilApi(request: ActionRequest, viewer: ActionViewer, dep
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
   const project = openProject(body.project);
   if (project.readItem("vigil", body.slug) === null) return fail(404, `no vigil ${body.slug} in ${body.project}`);
-  const status = vigilStatus(body.slug, linesFor(readLedger(project), itemRef("vigil", body.slug)));
+  const lines = linesFor(readLedger(project), itemRef("vigil", body.slug));
+  const status = vigilStatus(body.slug, lines);
   if (status.state === "closed") return fail(409, `vigil '${body.slug}' is closed; there is nothing to check`);
   if (status.paused) return fail(409, `vigil '${body.slug}' is paused${status.pausedUntil === undefined ? "" : ` until ${status.pausedUntil}`}; resume it to check it`);
+  const cooling = cooldownReply(lines, Date.now());
+  if (cooling !== null) return cooling;
   const dir = join(project.root, "sweeps");
   const log = join(dir, `${body.slug}.log`);
   let started: StartedFollowUp;
@@ -1060,5 +1130,5 @@ export async function vigilApi(request: ActionRequest, viewer: ActionViewer, dep
   const id = recordPending({ at, who: `web:${viewer.who}`, kind: "vigil-check", project: body.project, vigil: body.slug, host: hostId(), log, offset });
   watchEnd(id, started);
   const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? CHECK_WAIT_MS, line: SWEEP_STARTED_LINE });
-  return checkReply(outcome, () => logSince(log, offset), id);
+  return checkReply(outcome, () => logSince(log, offset), { id, host: hostId(), at });
 }

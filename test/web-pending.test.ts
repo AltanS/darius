@@ -118,7 +118,38 @@ test("the run id in the log's started line finds the run whatever its time or wh
   const odd = ledgerLine("run.started", "someone-else", "2026-10-15T08:00:00.000Z", { item: "ritual/daily", run: CHILD });
   const found = resolve(request(), [odd], STARTED_TEXT);
   assert.deepEqual([found.state, found.run], ["started", CHILD]);
-  assert.equal(resolve(request({ kind: "resume" }), [odd], `darius run resume: started run ${CHILD} on host-a\n`).state, "starting", "a resume is not found by a run start");
+  assert.equal(resolve(request({ kind: "resume" }), [odd], "").state, "starting", "a resume is not found by a run start");
+});
+
+test("a forwarded start resolves from the log line: run-now, resume and follow-up are started with the logged run, though the ledger has no line yet", () => {
+  const forwarded = (extra: Partial<PendingRequest>): PendingRequest => request({ host: "host-b", ...extra });
+  const text = (verb: string): string => `warning: ssh banner\ndarius ${verb}: started run ${CHILD} on host-b\n`;
+  const cases: Array<[PendingRequest, string]> = [
+    [forwarded({ kind: "run-now" }), text("run now")],
+    [forwarded({ kind: "resume" }), text("run resume")],
+    [forwarded({ kind: "follow-up" }), text("run follow-up")],
+  ];
+  for (const [req, output] of cases) {
+    const found = resolvePending(req, { lines: [], output, ended: undefined, now: NOW, isForwarded: true });
+    assert.deepEqual([req.kind, found.state, found.run], [req.kind, "started", CHILD]);
+    const ended = resolvePending(req, { lines: [], output, ended: 0, now: NOW, isForwarded: true });
+    assert.deepEqual([req.kind, ended.state, ended.run], [req.kind, "started", CHILD], "the spawn ended after the start line");
+  }
+});
+
+test("a vigil check keeps its rule: the started line of the log is not enough, the sweep line is", () => {
+  const check = request({ kind: "vigil-check", vigil: "queue", host: "host-b" });
+  const output = "darius vigil sweep: started queue on host-b\n";
+  assert.equal(resolvePending(check, { lines: [], output, ended: undefined, now: NOW, isForwarded: true }).state, "starting");
+  assert.equal(resolvePending(check, { lines: [], output, ended: 0, now: NOW, isForwarded: true }).state, "starting");
+  const swept = ledgerLine("vigil.swept", "web:altan via ssh", "2026-10-15T09:58:20.000Z", { item: "vigil/queue", outcome: "held" });
+  assert.equal(resolvePending(check, { lines: [swept], output, ended: undefined, now: NOW, isForwarded: true }).state, "started");
+});
+
+test("a start knows where it came from without parsing who", () => {
+  assert.equal(resolve(request()).from, "web");
+  assert.equal(resolve(request({ who: "timer" })).from, "other");
+  assert.equal(resolve(request({ who: "web:altan via the proxy" })).who, "web:altan via the proxy", "the raw who stays");
 });
 
 test("refused: an ended spawn without a start line says the CLI's sentence; no sentence says the exit code; null says it could not start", () => {
@@ -131,7 +162,7 @@ test("refused: an ended spawn without a start line says the CLI's sentence; no s
 
 test("a warning before the start line, or text with no end, stays starting; after 15 minutes it is lost with the last line", () => {
   assert.equal(resolve(request(), [], "warning: ssh login banner\n").state, "starting");
-  assert.equal(resolve(request(), [], `warning: ssh login banner\n${STARTED_TEXT}`, 0).state, "starting", "ended, but it said started: the ledger line is coming");
+  assert.equal(resolve(request(), [], `warning: ssh login banner\n${STARTED_TEXT}`, 0).state, "started", "ended, but it said started: the log names the run");
   const old = Date.parse(ASKED) + STARTING_MS + 1000;
   const lost = resolve(request(), [], "warning: still waiting\n", undefined, old);
   assert.deepEqual([lost.state, lost.sentence], ["lost", "warning: still waiting"]);
@@ -234,7 +265,7 @@ test("pendingStarts lists the last 24 hours, newest first, for one project or al
     // Times relative to the clock: a write compacts requests older than 24 hours by the real time.
     const base = Date.now() - 60 * 60_000;
     const at = (offsetMs: number): string => new Date(base + offsetMs).toISOString();
-    const first = recordPending(input({ project: "alpha", at: at(0), log, ritual: "daily" }));
+    const first = recordPending(input({ project: "alpha", at: at(0), log: logFile(""), ritual: "daily" }));
     const second = recordPending(input({ project: "beta", at: at(30 * 60_000), log, ritual: "daily" }));
     const views: string[] = [];
     const view = (name: string): LedgerLine[] => {

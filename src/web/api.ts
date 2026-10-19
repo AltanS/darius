@@ -336,6 +336,8 @@ export interface VigilRow {
   pausedUntil: string | null;
   /** Set when only the legacy `.tracker` holds the vigil: darius cannot check it (0.87.0). */
   legacy?: true;
+  /** When the newest sweep that was no skip ended, an ISO time: the clock of the check cooldown. Absent until a sweep ran. */
+  lastCheckedAt?: string;
 }
 
 /** The failure block of the vigil page. Every text is untrusted: the page shows it as text. */
@@ -1036,6 +1038,65 @@ export interface PendingStart {
   /** The run, once started. */
   run?: string;
   sentence?: string;
+  /** Where the ask came from, in one plain word, so a page can say "from the web" without reading `who`. `who` stays raw for audit. */
+  from?: "web" | "other";
+}
+
+/**
+ * What every start endpoint says about the entry it recorded, started or pending, so a page can show
+ * the pending state from the reply without a reload (POST /api/vigil/check, /api/run/follow-up,
+ * /api/run/ack with runNow, /api/run/answer). `id` is the registry entry (`GET /api/pending?ids=`),
+ * `host` the host that runs it, `at` when it was asked (ISO).
+ */
+export interface StartAsked {
+  id: string;
+  host: string;
+  at: string;
+}
+
+/** The start was seen within the wait: `started: true` (a check), or `run` (a run verb; `resumed: true` for a resume). */
+export interface StartedReply extends StartAsked {
+  ok: true;
+  started?: true;
+  resumed?: true;
+  run?: string;
+}
+
+/** The normal reply of a slow start: nothing confirmed within the wait. `message` is a plain sentence naming the host. */
+export interface PendingReply extends StartAsked {
+  ok: true;
+  pending: true;
+  message: string;
+}
+
+/** A repeat check inside the cooldown (HTTP 409). `error` is a plain sentence; both times are ISO. */
+export interface CooldownRefusal {
+  ok: false;
+  error: string;
+  retryAt: string;
+  lastCheckedAt: string;
+}
+
+/** One entry of `GET /api/pending?ids=a,b`. `unknown`: the id is not in the registry (older than 24 h, or never written). */
+export type PendingPollEntry =
+  | {
+      id: string;
+      state: PendingState;
+      host: string;
+      /** The run, once started. */
+      run?: string;
+      at: string;
+      kind: PendingKind;
+      project: string;
+      /** The ritual or the vigil slug. */
+      item: string;
+    }
+  | { id: string; state: "unknown" };
+
+/** The body of `GET /api/pending?ids=a,b`: the listed entries only, in the order asked. */
+export interface PendingPollReply {
+  ok: true;
+  starts: PendingPollEntry[];
 }
 
 // --- the handler ---------------------------------------------------------------------------
