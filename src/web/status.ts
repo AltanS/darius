@@ -201,7 +201,8 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout:
 function vigilRowOf(slug: string, doc: Document<Vigil>, lines: readonly LedgerLine[]): VigilRow {
   const status = vigilStatus(slug, lines);
   const failure = status.flagged ? lastFailure(slug, lines, doc.body) : null;
-  return {
+  const lastSweep = lines.findLast((line) => line.type === "vigil.swept" && line.outcome !== "skipped");
+  const row: VigilRow = {
     slug,
     title: doc.header.title,
     state: status.state,
@@ -215,6 +216,8 @@ function vigilRowOf(slug: string, doc: Document<Vigil>, lines: readonly LedgerLi
     paused: status.paused,
     pausedUntil: status.pausedUntil ?? null,
   };
+  if (lastSweep !== undefined) row.lastCheckedAt = lastSweep.at;
+  return row;
 }
 
 function vigilRows(project: Project, ledger: LedgerLine[]): VigilRow[] {
