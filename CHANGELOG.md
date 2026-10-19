@@ -2,6 +2,27 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.104.0] - 2026-10-19
+
+### Added
+
+- The web UI keeps a service worker. It saves the shell and the last copy of each page, so a page opens with no connection. A connection strip says No connection with the saved time, then Connected. While the connection is lost the page asks `/healthz` every 5 seconds and reloads its data when it answers. A read with no answer shows No connection with Retry. A POST fails fast while lost, and nothing is queued.
+- `GET /api/pending` answers which starts are still pending. One light poll follows a start with it, and the page reload polling is gone.
+- New state words in the web UI: plain start messages, and the words of a refused or lost check.
+- `serve` keeps a 10 second status cache. A write clears it.
+- `serve` sends gzip when the browser accepts it.
+
+### Changed
+
+- The emblem loader blinks. A busy gem brings its five elements into focus one at a time in the first 1.8 s, then all five blink together twice (lit 0.2 s, dim 0.2 s, twice) in the last 0.8 s. The loop is 2.6 s. Each element has its own keyframes, with no `animation-delay`. The reduced-motion rule is unchanged.
+- One gem per wait. The wait line under a button is text only and shows after 2 seconds, because the button already animates.
+- The gem in the shell shows for navigation only. A reload of the data never lights it. The tab and the Places row light at once from the page the tap goes to.
+- A start answers in 1.5 to 2.5 seconds. The page follows it with `GET /api/pending` instead of waiting on the request.
+- Known results render at once, with no spinner first.
+- The check cooldown is data, with `lastCheckedAt`. Check now switches to the checking line from the reply and shows the cooldown and the result line.
+- The overview strip is one wrapping line, and the Next line is one line. Done lately is eight one-line rows, and a long title ends in an ellipsis. A pending start shows once, in Now.
+- Small buttons and inline action links have 44 px tap targets.
+
 ## [0.103.0] - 2026-10-17
 
 ### Added
