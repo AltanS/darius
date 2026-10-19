@@ -1,4 +1,4 @@
-/** The delay hook of the shell's busy gem (0.98.0; the rule is in `busy.ts`). */
+/** The delay hook of the busy gem and of the wait line (the rules are in `busy.ts` and `wait-line.tsx`). */
 
 import { useEffect, useState } from "react";
 

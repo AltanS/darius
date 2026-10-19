@@ -13,7 +13,7 @@
  */
 
 import { useEffect } from "react";
-import { Link, useLocation, useNavigation, useRevalidator, useRouteLoaderData } from "react-router";
+import { Link, useLocation, useNavigation, useRouteLoaderData } from "react-router";
 
 import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
@@ -48,7 +48,7 @@ interface TopBarProps {
   host: boolean;
   /** Keyed by the address, so the drawer closes after each navigation. */
   pathKey: string;
-  /** The page is loading and has taken more than 300 ms: the gem blinks. */
+  /** The router has navigated for more than 300 ms: the gem blinks. A reload of the data in place does not count. */
   busy: boolean;
 }
 
@@ -96,20 +96,23 @@ interface ShellProps {
 
 export function Shell({ data, children }: ShellProps): React.ReactNode {
   useMenuDismiss();
-  // The gems of the bar and of Places blink while a page loads (0.98.0): navigation or a reload that takes over 300 ms.
+  // The gems of the bar and of Places blink while the router navigates for over 300 ms. The minute refresh, the poll of a start and the load after an action do not count.
   const navigation = useNavigation();
-  const revalidator = useRevalidator();
-  const busy = useAfter(isLoading(navigation.state, revalidator.state), BUSY_AFTER_MS);
+  const busy = useAfter(isLoading(navigation.state), BUSY_AFTER_MS);
   const location = useLocation();
-  // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind.
+  // The tab and the Places row light from the page the tap goes to, not from the page that is on screen: the tap shows at once, before the loader answers.
+  const shown = navigation.location ?? location;
+  // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind, but only for the run on screen.
   const runKind = useRouteLoaderData<typeof runLoader>("routes/run")?.kind;
+  const shownPlace = placeOf(shown.pathname);
+  const section = sectionOf(shownPlace, shown.pathname === location.pathname ? runKind : undefined);
+  // The scope, the cookie and the top bar follow the page on screen, so a tap that is cancelled leaves nothing behind.
   const place = placeOf(location.pathname);
   const scope = effectiveScope(place, data.lastScope);
   const host = place.kind === "host";
-  const section = sectionOf(place, runKind);
   // Runs and Activity are places, not tabs: they light a Places row and no tab.
   const tabLit = section === "runs" || section === "activity" ? null : section;
-  const lit: LitRow | null = host ? hostRowOf(location.pathname) : place.kind === "overview" ? "overview" : section;
+  const lit: LitRow | null = shownPlace.kind === "host" ? hostRowOf(shown.pathname) : shownPlace.kind === "overview" ? "overview" : section;
   const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
   // Remember the scope you are in, for the host pages and the error pages. A path with no scope (a 404) says nothing.
   const remembered = host || (place.kind === "unknown" && place.scope === null) ? undefined : place.scope;
