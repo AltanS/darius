@@ -8,8 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { HostStatus, PendingStart, ProjectActivityEntry, ProjectStatus, RitualRow, RunRow, VigilRow } from "../src/web/api.ts";
-import { doneLately, homeView, type DonePending, type DoneReceipt, type DoneRow } from "../web/app/lib/home.ts";
+import type { HostStatus, PendingStart, ProjectActivityEntry, ProjectStatus, RitualRow, RunDetail, RunRow, VigilRow } from "../src/web/api.ts";
+import { doneLately, DONE_ROWS, homeView, nowStarts, type DonePending, type DoneReceipt, type DoneRow } from "../web/app/lib/home.ts";
 import { pendingText, receiptText, NO_FACTS } from "../web/app/lib/receipt.ts";
 
 const NOW = Date.parse("2026-10-15T09:30:00.000Z");
@@ -171,14 +171,89 @@ test("a check and a finding close by a person show; a check by the timer does no
   assert.equal(rows[1]?.href, "/w/shop/findings");
 });
 
-test("a start without a run sits on top with its sentence, whatever the other rows say", () => {
+test("a refused start sits on top with its sentence, whatever the other rows say", () => {
   const answered = entry("ack-answered", "2026-10-15T09:20:00.000Z", { text: "Answered by web:altan", detail: ["Q1: y"] });
-  const rows = doneLately(status([SHOP]), [start({ at: "2026-10-15T09:12:00.000Z" })], [answered], NOW);
+  const rows = doneLately(status([SHOP]), [start({ at: "2026-10-15T09:12:00.000Z", state: "refused", sentence: "run is still running" })], [answered], NOW);
   assert.deepEqual(rows.map((row) => row.kind), ["pending", "receipt"]);
   const top = pendings(rows)[0];
-  assert.equal(top?.text, "Starting a follow-up on host-b, asked 09:12 by web:altan");
-  assert.deepEqual(top?.word, { tone: "run", label: "Starting" });
-  assert.equal(top?.retry, null);
+  assert.deepEqual(top?.word, { tone: "bad", label: "Not started" });
+  assert.deepEqual(rows[1] !== undefined && rows[1].kind === "receipt" ? rows[1].word : null, { tone: "idle", label: "Answered" });
+});
+
+test("a start that waits for its run is not a Done lately row", () => {
+  assert.deepEqual(doneLately(status([SHOP]), [start()], [], NOW), []);
+});
+
+test("a refused or lost start leaves Done lately once a later start of the same item worked", () => {
+  const refused = start({ id: "r", at: "2026-10-15T09:00:00.000Z", state: "refused", sentence: "no slot" });
+  assert.equal(pendings(doneLately(status([SHOP]), [refused], [], NOW)).length, 1);
+  const worked = start({ id: "ok", at: "2026-10-15T09:10:00.000Z", state: "started", run: "01NEW" });
+  assert.equal(pendings(doneLately(status([SHOP]), [refused, worked], [], NOW)).length, 0, "a later started entry");
+  const earlier = start({ id: "early", at: "2026-10-15T08:00:00.000Z", state: "started", run: "01OLD" });
+  assert.equal(pendings(doneLately(status([SHOP]), [refused, earlier], [], NOW)).length, 1, "an earlier one does not count");
+  const other = start({ id: "other", at: "2026-10-15T09:10:00.000Z", state: "started", ritual: "other", run: "01OTH" });
+  assert.equal(pendings(doneLately(status([SHOP]), [refused, other], [], NOW)).length, 1, "another item does not count");
+  const newer = project("shop", [REPORT], [run("01NEWER", "ritual/report", "2026-10-15T09:20:00.000Z", { phase: "running", outcome: null, endedAt: null })]);
+  assert.equal(pendings(doneLately(status([newer]), [refused], [], NOW)).length, 0, "a newer run of the item");
+  const check = start({ id: "c", kind: "vigil-check", vigil: "soak", ritual: undefined, parent: undefined, state: "lost" });
+  const swept = project("shop", [REPORT], [run("01SWEEP", "vigil/soak", "2026-10-15T09:20:00.000Z")], [vigil("soak")]);
+  assert.equal(pendings(doneLately(status([swept]), [check], [], NOW)).length, 0, "a newer sweep of the vigil");
+});
+
+test("Now shows a pending check as Checking and a pending run as Starting, with the time and no host name or who", () => {
+  const shop = project("shop", [REPORT], [], [vigil("soak")]);
+  const check = start({ id: "c", at: "2026-10-15T09:18:00.000Z", kind: "vigil-check", vigil: "soak", ritual: undefined, parent: undefined });
+  const runNow = start({ id: "r", at: "2026-10-15T09:20:00.000Z", kind: "run-now", parent: undefined });
+  const rows = nowStarts(status([shop]), [check, runNow, start({ id: "x", state: "started", run: "01X" })], []);
+  assert.deepEqual(rows.map((row) => [row.id, row.word.label, row.title, row.tail]), [
+    ["start-r", "Starting", "Title of report", "asked 09:20 from the web"],
+    ["start-c", "Checking", "Vigil soak", "asked 09:18 from the web"],
+  ]);
+  assert.equal(rows[1]?.item, "vigil");
+  assert.equal(rows[1]?.href, "/w/shop/vigils/soak");
+  assert.equal(JSON.stringify(rows).includes("web:altan"), false);
+  assert.equal(JSON.stringify(rows).includes("host-b"), false);
+});
+
+test("Now shows no row for a check whose flagged card in Needs you draws its own line", () => {
+  const flagged = Object.assign(vigil("soak"), { flagged: true, state: "armed" as const });
+  const shop = project("shop", [REPORT], [], [flagged]);
+  const check = start({ id: "c", kind: "vigil-check", vigil: "soak", ritual: undefined, parent: undefined });
+  const feed = { activity: [], pending: [check] };
+  const view = homeView(status([shop]), () => null, undefined, feed);
+  assert.equal(view.needs.length, 1);
+  assert.deepEqual(view.starting, []);
+  assert.equal(homeView(status([shop]), () => null, undefined, { ...feed, canWrite: false }).starting.length, 1, "a viewer who cannot write sees no line on the card");
+  const quiet = project("shop", [REPORT], [], [vigil("soak")]);
+  assert.equal(homeView(status([quiet]), () => null, undefined, feed).starting.length, 1, "an unflagged vigil has no card");
+});
+
+test("Done lately keeps the newest rows only, one line each: no extract, no second line", () => {
+  const notes = Array.from({ length: DONE_ROWS + 4 }, (_, index) => entry("ack-note", `2026-10-15T09:${String(10 + index).padStart(2, "0")}:00.000Z`, { text: `Noted by web:altan: n${index}`, tone: "idle", run: `01RUN${index}` }));
+  const view = homeView(status([SHOP]), () => null, undefined, { activity: notes, pending: [] });
+  assert.equal(view.doneLately.length, DONE_ROWS);
+  assert.equal(view.doneLately[0]?.at, "2026-10-15T09:21:00.000Z", "the newest first");
+  const finished = run("01DONE", "ritual/report", "2026-10-15T05:00:00.000Z", { findingsSha: "abc" });
+  const detail: RunDetail = {
+    project: "shop",
+    row: finished,
+    itemKind: "ritual",
+    itemSlug: "report",
+    findings: [{ kind: "paragraph", lines: [[{ kind: "text", text: "A long paragraph of findings." }]] }],
+    result: null,
+    followUpOf: null,
+    followUps: [],
+    origin: { kind: "schedule", who: "timer" },
+    readBy: [],
+    children: [],
+    skillHash: null,
+  };
+  const done = homeView(status([project("shop", [REPORT], [finished])]), () => detail).doneLately[0];
+  assert.equal(done?.kind, "run");
+  assert.equal(done?.kind === "run" ? done.card.report : "x", null);
+  const failed = run("01BAD", "ritual/report", "2026-10-15T06:00:00.000Z", { outcome: "failed", findingsSha: "abc" });
+  const need = homeView(status([project("shop", [REPORT], [failed])]), () => detail).needs[0];
+  assert.notEqual(need?.report, null, "a failed card in Needs you keeps its extract");
 });
 
 test("a refused or lost start shows the sentence and a Try again link to the parent run", () => {

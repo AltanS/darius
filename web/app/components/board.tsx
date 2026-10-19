@@ -4,7 +4,7 @@ import { Link } from "react-router";
 
 import type { MdBlock } from "../../../src/web/api.ts";
 import type { NextLine } from "../lib/agenda.ts";
-import type { Ask, Card, DoneRow, NowRun, Piece, Segment } from "../lib/home.ts";
+import type { Ask, Card, DoneRow, NowRun, NowStart, Piece, Segment } from "../lib/home.ts";
 import { RUNNING } from "../lib/state-words.ts";
 import type { Excerpt } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
@@ -65,13 +65,13 @@ interface StatusStripProps {
   segments: readonly Segment[];
 }
 
-/** The status strip: the `Pill` segments of the project page, over all projects. Each segment is a link to what it counts. */
+/** The status strip: one wrapping line of `Pill` items with no borders, the same on a phone and a desktop. Each item is a link to what it counts. */
 export function StatusStrip({ segments }: StatusStripProps): React.ReactNode {
   if (segments.length === 0) return null;
   return (
-    <nav className="pulse pulse-home" aria-label="Summary">
+    <nav className="pulse-line" aria-label="Summary">
       {segments.map((segment) => (
-        <Pill key={segment.key} label={segment.label} value={segment.count} tone={segment.tone} href={segment.href} live={segment.live} kind={segment.kind} />
+        <Pill key={segment.key} label={segment.label} value={segment.count} tone={segment.tone} href={segment.href} kind={segment.kind} />
       ))}
     </nav>
   );
@@ -79,10 +79,12 @@ export function StatusStrip({ segments }: StatusStripProps): React.ReactNode {
 
 interface NowListProps {
   runs: readonly NowRun[];
+  /** Starts that wait for their run. */
+  starts?: readonly NowStart[];
 }
 
-/** One row per run that runs now, with its project, how long it has run and the sweeping light. */
-export function NowList({ runs }: NowListProps): React.ReactNode {
+/** One row per run that runs now, with its project, how long it has run and the sweeping light; then one row per start that has not begun yet, with the busy gem. */
+export function NowList({ runs, starts = [] }: NowListProps): React.ReactNode {
   return (
     <RowList>
       {runs.map((run) => (
@@ -104,6 +106,9 @@ export function NowList({ runs }: NowListProps): React.ReactNode {
             </>
           }
         />
+      ))}
+      {starts.map((start) => (
+        <Row key={start.id} id={start.id} kind={start.item} manual={start.manual} href={start.href} title={start.title} busy chips={<KindWord kind={start.item} manual={start.manual} />} state={start.word} meta={[start.project]} time={start.tail} />
       ))}
     </RowList>
   );
@@ -129,7 +134,7 @@ interface DoneRowsProps {
   rows: readonly DoneRow[];
 }
 
-/** The Done lately rows: starts that show no run, the operator's decisions, and what finished. A finished run opens its report; a desktop shows an excerpt under it. */
+/** The Done lately rows, one line each: the state word, the title of the item, its workspace and the time. The title opens the run. A refused start keeps its sentence and the way to try again. */
 export function DoneRows({ rows }: DoneRowsProps): React.ReactNode {
   return (
     <RowList>
@@ -144,13 +149,9 @@ export function DoneRows({ rows }: DoneRowsProps): React.ReactNode {
             manual={card.manual}
             href={card.href}
             title={card.title}
-            chips={card.item === null ? undefined : <KindWord kind={card.item} manual={card.manual} />}
             state={card.word.ink === "plain" || card.word.ink === "mute" ? null : { tone: card.word.ink, label: card.word.text }}
-            meta={card.meta}
+            meta={[card.meta[0] ?? ""].filter((part) => part !== "")}
             time={card.side === null ? undefined : card.side.text}
-            acts={card.actions[0] === undefined ? undefined : <Link to={card.actions[0].href}>{card.actions[0].text}</Link>}
-            note={card.meta2}
-            excerpt={card.report === null ? undefined : <Report report={card.report} lines={2} fades={false} />}
           />
         );
       })}

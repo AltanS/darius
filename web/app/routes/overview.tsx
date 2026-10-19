@@ -34,7 +34,7 @@ export function loader({ context, request, params }: Route.LoaderArgs) {
   const only = scope.workspace === null ? undefined : projects[0];
   // The ledger events and the starts of the last day: they are the receipts of Done lately.
   const since = new Date(Date.parse(status.generatedAt) - DAY).toISOString();
-  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace) };
+  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace), canWrite: context.canWrite };
   return {
     workspace: scope.workspace,
     home: homeView(status, read, scope, feed),
@@ -146,8 +146,8 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
  * lately and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { home, extras, workspaces, canWrite } = loaderData;
-  const { verdict, tone, sub, next, strip, now, needs, doneLately, health } = home;
+  const { home, extras, workspaces, canWrite, workspace } = loaderData;
+  const { verdict, tone, sub, next, strip, now, starting, needs, doneLately, health } = home;
   return (
     <div className="proj ov">
       <section className="verdict">
@@ -169,10 +169,10 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
             </section>
           )}
           {workspaces === null ? null : <WorkspaceList rows={workspaces} />}
-          {now.length === 0 ? null : (
+          {now.length === 0 && starting.length === 0 ? null : (
             <section className="section sec-now" id="now">
               <SectHead title="Now" />
-              <NowList runs={now} />
+              <NowList runs={now} starts={starting} />
             </section>
           )}
           {extras === null ? null : <LatestReports extras={extras} />}
@@ -181,7 +181,7 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
         <aside className="board-rail">
           {doneLately.length === 0 ? null : (
             <section className="section sec-last" id="done">
-              <SectHead title="Done lately" />
+              <SectHead title="Done lately" aside={<Link to={href({ to: "section", ws: workspace, section: "activity" })}>All activity</Link>} />
               <div className="panel">
                 <DoneRows rows={doneLately} />
               </div>

@@ -16,19 +16,16 @@ interface PillProps {
   tone: Tone;
   /** A `#anchor` scrolls the page, anything else opens the route; null when there is nothing to open. */
   href: string | null;
-  /** Sweep a light along the top edge while the count is above zero. */
-  live?: boolean;
   /** Mark the segment with the icon of a kind instead of a square. */
   kind?: Kind | null;
 }
 
-/** One count of the status strip. The whole segment is the link. */
-export function Pill({ label, value, tone, href: target, live = false, kind = null }: PillProps): React.ReactNode {
+/** One count of the status strip: a square, the number and the word, all one link. The ring on the square of a running count is its only motion. */
+export function Pill({ label, value, tone, href: target, kind = null }: PillProps): React.ReactNode {
   const on = value > 0;
   const className = `pill tone-${on ? tone : "idle"}`;
   const body = (
     <>
-      {on && live ? <span className="live-bar" aria-hidden="true" /> : null}
       {kind === null ? <span className="pill-dot" aria-hidden="true" /> : <KindIcon kind={kind} size={14} className={`pill-kind${on ? "" : " is-off"}`} />}
       <span className="pill-n">{value}</span>
       <span className="pill-l">{label}</span>

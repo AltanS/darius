@@ -39,7 +39,7 @@ import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, r
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { answerBefore, pendingText, readerOf, readsAnswers, receiptText, type ReceiptFacts } from "./receipt.ts";
-import { ASKS_YOU, datePhrase, FLAGGED, NOT_STARTED, RUNNING, STARTING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
+import { ASKS_YOU, CHECKING, datePhrase, FLAGGED, NOT_STARTED, RUNNING, STARTING, vigilWord, WAITING_FOR_YOU } from "./state-words.ts";
 import { outcomeTone, type Badge, type Tone } from "./tone.ts";
 import { ackText, activity, askStacks, asksYou, decisionText, excerpt, isDjinn, nextRunText, runState, stuckFor, checkBlocked, vigilFailureText, type ActivityRun, type AskStack, type Excerpt } from "./view.ts";
 
@@ -49,11 +49,12 @@ const DAY = 24 * HOUR;
 /** A sync older than this shows in the overdue colour. */
 const SYNC_STALE_MS = 2 * HOUR;
 
-/** Report excerpts: the characters sent, and the size past which the last line fades out. */
+/** Report excerpts of a failed card: the characters sent, and the size past which the last line fades out. Done lately rows carry no excerpt. */
 const NEED_CHARS = 480;
 const NEED_FADE = 260;
-const DONE_CHARS = 320;
-const DONE_FADE = 190;
+
+/** Done lately shows this many rows, one line each. The Activity place has the rest. */
+export const DONE_ROWS = 8;
 
 /** The project that tests darius itself (`darius selftest`). A project named `darius` is a real project, not a test. */
 const SELFTEST_PROJECTS: ReadonlySet<string> = new Set(["darius-selftest"]);
@@ -170,8 +171,6 @@ export interface Segment {
   tone: Tone;
   /** A `#card` on this page, a path to a section, or null when there is nowhere to go. */
   href: string | null;
-  /** The segment shows the live animation while its count is above zero. */
-  live: boolean;
   /** The kind whose icon marks the segment instead of a square; null for a state segment. */
   kind: Kind | null;
 }
@@ -200,8 +199,10 @@ export interface Home {
   strip: Segment[];
   /** The runs that run now and are not stuck (a stuck run has its card in Needs you). */
   now: NowRun[];
+  /** The starts the web asked for that wait for their run: a check or a run that has not begun. */
+  starting: NowStart[];
   needs: Card[];
-  /** Done lately (0.90.0): what finished and what the operator decided in the last day, newest first, starts that show no run on top. */
+  /** Done lately (0.90.0): what finished and what the operator decided in the last day, newest first, refused starts on top. At most `DONE_ROWS`. */
   doneLately: DoneRow[];
   /** Coming up and Waiting on an event: the same agenda the project page draws. */
   agenda: Agenda;
@@ -383,7 +384,8 @@ function seenText(run: RunRow, clock: Clock): string | null {
 function finishedCard(clock: Clock, readRun: ReadRun, state: DjinnState, run: ActivityRun): Card {
   const failed = isOpenFailure(run);
   const badge = runState(run, state.own);
-  const report = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : reportOf(readRun, run, DONE_CHARS, DONE_FADE);
+  // A done row is one line: no excerpt, so the payload stays small.
+  const report: ReportCard = failed ? reportOf(readRun, run, NEED_CHARS, NEED_FADE) : { report: null, fades: false };
   // An acknowledged failure is a plain card: runState() makes its word grey, and the acknowledgement says who saw it.
   return {
     ...blank(`${failed ? "failed" : "done"}-${state.project}-${state.ritual.slug}`, failed ? "failed" : "done", "ritual", isManual(state.ritual)),
@@ -576,8 +578,10 @@ export interface DoneReceipt {
   project: string;
   entry: ActivityEntry;
   facts: ReceiptFacts;
-  /** The sentence: what, by whom, when, what comes next. */
+  /** The sentence: what, by whom, when, what comes next. The Activity place shows it; Done lately shows the state word. */
   text: string;
+  /** The state word of the row: "Answered", "Dismissed", "Noted". */
+  word: Badge;
   item: Kind;
   manual: boolean;
   title: string;
@@ -586,7 +590,7 @@ export interface DoneReceipt {
   links: Action[];
 }
 
-/** A start the web asked for that shows no run yet, or never will (`PendingStart`). */
+/** A start the web asked for that the command refused, or that shows no run after 15 minutes (`PendingStart`). A start that waits for its run is a Now row (`NowStart`). */
 export interface DonePending {
   kind: "pending";
   id: string;
@@ -609,6 +613,8 @@ export type DoneRow = DoneRun | DoneReceipt | DonePending;
 export interface HomeFeed {
   activity: readonly ProjectActivityEntry[];
   pending: readonly PendingStart[];
+  /** False for the loopback viewer, whose cards draw no check line; a pending check then keeps its Now row. Default true. */
+  canWrite?: boolean;
 }
 
 const NO_FEED: HomeFeed = { activity: [], pending: [] };
@@ -660,6 +666,30 @@ function groupDismissals(entries: readonly ProjectActivityEntry[]): ProjectActiv
   });
 }
 
+/** The state word of a receipt row. A decision is quiet; a start is blue; a check takes the tone of its result. */
+function receiptWord(entry: ActivityEntry): Badge {
+  switch (entry.kind) {
+    case "ack-answered":
+      return { tone: "idle", label: "Answered" };
+    case "ack-dismissed":
+      return { tone: "idle", label: "Dismissed" };
+    case "ack-note":
+      return { tone: "idle", label: "Noted" };
+    case "follow-up-started":
+      return { tone: "run", label: "Follow-up" };
+    case "run-started":
+      return { tone: "run", label: "Started" };
+    case "finding-closed":
+      return { tone: "idle", label: "Finding closed" };
+    case "vigil-closed":
+      return { tone: "idle", label: "Vigil closed" };
+    case "vigil-swept":
+      return { tone: entry.tone, label: "Checked" };
+    default:
+      return { tone: "idle", label: "Done" };
+  }
+}
+
 /** Where a receipt row points and what it is called. */
 interface ReceiptPlace {
   item: Kind;
@@ -708,7 +738,17 @@ function answeredBefore(run: RunRow, project: string, events: readonly ProjectAc
   return answerBefore(started, events)?.links.run ?? null;
 }
 
-function pendingRow(clock: Clock, byName: ReadonlyMap<string, ProjectStatus>, start: PendingStart): DonePending {
+/** What a start is about: the ritual or vigil it names, with the page of it. */
+interface StartTarget {
+  item: Kind;
+  manual: boolean;
+  title: string;
+  href: string;
+  /** The page where the operator can ask again; null when the start names nothing. */
+  retry: Action | null;
+}
+
+function startTarget(byName: ReadonlyMap<string, ProjectStatus>, start: PendingStart): StartTarget {
   const project = byName.get(start.project);
   const ritual = start.ritual === undefined ? undefined : project?.rituals.find((candidate) => candidate.slug === start.ritual);
   const vigil = start.vigil === undefined ? undefined : project?.vigils.find((candidate) => candidate.slug === start.vigil);
@@ -721,30 +761,97 @@ function pendingRow(clock: Clock, byName: ReadonlyMap<string, ProjectStatus>, st
         : start.ritual !== undefined
           ? { text: "Try again", href: href({ to: "ritual", ws, slug: start.ritual }) }
           : null;
-  const failed = start.state === "refused" || start.state === "lost";
   const target = start.vigil !== undefined ? href({ to: "vigil", ws, slug: start.vigil }) : start.ritual !== undefined ? href({ to: "ritual", ws, slug: start.ritual }) : (place?.href ?? href({ to: "overview", ws }));
   return {
-    kind: "pending",
-    id: `pending-${start.id}`,
-    at: start.at,
-    project: ws,
-    start,
-    text: pendingText(start, clock),
-    word: failed ? NOT_STARTED : STARTING,
     item: start.vigil === undefined ? "ritual" : "vigil",
     manual: ritual !== undefined && isManual(ritual),
     title: ritual?.title ?? vigil?.title ?? start.vigil ?? start.ritual ?? start.parent ?? "run",
     href: target,
-    retry: failed ? place : null,
+    retry: place,
   };
+}
+
+/** The ritual or vigil a start is about, as the key of the item in the status (`ritual/slug`); null when it names neither. */
+function startItem(start: PendingStart): string | null {
+  if (start.vigil !== undefined) return `vigil/${start.vigil}`;
+  return start.ritual === undefined ? null : `ritual/${start.ritual}`;
+}
+
+/** Whether a later start of the same item worked: a `started` entry, or a run of the item that began after the ask. */
+function laterStartWorked(byName: ReadonlyMap<string, ProjectStatus>, pending: readonly PendingStart[], start: PendingStart): boolean {
+  const item = startItem(start);
+  if (item === null) return false;
+  const asked = Date.parse(start.at);
+  if (pending.some((other) => other.state === "started" && other.project === start.project && startItem(other) === item && Date.parse(other.at) > asked)) return true;
+  return byName.get(start.project)?.runs.some((run) => run.item === item && Date.parse(run.startedAt) > asked) ?? false;
+}
+
+function pendingRow(clock: Clock, byName: ReadonlyMap<string, ProjectStatus>, start: PendingStart): DonePending {
+  const target = startTarget(byName, start);
+  return {
+    kind: "pending",
+    id: `pending-${start.id}`,
+    at: start.at,
+    project: start.project,
+    start,
+    text: pendingText(start, clock),
+    word: NOT_STARTED,
+    item: target.item,
+    manual: target.manual,
+    title: target.title,
+    href: target.href,
+    retry: target.retry,
+  };
+}
+
+/** A start the web asked for that has not become a run yet: one row in Now. */
+export interface NowStart {
+  id: string;
+  project: string;
+  /** "Checking" for a vigil, "Starting" for a run. */
+  word: Badge;
+  item: Kind;
+  manual: boolean;
+  title: string;
+  href: string;
+  /** "asked 07:18 from the web". */
+  tail: string;
+}
+
+/**
+ * The starts that wait for their run (`starting`), as Now rows, newest first.
+ * A vigil check is "Checking", a run is "Starting". A check whose flagged card
+ * is in Needs you on this page shows no row: the card draws its own line.
+ */
+export function nowStarts(status: HostStatus, pending: readonly PendingStart[], needs: readonly Card[], scope: HomeScope = ALL_WORKSPACES, canWrite = true): NowStart[] {
+  const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
+  const byName = new Map(scopeProjects(status, scope).map((project) => [project.name, project]));
+  const carded = new Set(needs.flatMap((card) => (card.check === null || card.check.pending === null || card.check.blocked !== null || !canWrite ? [] : [`${card.check.project}/${card.check.slug}`])));
+  return pending
+    .filter((start) => start.state === "starting" && byName.has(start.project) && Date.parse(start.at) >= clock.now - DAY)
+    .filter((start) => !(start.kind === "vigil-check" && start.vigil !== undefined && carded.has(`${start.project}/${start.vigil}`)))
+    .toSorted((left, right) => right.at.localeCompare(left.at))
+    .map((start) => {
+      const target = startTarget(byName, start);
+      return {
+        id: `start-${start.id}`,
+        project: start.project,
+        word: start.kind === "vigil-check" ? CHECKING : STARTING,
+        item: target.item,
+        manual: target.manual,
+        title: target.title,
+        href: target.href,
+        tail: `asked ${clockTime(start.at, clock.offset)} from the web`,
+      };
+    });
 }
 
 /**
  * Done lately (0.90.0): what finished and what the operator decided in the
  * last 24 hours, for every ritual and every kind of decision, newest first.
- * A start the web asked for that shows no run yet (or never will) sits on top
- * with the CLI's sentence. The rows come from the status (finished runs), the
- * activity model (answers, dismissals, notes, follow-ups, run now, checks,
+ * A start the web asked for that was refused or never showed a run sits on top
+ * with the CLI's sentence. A start that waits is in Now (`nowStarts`). The rows
+ * come from the status (finished runs), the activity model (answers, dismissals, notes, follow-ups, run now, checks,
  * finding closes) and the pending registry, never from client state, so a
  * reload shows the same. `now` is in milliseconds.
  */
@@ -772,7 +879,7 @@ export function doneLately(status: HostStatus, pending: readonly PendingStart[],
     const facts: ReceiptFacts = { nextRun: nextRun === "on demand" ? null : nextRun, follow: entry.kind === "follow-up-started" ? followFacts(project, entry, hosts) : null, readBy };
     const place = receiptPlace(project, entry);
     const started: Action[] = readBy === null || !readBy.isNow ? [] : [{ text: "Started run", href: href({ to: "run", ws: entry.project, run: readBy.run }) }];
-    receipts.push({ kind: "receipt", id: `receipt-${entry.project}-${entry.kind}-${entry.at}-${entry.run ?? entry.item.id}`, at: entry.at, project: entry.project, entry, facts, text: receiptText(entry, facts, clock), ...place, links: [...place.links, ...started] });
+    receipts.push({ kind: "receipt", id: `receipt-${entry.project}-${entry.kind}-${entry.at}-${entry.run ?? entry.item.id}`, at: entry.at, project: entry.project, entry, facts, text: receiptText(entry, facts, clock), word: receiptWord(entry), ...place, links: [...place.links, ...started] });
   }
   const shown = receipts.filter((receipt) => !(receipt.entry.kind === "run-started" && receipt.entry.run !== undefined && absorbed.has(`${receipt.project}/${receipt.entry.run}`)));
   // A run a receipt already covers has no card of its own: a decision on it, the follow-up it is, or the run an answer started. One row per run.
@@ -791,8 +898,9 @@ export function doneLately(status: HostStatus, pending: readonly PendingStart[],
     });
   });
 
+  // A refused or lost start stays a row until a later start of the same item worked.
   const starts = pending
-    .filter((start) => byName.has(start.project) && start.state !== "started" && recent(start.at))
+    .filter((start) => byName.has(start.project) && (start.state === "refused" || start.state === "lost") && recent(start.at) && !laterStartWorked(byName, pending, start))
     .toSorted((left, right) => right.at.localeCompare(left.at))
     .map((start) => pendingRow(clock, byName, start));
   const rest = [...shown, ...finished].toSorted((left, right) => right.at.localeCompare(left.at));
@@ -824,7 +932,7 @@ function lastRunPiece(clock: Clock, states: readonly DjinnState[]): Piece[] {
 function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone: Tone): Segment[] {
   const cards = needs.filter((card) => card.kind === kind);
   const first = cards[0];
-  return first === undefined ? [] : [{ key: kind, label, count: cards.length, tone, href: `#${first.id}`, live: false, kind: null }];
+  return first === undefined ? [] : [{ key: kind, label, count: cards.length, tone, href: `#${first.id}`, kind: null }];
 }
 
 /**
@@ -837,13 +945,13 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
 function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, workspace: string | null, findings: number, vigilsDueCount: number): Segment[] {
   const waiting = needs.filter((card) => card.kind === "held" || card.kind === "asks").length;
   const findingsHref = href({ to: "section", ws: workspace, section: "findings" });
-  const findingsSegment: Segment[] = findings === 0 ? [] : [{ key: "findings", label: "findings", count: findings, tone: "wait", href: findingsHref, live: false, kind: null }];
-  const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", live: true, kind: null }];
-  const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", live: false, kind: null }];
-  const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), live: false, kind: null }];
-  const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: groupHref(agenda, "today", workspace), live: false, kind: null }];
+  const findingsSegment: Segment[] = findings === 0 ? [] : [{ key: "findings", label: "findings", count: findings, tone: "wait", href: findingsHref, kind: null }];
+  const runningSegment: Segment[] = running === 0 ? [] : [{ key: "running", label: "running", count: running, tone: "run", href: "#now", kind: null }];
+  const needSegment: Segment[] = waiting === 0 ? [] : [{ key: "need", label: "need you", count: waiting, tone: "wait", href: "#needs", kind: null }];
+  const lateSegment: Segment[] = agenda.overdue === 0 ? [] : [{ key: "late", label: "late", count: agenda.overdue, tone: "late", href: groupHref(agenda, "overdue", workspace), kind: null }];
+  const todaySegment: Segment[] = agenda.dueToday === 0 ? [] : [{ key: "today", label: "due today", count: agenda.dueToday, tone: "gold", href: groupHref(agenda, "today", workspace), kind: null }];
   const vigilsHref = `${href({ to: "section", ws: workspace, section: "vigils" })}#coming-up`;
-  const vigilsSegment: Segment[] = vigilsDueCount === 0 ? [] : [{ key: "vigils", label: "vigils due", count: vigilsDueCount, tone: "gold", href: vigilsHref, live: false, kind: "vigil" }];
+  const vigilsSegment: Segment[] = vigilsDueCount === 0 ? [] : [{ key: "vigils", label: "vigils due", count: vigilsDueCount, tone: "gold", href: vigilsHref, kind: "vigil" }];
   return [
     ...needSegment,
     ...findingsSegment,
@@ -912,7 +1020,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     ...all.flatMap((entry) => entry.flagged.map((vigil) => flaggedCard(clock, entry.project, vigil, runs, status.generatedAt, feed.pending))),
     ...all.filter((entry) => entry.unreadable).map((entry) => unreadableCard(entry.project)),
   ];
-  const done = doneLately(status, feed.pending, feed.activity, clock.now, { scope, readRun });
+  const done = doneLately(status, feed.pending, feed.activity, clock.now, { scope, readRun }).slice(0, DONE_ROWS);
   const agenda = buildAgenda({ projects: all.map((entry) => entry.project), today: clock.today, offset: clock.offset });
   const now = runs.filter((run) => run.phase === "running" && stuckFor(run, status.generatedAt) === null).map((run) => nowRun(run, feed.activity));
 
@@ -923,6 +1031,7 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
     next: nextLine(agenda, clock.today),
     strip: statusStrip(needs, now.length, agenda, scope.workspace, scoped.reduce((sum, project) => sum + project.findings.needsYou, 0), vigilsDue(scoped, clock.today)),
     now,
+    starting: nowStarts(status, feed.pending, needs, scope, feed.canWrite ?? true),
     needs,
     doneLately: done,
     agenda,
