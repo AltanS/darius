@@ -261,10 +261,10 @@ test("a refused or lost start shows the sentence and a Try again link to the par
   const lost = start({ id: "l", at: "2026-10-15T08:00:00.000Z", state: "lost", sentence: "waiting for a slot", kind: "run-now" });
   const rows = pendings(doneLately(status([SHOP]), [lost, refused], [], NOW));
   assert.deepEqual(rows.map((row) => row.id), ["pending-r", "pending-l"], "newest first");
-  assert.equal(rows[0]?.text, "A follow-up was not started: darius run follow-up: run is still running. Asked 09:12 by web:altan.");
+  assert.equal(rows[0]?.text, "host-b did not start it: darius run follow-up: run is still running.");
   assert.deepEqual(rows[0]?.retry, { text: "Try again", href: "/w/shop/runs/01PARENT" });
   assert.deepEqual(rows[0]?.word, { tone: "bad", label: "Not started" });
-  assert.equal(rows[1]?.text, "A run on host-b, asked 08:00 by web:altan, shows no start after 15 minutes. Last line: waiting for a slot");
+  assert.equal(rows[1]?.text, "No sign of this run on host-b after 15 minutes. Start it again from the ritual.");
   const check = pendings(doneLately(status([project("shop", [REPORT], [], [vigil("soak")])]), [start({ kind: "vigil-check", vigil: "soak", ritual: undefined, parent: undefined, state: "refused", sentence: "no slot" })], [], NOW))[0];
   assert.equal(check?.retry?.href, "/w/shop/vigils/soak");
   assert.equal(check?.item, "vigil");
@@ -301,10 +301,13 @@ test("a receipt depends on its inputs alone: the same input gives the same rows"
   assert.deepEqual(doneLately(...input), doneLately(...input));
 });
 
-test("receiptText and pendingText name no one but the ledger's who", () => {
+test("receiptText names the ledger's who; pendingText never shows the raw who, only where the ask came from", () => {
   const answered = entry("ack-answered", "2026-10-15T09:12:00.000Z", { text: "Answered by web:altan; note: later", detail: [] });
   assert.equal(receiptText(answered, NO_FACTS, { offset: 120 }), "Answered by web:altan at 11:12; note: later");
-  assert.equal(pendingText(start({ kind: "resume" }), { offset: 0 }), "Starting a resume on host-b, asked 09:12 by web:altan");
+  assert.equal(pendingText(start({ kind: "resume" }), { offset: 0 }), "Starting a resume on host-b, asked 09:12");
+  assert.equal(pendingText(start({ kind: "resume", from: "web" }), { offset: 0 }), "Starting a resume on host-b, asked 09:12 from the web");
+  assert.equal(pendingText(start({ kind: "vigil-check", from: "web" }), { offset: 0 }), "Checking on host-b, asked 09:12 from the web", "a vigil is checking, a run is starting");
+  assert.equal(pendingText(start({ kind: "vigil-check", state: "lost" }), { offset: 0 }), "No sign of this check on host-b after 15 minutes.");
 });
 
 // --- Now ----------------------------------------------------------------------------------
@@ -344,7 +347,7 @@ test("a finished follow-up and a finished run-now run have no card besides their
 
 test("a refusal sentence that ends in a period does not get a second one", () => {
   const refused = start({ state: "refused", sentence: "run 01PARENT is still running." });
-  assert.equal(pendings(doneLately(status([SHOP]), [refused], [], NOW))[0]?.text, "A follow-up was not started: run 01PARENT is still running. Asked 09:12 by web:altan.");
+  assert.equal(pendings(doneLately(status([SHOP]), [refused], [], NOW))[0]?.text, "host-b did not start it: run 01PARENT is still running.");
 });
 
 test("a run whose start line was written by a clock a little behind still counts as the reader of the answer", () => {

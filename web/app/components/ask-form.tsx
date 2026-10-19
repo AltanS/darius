@@ -11,6 +11,12 @@
  * says so and keeps the answer as sent; it goes to the next run. A refusal of
  * the server (the run was answered meanwhile, say) shows as its own sentence.
  *
+ * The reply is the news. "Send answer" and "Dismiss" turn their buttons into
+ * the line "Answer sent." or "Dismissed." at once, and one load in the
+ * background follows; the card goes away by itself when the load shows the
+ * run in its new state. "Send and run now" and "Answer and resume" show what
+ * the host said (`start-line.tsx`): the run started, or not confirmed yet.
+ *
  * Older open asks of the same ritual fold under the card (`EarlierAsks`), each
  * with its own form, and one confirm dismisses them all. That grouping is view
  * state only: nothing is written to the ledger to close an old card.
@@ -23,10 +29,10 @@ import type { ResultQuestion, RunRow } from "../../../src/web/api.ts";
 import { ANSWERS_TOO_LONG, answersOf, askBody, currentHold, earlierBody, heldBody, isTooLong, recommendedText, resumeNotice, runNowNotice, withText, type RunNowNotice } from "../lib/ask.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
-import { useReloadSoon } from "../lib/reload.ts";
 import { dismissAllText, earlierText } from "../lib/view.ts";
 import { QuestionList } from "./questions.tsx";
 import { BusyButton } from "./busy-button.tsx";
+import { StartLine } from "./start-line.tsx";
 import { Fold } from "./ui.tsx";
 import { WaitLine } from "./wait-line.tsx";
 
@@ -51,11 +57,12 @@ interface AskFormProps {
 
 export function AskForm({ project, run, questions, canWrite, subject, nextRun, canRunNow, isEarlier = false }: AskFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
-  const reloadSoon = useReloadSoon();
   const [texts, setTexts] = useState<readonly string[]>(() => questions.map(() => ""));
   const [busy, setBusy] = useState<"send" | "now" | "dismiss" | null>(null);
   const [isDone, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The line that replaces the buttons after the reply: "Answer sent.", "Dismissed.", or the start of the run.
+  const [receipt, setReceipt] = useState<string | null>(null);
   const [notice, setNotice] = useState<RunNowNotice | null>(null);
   if (!canWrite) {
     return (
@@ -77,20 +84,20 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
     setError(null);
     const result = await postJson("/api/run/ack", askBody(runNow ? "now" : "send", { project, run }, texts));
     setBusy(null);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       // A refusal (answered meanwhile, already dismissed) means the list is stale: load it again.
-      await revalidate();
+      void revalidate();
       return;
     }
     setDone(true);
     if (!runNow) {
-      await revalidate();
+      setReceipt("Answer sent.");
+      void revalidate();
       return;
     }
-    const told = runNowNotice(result);
-    setNotice(told);
+    // The answer is saved. What the host said about the run stays on the card; the follower loads the page again when the start settles.
+    setNotice(runNowNotice(result));
   };
 
   const dismiss = async (): Promise<void> => {
@@ -98,14 +105,14 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
     setError(null);
     const result = await postJson("/api/run/ack", askBody("dismiss", { project, run }, texts));
     setBusy(null);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
-      await revalidate();
+      void revalidate();
       return;
     }
     setDone(true);
-    await revalidate();
+    setReceipt("Dismissed.");
+    void revalidate();
   };
 
   return (
@@ -146,33 +153,30 @@ export function AskForm({ project, run, questions, canWrite, subject, nextRun, c
           {ANSWERS_TOO_LONG}
         </p>
       ) : null}
-      <div className="fu-acts">
-        {questions.length === 0 ? null : (
-          <BusyButton busy={busy === "send"} type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0}>
-            {busy === "send" ? "Sending…" : "Send answer"}
-          </BusyButton>
-        )}
-        {isEarlier || !canRunNow || questions.length === 0 ? null : (
-          <BusyButton busy={busy === "now"} className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0} onClick={() => void send(true)}>
-            {busy === "now" ? "Sending…" : "Send and run now"}
-          </BusyButton>
-        )}
-        <BusyButton busy={busy === "dismiss"} className="st-link" aria-label={`Dismiss, no action: ${subject}`} disabled={isLocked} onClick={() => void dismiss()}>
-          {busy === "dismiss" ? "Dismissing…" : "Dismiss, no action"}
-        </BusyButton>
-      </div>
-      <WaitLine active={busy !== null} />
-      {notice === null ? null : (
-        <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
-          {notice.text}
-          {notice.child === undefined ? null : (
-            <>
-              {" "}
-              <Link to={href({ to: "run", ws: project, run: notice.child })}>Open the run</Link>
-            </>
-          )}
+      {receipt !== null ? (
+        <p className="bk-note tone-ok" role="status">
+          {receipt}
         </p>
+      ) : notice !== null ? (
+        <StartLine notice={notice} project={project} />
+      ) : (
+        <div className="fu-acts">
+          {questions.length === 0 ? null : (
+            <BusyButton busy={busy === "send"} type="submit" className="st-btn st-btn-main" aria-label={`Send answer: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0}>
+              {busy === "send" ? "Sending…" : "Send answer"}
+            </BusyButton>
+          )}
+          {isEarlier || !canRunNow || questions.length === 0 ? null : (
+            <BusyButton busy={busy === "now"} className="st-btn" aria-label={`Send and run now: ${subject}`} disabled={isLocked || isTooBig || answers.length === 0} onClick={() => void send(true)}>
+              {busy === "now" ? "Starting…" : "Send and run now"}
+            </BusyButton>
+          )}
+          <BusyButton busy={busy === "dismiss"} className="st-link" aria-label={`Dismiss, no action: ${subject}`} disabled={isLocked} onClick={() => void dismiss()}>
+            {busy === "dismiss" ? "Dismissing…" : "Dismiss, no action"}
+          </BusyButton>
+        </div>
       )}
+      <WaitLine active={busy === "now"} what="run" />
       {error === null ? null : (
         <p className="bk-note tone-bad" role="alert">
           {error}
@@ -207,9 +211,8 @@ interface EarlierAsksProps {
  */
 export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAsksProps): React.ReactNode {
   const { revalidate } = useRevalidator();
-  const reloadSoon = useReloadSoon();
   const [busy, setBusy] = useState(false);
-  const [isDone, setDone] = useState(false);
+  const [receipt, setReceipt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (asks.length === 0) return null;
 
@@ -218,14 +221,13 @@ export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAs
     setError(null);
     const result = await postJson("/api/run/ack-earlier", earlierBody({ project, run }, asks.map((ask) => ask.run)));
     setBusy(false);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
-      await revalidate();
+      void revalidate();
       return;
     }
-    setDone(true);
-    await revalidate();
+    setReceipt("Earlier asks dismissed.");
+    void revalidate();
   };
 
   return (
@@ -244,12 +246,17 @@ export function EarlierAsks({ project, run, asks, canWrite, nextRun }: EarlierAs
       {canWrite ? (
         <Fold summary="Dismiss all earlier asks">
           <p className="fu-ask-q">{dismissAllText(asks.length)}</p>
-          <div className="fu-acts">
-            <BusyButton busy={busy} className="st-btn st-btn-danger" disabled={busy || isDone} onClick={() => void dismissAll()}>
-              {busy ? "Dismissing…" : isDone ? "Dismissed" : `Yes, dismiss ${asks.length}`}
-            </BusyButton>
-          </div>
-          <WaitLine active={busy} />
+          {receipt !== null ? (
+            <p className="bk-note tone-ok" role="status">
+              {receipt}
+            </p>
+          ) : (
+            <div className="fu-acts">
+              <BusyButton busy={busy} className="st-btn st-btn-danger" disabled={busy} onClick={() => void dismissAll()}>
+                {busy ? "Dismissing…" : `Yes, dismiss ${asks.length}`}
+              </BusyButton>
+            </div>
+          )}
           {error === null ? null : (
             <p className="bk-note tone-bad" role="alert">
               {error}
@@ -276,7 +283,6 @@ interface HeldFormProps {
  */
 export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
-  const reloadSoon = useReloadSoon();
   const hold = currentHold(row);
   const [texts, setTexts] = useState<readonly string[]>(() => hold.map(() => ""));
   const [busy, setBusy] = useState(false);
@@ -292,11 +298,10 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
     setError(null);
     const result = await postJson("/api/run/answer", heldBody({ project, run: row.run }, hold, texts));
     setBusy(false);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       // A refusal (the run was answered or went on meanwhile) means the card is stale: load it again.
-      await revalidate();
+      void revalidate();
       return;
     }
     const told = resumeNotice(result);
@@ -335,23 +340,17 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
           {ANSWERS_TOO_LONG}
         </p>
       ) : null}
-      <div className="fu-acts">
-        <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
-          {busy ? "Sending…" : "Answer and resume"}
-        </BusyButton>
-      </div>
-      <WaitLine active={busy} />
-      {notice === null ? null : (
-        <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
-          {notice.text}
-          {notice.child === undefined ? null : (
-            <>
-              {" "}
-              <Link to={href({ to: "run", ws: project, run: notice.child })}>Open the run</Link>
-            </>
-          )}
-        </p>
+      {isDone && notice !== null ? (
+        <StartLine notice={notice} project={project} />
+      ) : (
+        <div className="fu-acts">
+          <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
+            {busy ? "Starting…" : "Answer and resume"}
+          </BusyButton>
+        </div>
       )}
+      <WaitLine active={busy} what="run" />
+      {notice !== null && !isDone ? <StartLine notice={notice} project={project} /> : null}
       {error === null ? null : (
         <p className="bk-note tone-bad" role="alert">
           {error}

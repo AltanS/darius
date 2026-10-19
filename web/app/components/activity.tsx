@@ -11,6 +11,7 @@ import type { ActivityEntry, PendingStart } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { clockTime, momentText } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
+import { useFollowStarts } from "../lib/follow-starts.ts";
 import { pendingText, shortRuns } from "../lib/receipt.ts";
 import { afterLead, leadOf } from "../lib/activity-place.ts";
 import { timelineDays } from "../lib/ritual-activity.ts";
@@ -23,16 +24,25 @@ interface StartingProps {
   project: string;
 }
 
-/** One card for each start of this ritual that shows no run: who asked, on which host, or why it did not start. */
+/**
+ * One card for each start of this ritual that shows no run: "Starting on <host>, asked 07:18" with the busy gem,
+ * or why it did not start. The page follows the starts that wait (`follow-starts.ts`); a start that began
+ * leaves its card at once and the load that follows drops it for good.
+ */
 export function Starting({ starts, project }: StartingProps): React.ReactNode {
   const { offset } = useClock();
+  const followed = useFollowStarts(starts.filter((start) => start.state === "starting").map((start) => start.id));
   return (
     <>
       {starts.map((start) => {
-        const failed = start.state === "refused" || start.state === "lost";
+        const entry = followed.get(start.id);
+        if (entry?.state === "started") return null;
+        const state = entry === undefined || entry.state === "unknown" ? start.state : entry.state;
+        const failed = state === "refused" || state === "lost";
+        const text = state === start.state ? pendingText(start, { offset }) : pendingText({ ...start, state }, { offset });
         return (
           <div key={start.id} className={`card card-accent ${failed ? "edge-bad" : "edge-run"}`}>
-            {failed ? <p>{pendingText(start, { offset })}</p> : <GemLine text={pendingText(start, { offset })} />}
+            {failed ? <p>{text}</p> : <GemLine text={`Starting on ${start.host}, asked ${clockTime(start.at, offset)}`} />}
             {failed && start.parent !== undefined ? (
               <p className="rail-note">
                 <Link to={href({ to: "run", ws: project, run: start.parent })}>Try again</Link> from the run page.

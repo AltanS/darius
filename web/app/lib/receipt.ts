@@ -7,6 +7,8 @@
  */
 
 import type { ActivityEntry, PendingStart } from "../../../src/web/api.ts";
+import { refusedStartText } from "./ask.ts";
+import { lostText } from "./check-poll.ts";
 import { clockTime, shortRun } from "./format.ts";
 
 /** The host clock a receipt reads its times on. */
@@ -103,18 +105,17 @@ export function receiptText(entry: ActivityEntry, facts: ReceiptFacts, clock: Re
   return text;
 }
 
-const WHAT = { "follow-up": "a follow-up", "run-now": "a run", resume: "a resume", "vigil-check": "a check" } satisfies Record<PendingStart["kind"], string>;
+const WHAT = { "follow-up": "a follow-up", "run-now": "a run", resume: "a resume" } satisfies Record<Exclude<PendingStart["kind"], "vigil-check">, string>;
 
-function capital(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+/** "asked 04:49 from the web" when the web asked, else "asked 04:49". The raw `who` never shows. */
+export function askedText(start: Pick<PendingStart, "at" | "from">, clock: ReceiptClock): string {
+  return `asked ${clockTime(start.at, clock.offset)}${start.from === "web" ? " from the web" : ""}`;
 }
 
 /** The sentence of a start the web asked for and that shows no run yet. */
 export function pendingText(start: PendingStart, clock: ReceiptClock): string {
-  const time = clockTime(start.at, clock.offset);
-  const what = WHAT[start.kind];
-  const asked = `asked ${time} by ${start.who}`;
-  if (start.state === "refused") return `${capital(what)} was not started: ${(start.sentence ?? "the command refused it").replace(/[.\s]+$/u, "")}. ${capital(asked)}.`;
-  if (start.state === "lost") return `${capital(what)} on ${start.host}, ${asked}, shows no start after 15 minutes${start.sentence === undefined ? "" : `. Last line: ${start.sentence}`}`;
-  return `Starting ${what} on ${start.host}, ${asked}`;
+  if (start.state === "refused") return refusedStartText(start.sentence ?? "the command refused it", start.host);
+  if (start.state === "lost") return lostText(start.host, start.kind === "vigil-check" ? "check" : "run");
+  const tail = `on ${start.host}, ${askedText(start, clock)}`;
+  return start.kind === "vigil-check" ? `Checking ${tail}` : `Starting ${WHAT[start.kind]} ${tail}`;
 }

@@ -4,8 +4,9 @@
  * is a plain acknowledgement; a note behind the small "Add a note" fold says
  * why the failure is fine. A complete run that asks questions has its own
  * answer form since 0.80.0 (`ask-form.tsx`), not this button. The button
- * posts to `/api/run/ack` and then reloads the page data, so the card moves
- * to Done lately as an acknowledged card. A refusal of the server (the run is
+ * posts to `/api/run/ack`. The reply is the news: the form gives way to the
+ * line "Acknowledged." at once, and one load in the background moves the card
+ * to Done lately. A refusal of the server (the run is
  * held, already acknowledged, and so on) shows as its own sentence and the
  * card stays. The button does not draw for a viewer who cannot write: the
  * server would refuse it. A line says why, and the terminal command stays.
@@ -15,7 +16,6 @@ import { useId, useState } from "react";
 import { useRevalidator } from "react-router";
 
 import { postJson } from "../lib/post.ts";
-import { useReloadSoon } from "../lib/reload.ts";
 import { BusyButton } from "./busy-button.tsx";
 import { Fold } from "./ui.tsx";
 
@@ -33,13 +33,20 @@ interface AckButtonProps {
 
 export function AckButton({ project, run, canWrite, subject }: AckButtonProps): React.ReactNode {
   const { revalidate } = useRevalidator();
-  const reloadSoon = useReloadSoon();
   const id = useId();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const [isDone, setDone] = useState(false);
+  const [receipt, setReceipt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (!canWrite) return <p className="fu-off">{NO_WRITE_HINT}</p>;
+  if (receipt !== null) {
+    // The card goes away by itself when the load brings the run in its new state.
+    return (
+      <p className="bk-note tone-ok" role="status">
+        {receipt}
+      </p>
+    );
+  }
 
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
@@ -48,27 +55,26 @@ export function AckButton({ project, run, canWrite, subject }: AckButtonProps): 
     const trimmed = note.trim();
     const result = await postJson("/api/run/ack", trimmed === "" ? { project, run } : { project, run, note: trimmed });
     setBusy(false);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    setDone(true);
-    await revalidate();
+    setReceipt("Acknowledged.");
+    void revalidate();
   };
 
   return (
     <form className="ack" onSubmit={(event) => void submit(event)}>
       <div className="fu-acts">
-        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={`Acknowledge: ${subject}`} disabled={busy || isDone}>
-          {busy ? "Acknowledging…" : isDone ? "Acknowledged" : "Acknowledge"}
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={`Acknowledge: ${subject}`} disabled={busy}>
+          {busy ? "Acknowledging…" : "Acknowledge"}
         </BusyButton>
       </div>
       <Fold summary="Add a note">
         <label className="fu-label" htmlFor={id}>
           Note (optional)
         </label>
-        <input id={id} className="st-input" type="text" maxLength={500} value={note} disabled={busy || isDone} onChange={(event) => setNote(event.currentTarget.value)} />
+        <input id={id} className="st-input" type="text" maxLength={500} value={note} disabled={busy} onChange={(event) => setNote(event.currentTarget.value)} />
       </Fold>
       {error === null ? null : (
         <p className="bk-note tone-bad" role="alert">

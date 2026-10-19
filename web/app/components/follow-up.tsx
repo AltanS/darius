@@ -7,9 +7,11 @@
  * the operator's decision and the run is granted no line (0.65.0).
  *
  * A press posts at once, unless the run would be granted command lines:
- * then a confirm box lists every line first (0.48.0). The answer names the
- * new run with a link, or says why it did not start (0.69.0): the POST waits
- * for the CLI.
+ * then a confirm box lists every line first (0.48.0). The POST waits up to
+ * 2.5 s for the CLI. The line under the button then names the new run with a
+ * link, says that the host has not confirmed the start yet (the page follows
+ * it and swaps the line when the run starts), or says why it did not start
+ * (0.69.0). The button stays off after a start: no second press.
  *
  * The card does not come with the page (0.98.0): `FollowUpSection` asks
  * `GET /api/run/follow-up/ready` after it mounts, because the check can take
@@ -23,17 +25,16 @@
  */
 
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { useRevalidator } from "react-router";
 
 import type { FollowUpReadiness, ResultItem, ResultQuestion } from "../../../src/web/api.ts";
+import { refusedStartText, startNotice, type RunNowNotice } from "../lib/ask.ts";
 import { cardView, checkingText, fetchReadiness, type FollowUpPlan, type Loaded } from "../lib/follow-up-load.ts";
-import { shortRun } from "../lib/format.ts";
-import { useReloadSoon } from "../lib/reload.ts";
-import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { BusyButton } from "./busy-button.tsx";
 import { Command } from "./command.tsx";
 import { ProposalView } from "./result.tsx";
+import { StartLine } from "./start-line.tsx";
 import { Fold, Section, Status } from "./ui.tsx";
 import { GemLine, WaitLine } from "./wait-line.tsx";
 
@@ -88,13 +89,6 @@ interface FollowUpCardProps {
   items: readonly ResultItem[];
 }
 
-interface Note {
-  tone: "ok" | "bad";
-  text: string;
-  /** The new run, when one started. */
-  child?: string;
-}
-
 /** The CLI command for the same follow-up, for a host where the button is off. */
 function followUpCommand(run: string, project: string, numbers: readonly number[]): string {
   const approve = numbers.length === 0 ? '--note "<decision>"' : numbers.map((n) => `--approve ${n}`).join(" ");
@@ -117,7 +111,7 @@ function toggled<T>(set: ReadonlySet<T>, value: T): Set<T> {
 }
 
 export function FollowUpCard({ project, run, readiness, questions, items }: FollowUpCardProps): React.ReactNode {
-  const reloadSoon = useReloadSoon();
+  const { revalidate } = useRevalidator();
   const offered = readiness.ready ? readiness.questions : [];
   const proposals = readiness.ready ? readiness.items : [];
   const [picked, setPicked] = useState<ReadonlySet<number>>(() => new Set(offered.length === 1 && proposals.length === 0 ? offered.map((question) => question.n) : []));
@@ -125,7 +119,9 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
   const [note, setNote] = useState("");
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Note | null>(null);
+  const [notice, setNotice] = useState<RunNowNotice | null>(null);
+  // After a start the button stays off: the card is read once, so a second press would start a second run.
+  const [isDone, setDone] = useState(false);
 
   if (!readiness.ready && readiness.rightHost !== undefined && readiness.command !== undefined) {
     return (
@@ -182,17 +178,15 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
     if (decision !== "") body.note = decision;
     const result = await postJson("/api/run/follow-up", body);
     setBusy(false);
-    reloadSoon();
     setAsking(false);
     if (!result.ok) {
-      setNotice({ tone: "bad", text: `Not started. ${result.error}` });
+      setNotice({ tone: "bad", text: refusedStartText(result.error, readiness.host, result.status) });
       return;
     }
-    if (result.run === null) {
-      setNotice({ tone: "ok", text: result.message ?? `The follow-up is starting on ${readiness.host}.` });
-    } else {
-      setNotice({ tone: "ok", text: `Started run ${shortRun(result.run)} on ${result.host ?? readiness.host}.`, child: result.run });
-    }
+    setDone(true);
+    setNotice(startNotice(result));
+    // The run starts as the reply says; one load brings "Its follow-ups" in the background. A start that is not confirmed yet loads the page again when it settles.
+    void revalidate();
   };
 
   const press = (): void => {
@@ -203,7 +197,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
   return (
     <div className="card fu">
       {proposals.length === 0 ? null : (
-        <fieldset className="fu-picks" disabled={busy}>
+        <fieldset className="fu-picks" disabled={busy || isDone}>
           <legend className="fu-label">Approve the proposals</legend>
           <label className="fu-pick fu-all">
             <input
@@ -240,7 +234,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
         </fieldset>
       )}
       {offered.length === 0 ? null : (
-        <fieldset className="fu-picks" disabled={busy}>
+        <fieldset className="fu-picks" disabled={busy || isDone}>
           <legend className="fu-label">Approve the commands of</legend>
           {offered.map((question) => (
             <label key={question.n} className="fu-pick">
@@ -268,7 +262,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
           maxLength={500}
           required={approved === 0}
           value={note}
-          disabled={busy}
+          disabled={busy || isDone}
           onChange={(event) => {
             setNote(event.currentTarget.value);
             setAsking(false);
@@ -288,7 +282,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
           </div>
           {decision === "" ? null : <p>Note: {decision}</p>}
           <div className="fu-acts">
-            <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy} onClick={() => void start()}>
+            <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy || isDone} onClick={() => void start()}>
               {busy ? "Starting…" : "Yes, start it"}
             </BusyButton>
             <button type="button" className="st-btn" disabled={busy} onClick={() => setAsking(false)}>
@@ -298,26 +292,16 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
         </div>
       ) : (
         <div className="fu-acts">
-          <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy || (approved === 0 && decision === "")} onClick={press}>
+          <BusyButton busy={busy} className="st-btn st-btn-main" disabled={busy || isDone || (approved === 0 && decision === "")} onClick={press}>
             {busy ? "Starting…" : approved === 0 ? `Start follow-up on ${readiness.host}` : `Start follow-up with ${approved} approved`}
           </BusyButton>
         </div>
       )}
-      <WaitLine active={busy} host={readiness.host} />
+      <WaitLine active={busy} host={readiness.host} what="run" />
       <p className="fu-off">
         It runs on {where} and carries out only what you approve, within the ritual's policy. Anything else the run tries still holds as usual. {how}
       </p>
-      {notice === null ? null : (
-        <p className={`bk-note tone-${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>
-          {notice.text}
-          {notice.child === undefined ? null : (
-            <>
-              {" "}
-              <Link to={href({ to: "run", ws: project, run: notice.child })}>Open the run</Link>
-            </>
-          )}
-        </p>
-      )}
+      {notice === null ? null : <StartLine notice={notice} project={project} />}
     </div>
   );
 }

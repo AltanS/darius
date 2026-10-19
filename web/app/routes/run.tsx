@@ -10,6 +10,7 @@ import { Actions, Items, ResultPanel } from "../components/result.tsx";
 import { NextStepCard, Questions } from "../components/runs.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Empty, Facts, Fold, Section, Status, Time, TitleText } from "../components/ui.tsx";
+import { useFollowStarts } from "../lib/follow-starts.ts";
 import { duration, shortRun } from "../lib/format.ts";
 import { href, itemTarget } from "../lib/paths.ts";
 import { itemKind, itemManual } from "../lib/kind.ts";
@@ -47,13 +48,19 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   // Where the run came from, what came of it, and its own events (0.92.0), from the ledger and the activity model.
   const clock = { today: status.today, offset: status.utcOffset };
   const trail = trailLines(context.activity(run.project, { run: run.row.run, limit: TRAIL_MAX }).filter((entry) => entry.run === run.row.run));
-  return { run, origin: originView(run.origin, run.row.startedAt, clock), came: thenLines(children, run.readBy, clock), trail, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite, nextRun: nextRunText(ritual, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }), canRunNow: run.row.item.startsWith("ritual/") };
+  // The starts of a follow-up, a resume or a run now that this run asked for and that are not confirmed yet: the page follows them (`follow-starts.ts`).
+  const starting = context
+    .pending(run.project)
+    .filter((start) => start.state === "starting" && start.parent === run.row.run)
+    .map((start) => start.id);
+  return { starting, run, origin: originView(run.origin, run.row.startedAt, clock), came: thenLines(children, run.readBy, clock), trail, kind: itemKind(run.row.item), slug: itemSlug(run.row.item), manual: itemManual(run.row.item, ritual), label: itemLabel(project, run.row.item), stuck: stuckFor(run.row, status.generatedAt), state: runState(run.row, project?.runs ?? []), next, followUp, children, canWrite: context.canWrite, nextRun: nextRunText(ritual, { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset }), canRunNow: run.row.item.startsWith("ritual/") };
 }
 
 export const meta: Route.MetaFunction = ({ data: loaded, params }) => [{ title: `${loaded?.label ?? "Run"} · ${params.ws} | darius` }];
 
 export default function Run({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { run, origin, came, trail, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow } = loaderData;
+  const { run, origin, came, trail, kind, manual, label, stuck, state, next, followUp, children, canWrite, nextRun, canRunNow, starting } = loaderData;
+  useFollowStarts(starting);
   const { row, project } = run;
   const badge = stuck === null ? state : { tone: "late" as const, label: "May be stuck" };
   // A complete report names itself: its first heading is the page title, so it is not shown twice.

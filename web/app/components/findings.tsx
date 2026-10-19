@@ -4,8 +4,10 @@
  * rendered as plain text only. A row says how bad it is, where it is, which
  * ritual reported it and since when; under it a fold holds the detail, the
  * key and the short history. A finding that waits can be closed with the
- * "Close" button and an optional note, which posts to `/api/finding/close`
- * and then reloads the page data. A closed one says who closed it and when,
+ * "Close" button and an optional note, which posts to `/api/finding/close`.
+ * The reply is the news: the button gives way to the line "Finding closed."
+ * at once, and one load in the background brings the new state. A closed one
+ * says who closed it and when,
  * and offers "Reopen" with an optional note (`/api/finding/reopen`, 0.96.0).
  * The history lists the closes and the reopens between the reports.
  */
@@ -19,7 +21,6 @@ import { hostDate, shortDate } from "../lib/format.ts";
 import { closedText, stepKey, stepRun, stepText } from "../lib/findings.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
-import { useReloadSoon } from "../lib/reload.ts";
 import { BusyButton } from "./busy-button.tsx";
 import { itemStateTag, severityTone } from "../lib/result.ts";
 import type { Badge } from "../lib/tone.ts";
@@ -65,16 +66,19 @@ const VERB_WORDS = {
   reopen: { main: "Reopen finding", busy: "Reopening…" },
 } as const satisfies Record<Verb, { main: string; busy: string }>;
 
+/** The line that replaces the control after the reply. */
+const RECEIPTS = { close: "Finding closed.", reopen: "Finding reopened." } as const satisfies Record<Verb, string>;
+
 interface NoteFormProps {
   row: FindingRow;
   verb: Verb;
-  onDone: () => void;
+  /** The form is done: `true` when the server took the change. */
+  onDone: (isChanged: boolean) => void;
 }
 
 /** The note field and the two buttons that close or reopen a finding. */
 function NoteForm({ row, verb, onDone }: NoteFormProps): React.ReactNode {
   const { revalidate } = useRevalidator();
-  const reloadSoon = useReloadSoon();
   const id = useId();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -88,13 +92,12 @@ function NoteForm({ row, verb, onDone }: NoteFormProps): React.ReactNode {
     const base = { project: row.project, ritual: row.ritual, key: row.key };
     const result = await postJson(`/api/finding/${verb}`, trimmed === "" ? base : { ...base, note: trimmed });
     setBusy(false);
-    reloadSoon();
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    onDone();
-    await revalidate();
+    onDone(true);
+    void revalidate();
   };
 
   return (
@@ -107,7 +110,7 @@ function NoteForm({ row, verb, onDone }: NoteFormProps): React.ReactNode {
         <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" disabled={busy}>
           {busy ? VERB_WORDS[verb].busy : VERB_WORDS[verb].main}
         </BusyButton>
-        <button type="button" className="st-btn" disabled={busy} onClick={onDone}>
+        <button type="button" className="st-btn" disabled={busy} onClick={() => onDone(false)}>
           Cancel
         </button>
       </div>
@@ -128,6 +131,8 @@ interface FindingItemProps {
 function FindingItem({ row, showProject }: FindingItemProps): React.ReactNode {
   const { offset } = useClock();
   const [asking, setAsking] = useState(false);
+  // What the person just did, kept while the finding still has the status it had then; the new status brings the real control back.
+  const [receipt, setReceipt] = useState<{ text: string; status: FindingRow["status"] } | null>(null);
   const canClose = row.status === "needs-you" || row.status === "open";
   const canReopen = row.status === "closed";
   const verb: Verb = canReopen ? "reopen" : "close";
@@ -154,11 +159,24 @@ function FindingItem({ row, showProject }: FindingItemProps): React.ReactNode {
       foot={
         <>
           {closed === null ? null : <p className="fnd-closed">{closed}</p>}
-          {asking ? <NoteForm row={row} verb={verb} onDone={() => setAsking(false)} /> : null}
+          {asking ? (
+            <NoteForm
+              row={row}
+              verb={verb}
+              onDone={(isChanged) => {
+                setAsking(false);
+                if (isChanged) setReceipt({ text: RECEIPTS[verb], status: row.status });
+              }}
+            />
+          ) : null}
           <div className="fnd-foot">
             <span className="fnd-acts">
               <Link to={href({ to: "run", ws: row.project, run: row.lastSeen.run })}>last report</Link>
-              {canClose || canReopen ? (
+              {receipt !== null && receipt.status === row.status ? (
+                <span className="bk-note tone-ok" role="status">
+                  {receipt.text}
+                </span>
+              ) : canClose || canReopen ? (
                 <button type="button" className="st-btn st-btn-small" aria-expanded={asking} aria-label={`${canReopen ? "Reopen" : "Close"} the finding: ${row.title}`} onClick={() => setAsking(!asking)}>
                   {canReopen ? "Reopen" : "Close"}
                 </button>

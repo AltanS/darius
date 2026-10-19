@@ -7,6 +7,7 @@ import { RowList } from "../components/row.tsx";
 import { ReportRow, RunList } from "../components/runs.tsx";
 import { Empty, SectHead, Time } from "../components/ui.tsx";
 import { WorkspaceList } from "../components/workspaces.tsx";
+import { useFollowStarts, startIdOf } from "../lib/follow-starts.ts";
 import { homeView, workspaceRows } from "../lib/home.ts";
 import { href } from "../lib/paths.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
@@ -148,6 +149,8 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { home, extras, workspaces, canWrite, workspace } = loaderData;
   const { verdict, tone, sub, next, strip, now, starting, needs, doneLately, health } = home;
+  // Every start that waits, in Now or in a flagged card: one light poll for all (`follow-starts.ts`). A card's own button follows its check too, and the ids are shared.
+  useFollowStarts([...starting.map((start) => startIdOf(start.id)), ...needs.flatMap((card) => (card.check?.pending?.state === "starting" ? [card.check.pending.id] : []))]);
   return (
     <div className="proj ov">
       <section className="verdict">

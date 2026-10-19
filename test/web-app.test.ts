@@ -1133,13 +1133,27 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   assert.deepEqual(rules.askBody("dismiss", at, ["a", "b"]), at, "Dismiss sends no answers, whatever is typed");
   assert.deepEqual(rules.earlierBody(at, ["r1", "r2"]), { ...at, runs: ["r1", "r2"] }, "the ids shown, nothing else");
 
-  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null };
-  assert.match(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).text, /^Your answer is saved\. Started run /u);
-  assert.equal(rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ" }).child, "01KQQQQQQQQQQQQQQQQQQQQQQQ");
-  const refused = rules.runNowNotice({ ...ok, runNowError: "run 01KX is held" });
+  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null, id: null, at: null, pending: false };
+  const started = rules.runNowNotice({ ...ok, run: "01KQQQQQQQQQQQQQQQQQQQQQQQ", host: "host-b", id: "01KIDIDIDIDIDIDIDIDIDIDIDI" });
+  assert.equal(started.text, "Run QQQQQQQQ started on host-b.", "the design sentence, with the short run id");
+  assert.equal(started.child, "01KQQQQQQQQQQQQQQQQQQQQQQQ");
+  assert.equal(started.follow, undefined, "a started run needs no follower");
+  const slow = rules.runNowNotice({ ...ok, pending: true, host: "host-b", id: "01KIDIDIDIDIDIDIDIDIDIDIDI", message: "host-b has not confirmed the start yet. It shows in Now when it starts." });
+  assert.equal(slow.text, "host-b has not confirmed the start yet. It shows in Now when it starts.", "the server's sentence");
+  assert.equal(slow.follow, "01KIDIDIDIDIDIDIDIDIDIDIDI", "the page follows the start");
+  assert.equal(slow.child, undefined);
+  const refused = rules.runNowNotice({ ...ok, host: "host-b", runNowError: "host-b did not start it: run 01KX is held." });
   assert.equal(refused.tone, "bad");
-  assert.equal(refused.text, "Your answer is saved, but the run did not start: run 01KX is held. The next run reads it.");
-  assert.equal(rules.runNowNotice({ ...ok, message: "Your answer is saved. The run did not start within 10 s." }).text, "Your answer is saved. The run did not start within 10 s.");
+  assert.equal(refused.text, "host-b did not start it: run 01KX is held.", "the server's wording stays as it is");
+  assert.equal(rules.runNowNotice({ ...ok, runNowError: "ssh to host-c failed" }).text, "The host did not start it: ssh to host-c failed.", "any other error gets the same words");
+  assert.equal(rules.refusedStartText("The host did not answer.", null, 0), "The host did not answer.", "a reply that never came is no refusal of the host");
+  // Once the page follows the start, the line changes with it.
+  const entry = (state: "starting" | "started" | "refused" | "lost", run?: string) => ({ id: "x", state, host: "host-b", at: "2026-10-19T07:18:00.000Z", kind: "run-now" as const, project: "demo", item: "daily", ...(run === undefined ? {} : { run }) });
+  assert.equal(rules.followedNotice(slow, undefined), slow);
+  assert.equal(rules.followedNotice(slow, entry("starting")), slow);
+  assert.deepEqual([rules.followedNotice(slow, entry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).text, rules.followedNotice(slow, entry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).child], ["Run RRRRRRRR started on host-b.", "01KRRRRRRRRRRRRRRRRRRRRRRR"]);
+  assert.equal(rules.followedNotice(slow, entry("refused")).text, "host-b did not start it.");
+  assert.equal(rules.followedNotice(slow, entry("lost")).text, "No sign of this run on host-b after 15 minutes. Start it again from the ritual.");
   assert.equal(rules.runNowNotice(ok).tone, "ok");
 });
 
@@ -1240,12 +1254,13 @@ test("the held form's rules: the current hold, the body Answer and resume posts,
   const at = { project: "demo", run: HELD };
   assert.deepEqual(rules.heldBody(at, hold, [" yes ", ""]), { ...at, answers: [{ n: 2, text: "yes" }], resume: true }, "numbers are the real ones; an empty box sends nothing");
   assert.deepEqual(rules.heldBody(at, hold, ["x", "y"]), { ...at, answers: [{ n: 2, text: "x" }, { n: 3, text: "y" }], resume: true });
-  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null };
-  const went = rules.resumeNotice({ ...ok, resumed: true, run: HELD });
-  assert.deepEqual([went.tone, went.text, went.child], ["ok", "Your answers are saved. The run goes on.", HELD]);
-  const refused = rules.resumeNotice({ ...ok, resumeError: "run is not held" });
-  assert.deepEqual([refused.tone, refused.text], ["bad", "Your answers are saved, but the run did not go on: run is not held."]);
-  assert.equal(rules.resumeNotice({ ...ok, message: "Your answers are saved. Slow." }).text, "Your answers are saved. Slow.");
+  const ok = { ok: true as const, status: 200, started: false, count: null, run: null, host: null, message: null, runNowError: null, resumed: false, resumeError: null, id: null, at: null, pending: false };
+  const went = rules.resumeNotice({ ...ok, resumed: true, run: HELD, host: "host-b" });
+  assert.deepEqual([went.tone, went.text, went.child], ["ok", `Run ${HELD.slice(-8)} started on host-b.`, HELD]);
+  const refused = rules.resumeNotice({ ...ok, host: "host-b", resumeError: "host-b did not start it: run is not held." });
+  assert.deepEqual([refused.tone, refused.text], ["bad", "host-b did not start it: run is not held."]);
+  const slow = rules.resumeNotice({ ...ok, pending: true, id: "01KIDIDIDIDIDIDIDIDIDIDIDI", host: "host-b", message: "host-b has not confirmed the start yet. It shows in Now when it starts." });
+  assert.deepEqual([slow.text, slow.follow], ["host-b has not confirmed the start yet. It shows in Now when it starts.", "01KIDIDIDIDIDIDIDIDIDIDIDI"]);
 });
 
 // --- follow-up (0.48.0) -----------------------------------------------------------------

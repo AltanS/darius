@@ -1,12 +1,13 @@
 /**
  * What the answer form does, apart from drawing it (0.80.0): the answers it
  * collects, the fill of "Use recommendation", the body each button posts and
- * the sentence for what "Send and run now" did. Pure, so a test can hold each
+ * the sentence for what a start did. Pure, so a test can hold each
  * rule without a browser. The server checks every body again
  * (src/web/action-api.ts).
  */
 
-import type { ResultQuestion } from "../../../src/web/api.ts";
+import type { PendingPollEntry, ResultQuestion } from "../../../src/web/api.ts";
+import { lostText } from "./check-poll.ts";
 import { shortRun } from "./format.ts";
 import type { PostBody, PostOk } from "./post.ts";
 
@@ -43,18 +44,58 @@ export function earlierBody(at: { project: string; run: string }, shown: readonl
   return { project: at.project, run: at.run, runs: [...shown] };
 }
 
+/** The line a start leaves under its button: what the host said, and the run to open when there is one. */
 export interface RunNowNotice {
   tone: "ok" | "bad";
   text: string;
   /** The new run, when one started. */
   child?: string;
+  /** The registry id of a start the host has not confirmed yet: the page follows it and swaps the line when it starts. */
+  follow?: string;
+  /** The host that runs it; the poll answer names it too. */
+  host?: string;
+}
+
+/** "Run 8SXQ2ABC started on host-b." */
+export function startedText(run: string, host: string | null): string {
+  return `Run ${shortRun(run)} started on ${host ?? "the host"}.`;
+}
+
+/** "<host> did not start it: <reason>." The server words a refusal this way already; an error without those words gets them. A reply that never came (status 0) stays as it is. */
+export function refusedStartText(error: string, host: string | null, status = 200): string {
+  if (status === 0 || error.includes("did not start it")) return error;
+  return `${host ?? "The host"} did not start it: ${error.trim().replace(/[.\s]+$/u, "")}.`;
+}
+
+/** The text of a start the host has not confirmed: the server's sentence, else the same words. */
+export function pendingStartText(message: string | null, host: string | null): string {
+  return message ?? `${host ?? "The host"} has not confirmed the start yet. It shows in Now when it starts.`;
+}
+
+/**
+ * What a start endpoint's reply says (a run now, a resume, a follow-up): started with a run, not confirmed yet (the
+ * page follows the id), or nothing the page can name.
+ */
+export function startNotice(result: PostOk): RunNowNotice {
+  const notice: RunNowNotice =
+    result.run === null ? { tone: "ok", text: pendingStartText(result.message, result.host) } : { tone: "ok", text: startedText(result.run, result.host), child: result.run };
+  if (result.run === null && result.id !== null) notice.follow = result.id;
+  if (result.host !== null) notice.host = result.host;
+  return notice;
 }
 
 /** What to tell the operator after "Send and run now" was accepted: the answer is saved in every case. */
 export function runNowNotice(result: PostOk): RunNowNotice {
-  if (result.runNowError !== null) return { tone: "bad", text: `Your answer is saved, but the run did not start: ${result.runNowError}. The next run reads it.` };
-  if (result.run === null) return { tone: "ok", text: result.message ?? "Your answer is saved. The run is starting." };
-  return { tone: "ok", text: `Your answer is saved. Started run ${shortRun(result.run)}.`, child: result.run };
+  if (result.runNowError !== null) return { tone: "bad", text: refusedStartText(result.runNowError, result.host) };
+  return startNotice(result);
+}
+
+/** The line after the page followed a pending start: started (with the run), refused, lost. Anything else leaves the line as it was. */
+export function followedNotice(notice: RunNowNotice, entry: PendingPollEntry | undefined): RunNowNotice {
+  if (entry === undefined || entry.state === "unknown" || entry.state === "starting") return notice;
+  if (entry.state === "started") return entry.run === undefined ? notice : { tone: "ok", text: startedText(entry.run, entry.host), child: entry.run };
+  if (entry.state === "refused") return { tone: "bad", text: `${entry.host} did not start it.` };
+  return { tone: "bad", text: lostText(entry.host, "run") };
 }
 
 /** The questions of a held run's current hold, with their numbers: the held card asks these, not the questions of earlier holds. */
@@ -74,13 +115,8 @@ export function heldBody(at: { project: string; run: string }, hold: ReadonlyArr
 
 /** What to tell the operator after "Answer and resume" was accepted: the answers are saved in every case. */
 export function resumeNotice(result: PostOk): RunNowNotice {
-  if (result.resumeError !== null) return { tone: "bad", text: `Your answers are saved, but the run did not go on: ${result.resumeError}.` };
-  if (result.resumed) {
-    const notice: RunNowNotice = { tone: "ok", text: "Your answers are saved. The run goes on." };
-    if (result.run !== null) notice.child = result.run;
-    return notice;
-  }
-  return { tone: "ok", text: result.message ?? "Your answers are saved. The run is starting." };
+  if (result.resumeError !== null) return { tone: "bad", text: refusedStartText(result.resumeError, result.host) };
+  return startNotice(result);
 }
 
 /** The React key of a held run's form: a second hold of the same run gets a fresh form, with empty boxes. */
