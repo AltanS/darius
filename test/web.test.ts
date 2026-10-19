@@ -84,6 +84,8 @@ function fakeBuild(): string {
   mkdirSync(join(build, "server"), { recursive: true });
   writeFileSync(join(build, "client", "assets", "app-1a2b.js"), "console.log(1);\n");
   writeFileSync(join(build, "client", "favicon.svg"), "<svg/>\n");
+  writeFileSync(join(build, "client", "sw.js"), "self;\n");
+  writeFileSync(join(build, "client", "offline.html"), "<p>No connection.</p>\n");
   writeFileSync(join(build, "build-info.json"), '{"sourceHash":"one"}\n');
   writeFileSync(join(SANDBOX, "package.json"), '{"type":"module"}\n');
   writeFileSync(
@@ -197,6 +199,11 @@ test("static files: hashed assets are immutable; nothing outside build/client is
   assert.match(asset.headers.get("content-type") ?? "", /text\/javascript/u);
   assert.match(asset.headers.get("cache-control") ?? "", /immutable/u);
   assert.equal((await get("/favicon.svg")).headers.get("cache-control"), "no-cache");
+  assert.equal((await get("/favicon.svg")).headers.get("content-security-policy"), "default-src 'none'");
+  const worker = await get("/sw.js");
+  assert.equal(worker.headers.get("cache-control"), "no-cache", "a new worker is seen at once");
+  assert.equal(worker.headers.get("content-security-policy"), "default-src 'none'; connect-src 'self'", "the worker may fetch the pages it saves");
+  assert.equal((await get("/offline.html")).headers.get("content-security-policy"), "default-src 'none'; style-src 'unsafe-inline'", "the offline page has its inline style, no script");
   for (const path of ["/../server/index.js", "/%2e%2e/server/index.js", "/..%2fbuild-info.json", "/assets/", "/%E0%A4%A"]) {
     assert.equal(staticFile(BUILD, path), null, path);
   }

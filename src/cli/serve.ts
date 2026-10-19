@@ -175,8 +175,18 @@ export function staticFile(build: string, path: string): string | null {
   return file;
 }
 
+/**
+ * The CSP of a static file. The service worker runs under its own CSP, and it
+ * fetches the pages it saves, so it needs connect-src. The offline page it
+ * shows has one inline style and nothing else.
+ */
+const FILE_CSP: ReadonlyMap<string, string> = new Map([
+  ["/sw.js", "default-src 'none'; connect-src 'self'"],
+  ["/offline.html", PLAIN_CSP],
+]);
+
 function fileReply(file: string, path: string): WebReply {
-  const answer = reply(200, TYPES.get(extname(file)) ?? "application/octet-stream", readFileSync(file), "default-src 'none'");
+  const answer = reply(200, TYPES.get(extname(file)) ?? "application/octet-stream", readFileSync(file), FILE_CSP.get(path) ?? "default-src 'none'");
   // Vite puts a content hash in every file name under /assets/, so such a file never changes.
   answer.headers.set("cache-control", path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
   return answer;

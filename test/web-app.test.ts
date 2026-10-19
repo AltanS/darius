@@ -1588,7 +1588,7 @@ test("an answered result: the decision replaces the command, home is quiet, the 
   assert.ok(runs.includes('<span class="chip-x c-idle">1 question, answered</span>'), "answered, in words and without the waiting tone");
 });
 
-test("the app can be installed and get push notices: manifest, icons, service worker, and the links to them", async () => {
+test("the app can be installed, get push notices and open offline: manifest, icons, service worker, offline page, and the links to them", async () => {
   const client = join(import.meta.dirname, "..", "web", "build", "client");
   const manifest: { start_url: string; display: string; icons: { src: string; sizes: string; purpose: string }[] } = JSON.parse(readFileSync(join(client, "manifest.webmanifest"), "utf8"));
   assert.equal(manifest.start_url, "/");
@@ -1598,7 +1598,8 @@ test("the app can be installed and get push notices: manifest, icons, service wo
   for (const file of ["apple-touch-icon.png", "badge-72.png"]) assert.ok(existsSync(join(client, file)), file);
   const worker = readFileSync(join(client, "sw.js"), "utf8");
   for (const event of ["push", "notificationclick"]) assert.match(worker, new RegExp(`addEventListener\\("${event}"`, "u"), event);
-  assert.doesNotMatch(worker, /addEventListener\("fetch"/u, "no fetch handler: the page is never served from a cache");
+  assert.match(worker, /addEventListener\("fetch"/u, "the worker keeps the last copy of each page (test/web-sw.test.ts holds its rules)");
+  assert.match(readFileSync(join(client, "offline.html"), "utf8"), /No connection, and no saved page yet\./u, "the page for a first open with no connection");
   const home = await readPage("/all", context);
   assert.match(home, /<link [^>]*rel="manifest" href="\/manifest.webmanifest"/u);
   assert.match(home, /<link [^>]*rel="apple-touch-icon" href="\/apple-touch-icon.png"/u);
