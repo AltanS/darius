@@ -4,9 +4,10 @@ import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestora
 import type { Route } from "./+types/root";
 import "./app.css";
 import { Gem } from "./components/nav-icons.tsx";
+import { NoConnection } from "./components/route-error.tsx";
 import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
-import { connectionNow, isFreshAdvance, markFresh, markStale, PROBE_MS, probeHost, useConnection } from "./lib/connection.ts";
+import { connectionNow, isFreshAdvance, isNetworkError, markFresh, markStale, PROBE_MS, probeHost, useConnection } from "./lib/connection.ts";
 import { NonceContext } from "./lib/nonce.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
@@ -82,7 +83,8 @@ export function Layout({ children }: LayoutProps): React.ReactNode {
   // Keep the nonce of the first render; later loads bring new ones that no CSP matches.
   const [nonce] = useState(useContext(NonceContext) ?? data?.nonce);
   // --- settings block: the attributes the themes in app.css key on ---
-  const settings = data?.settings ?? DEFAULT_SETTINGS;
+  // With no root data (the root boundary after a failed read), the browser still has the cookie.
+  const settings = data?.settings ?? ("document" in globalThis ? readSettings(document.cookie) : DEFAULT_SETTINGS);
   return (
     <html lang="en" data-theme={settings.theme} data-density={settings.density} data-motion={settings.motion}>
       <head>
@@ -200,6 +202,14 @@ export default function App({ loaderData }: Route.ComponentProps): React.ReactNo
 /** The last resort, when even the frame data failed. Pages have their own boundary. */
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactNode {
   const data = useRouteLoaderData<typeof loader>("root");
+  // A read with no answer and no saved copy (no worker yet): the backstop, not the path.
+  if (isNetworkError(error)) {
+    return (
+      <main className="wa page-main reading">
+        <NoConnection />
+      </main>
+    );
+  }
   const title = isRouteErrorResponse(error) ? `${error.status} ${error.statusText}` : "darius could not show this page";
   const detail = isRouteErrorResponse(error) ? String(error.data ?? "") : error instanceof Error ? error.message : "";
   return (

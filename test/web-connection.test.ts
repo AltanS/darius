@@ -81,3 +81,16 @@ test("the store: markStale, markFresh and markSendFailed move the state; the gre
   await new Promise((resolve) => setTimeout(resolve, connection.CONNECTED_MS + 50));
   assert.equal(connection.connectionNow().lost, true, "the old timer does not clear a new outage");
 });
+
+/** The shape React Router's isRouteErrorResponse checks. */
+const routeError = (status: number) => ({ status, statusText: "x", internal: false, data: "" });
+
+test("a network error: a failed fetch, or a route error of status 0, 502, 503 or 504; anything else is a real failure", () => {
+  const { isNetworkError } = connection;
+  assert.equal(isNetworkError(new TypeError("Failed to fetch")), true);
+  assert.equal(isNetworkError(new TypeError("Load failed")), true);
+  for (const status of [0, 502, 503, 504]) assert.equal(isNetworkError(routeError(status)), true, String(status));
+  for (const status of [404, 500]) assert.equal(isNetworkError(routeError(status)), false, String(status));
+  assert.equal(isNetworkError(new Error("Unknown error")), false);
+  assert.equal(isNetworkError(null), false);
+});

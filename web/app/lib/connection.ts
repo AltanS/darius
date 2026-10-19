@@ -16,6 +16,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { isRouteErrorResponse } from "react-router";
 
 export interface ConnectionState {
   /** The last read or send got no answer. */
@@ -73,6 +74,15 @@ export function isFreshAdvance(previous: string, next: string, since: number | n
 /** The time the strip names: when the copy was saved, else when the page on screen was read. */
 export function shownTime(state: ConnectionState, generatedAt: string): string {
   return state.savedAt ?? generatedAt;
+}
+
+/** The answers of a proxy when darius is down, and 0 for no answer at all. */
+const NO_HOST = new Set([0, 502, 503, 504]);
+
+/** An error that means the host did not answer: a failed fetch (a TypeError), or a route error with a status of NO_HOST. */
+export function isNetworkError(cause: unknown): boolean {
+  if (cause instanceof TypeError) return true;
+  return isRouteErrorResponse(cause) && NO_HOST.has(cause.status);
 }
 
 // --- the probe ---
