@@ -6,9 +6,10 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { ActivityOptions, FindingRow, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
+import type { ActivityOptions, FindingRow, HostStatus, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
+import { configDir, stateDir } from "../core/paths.ts";
 import { listProjects, openProject } from "../core/store.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
@@ -119,6 +120,38 @@ function withCheck(detail: VigilDetail | null): VigilDetail | null {
   return { ...detail, pending: vigilCheckOf(collectPending(detail.project), detail.row.slug, sweptAt) };
 }
 
+/** How long a status read is reused: a navigation or a poll inside this window skips the 0.5 to 0.7 s read. */
+export const STATUS_TTL_MS = 10_000;
+
+let statusCache: { key: string; at: number; value: HostStatus } | null = null;
+let statusCacheOn = false;
+
+/** Turns the status cache on or off, and forgets what it holds. `darius serve` turns it on while it listens; the dev server and tests leave it off, so they always read the store. */
+export function useStatusCache(on: boolean): void {
+  statusCacheOn = on;
+  statusCache = null;
+}
+
+/**
+ * `collectStatus()`, reused for STATUS_TTL_MS across requests (module-wide) while `useStatusCache(true)` holds.
+ * The key holds the state and config folders, so a process that switches stores never reads the other's status.
+ * `darius serve` clears it after every write POST, so a page after an action sees the result.
+ * `GET /api/status.json` does not use it.
+ */
+export function cachedStatus(now: number = Date.now()): HostStatus {
+  if (!statusCacheOn) return collectStatus();
+  const key = `${stateDir()}\0${configDir()}`;
+  if (statusCache !== null && statusCache.key === key && now - statusCache.at >= 0 && now - statusCache.at < STATUS_TTL_MS) return statusCache.value;
+  const value = collectStatus();
+  statusCache = { key, at: now, value };
+  return value;
+}
+
+/** Forgets the cached status: the next read is fresh. */
+export function clearStatusCache(): void {
+  statusCache = null;
+}
+
 export function newNonce(): string {
   return randomBytes(16).toString("base64");
 }
@@ -129,7 +162,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     viewer,
     nonce,
     canWrite: !local,
-    status: () => collectStatus(),
+    status: () => cachedStatus(),
     ritual: (project, slug) => ritualDetail(project, slug),
     vigil: (project, slug) => withCheck(vigilDetail(project, slug)),
     run: (project, run) => runDetail(project, run),
