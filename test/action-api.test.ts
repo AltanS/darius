@@ -26,7 +26,8 @@ import { collectFindings } from "../src/core/finding-index.ts";
 import { Seeder } from "./helpers/finding-seed.ts";
 import { webContext } from "../src/web/context.ts";
 import type { PushApiReply } from "../src/web/push-api.ts";
-import { pendingStarts, readRegistry } from "../src/web/pending.ts";
+import { pendingStarts, readRegistry, recordPending } from "../src/web/pending.ts";
+import { CHECK_WAIT_MS, OUTCOME_WAIT_MS, PENDING_API_PATH, PENDING_IDS_MAX, cooldownReply, pendingApi, pendingMessage, refusedMessage } from "../src/web/action-api.ts";
 import type { FollowUpReadiness } from "../src/web/api.ts";
 
 const sandbox = mkdtempSync(join(tmpdir(), "darius-action-api-test-"));
@@ -114,10 +115,11 @@ function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
 }
 
-/** The body without its pending-starts `id` (0.89.0); the id must be a ULID. */
+/** The body without its pending-starts `id` (0.89.0) and the time asked `at`; the id must be a ULID, the time an ISO time. */
 function bodyWithoutId(body: JsonValue): JsonValue {
   assert.ok(isRecord(body) && isText(body.id) && /^[0-9A-Z]{26}$/u.test(body.id), `the reply carries the id of its pending line: ${JSON.stringify(body)}`);
-  return Object.fromEntries(Object.entries(body).filter(([key]) => key !== "id"));
+  assert.ok(isText(body.at) && new Date(body.at).toISOString() === body.at, `the reply carries the time asked: ${JSON.stringify(body)}`);
+  return Object.fromEntries(Object.entries(body).filter(([key]) => key !== "id" && key !== "at"));
 }
 
 function replyWithoutId(reply: PushApiReply): PushApiReply {
@@ -281,11 +283,11 @@ test("forwarded: when readiness ran on the ritual's host, the CLI gets --on <hos
 
 test("outcome: a refusal or a skip is 409 with the CLI's sentence; an ssh failure is 503; nothing comes in time is 202 pending with a message", async () => {
   const cases: [Script, number, RegExp][] = [
-    [{ output: "! follow-up 01X of run 'R' is still open; finish it first\n", code: 1 }, 409, /^follow-up 01X of run 'R' is still open; finish it first$/u],
-    [{ output: "heartbeat: skipped\ndarius run follow-up: lease-held: host-b holds the lease\n", code: 1 }, 409, /^lease-held: host-b holds the lease$/u],
-    [{ output: "darius: run follow-up: item 'k' of run 'R' is fixed; only a needs-decision item can be approved\n", code: 2 }, 409, /^run follow-up: item 'k' of run 'R' is fixed/u],
-    [{ output: "ssh: connect to host minibuch port 22: No route to host\n", code: 255 }, 503, /^host-a did not answer: ssh: connect to host minibuch port 22: No route to host$/u],
-    [{ output: "", code: 0 }, 409, /ended without starting a run/u],
+    [{ output: "! follow-up 01X of run 'R' is still open; finish it first\n", code: 1 }, 409, /^host-a did not start it: follow-up 01X of run 'R' is still open; finish it first\.$/u],
+    [{ output: "heartbeat: skipped\ndarius run follow-up: lease-held: host-b holds the lease\n", code: 1 }, 409, /^host-a did not start it: lease-held: host-b holds the lease\.$/u],
+    [{ output: "darius: run follow-up: item 'k' of run 'R' is fixed; only a needs-decision item can be approved\n", code: 2 }, 409, /^host-a did not start it: run follow-up: item 'k' of run 'R' is fixed/u],
+    [{ output: "ssh: connect to host minibuch port 22: No route to host\n", code: 255 }, 503, /^host-a did not start it: ssh: connect to host minibuch port 22: No route to host\.$/u],
+    [{ output: "", code: 0 }, 409, /^host-a did not start it: darius ended with exit code 0 and no message\.$/u],
   ];
   for (const [script, status, reason] of cases) {
     const answer = await actionApi(post(VALID), { who: "owner" }, deps(READY, script));
@@ -294,7 +296,7 @@ test("outcome: a refusal or a skip is 409 with the CLI's sentence; an ssh failur
   }
   const slow = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "" }));
   assert.equal(slow.status, 202);
-  assert.ok(isRecord(slow.body) && slow.body.pending === true && isText(slow.body.message) && /did not start within 10 s/u.test(slow.body.message), JSON.stringify(slow.body));
+  assert.deepEqual(bodyWithoutId(slow.body), { ok: true, pending: true, host: "host-a", message: "host-a has not confirmed the start yet. It shows in Now when it starts." });
 });
 
 test("outcome: the wait reads only what this start wrote, and a started line before the exit wins", async () => {
@@ -702,7 +704,7 @@ test("run now: a host lookup that throws is a 500 before anything is written; a 
     },
   };
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, spawn);
-  assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "the run could not be started: disk full" } } });
+  assert.deepEqual(sent, { status: 200, body: { ok: true, runNow: { error: "host-a did not start it: disk full." } } });
   assert.equal(spawn.calls.length, 1, "the ack ran and stays");
 });
 
@@ -789,13 +791,13 @@ test("run now: no ack, no run. A refused ack (also the second click on an acknow
 
 test("run now: an exit without a start line is reported as runNow.error, and the ack stays written", async () => {
   const scripts: [Script, RegExp, string?][] = [
-    [{ output: "", code: 0 }, /^no run started: darius ended with exit code 0 and no message$/u],
-    [{ output: "! daily runs on host-b (pinned): ssh host-b darius run now daily\n", code: 1 }, /^daily runs on host-b \(pinned\)/u],
-    [{ output: "darius run now: lease-held: another host runs it\n", code: 0 }, /^no run started: lease-held: another host runs it$/u],
-    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, /^the ritual's host did not answer: ssh: connect/u, "host-b"],
-    [{ output: "", code: null }, /^the ritual's host did not answer/u, "host-b"],
-    [{ output: "darius: something broke\n", code: 255 }, /^something broke$/u],
-    [{ output: "", code: null }, /^darius ended with exit code null and no message$/u],
+    [{ output: "", code: 0 }, /^host-a did not start it: darius ended with exit code 0 and no message\.$/u],
+    [{ output: "! daily runs on host-b (pinned): ssh host-b darius run now daily\n", code: 1 }, /^host-a did not start it: daily runs on host-b \(pinned\)/u],
+    [{ output: "darius run now: lease-held: another host runs it\n", code: 0 }, /^host-a did not start it: lease-held: another host runs it\.$/u],
+    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, /^host-b did not start it: ssh: connect/u, "host-b"],
+    [{ output: "", code: null }, /^host-b did not start it: /u, "host-b"],
+    [{ output: "darius: something broke\n", code: 255 }, /^host-a did not start it: something broke\.$/u],
+    [{ output: "", code: null }, /^host-a did not start it: darius ended with exit code null and no message\.$/u],
   ];
   for (const [script, reason, host] of scripts) {
     const stub: ActionDeps & { calls: string[][] } = { ...nowDeps(script), nowHost: () => host };
@@ -817,13 +819,14 @@ test("run now: a start that throws is runNow.error; a CLI that neither starts no
   };
   const failed = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, broken);
   assert.equal(failed.status, 200);
-  assert.deepEqual(failed.body, { ok: true, runNow: { error: "the run could not be started: disk full" } });
+  assert.deepEqual(failed.body, { ok: true, runNow: { error: "host-a did not start it: disk full." } });
 
   const slow = nowDeps({ output: "" });
   const pending = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, slow);
   assert.equal(pending.status, 200);
   assert.ok(isRecord(pending.body) && pending.body.ok === true && pending.body.pending === true);
-  assert.match(String(isRecord(pending.body) ? pending.body.message : ""), /Your answer is saved\. The run did not start within 10 s/u);
+  assert.equal(String(isRecord(pending.body) ? pending.body.message : ""), "host-a has not confirmed the start yet. It shows in Now when it starts.");
+  assert.deepEqual(bodyWithoutId(pending.body), { ok: true, pending: true, host: "host-a", message: "host-a has not confirmed the start yet. It shows in Now when it starts." });
 });
 
 test("ack and ack-earlier: the loopback viewer 403, no or foreign Origin 403, other content 415, a large body 413; nothing runs", async () => {
@@ -1157,11 +1160,11 @@ test("held: when the CLI writes none (a refusal in the answer call), the reply i
 
 test("held: a refused resume still returns ok with the reason, and the answers stay written", async () => {
   const cases: [Script, string | undefined, RegExp][] = [
-    [{ output: "! run 'R' has no answer since it was held: darius run answer R <n> <text>\n", code: 1 }, undefined, /^run 'R' has no answer since it was held/u],
-    [{ output: "", code: 0 }, undefined, /^no run started: darius ended with exit code 0 and no message$/u],
-    [{ output: "! heartbeat runs on host-b (pinned): ssh host-b darius run resume R\n", code: 1 }, undefined, /^heartbeat runs on host-b \(pinned\)/u],
-    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, "host-b", /^the ritual's host did not answer: ssh: connect/u],
-    [{ output: "darius: something broke\n", code: 255 }, undefined, /^something broke$/u],
+    [{ output: "! run 'R' has no answer since it was held: darius run answer R <n> <text>\n", code: 1 }, undefined, /^host-a did not start it: run 'R' has no answer since it was held/u],
+    [{ output: "", code: 0 }, undefined, /^host-a did not start it: darius ended with exit code 0 and no message\.$/u],
+    [{ output: "! heartbeat runs on host-b (pinned): ssh host-b darius run resume R\n", code: 1 }, undefined, /^host-a did not start it: heartbeat runs on host-b \(pinned\)/u],
+    [{ output: "ssh: connect to host host-b port 22: no route\n", code: 255 }, "host-b", /^host-b did not start it: ssh: connect/u],
+    [{ output: "darius: something broke\n", code: 255 }, undefined, /^host-a did not start it: something broke\.$/u],
   ];
   for (const [script, host, reason] of cases) {
     const run = seedHeld();
@@ -1184,7 +1187,7 @@ test("held: a refused resume still returns ok with the reason, and the answers s
     },
   };
   const failed = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, broken);
-  assert.deepEqual(failed, { status: 200, body: { ok: true, resume: { error: "the run could not be started: disk full" } } });
+  assert.deepEqual(failed, { status: 200, body: { ok: true, resume: { error: "host-a did not start it: disk full." } } });
   assert.equal(answeredLines(run).length, 1);
 });
 
@@ -1194,7 +1197,8 @@ test("held: a resume that neither starts nor ends in time is pending, with the a
   const pending = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, slow);
   assert.equal(pending.status, 200);
   assert.ok(isRecord(pending.body) && pending.body.ok === true && pending.body.pending === true);
-  assert.match(String(isRecord(pending.body) ? pending.body.message : ""), /Your answers are saved\. The run did not go on within 10 s/u);
+  assert.equal(String(isRecord(pending.body) ? pending.body.message : ""), "host-a has not confirmed the start yet. It shows in Now when it starts.");
+  assert.deepEqual(bodyWithoutId(pending.body), { ok: true, pending: true, host: "host-a", message: "host-a has not confirmed the start yet. It shows in Now when it starts." });
 });
 
 test("held: a double POST is refused. The first answers and resumes, the second finds the run no longer held and writes nothing", async () => {
@@ -1387,13 +1391,12 @@ test("check: it starts the sweep of that vigil with the project, --json and the 
   assert.equal(stub.started[0]?.log, join(openProject(PROJECT).root, "sweeps", "armed.log"));
 });
 
-test("check: a lease refusal or a cooldown is 409 with the CLI's own sentence", async () => {
+test("check: a lease refusal is 409 with the CLI's sentence in the refused wording", async () => {
   const cases: [Script, RegExp][] = [
-    [{ output: "darius: the daily sweep runs on host-b\n", code: 1 }, /^the daily sweep runs on host-b$/u],
-    [{ output: "darius: a check of 'armed' is already running (host-b holds the lease)\n", code: 1 }, /^a check of 'armed' is already running \(host-b holds the lease\)$/u],
-    [{ output: "darius: vigil 'armed' was swept less than 2 minutes ago; wait 90 s or pass --force\n", code: 1 }, /^vigil 'armed' was swept less than 2 minutes ago; wait 90 s or pass --force$/u],
-    [{ output: `${JSON.stringify({ project: PROJECT, skipped: { reason: "lease-offline", detail: "the bucket did not answer" } })}\n`, code: 3 }, /^the bucket did not answer$/u],
-    [{ output: "", code: 1 }, /ended with exit code 1 and no message/u],
+    [{ output: "darius: the daily sweep runs on host-b\n", code: 1 }, /^host-a did not start it: the daily sweep runs on host-b\.$/u],
+    [{ output: "darius: a check of 'armed' is already running (host-b holds the lease)\n", code: 1 }, /^host-a did not start it: a check of 'armed' is already running \(host-b holds the lease\)\.$/u],
+    [{ output: `${JSON.stringify({ project: PROJECT, skipped: { reason: "lease-offline", detail: "the bucket did not answer" } })}\n`, code: 3 }, /^host-a did not start it: the bucket did not answer\.$/u],
+    [{ output: "", code: 1 }, /^host-a did not start it: the check ended with exit code 1 and no message\.$/u],
   ];
   for (const [script, reason] of cases) {
     const answer = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps(script));
@@ -1499,4 +1502,98 @@ test("pending: a spawn that throws writes no line, and a registry that cannot be
     rmSync(dir, { force: true });
     renameSync(moved, dir);
   }
+});
+
+// --- waits, messages, cooldown and the light poll (0.104.0) --------------------------------
+
+test("waits: a check waits 1.5 s and a run start 2.5 s; pending is the normal reply", () => {
+  assert.equal(CHECK_WAIT_MS, 1500);
+  assert.equal(OUTCOME_WAIT_MS, 2500);
+});
+
+test("messages: the pending and the refused sentences name the host and carry no path or flag", () => {
+  assert.equal(pendingMessage("host-a"), "host-a has not confirmed the start yet. It shows in Now when it starts.");
+  assert.equal(refusedMessage("host-a", "the checkout is dirty."), "host-a did not start it: the checkout is dirty.");
+  assert.equal(refusedMessage("host-a", "no lease"), "host-a did not start it: no lease.");
+});
+
+test("start replies: every start names id, host and time asked, started or pending", async () => {
+  const slow = await actionApi(post(VALID), { who: "owner" }, deps(READY, { output: "" }));
+  assert.ok(isRecord(slow.body) && slow.body.pending === true && slow.body.host === "host-a" && isText(slow.body.id) && isText(slow.body.at));
+  const line = readRegistry().requests.find((request) => isRecord(slow.body) && request.id === slow.body.id);
+  assert.equal(line?.at, isRecord(slow.body) ? slow.body.at : "", "the reply carries the time the registry holds");
+  const started = await vigilApi(checkRequest(CHECK), { who: "owner" }, checkDeps({ output: `${SWEEP_STARTED_PREFIX}armed on host-a\n` }));
+  assert.ok(isRecord(started.body) && started.body.started === true && started.body.host === "host-a" && isText(started.body.id) && isText(started.body.at));
+});
+
+test("check cooldown: a repeat inside two minutes is 409 with retryAt and lastCheckedAt, and nothing starts", async () => {
+  addVigil(openProject(PROJECT), { slug: "cooling", title: "Cooling", body: CHECK_BODY, due: "2026-10-01", heavy: false, who: "test" });
+  const sweptAt = new Date(Date.now() - 60_000).toISOString();
+  appendLine(openProject(PROJECT), { who: "timer", type: "vigil.swept", item: "vigil/cooling", outcome: "held", at: sweptAt });
+  const stub = checkDeps();
+  const answer = await vigilApi(checkRequest({ project: PROJECT, slug: "cooling" }), { who: "owner" }, stub);
+  assert.equal(answer.status, 409);
+  assert.ok(isRecord(answer.body) && answer.body.ok === false);
+  assert.match(errorOf(answer.body), /^Checked 1 min ago\. Check again at \d\d:\d\d\.$/u);
+  assert.ok(!/force|--/u.test(errorOf(answer.body)), "no flag in the sentence");
+  assert.equal(answer.body.lastCheckedAt, sweptAt);
+  assert.equal(answer.body.retryAt, new Date(Date.parse(sweptAt) + 120_000).toISOString());
+  assert.deepEqual(stub.started, []);
+});
+
+test("check cooldown: a skipped sweep and an old sweep start no cooldown", () => {
+  const swept = (at: string, outcome: string): LedgerLine => ({ v: 1, id: "01JLINE0000000000000000001", at, host: "host-a", who: "timer", project: PROJECT, type: "vigil.swept", item: "vigil/x", outcome });
+  const now = Date.parse("2026-10-19T10:00:00.000Z");
+  assert.equal(cooldownReply([swept("2026-10-19T09:59:30.000Z", "skipped")], now), null);
+  assert.equal(cooldownReply([swept("2026-10-19T09:57:59.000Z", "held")], now), null);
+  assert.equal(cooldownReply([], now), null);
+  const cooling = cooldownReply([swept("2026-10-19T09:59:30.000Z", "held")], now);
+  assert.equal(cooling?.status, 409);
+  assert.ok(cooling !== null && isRecord(cooling.body) && cooling.body.retryAt === "2026-10-19T10:01:30.000Z");
+});
+
+test("the vigil row carries lastCheckedAt once a sweep ran", () => {
+  const row = webContext("owner").status().projects.find((one) => one.name === PROJECT)?.vigils.find((vigil) => vigil.slug === "cooling");
+  assert.ok(row?.lastCheckedAt !== undefined && !Number.isNaN(Date.parse(row.lastCheckedAt)));
+  assert.equal(webContext("owner").status().projects.find((one) => one.name === PROJECT)?.vigils.find((vigil) => vigil.slug === "armed")?.lastCheckedAt, undefined);
+});
+
+function pollRequest(query: string, overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return { method: "GET", path: PENDING_API_PATH, headers: new Headers(), body: "", query, ...overrides };
+}
+
+test("GET /api/pending: it resolves the listed entries only, in the order asked, and unknown ids are state unknown", () => {
+  const log = join(sandbox, "poll.log");
+  writeFileSync(log, `darius run now: started run ${CHILD} on host-a\n`);
+  const base = { at: new Date().toISOString(), who: "web:owner", project: PROJECT, host: "host-a", log, offset: 0 };
+  const started = recordPending({ ...base, kind: "run-now", ritual: "daily", parent: RUN });
+  const waiting = recordPending({ ...base, kind: "vigil-check", vigil: "armed", log: join(sandbox, "none.log") });
+  const ghost = "01JGHOST0000000000000000AA";
+  let ledgerReads = 0;
+  const answer = pendingApi(pollRequest(`?ids=${waiting},${ghost},${started}`), (name) => {
+    ledgerReads += 1;
+    return readLedger(openProject(name));
+  });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.body, {
+    ok: true,
+    starts: [
+      { id: waiting, state: "starting", host: "host-a", at: base.at, kind: "vigil-check", project: PROJECT, item: "armed" },
+      { id: ghost, state: "unknown" },
+      { id: started, state: "started", host: "host-a", at: base.at, kind: "run-now", project: PROJECT, item: "daily", run: CHILD },
+    ],
+  });
+  assert.equal(ledgerReads, 1, "one project, read once");
+  const before = Date.now();
+  pendingApi(pollRequest(`?ids=${waiting}`), (name) => readLedger(openProject(name)));
+  assert.ok(Date.now() - before < 100, "a poll of one project is fast");
+});
+
+test("GET /api/pending: GET only, no cross-site caller, bad ids and too many ids are 400, an empty list is empty", () => {
+  assert.equal(pendingApi(pollRequest("?ids=x", { method: "POST" })).status, 405);
+  assert.equal(pendingApi(pollRequest("?ids=01JGHOST0000000000000000AA", { headers: new Headers({ "sec-fetch-site": "cross-site" }) })).status, 403);
+  assert.equal(pendingApi(pollRequest("?ids=not-an-id")).status, 400);
+  const many = Array.from({ length: PENDING_IDS_MAX + 1 }, (_, index) => `01JGHOST${String(index).padStart(18, "0")}`);
+  assert.equal(pendingApi(pollRequest(`?ids=${many.join(",")}`)).status, 400);
+  assert.deepEqual(pendingApi(pollRequest("")).body, { ok: true, starts: [] });
 });
