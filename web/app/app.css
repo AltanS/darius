@@ -5766,6 +5766,15 @@
     inset: -13px -8px;
   }
 
+  /* The history of a finding links each step to its run: one 44 px line for each link. */
+
+  .fnd-history a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding-block: 0;
+  }
+
   /* The wait line under a button is text only: the button carries the gem. */
 
   .rail-note[role="status"],

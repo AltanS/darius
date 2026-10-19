@@ -9,7 +9,7 @@
  * - On a 202 reply the button gives way to the checking line, built from the
  *   reply (host, time): "Checking on <host>, 40 s so far. Most checks end
  *   within a minute." It ticks. After 3 minutes it says "Still checking ...".
- *   There is no stalled state and no "Look again": the light poll of
+ *   There is no stalled state and no manual button: the light poll of
  *   `follow-starts.ts` keeps looking until the check ends or 15 minutes pass.
  * - When the check ends the line reads "Checked 07:24: passed." (or "still
  *   failing"), for the rest of the visit.
@@ -97,13 +97,14 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain, p
   const [error, setError] = useState<string | null>(null);
   const [asked, setAsked] = useState<Asked | null>(null);
   const [cooling, setCooling] = useState<Cooling | null>(null);
-  const fromLoader: Asked | null = pending?.state === "starting" ? { id: pending.id, host: pending.host, at: pending.at } : null;
-  // The page keeps following a check that the loader showed as `starting`, even after the loader stops listing it.
+  const fromLoader: Asked | null = pending === null ? null : { id: pending.id, host: pending.host, at: pending.at };
+  // The page keeps a check that the loader showed, even after the loader stops listing it: it is the line "Checked 07:24" or the refusal.
   const tracked = newerAsk(asked, fromLoader);
   useEffect(() => {
     if (fromLoader !== null && fromLoader.id !== asked?.id && newerAsk(asked, fromLoader) === fromLoader) setAsked(fromLoader);
   }, [fromLoader, asked]);
-  const followed = useFollowStarts(tracked === null ? [] : [tracked.id]);
+  // A refused or lost check is decided: only a check that may still change is followed.
+  const followed = useFollowStarts(tracked === null || (pending?.id === tracked.id && pending.state !== "starting") ? [] : [tracked.id]);
   const entry = tracked === null ? undefined : followed.get(tracked.id);
   // The loader knows the sentence of a refusal, the poll does not: once the loader shows the same start in an end state, it wins.
   const sameLoader = pending !== null && tracked !== null && pending.id === tracked.id ? pending : null;
@@ -169,7 +170,7 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain, p
       </div>
       <WaitLine active={busy} what="check" />
       {blocked !== null && explain ? <p className="rail-note">{blocked}</p> : null}
-      {lastLine === null ? null : (
+      {lastLine === null || busy ? null : (
         <p className={failed ? "bk-note tone-bad" : "rail-note"} role="status">
           {lastLine}
         </p>

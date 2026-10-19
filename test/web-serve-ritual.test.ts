@@ -79,7 +79,7 @@ const text = (html: string): string => html.replaceAll(/<script\b[\s\S]*?<\/scri
 
 test("the ritual page shows the Starting card for a start without a run, and not one of another ritual", async () => {
   const body = text(await page("/w/darius-selftest/rituals/heartbeat"));
-  assert.match(body, /Starting .*Starting a run on host-b, asked \d\d:\d\d by web:altan/u);
+  assert.match(body, /Starting Starting on host-b, asked \d\d:\d\d/u);
   const html = await page("/w/darius-selftest/rituals/heartbeat");
   assert.match(html, /<p class="gem-line"><svg[^>]*class="gem gem-busy"/u, "0.98.0: the busy gem on the Starting card");
   assert.equal(body.includes("follow-up on host-b"), false, "the start of the other ritual stays off");
@@ -160,7 +160,7 @@ test("the window is 30 days, Show older adds 30 through ?days=, and a bad value 
 
 test("a refused start shows the CLI's sentence and a Try again link to the parent run", async () => {
   const html = await page("/w/darius-selftest/rituals/aged");
-  assert.match(text(html), /Starting A follow-up was not started: run 01PARENTRUN is still running\. Asked \d\d:\d\d by web:altan\./u);
+  assert.match(text(html), /Starting host-b did not start it: run 01PARENTRUN is still running\./u);
   assert.ok(html.includes('href="/w/darius-selftest/runs/01PARENTRUN"'), "the link goes to the parent run");
   assert.ok(text(html).includes("Try again"));
   assert.equal(html.includes("gem-busy"), false, "a refused start is not in flight: no busy gem");

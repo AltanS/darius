@@ -77,8 +77,9 @@ function cardOf(html: string, title: string): string {
 
 test("the vigil page of a running check shows the busy gem and the host, not the button", async () => {
   const html = await page(`/w/${PROJECT}/vigils/running`);
-  assert.match(text(html), /Checking on host-b, asked \d\d:\d\d/u);
+  assert.match(text(html), /Checking on host-b, \d+ (s|min) so far\. Most checks end within a minute\./u);
   assert.match(html, /<div role="status"><p class="gem-line"><svg[^>]*class="gem gem-busy"/u, "0.98.0: the busy gem, not the running light");
+  assert.equal((html.match(/gem-busy/gu) ?? []).length, 1, "one gem for one wait: the top bar and Places do not blink for a poll");
   assert.equal(html.includes("live-bar"), false);
   assert.equal(html.includes("Check now: Soak test"), false, "the button is off while the check runs");
   assert.equal(html.includes("Reload to see the result"), false);
@@ -90,7 +91,7 @@ test("a vigil with no check running keeps its button; a refused check says why a
   assert.equal(text(idle).includes("Checking on"), false);
   const refused = await page(`/w/${PROJECT}/vigils/refused`);
   assert.ok(refused.includes("Check now: Backups fresh"));
-  assert.match(text(refused), /A check was not started: .*another check of this vigil runs/u);
+  assert.match(text(refused), /host-b did not start it: .*another check of this vigil runs/u);
 });
 
 test("the vigil page lists its sweeps and pauses in an Activity section, and the table stays", async () => {
@@ -113,7 +114,8 @@ test("the Vigils list says Checking, with the busy gem, for a vigil with a check
   const html = await page(`/w/${PROJECT}/vigils`);
   const rows = html.split("<li ").filter((row) => row.includes('class="rw'));
   const running = rows.find((row) => row.includes("Soak test")) ?? "";
-  assert.match(running, /<span class="rw-seg"><svg[^>]*class="gem gem-busy"/u, "the busy gem before the state word");
+  assert.match(running, /<div class="rw-foot"><div role="status"><p class="gem-line"><svg[^>]*class="gem gem-busy"/u, "the busy gem sits in the checking line, once");
+  assert.equal((running.match(/gem-busy/gu) ?? []).length, 1, "the state word has no second gem: one gem for one wait");
   assert.equal(running.includes("live-bar"), false, "no running light");
   assert.match(text(running), /Checking/u);
   const idle = rows.find((row) => row.includes("Queue empty")) ?? "";
@@ -133,7 +135,7 @@ test("a row of a vigil that is not flagged still says Checking while its check r
 test("the Overview card of a flagged vigil offers Check now, and shows a check that runs", async () => {
   const html = await page(`/w/${PROJECT}`);
   assert.ok(cardOf(html, "Queue empty").includes("Check now: Queue empty"));
-  assert.match(text(cardOf(html, "Soak test")), /Checking on host-b, asked \d\d:\d\d/u);
+  assert.match(text(cardOf(html, "Soak test")), /Checking on host-b, \d+ (s|min) so far\. Most checks end within a minute\./u);
   assert.equal(cardOf(html, "Soak test").includes("Check now: Soak test"), false);
 });
 

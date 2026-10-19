@@ -7,6 +7,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import type { PendingPollEntry } from "../src/web/api.ts";
 
@@ -101,4 +103,30 @@ test("a Now row id maps to its registry id", () => {
 
 test("the limits match the design: 1.5 s, 3 s, 1 minute, 10 s, 15 minutes, 50 ids", () => {
   assert.deepEqual([follow.FIRST_LOOK_MS, follow.FAST_LOOK_MS, follow.FAST_WINDOW_MS, follow.SLOW_LOOK_MS, follow.GIVE_UP_MS, follow.MAX_IDS], [1500, 3000, 60_000, 10_000, 900_000, 50]);
+});
+
+// --- what is gone from the client ---------------------------------------------------------------
+
+const APP = fileURLToPath(new URL("../web/app/", import.meta.url));
+
+/** The `.ts` and `.tsx` files of web/app, with their text. */
+function sources(): Array<{ file: string; code: string }> {
+  return readdirSync(APP, { recursive: true, encoding: "utf8" })
+    .filter((file) => /\.tsx?$/u.test(file))
+    .map((file) => ({ file, code: readFileSync(`${APP}${file}`, "utf8") }));
+}
+
+test("lib/reload.ts and every timed reload are gone", () => {
+  assert.equal(existsSync(`${APP}lib/reload.ts`), false);
+  for (const { file, code } of sources()) {
+    assert.equal(/useReloadSoon|reloadSoon|RELOAD_STEPS/u.test(code), false, `${file} has no timed reload`);
+  }
+});
+
+test("no client sentence names a file path, a flag, a reload or a stalled check", () => {
+  for (const { file, code } of sources().filter((one) => !one.file.endsWith("app.css"))) {
+    for (const bad of ["--force", "follow-up.log", "Look again", "No result yet after", "after this page answers", "Reload in a moment"]) {
+      assert.equal(code.includes(bad), false, `${file} says "${bad}"`);
+    }
+  }
 });

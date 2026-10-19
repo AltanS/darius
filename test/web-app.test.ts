@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingPollEntry, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -713,7 +713,7 @@ test("the quiet home page: Nothing needs you, the last night card, and the self-
   assert.equal(body.includes("Quiet."), false);
   assert.ok(body.includes("Last ritual run 1 h ago, complete."), "the last run moved into the health line");
   assert.ok(body.includes("Done lately"), "the completed djinn");
-  assert.ok(body.includes("Findings heading"), "with its report excerpt");
+  assert.equal(body.includes("Findings heading"), false, "Done lately rows carry no report excerpt (ui-next)");
   assert.equal(segment(body, "flagged"), null, "the self-test vigil does not count");
   assert.equal(segment(body, "need you"), null, "a zero segment does not render");
   assert.ok(body.includes("Self-test: heartbeat ran 1 h ago. 1 vigil flagged."), "one muted line at the end of Places");
@@ -783,7 +783,7 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   assert.equal(home.includes(`id="failed-`), false, "no Needs you card");
   assert.match(home, /<h1 class="verdict-h ink-ok">/u);
   assert.match(home, /Done lately.*<li id="done-demo-daily-report" class="rw">/su, "a plain Done lately row");
-  assert.match(home, /Done lately.*Acknowledged by owner at 10:30: known &lt;script&gt;alert\(1\)&lt;\/script&gt; outage\./su, "with the acknowledgement");
+  assert.equal(home.includes("known &lt;script&gt;alert(1)&lt;/script&gt; outage"), false, "a Done lately row is one line: the acknowledgement text is not repeated (ui-next)");
 });
 
 test("the ritual page says where a pinned ritual runs", async () => {
@@ -1148,14 +1148,20 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   assert.equal(rules.runNowNotice({ ...ok, runNowError: "ssh to host-c failed" }).text, "The host did not start it: ssh to host-c failed.", "any other error gets the same words");
   assert.equal(rules.refusedStartText("The host did not answer.", null, 0), "The host did not answer.", "a reply that never came is no refusal of the host");
   // Once the page follows the start, the line changes with it.
-  const entry = (state: "starting" | "started" | "refused" | "lost", run?: string) => ({ id: "x", state, host: "host-b", at: "2026-10-19T07:18:00.000Z", kind: "run-now" as const, project: "demo", item: "daily", ...(run === undefined ? {} : { run }) });
   assert.equal(rules.followedNotice(slow, undefined), slow);
-  assert.equal(rules.followedNotice(slow, entry("starting")), slow);
-  assert.deepEqual([rules.followedNotice(slow, entry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).text, rules.followedNotice(slow, entry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).child], ["Run RRRRRRRR started on host-b.", "01KRRRRRRRRRRRRRRRRRRRRRRR"]);
-  assert.equal(rules.followedNotice(slow, entry("refused")).text, "host-b did not start it.");
-  assert.equal(rules.followedNotice(slow, entry("lost")).text, "No sign of this run on host-b after 15 minutes. Start it again from the ritual.");
+  assert.equal(rules.followedNotice(slow, pollEntry("starting", null)), slow);
+  assert.deepEqual([rules.followedNotice(slow, pollEntry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).text, rules.followedNotice(slow, pollEntry("started", "01KRRRRRRRRRRRRRRRRRRRRRRR")).child], ["Run RRRRRRRR started on host-b.", "01KRRRRRRRRRRRRRRRRRRRRRRR"]);
+  assert.equal(rules.followedNotice(slow, pollEntry("refused", null)).text, "host-b did not start it.");
+  assert.equal(rules.followedNotice(slow, pollEntry("lost", null)).text, "No sign of this run on host-b after 15 minutes. Start it again from the ritual.");
   assert.equal(rules.runNowNotice(ok).tone, "ok");
 });
+
+/** One answer of `GET /api/pending` for the run-now start `x`. */
+function pollEntry(state: "starting" | "started" | "refused" | "lost", run: string | null): PendingPollEntry {
+  const entry: PendingPollEntry = { id: "x", state, host: "host-b", at: "2026-10-19T07:18:00.000Z", kind: "run-now", project: "demo", item: "daily" };
+  if (run !== null) entry.run = run;
+  return entry;
+}
 
 /** `size` answers of 500 characters. */
 const longAnswers = (size: number): string[] => Array.from({ length: size }, () => "x".repeat(500));
@@ -2473,11 +2479,10 @@ test("Done lately draws the receipts from the activity and the starts, and a rel
   const again = await readPage("/all", ctx);
   assert.equal(first, again, "a receipt never depends on client state");
   assert.ok(first.includes("Done lately"));
-  assert.ok(first.includes("Starting a follow-up on host-b, asked 10:50 by web:owner"), "the start with no run yet");
-  assert.ok(first.includes("A run was not started: no slot &lt;script&gt;alert(1)&lt;/script&gt;. Asked 10:45 by web:owner."), "the sentence of a refused start, as text");
+  assert.ok(first.includes("asked 10:50 from the web"), "the start with no run yet shows once, in Now");
+  assert.ok(first.includes("host-b did not start it: no slot &lt;script&gt;alert(1)&lt;/script&gt;."), "the sentence of a refused start, as text");
   assert.ok(first.includes(">Try again</a>"));
   assert.ok(first.includes("Answered by web:owner at 10:40, 1 answer waits for the next run"));
-  assert.ok(first.indexOf("Starting a follow-up") < first.indexOf("Answered by web:owner at"), "starts without a run come first");
   assert.equal(first.includes(EVIL), false);
 });
 
