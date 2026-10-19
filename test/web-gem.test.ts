@@ -1,7 +1,8 @@
 /**
- * The emblem loader's CSS (0.97.0, web/app/app.css): the `focus` keyframes,
- * the delay of each facet by class, how long each facet is in focus, and the
- * two reduced-motion switches that leave the full static emblem. The page
+ * The emblem loader's CSS (0.97.0, 0.104.0, web/app/app.css): one keyframes
+ * block per element, a 2.6 s loop with no animation-delay, the first 1.8 s one
+ * element at a time and the last 0.8 s all five blinking together twice, and
+ * the two reduced-motion switches that leave the full static emblem. The page
  * itself is checked in test/web-settings.test.ts.
  */
 
@@ -13,7 +14,15 @@ import { fileURLToPath } from "node:url";
 /** The sheet with every run of white space as one space, so a formatter cannot break a match. */
 const CSS = readFileSync(fileURLToPath(new URL("../web/app/app.css", import.meta.url)), "utf8").replaceAll(/\s+/gu, " ");
 const NAV_ICONS = readFileSync(fileURLToPath(new URL("../web/app/components/nav-icons.tsx", import.meta.url)), "utf8");
-const LOOP = 1.8;
+const LOOP = 2.6;
+/** Facet classes in the order they take their turn, with the start of each slot in seconds. */
+const ORDER = [
+  ["a", 0],
+  ["b1", 0.35],
+  ["c", 0.7],
+  ["b2", 1.05],
+  ["d", 1.4],
+] as const;
 
 /** The declarations of the first rule whose selector is `selector`. */
 function block(selector: string): string {
@@ -34,38 +43,64 @@ function frames(name: string): { at: number[]; body: string }[] {
   }));
 }
 
-/** Seconds a facet stays at full opacity: from its first full frame to its last. */
-function litSeconds(name: string): number {
-  const lit = frames(name).find((frame) => /opacity: 1;/u.test(frame.body));
-  assert.ok(lit !== undefined, `${name} has a frame at full opacity`);
-  return ((Math.max(...lit.at) - Math.min(...lit.at)) / 100) * LOOP;
+/** The opacity of an element `seconds` into the loop, interpolated linearly between its frames. */
+function opacityAt(name: string, seconds: number): number {
+  const points = frames(name)
+    .flatMap((frame) => frame.at.map((at) => ({ t: (at / 100) * LOOP, o: /opacity: 1;/u.test(frame.body) ? 1 : 0.45 })))
+    .toSorted((x, y) => x.t - y.t);
+  const after = points.findIndex((point) => point.t >= seconds - 1e-4);
+  const next = points[after];
+  const prev = points[after - 1];
+  assert.ok(next !== undefined, `${name} has a frame at or after ${String(seconds)} s`);
+  if (prev === undefined || Math.abs(next.t - seconds) < 1e-4) return next.o;
+  return prev.o + ((next.o - prev.o) * (seconds - prev.t)) / (next.t - prev.t);
 }
 
-test("focus: a facet in focus has full opacity and a light stroke, the others sit at 0.45", () => {
-  for (const name of ["focus", "focus-heart"]) {
-    const all = frames(name);
-    assert.equal(all.length, 2, `${name}: a dim frame group and a lit one`);
+test("focus: an element in focus has full opacity and a light stroke, the others sit at 0.45", () => {
+  for (const [facet] of ORDER) {
+    const all = frames(`focus-${facet}`);
+    assert.equal(all.length, 2, `focus-${facet}: a dim frame group and a lit one`);
     const dim = all.find((frame) => /opacity: 0\.45;/u.test(frame.body));
     const lit = all.find((frame) => /opacity: 1;/u.test(frame.body));
-    assert.deepEqual(dim?.at, name === "focus" ? [0, 23, 100] : [0, 27, 100], name);
-    assert.match(lit?.body ?? "", /stroke: var\(--gem-lit, /u, `${name}: the focus stroke is light`);
+    assert.equal(Math.min(...(dim?.at ?? [NaN])), 0, `focus-${facet} starts dim`);
+    assert.equal(Math.max(...(dim?.at ?? [NaN])), 100, `focus-${facet} ends dim`);
+    assert.match(dim?.body ?? "", /stroke: var\(--gem-edge, /u, `focus-${facet}: the dim stroke is the edge`);
+    assert.match(lit?.body ?? "", /stroke: var\(--gem-lit, /u, `focus-${facet}: the focus stroke is light`);
   }
-  assert.match(block(".gem-busy path"), /animation: focus 1\.8s linear infinite backwards;/u, "a 1.8 s loop that waits dim for its slot");
+  assert.match(block(".gem-busy path"), /animation: focus-a 2\.6s linear infinite;/u, "a 2.6 s linear loop, forever");
 });
 
-test("the centre holds about 0.4 s, an outer facet less than its 0.35 s slot", () => {
-  assert.ok(litSeconds("focus") < 0.35, `an outer facet is lit for ${String(litSeconds("focus"))} s`);
-  const heart = litSeconds("focus-heart");
-  assert.ok(heart > 0.3 && heart <= 0.4, `the centre is lit for ${String(heart)} s`);
-  assert.ok(litSeconds("focus-heart") > litSeconds("focus"), "the centre holds longer than a facet");
+test("the first 1.8 s light one element at a time, in order, each at the middle of its slot", () => {
+  ORDER.forEach(([facet, slot], index) => {
+    const middle = slot + 0.18;
+    for (const [other] of ORDER) {
+      const want = other === facet ? 1 : 0.45;
+      assert.ok(Math.abs(opacityAt(`focus-${other}`, middle) - want) < 1e-3, `at ${String(middle)} s ${other} is ${String(want)} (${facet}'s turn ${String(index)})`);
+    }
+  });
+  for (const [facet, slot] of ORDER.slice(0, 4)) {
+    const lit = frames(`focus-${facet}`).find((frame) => /opacity: 1;/u.test(frame.body));
+    const own = (lit?.at ?? []).filter((at) => (at / 100) * LOOP < 1.7).map((at) => (at / 100) * LOOP);
+    assert.ok(Math.min(...own) >= slot && Math.max(...own) < slot + 0.35, `${facet} is lit inside its 0.35 s slot`);
+  }
+  const heart = frames("focus-d").find((frame) => /opacity: 1;/u.test(frame.body));
+  const heartStart = Math.min(...(heart?.at ?? [NaN])) * LOOP / 100;
+  assert.ok(heartStart >= 1.4 && heartStart < 1.5, `the centre is lit from ${String(heartStart)} s`);
 });
 
-test("the facets take their turn by class: top right, bottom right, bottom left, top left, then the centre", () => {
-  const delays = [".gem-a", ".gem-b1", ".gem-c", ".gem-b2", ".gem-d"].map((facet) => Number.parseFloat(/animation-delay: ([\d.]+)s/u.exec(block(`.gem-busy ${facet}`))?.[1] ?? "NaN"));
-  assert.deepEqual(delays, [0, 0.35, 0.7, 1.05, 1.4]);
-  assert.ok(Math.abs(LOOP - delays[4]! - 0.4) < 1e-9, "the centre's slot is the last 0.4 s of the loop");
-  assert.match(block(".gem-busy .gem-d"), /animation-name: focus-heart;/u);
+test("from 1.8 s to 2.6 s all five elements blink together twice: lit 0.2 s, dim 0.2 s, lit 0.2 s, dim 0.2 s", () => {
+  for (const [facet] of ORDER) {
+    const name = `focus-${facet}`;
+    assert.ok(Math.abs(opacityAt(name, 1.8) - 0.45) < 1e-3, `${name} is dim at 1.8 s`);
+    for (const lit of [1.85, 1.95, 2.25, 2.35]) assert.equal(opacityAt(name, lit), 1, `${name} is lit at ${String(lit)} s`);
+    for (const dim of [2.05, 2.15, 2.45, 2.55, 2.6]) assert.ok(Math.abs(opacityAt(name, dim) - 0.45) < 1e-3, `${name} is dim at ${String(dim)} s`);
+  }
+});
+
+test("the facets take their turn by keyframes, never by delay: top right, bottom right, bottom left, top left, then the centre", () => {
+  assert.ok(!/animation-delay/u.test(CSS.slice(CSS.indexOf("@keyframes focus-a"), CSS.indexOf("The gem inside a button"))), "no delay in the loader");
   assert.ok(!/animation-delay:[^;]*var\(/u.test(CSS), "no delay depends on a variable that an inline style could set");
+  for (const [facet] of ORDER.slice(1)) assert.match(block(`.gem-busy .gem-${facet}`), new RegExp(`animation-name: focus-${facet};`, "u"));
   for (const [facet, path] of [
     ["gem-a", "M16 2 30 16 22 16 16 10Z"],
     ["gem-b1", "M30 16 16 30 16 22 22 16Z"],

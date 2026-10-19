@@ -2859,66 +2859,149 @@
   }
 
   /*
-   * The emblem loader (0.97.0): a busy gem brings its facets into focus one at a time, top right,
-   * bottom right, bottom left, top left, then the centre, in a 1.8 s loop. Each outer facet has a
-   * slot of 0.35 s, the centre holds the last 0.4 s (its own keyframes, `focus-heart`). The facet
-   * in focus has full opacity and a light stroke, the others sit at 0.45. Only the keyframes dim a
-   * facet, so the two reduced-motion switches (animation: none) leave the full emblem. The delays
-   * come from the facet classes, never from an inline style, and a facet keeps its dim look until
-   * its first slot (fill mode backwards).
+   * The emblem loader (0.97.0, 0.104.0): a busy gem runs a 2.6 s loop in two parts. In the first
+   * 1.8 s it brings its facets into focus one at a time, top right, bottom right, bottom left, top
+   * left, then the centre. Each outer facet has a slot of 0.35 s; the centre holds from 1.4 s. In
+   * the last 0.8 s all five elements blink together twice: lit 0.2 s, dim 0.2 s, lit 0.2 s, dim
+   * 0.2 s. The element in focus has full opacity and a light stroke, the others sit at 0.45. Only
+   * the keyframes dim an element, so the two reduced-motion switches (animation: none) leave the
+   * full emblem. Each element has its own keyframes (focus-a, focus-b1, focus-c, focus-b2,
+   * focus-d) with its own lit window and the shared blink windows, so all five stay in sync with no
+   * animation-delay. A facet waits dim until its slot. A blink change takes 0.02 s: the rise at the
+   * start of a lit window and the fall at the start of a dim window.
    */
 
-  @keyframes focus {
+  @keyframes focus-a {
     0%,
-    23%,
+    15.923%,
+    69.231%,
+    77.692%,
+    84.615%,
+    93.077%,
     100% {
       opacity: 0.45;
       stroke: var(--gem-edge, var(--color-deep));
     }
-    3%,
-    17% {
+    2.077%,
+    11.769%,
+    70%,
+    76.923%,
+    85.385%,
+    92.308% {
       opacity: 1;
       stroke: var(--gem-lit, var(--color-parchment));
     }
   }
 
-  @keyframes focus-heart {
+  @keyframes focus-b1 {
     0%,
-    27%,
+    13.462%,
+    29.385%,
+    69.231%,
+    77.692%,
+    84.615%,
+    93.077%,
     100% {
       opacity: 0.45;
       stroke: var(--gem-edge, var(--color-deep));
     }
-    3%,
-    21.5% {
+    15.538%,
+    25.231%,
+    70%,
+    76.923%,
+    85.385%,
+    92.308% {
+      opacity: 1;
+      stroke: var(--gem-lit, var(--color-parchment));
+    }
+  }
+
+  @keyframes focus-c {
+    0%,
+    26.923%,
+    42.846%,
+    69.231%,
+    77.692%,
+    84.615%,
+    93.077%,
+    100% {
+      opacity: 0.45;
+      stroke: var(--gem-edge, var(--color-deep));
+    }
+    29%,
+    38.692%,
+    70%,
+    76.923%,
+    85.385%,
+    92.308% {
+      opacity: 1;
+      stroke: var(--gem-lit, var(--color-parchment));
+    }
+  }
+
+  @keyframes focus-b2 {
+    0%,
+    40.385%,
+    56.308%,
+    69.231%,
+    77.692%,
+    84.615%,
+    93.077%,
+    100% {
+      opacity: 0.45;
+      stroke: var(--gem-edge, var(--color-deep));
+    }
+    42.462%,
+    52.154%,
+    70%,
+    76.923%,
+    85.385%,
+    92.308% {
+      opacity: 1;
+      stroke: var(--gem-lit, var(--color-parchment));
+    }
+  }
+
+  @keyframes focus-d {
+    0%,
+    53.846%,
+    69.231%,
+    77.692%,
+    84.615%,
+    93.077%,
+    100% {
+      opacity: 0.45;
+      stroke: var(--gem-edge, var(--color-deep));
+    }
+    55.923%,
+    67.692%,
+    70%,
+    76.923%,
+    85.385%,
+    92.308% {
       opacity: 1;
       stroke: var(--gem-lit, var(--color-parchment));
     }
   }
 
   .gem-busy path {
-    animation: focus 1.8s linear infinite backwards;
-  }
-
-  .gem-busy .gem-a {
-    animation-delay: 0s;
+    animation: focus-a 2.6s linear infinite;
   }
 
   .gem-busy .gem-b1 {
-    animation-delay: 0.35s;
+    animation-name: focus-b1;
   }
 
   .gem-busy .gem-c {
-    animation-delay: 0.7s;
+    animation-name: focus-c;
   }
 
   .gem-busy .gem-b2 {
-    animation-delay: 1.05s;
+    animation-name: focus-b2;
   }
 
   .gem-busy .gem-d {
-    animation-name: focus-heart;
-    animation-delay: 1.4s;
+    animation-name: focus-d;
   }
 
   /*
