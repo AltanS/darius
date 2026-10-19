@@ -10,7 +10,9 @@
  * part of it; the milestone detail page is, for M12 of demo-shop.
  */
 
-import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { JsonValue } from "../../src/core/model.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 
 const MINUTE = 60_000;
@@ -502,8 +504,108 @@ function demoBackups(clock: number): BackupsStatus {
   };
 }
 
+// --- demo writes (0.104.0) ---------------------------------------------------------------
+
+/** How long a demo start stays `starting`. */
+export const DEMO_START_MS = 45_000;
+/** How long a demo write takes to answer, so the busy button and the wait line can be seen. */
+export const DEMO_REPLY_MS = 1_000;
+const DEMO_HOST = "demo";
+
+/** The in-memory pending starts of the demo: `starting` for DEMO_START_MS, then `started`. */
+export interface DemoStarts {
+  ask(kind: PendingKind, projectName: string, item: string, parent?: string): PendingStart;
+  list(projectName: string | null): PendingStart[];
+  poll(ids: readonly string[]): PendingPollEntry[];
+}
+
+/** Ids and run ids come from a counter, so the demo is the same on each run. `clock` is injectable for tests. */
+export function createDemoStarts(clock: () => number = Date.now): DemoStarts {
+  let counter = 0;
+  const asked: Array<{ start: PendingStart; at: number }> = [];
+  const resolve = (entry: { start: PendingStart; at: number }): PendingStart => {
+    if (clock() - entry.at < DEMO_START_MS) return entry.start;
+    const started: PendingStart = { ...entry.start, state: "started" };
+    if (entry.start.kind !== "vigil-check") started.run = entry.start.parent !== undefined && entry.start.kind === "resume" ? entry.start.parent : `01DEMORUN${entry.start.id.slice(-17)}`;
+    return started;
+  };
+  return {
+    ask(kind, projectName, item, parent) {
+      counter += 1;
+      const at = clock();
+      const start: PendingStart = { id: `01DEMOSTART${String(counter).padStart(15, "0")}`, at: new Date(at).toISOString(), who: "web:demo", from: "web", kind, project: projectName, host: DEMO_HOST, state: "starting" };
+      if (kind === "vigil-check") start.vigil = item;
+      else start.ritual = item;
+      if (parent !== undefined) start.parent = parent;
+      asked.push({ start, at });
+      return start;
+    },
+    list: (projectName) => asked.filter((entry) => projectName === null || entry.start.project === projectName).map(resolve).toReversed(),
+    poll: (ids) =>
+      ids.map((id): PendingPollEntry => {
+        const entry = asked.find((one) => one.start.id === id);
+        if (entry === undefined) return { id, state: "unknown" };
+        const start = resolve(entry);
+        const out: PendingPollEntry = { id, state: start.state, host: start.host, at: start.at, kind: start.kind, project: start.project, item: start.vigil ?? start.ritual ?? "" };
+        if (start.run !== undefined) out.run = start.run;
+        return out;
+      }),
+  };
+}
+
+/** The ritual a demo run belongs to, when the demo status still holds the run; else the project's first ritual. */
+function ritualOfRun(projectName: string, runId: string): string {
+  const status = demoStatus().projects.find((one) => one.name === projectName);
+  const item = status?.runs.find((one) => one.run === runId)?.item;
+  if (item !== undefined && item.startsWith("ritual/")) return item.slice("ritual/".length);
+  return status?.rituals[0]?.slug ?? "demo-ritual";
+}
+
+function isRecord(value: JsonValue): value is { readonly [key: string]: JsonValue } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isText(value: JsonValue | undefined): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/** The paths the demo answers instead of the real writers. */
+export const DEMO_WRITE_PATHS: ReadonlySet<string> = new Set(["/api/vigil/check", "/api/run/ack", "/api/run/ack-earlier", "/api/run/answer", "/api/run/follow-up", "/api/finding/close", "/api/finding/reopen"]);
+
+/** One demo answer: the HTTP status and the JSON body. */
+export interface DemoReply {
+  status: number;
+  body: { [key: string]: JsonValue };
+}
+
+function pendingReply(status: number, start: PendingStart): DemoReply {
+  return { status, body: { ok: true, pending: true, host: start.host, id: start.id, at: start.at, message: pendingMessage(start.host) } };
+}
+
+/**
+ * The reply the demo gives to one write POST (the caller waits DEMO_REPLY_MS first). A vigil check, a follow-up,
+ * "Send and run now" and "Answer and resume" answer `pending` and record a `starting` entry; the rest answer ok.
+ */
+export function demoWrite(path: string, bodyText: string, starts: DemoStarts): DemoReply {
+  let parsed: JsonValue;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return { status: 400, body: { ok: false, error: "not valid JSON" } };
+  }
+  const body = isRecord(parsed) ? parsed : {};
+  const projectName = isText(body.project) ? body.project : "demo-shop";
+  const runId = isText(body.run) ? body.run : "";
+  if (path === "/api/vigil/check") return pendingReply(202, starts.ask("vigil-check", projectName, isText(body.slug) ? body.slug : "demo-vigil"));
+  if (path === "/api/run/follow-up") return pendingReply(202, starts.ask("follow-up", projectName, ritualOfRun(projectName, runId), runId));
+  if (path === "/api/run/answer") return pendingReply(200, starts.ask("resume", projectName, ritualOfRun(projectName, runId), runId));
+  if (path === "/api/run/ack" && body.runNow === true) return pendingReply(200, starts.ask("run-now", projectName, ritualOfRun(projectName, runId), runId));
+  if (path === "/api/run/ack-earlier") return { status: 200, body: { ok: true, count: Array.isArray(body.runs) ? body.runs.length : 0 } };
+  return { status: 200, body: { ok: true } };
+}
+
 /** The real context with the demo status; run and ritual detail pages answer 404, and only M12 of demo-shop has a detail page. */
-export function demoContext(base: WebContext): WebContext {
+export function demoContext(base: WebContext, starts: DemoStarts = createDemoStarts()): WebContext {
   return {
     ...base,
     // The dev server answers the demo's POSTs with a stub, so the demo shows the write buttons to every viewer.
@@ -517,7 +619,7 @@ export function demoContext(base: WebContext): WebContext {
     backups: () => demoBackups(Date.now()),
     findings: () => Promise.resolve(demoFindings(Date.now())),
     activity: () => [],
-    pending: () => [],
+    pending: (name) => starts.list(name),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
   };
 }

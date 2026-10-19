@@ -22,11 +22,11 @@ import { createServer } from "node:http";
 import { createRequestHandler, type ServerBuild } from "react-router";
 import { createServer as createVite } from "vite";
 
-import { actionApi, FOLLOW_UP_READY_PATH } from "../../src/web/action-api.ts";
+import { actionApi, FOLLOW_UP_READY_PATH, PENDING_API_PATH, pendingApi } from "../../src/web/action-api.ts";
 import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, runTailscale, tailnetAddress, tailscaleWhois } from "../../src/web/auth.ts";
 import { webContext } from "../../src/web/context.ts";
 import { collectStatus } from "../../src/web/status.ts";
-import { demoContext, demoStatus } from "./demo.ts";
+import { createDemoStarts, DEMO_REPLY_MS, DEMO_WRITE_PATHS, demoContext, demoStatus, demoWrite } from "./demo.ts";
 import { sendResponse, toRequest } from "./http.ts";
 import { loadContext } from "./load-context.ts";
 
@@ -40,6 +40,15 @@ function flag(name: string): string | undefined {
 }
 
 const demo = process.argv.includes("--demo");
+/** The demo's pending starts live here, so they outlive a request. */
+const demoStarts = createDemoStarts();
+
+/** The request body as text; the demo's writes are small. */
+async function bodyText(req: AsyncIterable<Buffer | string>): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8").slice(0, 64 * 1024);
+}
 
 /** Where to listen: the flag, else the tailnet address, else loopback. Never every interface. */
 async function pickAddress(): Promise<string> {
@@ -139,6 +148,29 @@ server.on("request", (req, res) => {
         void send();
         return;
       }
+      if (url.pathname === PENDING_API_PATH) {
+        // The light poll: the real registry, or the demo's in-memory starts.
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        const query = url.search;
+        const reply = demo
+          ? { status: 200, body: { ok: true, starts: demoStarts.poll((new URLSearchParams(query).get("ids") ?? "").split(",").filter((id) => id !== "")) } }
+          : pendingApi({ method: req.method ?? "GET", path: url.pathname, headers, body: "", query });
+        res.statusCode = reply.status;
+        res.end(`${JSON.stringify(reply.body)}\n`);
+        return;
+      }
+      if (demo && req.method === "POST" && DEMO_WRITE_PATHS.has(url.pathname)) {
+        // The demo answers a write after about a second, so the busy button and the wait line can be judged.
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        void (async () => {
+          const text = await bodyText(req);
+          await new Promise((resolve) => setTimeout(resolve, DEMO_REPLY_MS));
+          const reply = demoWrite(url.pathname, text, demoStarts);
+          res.statusCode = reply.status;
+          res.end(`${JSON.stringify(reply.body)}\n`);
+        })();
+        return;
+      }
       if (url.pathname === "/api/run/ack") {
         // The dev server writes nothing. The demo answers ok, so its Acknowledge button works; on real data a click
         // says so, instead of looking done while the ledger stays as it was.
@@ -149,7 +181,7 @@ server.on("request", (req, res) => {
         return;
       }
       const base = webContext(access.who, undefined, access.local === true);
-      handle(toRequest(req, url.origin), loadContext(demo ? demoContext(base) : base))
+      handle(toRequest(req, url.origin), loadContext(demo ? demoContext(base, demoStarts) : base))
         .then((response) => sendResponse(res, response))
         .catch((error: Error) => {
           vite.ssrFixStacktrace(error);
