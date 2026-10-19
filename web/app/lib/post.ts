@@ -5,7 +5,14 @@
  * an answer that is not JSON both come back as `ok: false` with a plain
  * sentence, so a caller never needs a try block. The body can hold a secret
  * (the key pair), so nothing here logs it or puts it in an error text.
+ *
+ * Actions fail fast and nothing is queued. While the connection store says
+ * lost, a POST is not sent at all; a real POST gets 20 s. Both, and a network
+ * failure, answer "No connection. Nothing was sent." A failure also marks the
+ * connection lost (lib/connection.ts), so the strip shows.
  */
+
+import { connectionNow, markSendFailed } from "./connection.ts";
 
 export interface PostOk {
   ok: true;
@@ -107,13 +114,24 @@ function parse(status: number, text: string): PostResult {
   };
 }
 
+/** How long a POST may take before it counts as no connection. */
+export const POST_DEADLINE_MS = 20_000;
+
+export const NOT_SENT = "No connection. Nothing was sent.";
+
 /** POST `body` as JSON to `path` on this origin. */
 export async function postJson(path: string, body: PostBody): Promise<PostResult> {
+  if (connectionNow().lost) return failed(0, NOT_SENT);
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), POST_DEADLINE_MS);
   let response: Response;
   try {
-    response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
+    response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body), signal: abort.signal });
   } catch {
-    return failed(0, "The host did not answer. Check the connection and try again.");
+    markSendFailed();
+    return failed(0, NOT_SENT);
+  } finally {
+    clearTimeout(timer);
   }
   let text: string;
   try {
