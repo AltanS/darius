@@ -1,34 +1,50 @@
 /**
  * The "Check now" button of a vigil (0.86.0; `darius vigil sweep <slug>`).
  * One click posts to `/api/vigil/check`. The server starts the sweep detached
- * and answers at once. Since 0.95.0 the page does not ask the person to
- * reload: the button turns into the busy gem (0.98.0) with "Checking on <host>,
- * asked 09:12", and the page loads its data again (1.5 s, 5 s, then every
- * 5 s, for 3 minutes) until the pending start of the check is no longer
- * `starting`. The new sweep then shows in the list without a reload. The
- * in-flight state comes from the `pending` prop, which the loader reads from
- * the registry of this host, so a reload of the page shows it too. A refusal
- * of the server (the daily sweep runs, another check runs, the 2 minute
- * wait) shows as its own sentence. The button is off for a paused or a
- * closed vigil, with the reason beside it. For the loopback viewer the server
- * would refuse the POST: the detail page says why there is no button, a list
- * row draws nothing.
+ * and answers within 1.5 s, "started" or "pending"; both mean the check is
+ * asked and the registry follows it. The page does not wait for a reload:
+ *
+ * - While the POST has no reply, the button reads "Checking…" with its gem.
+ *   After 2 s a text line says "Asking <host> to start the check."
+ * - On a 202 reply the button gives way to the checking line, built from the
+ *   reply (host, time): "Checking on <host>, 40 s so far. Most checks end
+ *   within a minute." It ticks. After 3 minutes it says "Still checking ...".
+ *   There is no stalled state and no "Look again": the light poll of
+ *   `follow-starts.ts` keeps looking until the check ends or 15 minutes pass.
+ * - When the check ends the line reads "Checked 07:24: passed." (or "still
+ *   failing"), for the rest of the visit.
+ * - Inside the 2 minute cooldown the button is off and says when to check again.
+ *
+ * The state of an unfinished check also comes from the `pending` prop, which
+ * the loader reads from the registry of this host, so a reload of the page
+ * shows it too. The button is off for a paused or a closed vigil, with the
+ * reason beside it. For the loopback viewer the server would refuse the POST:
+ * the detail page says why there is no button, a list row draws nothing.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRevalidator } from "react-router";
 
 import type { PendingStart } from "../../../src/web/api.ts";
-import { checkPhase, lookAt } from "../lib/check-poll.ts";
+import { checkedText, checkingText, cooldownText, lostText, newerAsk, refusedText, type Asked } from "../lib/check-poll.ts";
 import { useClock } from "../lib/clock.tsx";
+import { seedStart, useFollowStarts } from "../lib/follow-starts.ts";
 import { clockTime } from "../lib/format.ts";
 import { postJson } from "../lib/post.ts";
-import { pendingText } from "../lib/receipt.ts";
 import { BusyButton } from "./busy-button.tsx";
-import { GemLine } from "./wait-line.tsx";
+import { Gem } from "./nav-icons.tsx";
+import { WaitLine } from "./wait-line.tsx";
 
 /** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
 const NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
+
+/** The newest check of the vigil that ended, for the line "Checked 07:24: passed." and for the cooldown. */
+export interface LatestCheck {
+  /** When the sweep ended, an ISO time. */
+  at: string;
+  /** The outcome of the sweep (`held`, `failed`, ...); null when the row does not know it. */
+  outcome: string | null;
+}
 
 interface CheckNowProps {
   project: string;
@@ -43,100 +59,119 @@ interface CheckNowProps {
   explain: boolean;
   /** The check of this vigil that the web asked for and that shows no result yet, from the loader; null when there is none. */
   pending: PendingStart | null;
+  /** The newest check that ended; null when the vigil has not been checked or the page does not know. */
+  latest?: LatestCheck | null;
 }
 
-/** Looks again at 1.5 s, 5 s and every 5 s while `pending` is `starting`, until it is not or its window has passed. A new pending start (its id) begins a new round; unmounting ends it. */
-export function useFollow(pending: PendingStart | null): void {
-  const { revalidate } = useRevalidator();
-  const again = useRef(revalidate);
-  again.current = revalidate;
-  const id = pending?.state === "starting" ? pending.id : null;
-  const asked = pending?.at ?? null;
-  useEffect(() => {
-    if (id === null || asked === null) return;
-    let step = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const look = (): void => {
-      if (checkPhase({ state: "starting", at: asked }, Date.now()) !== "checking") return;
-      void again.current();
-      step += 1;
-      timer = setTimeout(look, lookAt(step) - lookAt(step - 1));
-    };
-    timer = setTimeout(look, lookAt(0));
-    return () => clearTimeout(timer);
-  }, [id, asked]);
-}
-
-/** Follows a check that has no button on its row (a vigil that is not flagged): it only looks again, and draws nothing. */
+/** Follows a check that has no button on its row (a vigil that is not flagged): it only follows, and draws nothing. */
 export function Follow({ pending }: { pending: PendingStart }): React.ReactNode {
-  useFollow(pending);
+  useFollowStarts(pending.state === "starting" ? [pending.id] : []);
   return null;
 }
 
-export function CheckNow({ project, slug, subject, canWrite, blocked, explain, pending }: CheckNowProps): React.ReactNode {
-  const { revalidate, state } = useRevalidator();
-  const { now, offset } = useClock();
+/** The time in ms that ticks once a second while `active`. Before the first tick, and on the server, it is the page clock, so hydration sees the same text. */
+function useTicker(active: boolean): number {
+  const { now } = useClock();
+  const [tick, setTick] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      setTick(null);
+      return;
+    }
+    setTick(Date.now());
+    const timer = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return tick ?? now;
+}
+
+interface Cooling {
+  lastCheckedAt: string;
+  retryAt: string;
+}
+
+export function CheckNow({ project, slug, subject, canWrite, blocked, explain, pending, latest = null }: CheckNowProps): React.ReactNode {
+  const { revalidate } = useRevalidator();
+  const { now: clockNow, offset } = useClock();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  useFollow(pending);
-  const phase = checkPhase(pending, now);
-  // The sentence of a 202 that did not report in time is for the moment before the check shows; once it shows, it is stale.
+  const [asked, setAsked] = useState<Asked | null>(null);
+  const [cooling, setCooling] = useState<Cooling | null>(null);
+  const fromLoader: Asked | null = pending?.state === "starting" ? { id: pending.id, host: pending.host, at: pending.at } : null;
+  // The page keeps following a check that the loader showed as `starting`, even after the loader stops listing it.
+  const tracked = newerAsk(asked, fromLoader);
   useEffect(() => {
-    if (phase === "checking") setMessage(null);
-  }, [phase]);
+    if (fromLoader !== null && fromLoader.id !== asked?.id && newerAsk(asked, fromLoader) === fromLoader) setAsked(fromLoader);
+  }, [fromLoader, asked]);
+  const followed = useFollowStarts(tracked === null ? [] : [tracked.id]);
+  const entry = tracked === null ? undefined : followed.get(tracked.id);
+  // The loader knows the sentence of a refusal, the poll does not: once the loader shows the same start in an end state, it wins.
+  const sameLoader = pending !== null && tracked !== null && pending.id === tracked.id ? pending : null;
+  const state = sameLoader !== null && sameLoader.state !== "starting" ? sameLoader.state : (entry?.state ?? "starting");
+  const checking = tracked !== null && state === "starting";
+  const cooldownFrom = cooling?.lastCheckedAt ?? latest?.at ?? null;
+  // The clock ticks every second only while a line needs it: a check that runs, or a cooldown that has not ended.
+  const now = useTicker(checking || (cooldownFrom !== null && cooldownText(cooldownFrom, clockNow, offset, cooling?.retryAt) !== null));
   if (!canWrite) return explain ? <p className="fu-off">{NO_WRITE_HINT}</p> : null;
 
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
     setBusy(true);
     setError(null);
-    setMessage(null);
     const result = await postJson("/api/vigil/check", { project, slug });
+    setBusy(false);
     if (!result.ok) {
-      setBusy(false);
-      setError(result.error);
+      if (result.retryAt !== undefined && result.lastCheckedAt !== undefined) setCooling({ lastCheckedAt: result.lastCheckedAt, retryAt: result.retryAt });
+      else setError(result.error);
       return;
     }
-    // The request is in the registry by now: one look shows it as the pending start, and the follow-up takes over.
-    await revalidate();
-    setBusy(false);
-    if (!result.started) setMessage(result.message ?? "Check requested.");
+    if (result.id !== null && result.at !== null) {
+      const host = result.host ?? "the host";
+      seedStart({ id: result.id, state: "starting", host, at: result.at, kind: "vigil-check", project, item: slug });
+      setAsked({ id: result.id, host, at: result.at });
+    }
+    // The reply is the news: the line is up. One load in the background brings the rest.
+    void revalidate();
   };
 
-  if (phase === "checking" && pending !== null) {
+  const host = entry !== undefined && entry.state !== "unknown" ? entry.host : (tracked?.host ?? "the host");
+  const cooldown = cooldownFrom === null ? null : cooldownText(cooldownFrom, now, offset, cooling?.retryAt);
+  if (checking && tracked !== null) {
+    const age = Math.max(0, now - Date.parse(tracked.at));
     return (
       <div role="status">
-        <GemLine text={`Checking on ${pending.host}, asked ${clockTime(pending.at, offset)}`} />
+        <p className="gem-line">
+          <Gem size={14} busy />
+          <span aria-hidden="true">{checkingText(host, age)}</span>
+          <span className="sr-only">{`Checking on ${host}.`}</span>
+        </p>
       </div>
     );
   }
+  const newer = tracked !== null && latest !== null && latest.at > tracked.at;
+  const lastLine =
+    tracked === null
+      ? null
+      : state === "started"
+        ? checkedText(clockTime(newer ? latest.at : new Date(now).toISOString(), offset), newer ? latest.outcome : null)
+        : state === "refused"
+          ? refusedText(host, sameLoader?.sentence)
+          : state === "lost"
+            ? lostText(host, "check")
+            : null;
+  const failed = state === "refused" || state === "lost";
   return (
     <form className="ack" onSubmit={(event) => void submit(event)}>
       <div className="fu-acts">
-        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={`Check now: ${subject}`} disabled={busy || blocked !== null}>
-          {busy ? "Starting…" : "Check now"}
+        <BusyButton busy={busy} type="submit" className="st-btn st-btn-small" aria-label={cooldown === null ? `Check now: ${subject}` : undefined} disabled={busy || blocked !== null || cooldown !== null}>
+          {busy ? "Checking…" : (cooldown ?? "Check now")}
         </BusyButton>
-        {phase === "stalled" ? (
-          <button type="button" className="st-btn st-btn-small" disabled={state === "loading"} onClick={() => void revalidate()}>
-            Look again
-          </button>
-        ) : null}
       </div>
+      <WaitLine active={busy} what="check" />
       {blocked !== null && explain ? <p className="rail-note">{blocked}</p> : null}
-      {phase === "stalled" && pending !== null ? (
-        <p className="rail-note" role="status">
-          {`No result yet after 3 minutes on ${pending.host}. The check may still finish.`}
-        </p>
-      ) : null}
-      {(phase === "refused" || phase === "lost") && pending !== null ? (
-        <p className="bk-note tone-bad" role="status">
-          {pendingText(pending, { offset })}
-        </p>
-      ) : null}
-      {message === null ? null : (
-        <p className="rail-note" role="status">
-          {message}
+      {lastLine === null ? null : (
+        <p className={failed ? "bk-note tone-bad" : "rail-note"} role="status">
+          {lastLine}
         </p>
       )}
       {error === null ? null : (

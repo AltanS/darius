@@ -259,7 +259,7 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
           <Commands card={card} />
           {card.report === null ? null : <Report report={card.report} lines={card.edge === null ? 3 : 4} fades={card.fades} />}
           {card.error === null ? null : <pre className="code-block">{card.error}</pre>}
-          {card.check === null || !canWrite || card.check.blocked !== null ? null : <CheckNow project={card.check.project} slug={card.check.slug} subject={card.title} canWrite blocked={card.check.blocked} explain={false} pending={card.check.pending} />}
+          {card.check === null || !canWrite || card.check.blocked !== null ? null : <CheckNow project={card.check.project} slug={card.check.slug} subject={card.title} canWrite blocked={card.check.blocked} explain={false} pending={card.check.pending} latest={card.check.latest} />}
           {card.ack === null ? null : <AckButton project={card.ack.project} run={card.ack.run} canWrite={canWrite} subject={card.title} />}
         </div>
       ) : null}

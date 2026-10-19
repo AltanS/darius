@@ -26,6 +26,12 @@ export interface PostOk {
   resumed: boolean;
   /** `resume.error` of an answer to a held run: the answers are saved, the resume was refused. Null when the answer has none. */
   resumeError: string | null;
+  /** `id` of a start reply: the registry entry that `GET /api/pending?ids=` follows. Null when the answer has none. */
+  id: string | null;
+  /** `at` of a start reply: when the start was asked, an ISO time. */
+  at: string | null;
+  /** `pending` of a start reply: the host has not confirmed the start yet. */
+  pending: boolean;
 }
 
 export interface PostFailed {
@@ -33,6 +39,10 @@ export interface PostFailed {
   /** The HTTP status; 0 when the request never got an answer. */
   status: number;
   error: string;
+  /** `retryAt` of a check inside its cooldown (409): an ISO time. */
+  retryAt?: string;
+  /** `lastCheckedAt` of a check inside its cooldown (409): an ISO time. */
+  lastCheckedAt?: string;
 }
 
 export type PostResult = PostOk | PostFailed;
@@ -65,12 +75,19 @@ function parse(status: number, text: string): PostResult {
     return failed(status, `The host answered ${status} with text that is not JSON.`);
   }
   const error = reply.get("error");
-  if (reply.get("ok") !== true) return failed(status, error === undefined || error === null || error === "" ? `The host answered ${status}.` : String(error));
-  const count = reply.get("count");
   const textOf = (key: string): string | null => {
     const value = reply.get(key);
     return value === undefined || value === null || value === "" ? null : String(value);
   };
+  if (reply.get("ok") !== true) {
+    const refusal = failed(status, error === undefined || error === null || error === "" ? `The host answered ${status}.` : String(error));
+    const retryAt = textOf("retryAt");
+    const lastCheckedAt = textOf("lastCheckedAt");
+    if (retryAt !== null) refusal.retryAt = retryAt;
+    if (lastCheckedAt !== null) refusal.lastCheckedAt = lastCheckedAt;
+    return refusal;
+  }
+  const count = reply.get("count");
   const nestedError: Scalar | undefined = new Map<string, Scalar>(Object.entries(Object(reply.get("runNow")))).get("error");
   const resumeError: Scalar | undefined = new Map<string, Scalar>(Object.entries(Object(reply.get("resume")))).get("error");
   return {
@@ -84,6 +101,9 @@ function parse(status: number, text: string): PostResult {
     resumed: reply.get("resumed") === true,
     resumeError: resumeError === undefined || resumeError === null || resumeError === "" ? null : String(resumeError),
     runNowError: nestedError === undefined || nestedError === null || nestedError === "" ? null : String(nestedError),
+    id: textOf("id"),
+    at: textOf("at"),
+    pending: reply.get("pending") === true,
   };
 }
 

@@ -161,6 +161,8 @@ export interface CardCheck {
   blocked: string | null;
   /** The check of the vigil that the web asked for and that has not started a sweep yet. */
   pending: PendingStart | null;
+  /** The newest sweep that was no skip: its time and outcome, for the cooldown and the line "Checked 07:24: still failing." Null before the first sweep. */
+  latest: { at: string; outcome: string | null } | null;
 }
 
 /** One segment of the status strip. Each one is a link to what it counts. */
@@ -440,7 +442,7 @@ function flaggedCard(clock: Clock, project: ProjectStatus, vigil: VigilRow, runs
     meta,
     meta2: check === undefined ? null : `A new check is running, ${byText(check.who)}, ${roughDuration(size)} so far.${stuckFor(check, generatedAt) === null ? "" : " It may be stuck."}`,
     actions: [{ text: "Open the vigil", href: href({ to: "vigil", ws: project.name, slug: vigil.slug }) }],
-    check: { project: project.name, slug: vigil.slug, blocked: checkBlocked(vigil), pending: startingCheck(starts, project.name, vigil.slug) },
+    check: { project: project.name, slug: vigil.slug, blocked: checkBlocked(vigil), pending: startingCheck(starts, project.name, vigil.slug), latest: vigil.lastCheckedAt === undefined ? null : { at: vigil.lastCheckedAt, outcome: vigil.lastOutcome } },
   };
 }
 

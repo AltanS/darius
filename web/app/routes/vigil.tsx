@@ -65,7 +65,7 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
         </p>
         {vigil.closedReason === null ? null : <p className="lede lede-tight">Closed because: {vigil.closedReason}</p>}
         {vigil.pausedReason === null || !row.paused ? null : <p className="lede lede-tight">Paused because: {vigil.pausedReason}</p>}
-        <CheckNow key={row.slug} project={vigil.project} slug={row.slug} subject={row.title} canWrite={canWrite} blocked={checkBlocked(row)} explain pending={vigil.pending} />
+        <CheckNow key={row.slug} project={vigil.project} slug={row.slug} subject={row.title} canWrite={canWrite} blocked={checkBlocked(row)} explain pending={vigil.pending} latest={row.lastCheckedAt === undefined ? null : { at: row.lastCheckedAt, outcome: row.lastOutcome }} />
       </header>
 
       <div className="board">
