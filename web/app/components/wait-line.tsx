@@ -1,15 +1,22 @@
 /**
- * The lines with the busy gem (0.98.0): "Waiting for <host>…" under a button
- * that waits for a host, and the line a follow-up card shows while its
- * readiness loads. After 10 s a waiting line says that the run may start
- * after the page answers. The wait line sits in a live region for screen readers.
+ * The lines about a wait (one gem for each wait, where the
+ * person tapped).
+ *
+ * - `GemLine` is one line with the busy gem. It belongs to a state that owns
+ *   its wait: the check that runs ("Checking on ..."), the card that waits
+ *   for a start, the follow-up card while its readiness loads.
+ * - `WaitLine` is the line under a button whose POST has no reply. The button
+ *   already shows the gem, so this line is text only, and it shows after 2 s,
+ *   not at once: most replies come sooner.
+ *
+ * Both sit in a live region for screen readers.
  */
 
-import { useEffect, useState } from "react";
 import { useRouteLoaderData } from "react-router";
 
 import type { loader as rootLoader } from "../root.tsx";
-import { waitingText } from "../lib/follow-up-load.ts";
+import { useAfter } from "../lib/use-after.ts";
+import { waitingText, WAIT_LINE_AFTER_MS, type WaitKind } from "../lib/follow-up-load.ts";
 import { Gem } from "./nav-icons.tsx";
 
 /** One line with a busy gem and a text. It is no live region by itself: a region that appears with its text is not announced, so a caller that adds the line later wraps it in a `role="status"` element that is already there. */
@@ -27,21 +34,14 @@ interface WaitLineProps {
   active: boolean;
   /** The host that answers; the host of this page when absent. */
   host?: string;
+  /** What the host is asked to start. */
+  what?: WaitKind;
 }
 
-/** The line under a busy button: it shows while `active`, and its text changes after 10 s. Only an empty live region renders otherwise. */
-export function WaitLine({ active, host }: WaitLineProps): React.ReactNode {
+/** The text under a busy button: "Asking <host> to start the run." It shows after 2 s of `active`, and it has no gem. Only an empty live region renders before. */
+export function WaitLine({ active, host, what = "run" }: WaitLineProps): React.ReactNode {
   const own = useRouteLoaderData<typeof rootLoader>("root")?.host ?? "the host";
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!active) {
-      setElapsed(0);
-      return;
-    }
-    const started = Date.now();
-    const timer = setInterval(() => setElapsed(Date.now() - started), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
+  const late = useAfter(active, WAIT_LINE_AFTER_MS);
   // The live region stays in the page, so a screen reader announces the line when it fills.
-  return <div role="status">{active ? <GemLine text={waitingText(host ?? own, elapsed)} /> : null}</div>;
+  return <div role="status">{late ? <p className="rail-note">{waitingText(host ?? own, what)}</p> : null}</div>;
 }

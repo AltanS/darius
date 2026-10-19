@@ -35,12 +35,15 @@ export function checkingText(host: string): string {
   return `Checking whether a follow-up can start on ${host}…`;
 }
 
-/** After this long without an answer, a waiting line says more. */
-export const STILL_WAITING_MS = 10_000;
+/** The wait line shows only after the POST has waited this long. */
+export const WAIT_LINE_AFTER_MS = 2000;
 
-/** The line under a button that waits for a host: short at first, then the honest sentence. */
-export function waitingText(host: string, elapsedMs: number): string {
-  return elapsedMs >= STILL_WAITING_MS ? "Still waiting. The run may start after this page answers." : `Waiting for ${host}…`;
+/** What a button asks a host to start. */
+export type WaitKind = "run" | "check";
+
+/** The line under a button that waits for a host. It says what happens, once, and nothing about the page. */
+export function waitingText(host: string, what: WaitKind): string {
+  return `Asking ${host} to start the ${what}.`;
 }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -120,6 +123,6 @@ export async function fetchReadiness(project: string, run: string, signal: Abort
     const response = await fetch(`/api/run/follow-up/ready?${query.toString()}`, { headers: { accept: "application/json" }, cache: "no-store", signal });
     return readReadiness(response.status, await response.text());
   } catch {
-    return { state: "failed", message: "The host did not answer. Check the connection and reload the page." };
+    return { state: "failed", message: "The host did not answer. Check the connection and open the page again." };
   }
 }

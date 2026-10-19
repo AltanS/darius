@@ -111,7 +111,7 @@ test("every button that posts uses BusyButton, with the words of its busy state 
     ["ack.tsx", ["Acknowledging…"]],
     ["ask-form.tsx", ["Sending…", "Dismissing…"]],
     ["follow-up.tsx", ["Starting…"]],
-    ["check-now.tsx", ["Starting…"]],
+    ["check-now.tsx", ["Checking…"]],
     ["backups.tsx", ["Starting…", "Testing…"]],
   ] as const) {
     const code = source(file);
@@ -121,10 +121,16 @@ test("every button that posts uses BusyButton, with the words of its busy state 
   assert.equal(/<button[^>]*onClick=\{\(\) => void (send|start|dismiss|test|submit|save)\b/u.test(source("ask-form.tsx")), false, "no plain post button is left in the answer forms");
 });
 
-test("a waiting line has the busy gem and the frame's gems follow the router, not a timer of their own", () => {
-  assert.match(source("wait-line.tsx"), /<Gem size=\{14\} busy \/>/u);
+test("a gem line has the busy gem; the wait line under a button is text only, and the frame's gems follow navigation alone", () => {
+  const wait = source("wait-line.tsx");
+  assert.match(wait, /<Gem size=\{14\} busy \/>/u, "GemLine keeps its gem");
+  const waitLine = wait.slice(wait.indexOf("export function WaitLine"));
+  assert.equal(waitLine.includes("<Gem"), false, "WaitLine has no gem: the button already animates");
+  assert.match(waitLine, /useAfter\(active, WAIT_LINE_AFTER_MS\)/u, "and it shows only after 2 s");
   const shell = source("shell.tsx");
   assert.match(shell, /useNavigation\(\)/u);
+  assert.equal(/useRevalidator/u.test(shell), false, "a reload of the data never lights the shell gem");
+  assert.match(shell, /navigation\.location \?\? location/u, "the tab lights from the page the tap goes to");
   assert.match(shell, /<Gem size=\{28\} busy=\{busy\} \/>/u);
   assert.match(source("places.tsx"), /<Gem size=\{28\} busy=\{busy\} \/>/u);
 });

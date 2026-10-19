@@ -192,17 +192,17 @@ test("a certain card shows when the check is off or failed, with the reason; a p
   assert.deepEqual(loadFile.cardView(maybe, { state: "failed", message: "x" }), { view: "none" });
 });
 
-test("the waiting texts: the host first, the honest sentence after 10 s", () => {
+test("the wait line says once what is asked of the host, after 2 s, with no page talk", () => {
   assert.equal(loadFile.checkingText("host-b"), "Checking whether a follow-up can start on host-b…");
-  assert.equal(loadFile.waitingText("host-b", 0), "Waiting for host-b…");
-  assert.equal(loadFile.waitingText("host-b", 9_999), "Waiting for host-b…");
-  assert.equal(loadFile.waitingText("host-b", 10_000), "Still waiting. The run may start after this page answers.");
+  assert.equal(loadFile.waitingText("host-b", "run"), "Asking host-b to start the run.");
+  assert.equal(loadFile.waitingText("host-b", "check"), "Asking host-b to start the check.");
+  assert.equal(loadFile.WAIT_LINE_AFTER_MS, 2000);
 });
 
-test("the shell's gem blinks for navigation or a reload, and only after 300 ms", () => {
+test("the shell's gem blinks for navigation only, and only after 300 ms; a reload of the data never counts", () => {
   assert.equal(busy.BUSY_AFTER_MS, 300);
-  assert.equal(busy.isLoading("idle", "idle"), false);
-  assert.equal(busy.isLoading("loading", "idle"), true);
-  assert.equal(busy.isLoading("submitting", "idle"), true);
-  assert.equal(busy.isLoading("idle", "loading"), true);
+  assert.equal(busy.isLoading("idle"), false);
+  assert.equal(busy.isLoading("loading"), true);
+  assert.equal(busy.isLoading("submitting"), true);
+  assert.equal(busy.isLoading.length, 1, "the revalidator state is not an input");
 });
