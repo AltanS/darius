@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestoration, useRevalidator, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/root";
@@ -6,6 +6,7 @@ import "./app.css";
 import { Gem } from "./components/nav-icons.tsx";
 import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
+import { connectionNow, isFreshAdvance, markFresh, markStale, PROBE_MS, probeHost, useConnection } from "./lib/connection.ts";
 import { NonceContext } from "./lib/nonce.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
@@ -125,9 +126,68 @@ function useRefresh(generatedAt: string): void {
   }, [generatedAt, revalidate]);
 }
 
+/** The page is under a service worker: its reads can come from saved copies. */
+function isControlled(): boolean {
+  return "serviceWorker" in navigator && navigator.serviceWorker.controller !== null;
+}
+
+/**
+ * While the host is away: ask /healthz every 5 s (at once on `online` and on
+ * return to the tab), and reload the data when it answers. The host is back
+ * when the worker says "fresh", or when the root data is newer than the
+ * outage (see `isFreshAdvance`). An `offline` event while connected asks
+ * once too, and a failed ask means lost.
+ */
+function useProbe(generatedAt: string): void {
+  const { lost } = useConnection();
+  const revalidator = useRevalidator();
+  const { revalidate } = revalidator;
+  const idle = useRef(true);
+  idle.current = revalidator.state === "idle";
+  const previous = useRef(generatedAt);
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = generatedAt;
+    const state = connectionNow();
+    if (state.lost && isFreshAdvance(before, generatedAt, state.since, isControlled())) markFresh();
+  }, [generatedAt]);
+
+  useEffect(() => {
+    if (lost) return;
+    const check = async (): Promise<void> => {
+      if (!(await probeHost())) markStale(null);
+    };
+    window.addEventListener("offline", check);
+    return () => window.removeEventListener("offline", check);
+  }, [lost]);
+
+  useEffect(() => {
+    if (!lost) return;
+    let asking = false;
+    let stopped = false;
+    const probe = async (): Promise<void> => {
+      if (asking || document.visibilityState !== "visible") return;
+      asking = true;
+      const ok = await probeHost();
+      asking = false;
+      if (ok && !stopped && idle.current) await revalidate();
+    };
+    const timer = setInterval(probe, PROBE_MS);
+    window.addEventListener("online", probe);
+    document.addEventListener("visibilitychange", probe);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener("online", probe);
+      document.removeEventListener("visibilitychange", probe);
+    };
+  }, [lost, revalidate]);
+}
+
 export default function App({ loaderData }: Route.ComponentProps): React.ReactNode {
   useServiceWorker(loaderData.version);
   useRefresh(loaderData.generatedAt);
+  useProbe(loaderData.generatedAt);
   return (
     <ClockProvider generatedAt={loaderData.generatedAt} today={loaderData.today} offset={loaderData.utcOffset}>
       <Shell data={loaderData}>

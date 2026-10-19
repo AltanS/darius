@@ -30,6 +30,8 @@ export interface ConnectionState {
 
 /** How long the green "Connected" line shows. */
 export const CONNECTED_MS = 1800;
+/** While lost, the page asks /healthz this often, and gives each ask this long. */
+export const PROBE_MS = 5000;
 
 export const CONNECTED: ConnectionState = { lost: false, savedAt: null, since: null, justConnected: false };
 
@@ -71,6 +73,22 @@ export function isFreshAdvance(previous: string, next: string, since: number | n
 /** The time the strip names: when the copy was saved, else when the page on screen was read. */
 export function shownTime(state: ConnectionState, generatedAt: string): string {
   return state.savedAt ?? generatedAt;
+}
+
+// --- the probe ---
+
+/** Ask `GET /healthz` (the worker never answers it from a cache): true when the host said ok within PROBE_MS. */
+export async function probeHost(): Promise<boolean> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PROBE_MS);
+  try {
+    const response = await fetch("/healthz", { cache: "no-store", signal: abort.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- the store ---
