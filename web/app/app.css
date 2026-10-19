@@ -4569,15 +4569,9 @@
   }
 
   .st-btn-small {
-    min-height: 36px;
+    min-height: 44px;
     padding: 0 12px;
     font-size: 14px;
-  }
-
-  @media (pointer: coarse) {
-    .st-btn-small {
-      min-height: 44px;
-    }
   }
 
   /* Inputs: short for a number, medium for a name, long for a path or an address. Never the full card. */
@@ -5744,5 +5738,38 @@
     .page-head:has(.crumbs) {
       padding-top: 4px;
     }
+  }
+
+  /* --- ui-next: tap targets and wait lines ------------------------------------------- */
+
+  /* A link inside a line of text takes a 44 px hit box without growing the text. The box is a pseudo element, so the line keeps its height. */
+
+  .rail-note a,
+  .bk-note a,
+  .gem-line a,
+  .fnd-acts a,
+  .hc-acts a,
+  .sect-aside a,
+  .rw-acts a {
+    position: relative;
+  }
+
+  .rail-note a::after,
+  .bk-note a::after,
+  .gem-line a::after,
+  .fnd-acts a::after,
+  .hc-acts a::after,
+  .sect-aside a::after,
+  .rw-acts a::after {
+    content: "";
+    position: absolute;
+    inset: -13px -8px;
+  }
+
+  /* The wait line under a button is text only: the button carries the gem. */
+
+  .rail-note[role="status"],
+  .bk-note[role="status"] {
+    overflow-wrap: anywhere;
   }
 }
