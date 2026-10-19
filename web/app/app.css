@@ -3004,6 +3004,98 @@
     scroll-margin-top: 72px;
   }
 
+  /* --- the connection strip ------------------------------------------------------------ */
+
+  /*
+   * One line that says the host is away (red) or back (green, 1.8 s), from
+   * connection-strip.tsx. It floats: fixed under the phone top bar (57 px: the bar and its
+   * border, under the safe area), and on a desktop under the Places head, as wide as Places.
+   * So it moves no layout. Square corners, an edge at the bottom, a soft shadow. The slot is
+   * the live region and is always there; it takes no clicks, only the strip does. Below the
+   * drawer (z 40) and Places (z 50), so an open drawer covers it. It slides in, except under
+   * reduced motion.
+   */
+
+  .conn-slot {
+    position: fixed;
+    inset: calc(env(safe-area-inset-top) + 57px) 0 auto;
+    z-index: 35;
+    pointer-events: none;
+  }
+
+  @media (min-width: 1024px) {
+    .conn-slot {
+      inset: 57px auto auto 0;
+      width: var(--sidebar-w);
+    }
+  }
+
+  .conn-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    padding: 0 4px 0 16px;
+    border-bottom: 1px solid var(--edge);
+    background: color-mix(in srgb, var(--tone) 16%, var(--color-deep));
+    box-shadow: 0 6px 16px var(--shadow);
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--color-parchment);
+    pointer-events: auto;
+    animation: conn-in 0.18s ease-out;
+  }
+
+  .conn-text {
+    flex: 1;
+    min-width: 0;
+    padding-block: 6px;
+  }
+
+  .conn-strip.tone-ok .conn-text {
+    color: var(--tone);
+    font-weight: 600;
+  }
+
+  .conn-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: var(--tone);
+    cursor: pointer;
+  }
+
+  .conn-btn:disabled {
+    opacity: 0.55;
+    cursor: progress;
+  }
+
+  .conn-close {
+    padding: 0;
+    color: var(--color-muted);
+  }
+
+  @keyframes conn-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .conn-strip {
+      animation: none;
+    }
+  }
+
   /* --- Places: the sidebar of a desktop, the drawer of a phone --- */
 
   .places {

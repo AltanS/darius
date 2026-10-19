@@ -1,7 +1,7 @@
 /**
  * The icons of the frame: the brand gem, the marks of Places (the settings gear, the status
  * pulse, the profile, the overview house, the shield of a finding, the event list of Activity, the two marks of the scopes,
- * the milestone flag), the chevron and check, and the lock of a setting the environment sets.
+ * the milestone flag), the chevron, check and close marks, and the lock of a setting the environment sets.
  * The eye and the two arrows of the vigil and ritual tabs are in `kind.tsx`.
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
  * from the text colour around them.
@@ -14,6 +14,7 @@ const PATHS = {
   milestone: ["M3.5 14.6V1.8", "M3.5 2.8H12.4L10.2 5.6L12.4 8.4H3.5"],
   chevron: ["M3.5 6L8 10.5L12.5 6"],
   check: ["M3 8.6L6.5 12L13 4.6"],
+  close: ["M4 4L12 12", "M12 4L4 12"],
   workspace: ["M2.4 3.4H13.6V12.6H2.4Z", "M2.4 6.4H13.6"],
   all: ["M8 2L14.4 5.4L8 8.8L1.6 5.4Z", "M1.6 8.4L8 11.8L14.4 8.4", "M1.6 11.2L8 14.6L14.4 11.2"],
   status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],

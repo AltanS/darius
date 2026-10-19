@@ -5,7 +5,8 @@
  * bottom: Overview, Vigils, Rituals, Findings, Milestones. A desktop (1024 px
  * and wider) has neither: a fixed sidebar takes their place. Both are in the
  * page always; CSS decides which one shows. The third part is Places (the
- * tree, `places.tsx`), the fourth is `<main>`.
+ * tree, `places.tsx`), the fourth is `<main>`. Over them floats the connection
+ * strip (`connection-strip.tsx`) when the host is away.
  *
  * The scope is one workspace or all of them. A host page (Status, Profiles,
  * Settings) is in no scope, so the tabs and Places point at the last scope you
@@ -17,6 +18,7 @@ import { Link, useLocation, useNavigation, useRouteLoaderData } from "react-rout
 
 import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
+import { ConnectionStrip } from "./connection-strip.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
 import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
@@ -122,6 +124,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   return (
     <div className="app">
       <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} />
+      <ConnectionStrip generatedAt={data.generatedAt} />
       <Places data={data} scope={scope} lit={lit} busy={busy} />
       <main className="wa page-main">{children}</main>
       <nav aria-label="Tabs" className="tabbar">
