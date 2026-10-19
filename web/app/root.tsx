@@ -12,6 +12,7 @@ import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { SPLASH_SIZES, splashFile, splashMedia } from "./lib/splash.ts";
 import { statusOf } from "./lib/status.ts";
 import { shellData } from "./lib/scope.ts";
+import { useServiceWorker } from "./lib/sw.ts";
 
 export function loader({ context, request }: Route.LoaderArgs) {
   // --- settings block (theme, density, motion): read from the cookie, put on <html> by Layout ---
@@ -125,6 +126,7 @@ function useRefresh(generatedAt: string): void {
 }
 
 export default function App({ loaderData }: Route.ComponentProps): React.ReactNode {
+  useServiceWorker(loaderData.version);
   useRefresh(loaderData.generatedAt);
   return (
     <ClockProvider generatedAt={loaderData.generatedAt} today={loaderData.today} offset={loaderData.utcOffset}>

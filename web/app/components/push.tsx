@@ -1,6 +1,6 @@
 /**
- * The notification switch (0.32.0), a row on the Notifications tab of the settings. It registers the service
- * worker (web/public/sw.js), asks the host for its VAPID key, and subscribes
+ * The notification switch (0.32.0), a row on the Notifications tab of the settings. It uses the one
+ * registration of the service worker (web/public/sw.js, lib/sw.ts), asks the host for its VAPID key, and subscribes
  * this browser with `darius serve`'s push endpoints (src/web/push-api.ts):
  * GET /api/push/key, POST /api/push/subscribe, POST /api/push/unsubscribe.
  *
@@ -11,7 +11,10 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouteLoaderData } from "react-router";
 
+import type { loader as rootLoader } from "../root.tsx";
+import { registerWorker } from "../lib/sw.ts";
 import { SettingRow } from "./settings-ui.tsx";
 
 type PushState =
@@ -21,8 +24,6 @@ type PushState =
   | { kind: "on" }
   | { kind: "busy"; text: string }
   | { kind: "failed"; text: string };
-
-const WORKER = "/sw.js";
 
 /** The VAPID key arrives as base64url; the push manager wants its bytes. */
 function keyBytes(key: string): Uint8Array<ArrayBuffer> {
@@ -52,10 +53,10 @@ function blocker(): string | null {
 }
 
 /** Where this browser stands: a reason it cannot, or whether it is subscribed. */
-async function check(): Promise<PushState> {
+async function check(version: string): Promise<PushState> {
   const reason = blocker();
   if (reason !== null) return { kind: "unavailable", text: reason };
-  const registration = await navigator.serviceWorker.register(WORKER, { scope: "/" });
+  const registration = await registerWorker(version);
   const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
   if (response.status === 404) return { kind: "unavailable", text: "This server has no notification endpoints. The dev server has none: run darius serve." };
   if (!response.ok) return { kind: "failed", text: `The host answered ${response.status} for its push key.` };
@@ -85,13 +86,13 @@ async function turnOn(key: string): Promise<PushState> {
   return { kind: "failed", text: error };
 }
 
-async function turnOff(): Promise<PushState> {
+async function turnOff(version: string): Promise<PushState> {
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.getSubscription();
-  if (subscription === null) return check();
+  if (subscription === null) return check(version);
   const error = await post("/api/push/unsubscribe", { endpoint: subscription.endpoint });
   await subscription.unsubscribe();
-  return error === null ? check() : { kind: "failed", text: error };
+  return error === null ? check(version) : { kind: "failed", text: error };
 }
 
 function failure(cause: Error): PushState {
@@ -123,9 +124,11 @@ function PushRow({ state, tone, children }: PushRowProps): React.ReactNode {
 
 export function PushSwitch(): React.ReactNode {
   const [state, setState] = useState<PushState>({ kind: "checking" });
+  // The worker is registered under the darius version (lib/sw.ts), the same one the app registered at boot.
+  const version = useRouteLoaderData<typeof rootLoader>("root")?.version ?? "dev";
   useEffect(() => {
-    check().then(setState, (cause: Error) => setState(failure(cause)));
-  }, []);
+    check(version).then(setState, (cause: Error) => setState(failure(cause)));
+  }, [version]);
   const run = useCallback((text: string, action: () => Promise<PushState>) => {
     setState({ kind: "busy", text });
     action().then(setState, (cause: Error) => setState(failure(cause)));
@@ -141,7 +144,7 @@ export function PushSwitch(): React.ReactNode {
     case "failed":
       return (
         <PushRow state={state.text} tone="bad">
-          <button type="button" className="st-btn" onClick={() => run("Checking…", check)}>
+          <button type="button" className="st-btn" onClick={() => run("Checking…", () => check(version))}>
             Try again
           </button>
         </PushRow>
@@ -164,7 +167,7 @@ export function PushSwitch(): React.ReactNode {
             </span>
           }
         >
-          <button type="button" className="st-btn" onClick={() => run("Turning notifications off…", turnOff)}>
+          <button type="button" className="st-btn" onClick={() => run("Turning notifications off…", () => turnOff(version))}>
             Turn off
           </button>
         </PushRow>
