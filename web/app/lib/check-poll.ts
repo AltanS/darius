@@ -1,40 +1,19 @@
 /**
- * How the page follows a "Check now" (0.95.0). A check runs for minutes and
- * writes only its final `vigil.swept` line, so the page asks again until the
- * pending start of the check (`WebContext.pending`, spec 02) is not `starting`
- * any more. Pure: `CheckNow` holds the timer, this file says when to look, how
- * long to keep looking, and what the pending start means.
+ * The words and the small rules of a "Check now" (spec 02, since 0.95.0).
+ * The page follows a check with the light poll of `follow-starts.ts`; this
+ * file holds what is left of the old reload polling: which pending start a
+ * vigil shows, and every sentence of the check. Pure, so a test can hold each
+ * one. The state words are the ones of the design table: a vigil is
+ * *checking*, never *starting*.
  */
 
 import type { PendingStart } from "../../../src/web/api.ts";
+import { clockTime } from "./format.ts";
 
-/** The page stops looking this long after the check was asked for. The pending start stays `starting` for 15 minutes; a person can reload to see more. */
-export const CHECK_WINDOW_MS = 3 * 60 * 1000;
-
-/**
- * When the look number `step` (from 0) happens, in milliseconds after the page
- * saw the pending start: 1.5 s, 5 s, then every 5 s (10 s, 15 s, ...).
- */
-export function lookAt(step: number): number {
-  if (step === 0) return 1500;
-  return 5000 * step;
-}
-
-/**
- * What a check is doing, for the button: `idle` (no check to follow: none was asked, or it started and
- * its sweep is in the list), `checking` (the page is looking), `stalled` (3 minutes passed with no
- * result: the page stopped looking), `refused` (the command would not start it) and `lost` (no sign
- * after 15 minutes). Only `checking` keeps the timer running.
- */
-export type CheckPhase = "idle" | "checking" | "stalled" | "refused" | "lost";
-
-/** The phase of a pending start at time `now` (ms). */
-export function checkPhase(pending: Pick<PendingStart, "state" | "at"> | null, now: number): CheckPhase {
-  if (pending === null || pending.state === "started") return "idle";
-  if (pending.state === "refused") return "refused";
-  if (pending.state === "lost") return "lost";
-  return now - Date.parse(pending.at) >= CHECK_WINDOW_MS ? "stalled" : "checking";
-}
+/** A check inside this time after the last one is refused (the CLI's cooldown, `SWEEP_COOLDOWN_MS` in src/core/sweep.ts). */
+export const COOLDOWN_MS = 2 * 60 * 1000;
+/** After this long the line says that the result shows here, since the check takes longer than most. */
+export const LONG_CHECK_MS = 3 * 60 * 1000;
 
 /** The newest check of one vigil that has not started (`starting`), from the starts of a project or of all. Null when there is none. */
 export function startingCheck(starts: readonly PendingStart[], project: string, slug: string): PendingStart | null {
@@ -45,4 +24,70 @@ export function startingCheck(starts: readonly PendingStart[], project: string, 
 /** The `project/slug` key of a vigil, for a map of its checks. */
 export function checkKey(project: string, slug: string): string {
   return `${project}/${slug}`;
+}
+
+/** "40 s" under a minute, "4 min" after. */
+export function elapsedText(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min`;
+}
+
+/** The line of a check that runs. It ticks: the caller passes the time since the ask. */
+export function checkingText(host: string, ageMs: number): string {
+  const so = `${elapsedText(ageMs)} so far`;
+  return ageMs >= LONG_CHECK_MS ? `Still checking on ${host}, ${so}. The result shows here.` : `Checking on ${host}, ${so}. Most checks end within a minute.`;
+}
+
+/** What a sweep outcome says in the line of a finished check: `held` closes the vigil (passed), `failed` keeps it flagged. Other outcomes say nothing. */
+export function outcomeWord(outcome: string | null): string | null {
+  if (outcome === "held") return "passed";
+  if (outcome === "failed") return "still failing";
+  return null;
+}
+
+/** "Checked 07:24: passed." / "Checked 07:24: still failing." / "Checked 07:24." when the outcome is not known. */
+export function checkedText(time: string, outcome: string | null): string {
+  const word = outcomeWord(outcome);
+  return word === null ? `Checked ${time}.` : `Checked ${time}: ${word}.`;
+}
+
+/**
+ * The label of the disabled button inside the cooldown: "Checked 1 min ago. Check again at 07:26."
+ * Null when the cooldown is over. `retryAt` is the server's time when it gave one; otherwise it is the
+ * last check plus the cooldown.
+ */
+export function cooldownText(lastCheckedAt: string, now: number, offset: number, retryAt?: string): string | null {
+  const checked = Date.parse(lastCheckedAt);
+  if (Number.isNaN(checked)) return null;
+  const retryMs = retryAt === undefined ? Number.NaN : Date.parse(retryAt);
+  const retry = Number.isNaN(retryMs) ? checked + COOLDOWN_MS : retryMs;
+  if (retry <= now) return null;
+  const minutes = Math.max(1, Math.round((now - checked) / 60_000));
+  return `Checked ${minutes} min ago. Check again at ${clockTime(new Date(retry).toISOString(), offset)}.`;
+}
+
+/** The sentence of a check that did not start. The reason is the server's; without one the sentence stops at the host. */
+export function refusedText(host: string, reason: string | undefined): string {
+  if (reason === undefined || reason.trim() === "") return `${host} did not start the check.`;
+  return `${host} did not start it: ${reason.trim().replace(/[.\s]+$/u, "")}.`;
+}
+
+/** The sentence of a start that shows nothing after 15 minutes. */
+export function lostText(host: string, what: "check" | "run"): string {
+  return `No sign of this ${what} on ${host} after 15 minutes.${what === "run" ? " Start it again from the ritual." : ""}`;
+}
+
+/** A start the page follows, from a reply or from the loader. */
+export interface Asked {
+  id: string;
+  host: string;
+  /** An ISO time. */
+  at: string;
+}
+
+/** The newer of two asks; null when there is none. */
+export function newerAsk(left: Asked | null, right: Asked | null): Asked | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return right.at > left.at ? right : left;
 }
