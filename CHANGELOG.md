@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.105.0] - 2026-10-28
+
+### Added
+
+- `darius onboard scan` and `doctor` name a legacy `.tracker/` folder in a nested repo below the marker's dir, which the project does not own, and print the fix: `darius init --project <name>` in that repo, then `darius onboard`. The scan no longer says "already onboarded" there, and `onboard` refuses. `--json` adds `nested_tracker` (#2).
+- A worklog thread verb (`append`, `close`, `set-stage`, `dispatch`, `park`) whose id names a legacy free-text worklog file says so and names the file to edit by hand, instead of only "thread not found" (#2).
+
+### Fixed
+
+- `darius onboard` copies a link to a regular file inside `.tracker/` as a file with its target's bytes, and reports `dereferenced N in-tree links`. Older tracker tooling wrote such links under `_counsel/`. A link out of `.tracker/` or a broken link still refuses, with its own reason. `--json` adds `links` (#1).
+
 ## [0.104.0] - 2026-10-19
 
 ### Added

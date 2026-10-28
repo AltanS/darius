@@ -12,7 +12,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -339,6 +339,85 @@ test("onboard refuses an unlinked checkout and a marker that is not v3; --only v
   const v2 = darius(at, ["onboard", "scan"], dir);
   assert.equal(v2.code, 1);
   assert.match(v2.stdout, /\.darius\.toml is v = 2; darius onboard needs v = 3/u);
+});
+
+test("onboard copies an in-tree link as its target's file and refuses an outside or broken link (0.105.0)", { skip: NO_GIT }, () => {
+  const at = host();
+  const name = "acme-links";
+  const dir = legacyRepo(at, name);
+  // What older tracker tooling wrote: _counsel/<NN>-<slug>.md links to _counsel/.objects/<name>.md.
+  const counsel = join(dir, ".tracker", "M1-alpha", "_counsel");
+  mkdirSync(join(counsel, ".objects"), { recursive: true });
+  writeFileSync(join(counsel, ".objects", "abc.md"), "# counsel\n\nkeep it\n");
+  symlinkSync(join(".objects", "abc.md"), join(counsel, "01-review.md"));
+  git(at, dir, ["add", "--all"]);
+  git(at, dir, ["commit", "--quiet", "--message", "counsel"]);
+
+  const outside = join(dir, ".tracker", "M1-alpha", "readme.md");
+  symlinkSync(join("..", "..", "README.md"), outside);
+  const broken = join(dir, ".tracker", "M1-alpha", "gone.md");
+  symlinkSync("nowhere.md", broken);
+  const refused = darius(at, ["onboard", "scan"], dir);
+  assert.equal(refused.code, 1, refused.stdout);
+  assert.match(refused.stdout, /^✗ \.tracker\/M1-alpha\/readme\.md is a link to .*README\.md, outside \.tracker\/\./mu);
+  assert.match(refused.stdout, /^✗ \.tracker\/M1-alpha\/gone\.md is a broken link\. Remove it\.$/mu);
+  assert.doesNotMatch(refused.stdout, /01-review\.md/u, "an in-tree link is no blocker");
+  rmSync(outside);
+  rmSync(broken);
+
+  const scan = darius(at, ["onboard", "scan", "--json"], dir);
+  assert.equal(scan.code, 0, scan.stdout);
+  assert.deepEqual([JSON.parse(scan.stdout).files, JSON.parse(scan.stdout).links], [10, 1]);
+  assert.match(darius(at, ["onboard", "scan"], dir).stdout, /^\.tracker: folder, 10 files, \d+ bytes, 1 in-tree link copied as a file$/mu);
+
+  const moved = darius(at, ["onboard"], dir);
+  assert.equal(moved.code, 0, moved.stdout + moved.stderr);
+  assert.match(moved.stdout, /^✓ 2 copy: 10 files, \d+ bytes into .*, every sha256 checked; dereferenced 1 in-tree link$/mu);
+  const copy = join(at.state, name, "tracker", "M1-alpha", "_counsel", "01-review.md");
+  assert.equal(lstatSync(copy).isFile(), true, "the link became a regular file");
+  assert.equal(readFileSync(copy, "utf8"), "# counsel\n\nkeep it\n");
+  assert.equal(lstatSync(join(dir, ".tracker"), { throwIfNoEntry: false }), undefined);
+});
+
+test("onboard scan and doctor in a nested repo name its legacy .tracker/ and the fix, never already onboarded (0.105.0)", { skip: NO_GIT }, () => {
+  const at = host();
+  const workspace = join(SANDBOX, "acme-ws");
+  mkdirSync(workspace);
+  git(at, workspace, ["init", "--quiet", "--initial-branch=main"]);
+  writeFileSync(join(workspace, ".darius.toml"), 'v = 3\nproject = "acme-ws"\ntz = "Europe/Berlin"\nkinds = ["ritual", "vigil", "milestone"]\n');
+  const linked = darius(at, ["link"], workspace);
+  assert.equal(linked.code, 0, linked.stderr);
+  const nested = join(workspace, "app");
+  mkdirSync(join(nested, ".tracker", "M1-alpha"), { recursive: true });
+  writeFileSync(join(nested, ".tracker", "M1-alpha", "01-spec-one.md"), "# Spec one\n");
+  git(at, nested, ["init", "--quiet", "--initial-branch=main"]);
+  git(at, nested, ["add", "--all"]);
+  git(at, nested, ["commit", "--quiet", "--message", "legacy tracker"]);
+
+  for (const cwd of [nested, join(nested, ".tracker", "M1-alpha")]) {
+    const scan = darius(at, ["onboard", "scan"], cwd);
+    assert.equal(scan.code, 1, scan.stdout);
+    assert.doesNotMatch(scan.stdout, /already onboarded|nothing to do/u);
+    assert.match(scan.stdout, /^✗ .*\/app\/\.tracker is a legacy tracker folder in a repo below .*; the project acme-ws does not own it/mu);
+    assert.match(scan.stdout, /To move it: cd .*\/app, darius init --project <name> \(a new project for that repo\), then darius onboard\./u);
+  }
+  const json = JSON.parse(darius(at, ["onboard", "scan", "--json"], nested).stdout);
+  assert.equal(json.nested_tracker, join(nested, ".tracker"));
+  assert.equal(json.status, undefined);
+  const move = darius(at, ["onboard"], nested);
+  assert.equal(move.code, 1);
+  assert.match(move.stderr, /is a legacy tracker folder in a repo below/u);
+
+  const doctor = darius(at, ["doctor"], nested);
+  assert.match(doctor.stdout + doctor.stderr, /NOTE: .*\/app\/\.tracker is a legacy tracker folder in a repo below the project acme-ws/u);
+  // From the workspace root itself there is nothing nested to report.
+  assert.match(darius(at, ["onboard", "scan"], workspace).stdout, /^✓ already onboarded/mu);
+
+  const init = darius(at, ["init", "--project", "acme-app", "--no-import"], nested);
+  assert.equal(init.code, 0, init.stdout + init.stderr);
+  const own = darius(at, ["onboard", "scan", "--json"], nested);
+  assert.equal(JSON.parse(own.stdout).nested_tracker, null, own.stdout);
+  assert.equal(JSON.parse(own.stdout).project, "acme-app");
 });
 
 test("withKinds sets or inserts the root kinds line and keeps every other byte", () => {

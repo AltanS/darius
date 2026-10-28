@@ -279,6 +279,35 @@ export function noTreeReason(cwd: string): string {
 }
 
 /**
+ * A real `.tracker/` folder in `cwd` or in a dir between it and `markerDir`
+ * (the marker's own dir excluded), or null (0.105.0). That is the legacy tree
+ * of a nested repo with no marker of its own: the marker's project does not
+ * own it, and onboard there would act on the marker's checkout instead. Only
+ * a diagnostic for `onboard` and `doctor`: it never resolves a tree, and
+ * nothing reads the folder it finds.
+ */
+export function nestedLegacyTracker(cwd: string, markerDir: string): string | null {
+  const top = resolve(markerDir);
+  let dir = resolve(cwd);
+  if (inside(top, dir) === null) return null;
+  while (dir !== top) {
+    const path = join(dir, TRACKER_FOLDER);
+    const stats = lstatSync(path, { throwIfNoEntry: false });
+    if (stats !== undefined && stats.isDirectory()) return path;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
+}
+
+/** The fix for a nested legacy tree at `folder`: its own project, then the move. */
+export function nestedLegacyFix(folder: string): string {
+  const repo = dirname(folder);
+  return `cd ${repo}, darius init --project <name> (a new project for that repo), then darius onboard`;
+}
+
+/**
  * The notes the full `doctor` adds about where the tree is (0.78.0). They go
  * to stdout after the report, or to stderr with `--json`. A note never
  * changes the exit code.
@@ -287,15 +316,23 @@ export function noTreeReason(cwd: string): string {
  *               it; darius does not edit `.gitignore`), and a `.tracker` path
  *               left in the checkout (never read, never removed by darius)
  *   git mode    the mode is deprecated: `darius onboard` moves the tree
+ *   nested      a legacy `.tracker/` below the marker's dir that the marker's
+ *               project does not own (0.105.0), with the fix
  */
 export function doctorNotes(cwd: string): string[] {
   let where: TrackerWhere;
+  let marker: ReturnType<typeof findMarker>;
   try {
     where = resolveTrackerRoot(cwd);
+    marker = findMarker(cwd);
   } catch {
     return [];
   }
   const notes: string[] = [];
+  const nested = marker === null ? null : nestedLegacyTracker(cwd, marker.dir);
+  if (nested !== null && marker !== null) {
+    notes.push(`NOTE: ${nested} is a legacy tracker folder in a repo below the project ${marker.project} (${marker.dir}), and that project does not own it. To move it into the store: ${nestedLegacyFix(nested)}.`);
+  }
   if (where.mode === "store") {
     if (hasStaleIgnoreLine(where.checkout)) {
       notes.push(`NOTE: .gitignore has a ${TRACKER_IGNORE} line. darius no longer makes a .tracker link, so you can remove the line.`);
@@ -303,7 +340,7 @@ export function doctorNotes(cwd: string): string[] {
     const state = treeLinkState(where.checkout, where.trackerRoot);
     if (state.kind === "real") notes.push(`NOTE: ${state.path} is in this checkout. darius does not read it; the tracker tree is in ${where.trackerRoot}.`);
     if (state.kind === "foreign-link") notes.push(`NOTE: ${state.path} links to ${state.target}. darius does not read it; the tracker tree is in ${where.trackerRoot}.`);
-  } else if (where.mode === "git") {
+  } else if (where.mode === "git" && nested === null) {
     notes.push("NOTE: this tracker is in git (.tracker/). Git mode is deprecated. Run darius onboard scan, then darius onboard, to move it into the darius store.");
   }
   return notes;

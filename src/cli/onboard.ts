@@ -37,17 +37,19 @@
  * Preconditions, each a refusal with exit 1: a v3 marker that names a
  * project linked to this checkout; `.tracker` is a real folder; every file
  * in it is committed and unmodified (host-local and derived files and
- * git-ignored files aside, but never under `vigils/`); the marker does not
- * list `milestone` yet (`vigil` for `--only vigil`); the store holds no tree
- * for the project yet.
+ * git-ignored files aside, but never under `vigils/`); every entry is a dir,
+ * a file, or a link to a file inside `.tracker/` (copied as a file, 0.105.0);
+ * the marker does not list `milestone` yet (`vigil` for `--only vigil`); the
+ * store holds no tree for the project yet; no dir between the cwd and the
+ * marker's dir holds a `.tracker/` folder of its own (a nested repo, 0.105.0).
  *
  * `--json` prints one object in every mode.
  */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import type { OwnedKind } from "../core/kinds.ts";
 import type { Vigil } from "../core/model.ts";
@@ -68,7 +70,7 @@ import {
   treeDir,
   type TreeCapture,
 } from "../core/tree.ts";
-import { TRACKER_FOLDER as TRACKER_LINK } from "../core/tracker-root.ts";
+import { nestedLegacyFix, nestedLegacyTracker, TRACKER_FOLDER as TRACKER_LINK } from "../core/tracker-root.ts";
 import { importLegacyVigils, type VigilImportResult } from "../core/vigil-import.ts";
 import { projectVigils } from "../core/vigil-projection.ts";
 import { errorMessage } from "../runtime.ts";
@@ -110,6 +112,10 @@ interface Survey {
   tracker: TrackerKind;
   files: number;
   bytes: number;
+  /** Links to a file inside `.tracker/` that the move copies as files (0.105.0). Counted in `files` too. */
+  links: number;
+  /** A legacy `.tracker/` folder between cwd and the marker's dir that the project does not own (0.105.0). */
+  nested: string | null;
   git: GitState;
   vigils: { files: number; open: number; closed: number };
   store: { exists: boolean; tree: boolean; vigils: number };
@@ -137,23 +143,32 @@ interface GitRun {
   err: string;
 }
 
-/** Everything under a folder: files with sizes, dirs, and entries that are neither. */
+/** An entry the move cannot copy, and why, as the rest of a sentence after its path. */
+interface OddEntry {
+  path: string;
+  why: string;
+}
+
+/** Everything under a folder: files with sizes, dirs, in-tree links (also in `files`), and entries that are neither. */
 interface Listing {
   files: SourceFile[];
   dirs: string[];
-  odd: string[];
+  links: string[];
+  odd: OddEntry[];
 }
 
 /** What step 2 copies. */
 interface CopyPlan {
   files: SourceFile[];
   dirs: string[];
+  links: string[];
 }
 
 /** What step 2 copied. */
 interface CopyCount {
   files: number;
   bytes: number;
+  links: number;
 }
 
 /** What step 1 did, or would do. */
@@ -218,11 +233,40 @@ function trackerKind(root: string): TrackerKind {
   return stats.isDirectory() ? "folder" : "other";
 }
 
-/** Every file under `dir`, relative, with its size; non-regular entries go to `odd`. Dirs come in `dirs`. */
+const NOT_A_FILE = "is not a regular file; the tree keeps regular files only. Remove it or replace it with a file.";
+
+/**
+ * What a link under `.tracker/` (real path `top`) points to: the size of a
+ * regular file inside `top`, or why the move cannot copy it. Older tracker
+ * tooling wrote such links itself (`_counsel/<NN>-<slug>.md` to
+ * `_counsel/.objects/`), so the move copies the target's bytes (0.105.0).
+ */
+function linkTarget(top: string, link: string): { size: number } | { why: string } {
+  let real: string;
+  try {
+    real = realpathSync(link);
+  } catch {
+    return { why: "is a broken link. Remove it." };
+  }
+  const rel = relative(top, real);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return { why: `is a link to ${real}, outside .tracker/. Replace it with a copy of its file, or remove it.` };
+  }
+  const stats = statSync(real);
+  return stats.isFile() ? { size: stats.size } : { why: `is a link to ${real}, which ${NOT_A_FILE}` };
+}
+
+/**
+ * Every file under `dir`, relative, with its size. A link to a regular file
+ * inside `dir` counts as a file and is named in `links` too; other entries
+ * that are neither dir nor file go to `odd`. Dirs come in `dirs`.
+ */
 function walk(dir: string): Listing {
+  const top = realOr(dir);
   const files: SourceFile[] = [];
   const dirs: string[] = [];
-  const odd: string[] = [];
+  const links: string[] = [];
+  const odd: OddEntry[] = [];
   const visit = (at: string, prefix: string): void => {
     for (const name of readdirSync(at).toSorted()) {
       const path = prefix === "" ? name : `${prefix}/${name}`;
@@ -231,11 +275,18 @@ function walk(dir: string): Listing {
         dirs.push(path);
         visit(join(at, name), path);
       } else if (stats.isFile()) files.push({ path, size: stats.size });
-      else odd.push(path);
+      else if (stats.isSymbolicLink()) {
+        const target = linkTarget(top, join(at, name));
+        if ("why" in target) odd.push({ path, why: target.why });
+        else {
+          files.push({ path, size: target.size });
+          links.push(path);
+        }
+      } else odd.push({ path, why: NOT_A_FILE });
     }
   };
   visit(dir, "");
-  return { files, dirs, odd };
+  return { files, dirs, links, odd };
 }
 
 function isUnderVigils(path: string): boolean {
@@ -259,6 +310,12 @@ function hasTreeLines(project: Project): boolean {
 
 function isNonEmptyDir(path: string): boolean {
   return existsSync(path) && readdirSync(path).length > 0;
+}
+
+/** The scan's words for in-tree links, empty when there are none. */
+function linksText(links: number): string {
+  if (links === 0) return "";
+  return links === 1 ? ", 1 in-tree link copied as a file" : `, ${String(links)} in-tree links copied as files`;
 }
 
 function kindsText(kinds: readonly OwnedKind[]): string {
@@ -317,8 +374,8 @@ function surveyMarker(cwd: string): Marker {
   return marker;
 }
 
-/** The scan: read-only. */
-function survey(marker: Marker, scope: Scope): Survey {
+/** The scan: read-only. `cwd` is where the operator runs it, at or below the marker's dir. */
+function survey(marker: Marker, scope: Scope, cwd: string): Survey {
   const root = marker.dir;
   const linked = linkedDir(marker.project);
   const tracker = trackerKind(root);
@@ -331,6 +388,8 @@ function survey(marker: Marker, scope: Scope): Survey {
     tracker,
     files: 0,
     bytes: 0,
+    links: 0,
+    nested: null,
     git: { repo: false, tracked: false, dirty: [] },
     vigils: { files: 0, open: 0, closed: 0 },
     store: { exists: false, tree: false, vigils: 0 },
@@ -348,7 +407,8 @@ function survey(marker: Marker, scope: Scope): Survey {
     const listing = walk(join(root, TRACKER_LINK));
     result.files = listing.files.length;
     result.bytes = listing.files.reduce((sum, file) => sum + file.size, 0);
-    for (const path of listing.odd) result.blockers.push(`.tracker/${path} is not a regular file; the tree keeps regular files only. Remove it or replace it with a file.`);
+    result.links = listing.links.length;
+    for (const entry of listing.odd) result.blockers.push(`.tracker/${entry.path} ${entry.why}`);
     result.git = gitState(root, scope === "vigil" ? `${TRACKER_LINK}/${VIGILS}` : TRACKER_LINK);
     const legacy = readLegacyVigils(root);
     result.vigils = { files: vigilFiles(root).length, open: legacy.filter((vigil) => vigil.resolved === null).length, closed: legacy.filter((vigil) => vigil.resolved !== null).length };
@@ -369,6 +429,7 @@ function survey(marker: Marker, scope: Scope): Survey {
     result.problems.push(...pending.problems);
   }
   addBlockers(result, scope);
+  addNested(result, cwd);
   result.onboarded = result.nothing && (scope === "vigil" ? result.kinds.includes("vigil") : storeOwned);
   return result;
 }
@@ -398,6 +459,19 @@ function addBlockers(result: Survey, scope: Scope): void {
   if (scope === "all" && result.store.tree) blockers.push("already onboarded: pull the marker commit and run darius sync");
 }
 
+/**
+ * A legacy `.tracker/` folder in a nested repo below the marker's dir (0.105.0):
+ * the marker's project does not own it, and a move here would act on the
+ * marker's checkout. A blocker, never "already onboarded" or "nothing to do".
+ */
+function addNested(result: Survey, cwd: string): void {
+  const nested = nestedLegacyTracker(cwd, result.root);
+  if (nested === null) return;
+  result.nested = nested;
+  result.nothing = false;
+  result.blockers.push(`${nested} is a legacy tracker folder in a repo below ${result.root}; the project ${result.project} does not own it, and onboard here acts on ${result.root}. To move it: ${nestedLegacyFix(nested)}.`);
+}
+
 // --- output ------------------------------------------------------------------
 
 function onboardedLine(scope: Scope): string {
@@ -413,6 +487,8 @@ function surveyJson(result: Survey) {
     tracker: result.tracker,
     files: result.files,
     bytes: result.bytes,
+    links: result.links,
+    nested_tracker: result.nested,
     git: { repo: result.git.repo, tracked: result.git.tracked, clean: result.git.dirty.length === 0, dirty: result.git.dirty },
     vigils: result.vigils,
     store: result.store,
@@ -427,7 +503,7 @@ function surveyJson(result: Survey) {
 function surveyLines(result: Survey): string[] {
   const lines = [
     `project ${result.project} at ${result.root}, kinds ${kindsText(result.kinds)}${result.linked ? "" : " (not linked here)"}`,
-    `.tracker: ${result.tracker}${result.tracker === "folder" ? `, ${String(result.files)} files, ${String(result.bytes)} bytes` : ""}`,
+    `.tracker: ${result.tracker}${result.tracker === "folder" ? `, ${String(result.files)} files, ${String(result.bytes)} bytes${linksText(result.links)}` : ""}`,
   ];
   if (result.tracker === "folder") {
     const clean = result.git.dirty.length === 0 ? "clean" : `${String(result.git.dirty.length)} uncommitted changes`;
@@ -473,12 +549,16 @@ function heavyLine(heavy: readonly string[]): string | null {
 /** The files and dirs step 2 copies: everything under `.tracker/` except `vigils/`. */
 function copyPlan(root: string): CopyPlan {
   const listing = walk(join(root, TRACKER_LINK));
-  return { files: listing.files.filter((file) => !isUnderVigils(file.path)), dirs: listing.dirs.filter((dir) => !isUnderVigils(dir)) };
+  return {
+    files: listing.files.filter((file) => !isUnderVigils(file.path)),
+    dirs: listing.dirs.filter((dir) => !isUnderVigils(dir)),
+    links: listing.links.filter((link) => !isUnderVigils(link)),
+  };
 }
 
-/** Copies one file keeping mode and mtime, then checks the copy's sha256. */
+/** Copies one file keeping mode and mtime, then checks the copy's sha256. An in-tree link copies its target. */
 function copyChecked(from: string, to: string): void {
-  const stats = lstatSync(from);
+  const stats = statSync(from);
   mkdirSync(dirname(to), { recursive: true });
   copyFileSync(from, to, constants.COPYFILE_EXCL);
   chmodSync(to, stats.mode & 0o7777);
@@ -498,7 +578,7 @@ function copyTree(project: Project, root: string): CopyCount {
     rmSync(target, { recursive: true, force: true });
     throw new StepFailure(2, `${errorMessage(cause)}. The copy was removed again; nothing else changed.`);
   }
-  return { files: plan.files.length, bytes: plan.files.reduce((sum, file) => sum + file.size, 0) };
+  return { files: plan.files.length, bytes: plan.files.reduce((sum, file) => sum + file.size, 0), links: plan.links.length };
 }
 
 /** The index of the first `#` outside a quoted or literal string, or -1. */
@@ -568,7 +648,7 @@ function checkLeftovers(project: Project, root: string): void {
   const target = treeDir(project);
   const blobs = headBlobs(root);
   const listing = walk(source);
-  const missing: string[] = [...listing.odd];
+  const missing: string[] = listing.odd.map((entry) => entry.path);
   for (const file of listing.files) {
     const from = join(source, file.path);
     const to = join(target, file.path);
@@ -627,8 +707,8 @@ function nextCommands(scope: Scope): string[] {
   return [add, `git commit -m "${message}"`];
 }
 
-async function runScan(marker: Marker, scope: Scope, json: boolean): Promise<number> {
-  const result = survey(marker, scope);
+async function runScan(marker: Marker, scope: Scope, cwd: string, json: boolean): Promise<number> {
+  const result = survey(marker, scope, cwd);
   if (json) console.log(JSON.stringify({ mode: "scan", ...surveyJson(result) }));
   else for (const line of surveyLines(result)) console.log(line);
   if (result.onboarded) return EXIT_OK;
@@ -636,10 +716,10 @@ async function runScan(marker: Marker, scope: Scope, json: boolean): Promise<num
   return result.blockers.length === 0 ? EXIT_OK : EXIT_REFUSED;
 }
 
-async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<number> {
-  const result = survey(marker, scope);
+async function runDry(marker: Marker, scope: Scope, cwd: string, json: boolean): Promise<number> {
+  const result = survey(marker, scope, cwd);
   const project = result.store.exists ? openProject(marker.project) : null;
-  const notRun = !result.store.exists ? "no store for the project on this host" : result.onboarded ? "the store already owns the tracker" : "there is no .tracker/ folder here";
+  const notRun = result.nested !== null ? "the .tracker/ folder here is in a nested repo" : !result.store.exists ? "no store for the project on this host" : result.onboarded ? "the store already owns the tracker" : "there is no .tracker/ folder here";
   let vigils: VigilStep | { error: string } = { summary: `not run: ${notRun}`, result: null, heavy: [] };
   if (project !== null && result.tracker === "folder") {
     try {
@@ -656,7 +736,7 @@ async function runDry(marker: Marker, scope: Scope, json: boolean): Promise<numb
     for (const line of surveyLines(result)) console.log(line);
     // A failed import is already a blocker line above.
     if (!("error" in vigils) && !result.onboarded) console.log(`· vigils: ${vigils.summary}`);
-    if (scope === "all" && !result.onboarded) {
+    if (scope === "all" && !result.onboarded && result.nested === null) {
       console.log(`· would copy ${String(copy.length)} files${project === null ? "" : ` into ${treeDir(project)}`}:`);
       for (const file of copy) console.log(`  ${file.path}`);
     }
@@ -675,8 +755,8 @@ function refuse(result: Survey, json: boolean): number {
 }
 
 /** The move itself, `--only vigil` or all of it. Refuses before step 1 when anything blocks. */
-async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<number> {
-  const result = survey(marker, scope);
+async function runMove(marker: Marker, scope: Scope, cwd: string, json: boolean): Promise<number> {
+  const result = survey(marker, scope, cwd);
   if (result.nothing || result.blockers.length > 0) return refuse(result, json);
   const root = marker.dir;
   const project = openProject(marker.project);
@@ -695,7 +775,8 @@ async function runMove(marker: Marker, scope: Scope, json: boolean): Promise<num
       steps.push({ step: 3, name: "git", summary: "git rm -r .tracker/vigils (staged, not committed)" });
     } else {
       const copied = copyTree(project, root);
-      steps.push({ step: 2, name: "copy", summary: `${String(copied.files)} files, ${String(copied.bytes)} bytes into ${treeDir(project)}, every sha256 checked` });
+      const links = copied.links === 0 ? "" : `; dereferenced ${String(copied.links)} in-tree link${copied.links === 1 ? "" : "s"}`;
+      steps.push({ step: 2, name: "copy", summary: `${String(copied.files)} files, ${String(copied.bytes)} bytes into ${treeDir(project)}, every sha256 checked${links}` });
       const commit = git(root, ["rev-parse", "HEAD"]);
       if (!commit.ok) throw new StepFailure(3, `git rev-parse HEAD failed: ${commit.err}`);
       let captured: TreeCapture;
@@ -767,10 +848,11 @@ function modeOf(args: ParsedArgs): Mode {
 async function run(args: ParsedArgs): Promise<number> {
   const mode = modeOf(args);
   const scope = scopeOf(args);
-  const marker = surveyMarker(process.cwd());
-  if (mode === "scan") return runScan(marker, scope, args.json);
-  if (mode === "dry-run") return runDry(marker, scope, args.json);
-  return runMove(marker, scope, args.json);
+  const cwd = process.cwd();
+  const marker = surveyMarker(cwd);
+  if (mode === "scan") return runScan(marker, scope, cwd, args.json);
+  if (mode === "dry-run") return runDry(marker, scope, cwd, args.json);
+  return runMove(marker, scope, cwd, args.json);
 }
 
 export const onboardCommand: Command = {

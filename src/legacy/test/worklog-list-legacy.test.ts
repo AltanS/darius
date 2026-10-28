@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { initTracker } from "../lib/tracker-writer.ts";
-import { listThreads, listWorklogFiles } from "../lib/worklog.ts";
+import { legacyWorklogFilesNamed, listThreads, listWorklogFiles } from "../lib/worklog.ts";
 
 const LEGACY = [
   "# Worklog — investigation",
@@ -74,7 +74,7 @@ describe("worklog list — legacy files", () => {
     writeFileSync(join(worklogDir, file), content, "utf-8");
   }
 
-  function runTracker(args: string[]): { stdout: string; exitCode: number } {
+  function runTracker(args: string[]): { stdout: string; stderr: string; exitCode: number } {
     const result = spawnSync(
       "node",
       [
@@ -85,7 +85,7 @@ describe("worklog list — legacy files", () => {
       ],
       { encoding: "utf-8", cwd: tmpDir, timeout: 30_000 },
     );
-    return { stdout: result.stdout ?? "", exitCode: result.status ?? -1 };
+    return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.status ?? -1 };
   }
 
   function listJson(args: string[] = []): ListJson {
@@ -187,5 +187,27 @@ describe("worklog list — legacy files", () => {
     const json = listJson(["--milestone", "M9"]);
     expect(json.files.map((f) => f.worklogFile)).toEqual(["M9-legacy.md"]);
     expect(json.threads).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // 5. A thread verb on a legacy file names the file to edit (0.105.0).
+  // -------------------------------------------------------------------------
+
+  it("worklog append on a legacy file's name says it is legacy and names the file", () => {
+    write("M9-legacy.md", LEGACY);
+    write("M10-clean.md", CLEAN);
+
+    expect(legacyWorklogFilesNamed({ trackerRoot, threadId: "M9-legacy" })).toEqual([join(worklogDir, "M9-legacy.md")]);
+    expect(legacyWorklogFilesNamed({ trackerRoot, threadId: "M10-clean" })).toEqual([]);
+
+    const legacy = runTracker(["worklog", "append", "M9-legacy", "--section", "note", "--message", "x"]);
+    expect(legacy.exitCode).toBe(1);
+    expect(legacy.stderr).toContain("thread not found: M9-legacy");
+    expect(legacy.stderr).toContain("names a legacy free-text worklog with no threads");
+    expect(legacy.stderr).toContain(join(worklogDir, "M9-legacy.md"));
+
+    const other = runTracker(["worklog", "append", "nope", "--section", "note", "--message", "x"]);
+    expect(other.exitCode).toBe(1);
+    expect(other.stderr).toContain("next: darius worklog list --active --json");
   });
 });

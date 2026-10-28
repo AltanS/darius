@@ -1017,6 +1017,21 @@ export function findWorklogFileForThread(opts: {
   return null;
 }
 
+/**
+ * The legacy worklog files a thread id that matched no thread may mean:
+ * thread-less files in `state` legacy whose name holds the id (`M3-x` for
+ * `M3-x.md`). Such a file is free text the CLI never wrote, so the thread
+ * verbs cannot touch it; the not-found message names it so the operator
+ * edits it by hand (0.105.0).
+ */
+export function legacyWorklogFilesNamed(opts: { trackerRoot: string; threadId: string }): string[] {
+  const { trackerRoot, threadId } = opts;
+  if (threadId === "") return [];
+  return scanWorklogDir(trackerRoot)
+    .filter(({ file, state, doc }) => state === "legacy" && doc.threads.length === 0 && file.replace(/\.md$/, "").includes(threadId))
+    .map(({ path }) => path);
+}
+
 // ---------------------------------------------------------------------------
 // File locking
 // ---------------------------------------------------------------------------

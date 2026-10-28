@@ -52,7 +52,9 @@ const vigil = (slug: string) => webContext("owner on phone").vigil(PROJECT, slug
 test("activity lists sweeps, pauses, resumes and the close, newest first, with who and why", () => {
   addOne("trail");
   swept("trail", "timer", "failed", ago(5 * MINUTE * 60));
-  pauseVigil(project(), { slug: "trail", reason: "waiting for the release", until: "2026-10-20", who: "web:altan" });
+  // 30 days ahead of now: a pause whose until has passed is already over.
+  const until = new Date(Date.now() + 30 * 24 * 60 * MINUTE).toISOString().slice(0, 10);
+  pauseVigil(project(), { slug: "trail", reason: "waiting for the release", until, who: "web:altan" });
   resumeVigil(project(), { slug: "trail", who: "web:altan" });
   swept("trail", "web:altan", "held", new Date().toISOString());
   closeVigil(project(), { slug: "trail", verdict: "held", reason: "the release shipped", who: "web:altan" });
@@ -65,7 +67,7 @@ test("activity lists sweeps, pauses, resumes and the close, newest first, with w
   assert.match(texts[0] ?? "", /^Closed held by web:altan.*the release shipped/u);
   assert.equal(texts[1], "Checked by web:altan: held");
   assert.equal(texts[2], "Resumed by web:altan");
-  assert.equal(texts[3], "Paused by web:altan until 2026-10-20: waiting for the release");
+  assert.equal(texts[3], `Paused by web:altan until ${until}: waiting for the release`);
   assert.equal(texts[4], "Checked by timer: failed");
   assert.deepEqual(
     entries.map((entry) => entry.actor),

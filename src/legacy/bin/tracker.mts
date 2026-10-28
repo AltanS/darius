@@ -97,6 +97,7 @@ import {
   listThreads,
   listWorklogFiles,
   findWorklogFileForThread,
+  legacyWorklogFilesNamed,
   setStage,
   dispatchThread,
   parkThread,
@@ -2082,7 +2083,7 @@ function runWorklogAppend(args: string[]): void {
   // Find the worklog file for this thread
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog append: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
+    process.stderr.write(threadNotFound("append", trackerRoot, threadId));
     process.exit(1);
   }
 
@@ -2130,7 +2131,7 @@ function runWorklogClose(args: string[]): void {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog close: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
+    process.stderr.write(threadNotFound("close", trackerRoot, threadId));
     process.exit(1);
   }
 
@@ -2197,7 +2198,7 @@ async function runWorklogSetStage(args: string[]): Promise<void> {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog set-stage: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
+    process.stderr.write(threadNotFound("set-stage", trackerRoot, threadId));
     process.exit(1);
   }
 
@@ -2272,7 +2273,7 @@ async function runWorklogDispatch(args: string[]): Promise<void> {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog dispatch: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
+    process.stderr.write(threadNotFound("dispatch", trackerRoot, threadId));
     process.exit(1);
   }
 
@@ -2334,7 +2335,7 @@ function runWorklogPark(args: string[]): void {
   const trackerRoot = requireTrackerRoot();
   const worklogPath = findWorklogFileForThread({ trackerRoot, threadId });
   if (!worklogPath) {
-    process.stderr.write(`darius worklog park: thread not found: ${threadId}\n  next: darius worklog list --active --json\n`);
+    process.stderr.write(threadNotFound("park", trackerRoot, threadId));
     process.exit(1);
   }
 
@@ -2590,6 +2591,18 @@ function parseMinAgeDays(raw: string | undefined): number {
 // ---------------------------------------------------------------------------
 // tracker doctor [--fix] [--quick]
 // ---------------------------------------------------------------------------
+
+/**
+ * The stderr text of a worklog verb whose thread id matched no thread. When
+ * the id names a legacy free-text file, it says so and where to edit it.
+ */
+function threadNotFound(verb: string, trackerRoot: string, threadId: string): string {
+  const head = `darius worklog ${verb}: thread not found: ${threadId}\n`;
+  const legacy = legacyWorklogFilesNamed({ trackerRoot, threadId });
+  if (legacy.length === 0) return `${head}  next: darius worklog list --active --json\n`;
+  const files = legacy.slice(0, 3).map((path) => `  ${path}\n`).join("");
+  return `${head}  ${threadId} names a legacy free-text worklog with no threads; the worklog verbs cannot change it. Edit the file directly:\n${files}`;
+}
 
 function runDoctor(args: string[]): void {
   const { values } = parseArgs({
