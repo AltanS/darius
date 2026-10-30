@@ -871,13 +871,13 @@ function runAddMilestone(args: string[]): void {
 
     if (result.kind === "exists") {
       process.stdout.write(
-        `darius add milestone: milestone with slug "${values.slug}" already exists at ${result.folderPath}\n`,
+        `darius add milestone: milestone ${basename(result.folderPath)} already exists at ${result.folderPath}\n`,
       );
       return;
     }
 
     process.stdout.write(
-      `darius add milestone: created M${result.number}-${values.slug} at ${result.folderPath}\n`,
+      `darius add milestone: created ${basename(result.folderPath)} at ${result.folderPath}\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

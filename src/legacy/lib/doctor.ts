@@ -94,7 +94,8 @@ export type DoctorFinding = {
     | "vigil-command-shape"
     | "vigil-premise-unshipped"
     | "vigil-heavy-command"
-    | "counsel-stamp-unhashed";
+    | "counsel-stamp-unhashed"
+    | "doubled-milestone-prefix";
   file: string;
   detail: string;
   /** If true, this finding is a warning only — doctor still exits healthy. */
@@ -712,6 +713,23 @@ export function runDoctor(opts: {
         `The stamp stays valid, but an edit after the review goes unnoticed. ` +
         `Run counsel-gate again to add the hash.`,
       warnOnly: true,
+    });
+  }
+
+  // 14. A milestone folder that carries its number twice (`M5-M5-foo`) — HARD FINDING.
+  // `add milestone --slug M5-foo` used to prefix the number again. Folders made that way
+  // still exist. There is no --fix: renaming a folder breaks paths in specs and worklogs,
+  // so the move stays a human step. The hint is the exact command.
+  for (const folder of milestoneFolders) {
+    const name = basename(folder);
+    if (!/^M(\d+)-M\d+-/.test(name)) continue;
+    const fixed = name.replace(/^(M\d+-)M\d+-/, "$1");
+    findings.push({
+      kind: "doubled-milestone-prefix",
+      file: folder,
+      detail:
+        `milestone folder ${name} carries its number twice. ` +
+        `Rename it: mv ${name} ${fixed}`,
     });
   }
 

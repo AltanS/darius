@@ -98,6 +98,28 @@ describe("doctor", () => {
     expect(report.findings).toHaveLength(0);
   });
 
+  it("reports doubled-milestone-prefix with a mv hint for M5-M5-foo", () => {
+    const doubled = join(trackerRoot, "M5-M5-foo");
+    mkdirSync(doubled);
+    writeFileSync(join(doubled, "00-README.md"), readFileSync(join(milestonePath, "00-README.md"), "utf-8"), "utf-8");
+
+    const report = runDoctor({ trackerRoot });
+    const found = report.findings.filter((f) => f.kind === "doubled-milestone-prefix");
+    expect(found).toHaveLength(1);
+    expect(found[0]!.file).toBe(doubled);
+    expect(found[0]!.detail).toContain("M5-M5-foo");
+    expect(found[0]!.detail).toContain("mv M5-M5-foo M5-foo");
+  });
+
+  it("does not report doubled-milestone-prefix for a plain M5-foo", () => {
+    const plain = join(trackerRoot, "M5-foo");
+    mkdirSync(plain);
+    writeFileSync(join(plain, "00-README.md"), readFileSync(join(milestonePath, "00-README.md"), "utf-8"), "utf-8");
+
+    const report = runDoctor({ trackerRoot });
+    expect(report.findings.filter((f) => f.kind === "doubled-milestone-prefix")).toHaveLength(0);
+  });
+
   it("reports dangling-dep when depends_on references a missing spec", () => {
     const specPath = join(milestonePath, "01-dangling.md");
     writeFileSync(specPath, DANGLING_DEP_SPEC, "utf-8");

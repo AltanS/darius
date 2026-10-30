@@ -138,6 +138,7 @@ export function initTracker(opts: { projectRoot: string; trackerDir?: string }):
 export type AddMilestoneOpts = {
   trackerRoot: string;
   name: string;
+  /** Folder slug. A slug that starts with `M<n>-` is read as the number plus the bare slug. */
   slug: string;
   owner: string;
   target?: string;
@@ -159,7 +160,23 @@ export type AddMilestoneResult =
  * Idempotent: if a directory with the same slug already exists, returns {kind:'exists'}.
  */
 export function addMilestone(opts: AddMilestoneOpts): AddMilestoneResult {
-  const { trackerRoot, name, slug, owner, target } = opts;
+  const { trackerRoot, name, owner, target } = opts;
+
+  // A slug that already carries its number (`M75-foo`) is the number plus the
+  // bare slug. Prefixing it again minted the folder `M75-M75-foo`.
+  let slug = opts.slug;
+  let number = opts.number;
+  const numbered = /^M(\d+)-(.+)$/.exec(slug);
+  if (numbered !== null) {
+    const slugNumber = Number(numbered[1]);
+    if (number !== undefined && number !== slugNumber) {
+      throw new Error(
+        `slug ${slug} names M${slugNumber} but the number given is ${number}; pass the slug without its M number`,
+      );
+    }
+    number = slugNumber;
+    slug = numbered[2] as string;
+  }
 
   // Check for existing milestone with same slug
   const existing = findMilestoneBySlug(trackerRoot, slug);
@@ -170,9 +187,9 @@ export function addMilestone(opts: AddMilestoneOpts): AddMilestoneResult {
   // Explicit number → refuse a collision (naming the collider).
   // No number → auto-mint above every occupied number, any prefix.
   let nextN: number;
-  if (opts.number !== undefined) {
-    assertMilestoneNumberAvailable(trackerRoot, opts.number);
-    nextN = opts.number;
+  if (number !== undefined) {
+    assertMilestoneNumberAvailable(trackerRoot, number);
+    nextN = number;
   } else {
     nextN = getNextMilestoneNumber(trackerRoot);
   }

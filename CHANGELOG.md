@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.105.1] - 2026-10-30
+
+### Fixed
+
+- `darius add milestone --slug M75-foo` created the folder `M75-M75-foo`. A slug that starts with `M<n>-` is now read as the number plus the bare slug, so the folder is `M75-foo`. A slug number that disagrees with `--number` is refused. The `created` and `already exists` lines print the real folder name.
+- `darius doctor` flags a milestone folder that carries its number twice (`M5-M5-foo`) and prints the `mv` that fixes it. There is no `--fix`; the move stays a human step.
+
 ## [0.105.0] - 2026-10-28
 
 ### Added

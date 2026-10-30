@@ -106,6 +106,15 @@ describe("CLI contract", () => {
     }
   });
 
+  it("add milestone with an M-numbered slug prints the real folder name", () => {
+    const first = run(["add", "milestone", "--name", "Census", "--slug", "M76-cli-census", "--owner", "dev@example.com"]);
+    expect(first.exitCode).toBe(0);
+    expect(first.stdout).toContain("created M76-cli-census at");
+    expect(first.stdout).not.toContain("M76-M76");
+    const again = run(["add", "milestone", "--name", "Census", "--slug", "M76-cli-census", "--owner", "dev@example.com"]);
+    expect(again.stdout).toContain("milestone M76-cli-census already exists at");
+  });
+
   it("a missing named item is exit 1", () => {
     expect(run(["show", "nope.md"]).exitCode).toBe(1);
     expect(run(["verify", "nope.md"]).exitCode).toBe(1);

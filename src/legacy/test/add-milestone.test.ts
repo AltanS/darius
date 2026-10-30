@@ -226,4 +226,36 @@ describe("add-milestone", () => {
     expect(data.slug).toBe("workspace-ergonomics");
     expect(data.owner).toBe("dev@example.com");
   });
+
+  it("a slug that carries its number does not double the prefix", () => {
+    const result = addMilestone({
+      trackerRoot,
+      name: "Census",
+      slug: "M76-cli-census",
+      owner: "dev@example.com",
+    });
+    expect(result.kind).toBe("created");
+    expect(existsSync(join(trackerRoot, "M76-cli-census"))).toBe(true);
+    expect(existsSync(join(trackerRoot, "M76-M76-cli-census"))).toBe(false);
+
+    const again = addMilestone({
+      trackerRoot,
+      name: "Census",
+      slug: "M76-cli-census",
+      owner: "dev@example.com",
+    });
+    expect(again.kind).toBe("exists");
+  });
+
+  it("refuses a numbered slug that disagrees with the given number", () => {
+    expect(() =>
+      addMilestone({
+        trackerRoot,
+        name: "Census",
+        slug: "M76-cli-census",
+        owner: "dev@example.com",
+        number: 77,
+      }),
+    ).toThrow(/names M76 but the number given is 77/);
+  });
 });
