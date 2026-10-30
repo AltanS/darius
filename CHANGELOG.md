@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.105.2] - 2026-10-30
+
+### Changed
+
+- The `darius` skill tells an agent that one folder is one project. An item that `list`, `show` or `run show` does not know here belongs to another project: the agent says so and asks, and never searches the store or the disk, changes into another repo, or moves a store folder for it. `due --all-projects` stays the one cross-project read.
+
 ## [0.105.1] - 2026-10-30
 
 ### Fixed

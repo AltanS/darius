@@ -83,6 +83,7 @@ test("the skill names may_extra, hold_extra, marker check --resolved and marker 
   assert.match(text, /`marker check --resolved <slug>`/u);
   assert.match(text, /; marker factor \[--write\] moves shared rules into \[policies\.\*\] \|/u);
   assert.match(text, /input to the skill with `args`/u);
+  assert.ok(text.includes("One project per folder"), "the skill states the one-project rule");
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });
 

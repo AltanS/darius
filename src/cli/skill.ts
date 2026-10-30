@@ -90,20 +90,20 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 - Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a README or a spec file.
 - A \`depends_on\` entry is a spec path, or \`02\` or \`02-name\` for a spec of the same milestone.
 - "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
-- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file with its reason; do not fix it.
+- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file and its reason; do not fix it.
 - A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.
 - The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself (at most 5 items each), not a worker.
+- One project per folder: \`darius root\` names it. An item that \`list\`, \`show\` or \`run show\` does not know here belongs to another project: say so and ask which one. Never search ~/.local/share/darius or the disk for it, never \`cd\` into another repo or \`mv\` a store folder. \`due --all-projects\` is the one cross-project read.
 - Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first.
 - In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
-- Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin.
+- Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin with a quoted heredoc (<<'EOF').
 
 ## Prose
 
 For worklog entries, findings, handoff and vigil bodies.
 
-- Short sentences. Facts, not narrative. One line each.
-- Name the thing, its state, the next step. At most 8 lines per entry.
-- Findings: at most 4000 characters. The result block holds the items.
+- Short sentences, facts. Name the thing, its state, the next step. At most 8 lines per entry.
+- Findings: at most 4000 characters; the result block holds the items.
 
 ## Exit codes
 
@@ -121,31 +121,22 @@ function trackerVerbs(): string {
 }
 
 const TAIL = `
-\`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, do the work, then \`run complete\`.
-\`run follow-up <run> --approve N|--item KEY\` is for a person: a new run that runs the lines of question N as written, or the proposal of item KEY.
-Findings are items a ritual reports with a \`key\`. \`finding list|show\` read them; \`finding close|reopen|reset\` are for a person.
-On the wrong host \`run now|resume|follow-up\` refuse and print the \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
+\`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, work, then \`run complete\`.
+\`run follow-up <run> --approve N|--item KEY\` is for a person: a new run of question N's lines as written, or of item KEY's proposal.
+\`finding close|reopen|reset\` are for a person; \`finding list|show\` read a ritual's keyed items.
+On the wrong host \`run now|resume|follow-up\` refuse and print an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
 
-A snapshot is a dated tar.gz of this host's store, in a local folder and optionally an S3 bucket.
+A snapshot is a dated tar.gz of this host's store, kept locally, optionally in an S3 bucket.
 
 - Read: \`snapshot status\`, \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
-- Act: \`snapshot create\` makes one now. \`snapshot check\` tests the bucket.
-- Settings: \`snapshot config set <key> <value>\` and \`unset <key>\`. Set \`endpoint\` and \`bucket\` in one call.
-- Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. The secret comes on stdin only. \`snapshot credentials clear\` removes it.
+- Act: \`snapshot create\` makes one now; \`snapshot check\` tests the bucket.
+- Settings: \`snapshot config set <key> <value>\` and \`unset <key>\`. Set \`endpoint\` and \`bucket\` together.
+- Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
 - Exit 3 from a snapshot verb: the bucket could not be reached; the local snapshot is fine.
 - \`darius restore\` only when the operator asks. Other hosts: \`snapshot config push\`.
-
-## Example
-
-Start a run by hand, then complete it with its findings:
-
-    darius run start weekly-report --json
-    darius run complete <run> --outcome complete --json --findings-stdin <<'EOF'
-    ...findings...
-    EOF
 `;
 
 function tableCell(text: string): string {
