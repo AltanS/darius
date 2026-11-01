@@ -15,6 +15,7 @@ function loadContext(context) {
 		findings: () => context.findings(),
 		flares: () => context.flares(),
 		flare: (project, key) => context.flare(project, key),
+		emailSetUp: () => context.emailSetUp(),
 		activity: (project, options) => context.activity(project, options),
 		pending: (project) => context.pending(project),
 		followUp: (project, run) => context.followUp(project, run)
@@ -28,7 +29,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-B_Dv7KVz.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-BfeAPatP.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

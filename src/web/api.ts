@@ -145,6 +145,8 @@ export interface ResultMetric {
 }
 
 export interface ResultItem {
+  /** True when the item lights a flare (0.112.0): the run page marks it and links to the flare. Absent otherwise. */
+  flare?: true;
   /** A stable id across runs of the ritual (0.62.0, "Findings"). Plain text. */
   key?: string;
   title: string;
@@ -251,10 +253,30 @@ export interface FlareRow {
   history: FlareStep[];
 }
 
-/** One flare with its body text; `body` is null with no body, or a blob not on this host yet. */
+/** How one channel took the newest notice of a flare (0.112.0): `sent`, `failed` (it will try again, or has given up), or `waiting` (nothing recorded yet). */
+export interface FlareDelivery {
+  channel: "push" | "email";
+  state: "sent" | "failed" | "waiting";
+  /** The host that sent it or failed; absent while waiting. */
+  host?: string;
+  /** When it was sent, or when it failed last. */
+  at?: string;
+  /** How many times it failed. */
+  tries: number;
+  /** Why it failed last: the ledger's own sentence, scrubbed. Absent unless failed. */
+  reason?: string;
+}
+
+/**
+ * One flare with its body text; `body` is null with no body, or a blob not on this host yet.
+ * `blocks` is the same body parsed (0.112.0), so the page draws it as the run page draws findings.
+ * `delivery` is the state of each channel the newest notice named; empty when the flare is app only.
+ */
 export interface FlareDetail {
   row: FlareRow;
   body: string | null;
+  blocks: MdBlock[] | null;
+  delivery: FlareDelivery[];
 }
 
 export interface FlareCounts {
@@ -1021,6 +1043,11 @@ export type ActivityKind =
   | "finding-closed"
   | "finding-reopened"
   | "finding-reset"
+  | "flare-lit"
+  | "flare-answered"
+  | "flare-accepted"
+  | "flare-cleared"
+  | "flare-reopened"
   | "ritual-lifecycle"
   | "ritual-rescheduled"
   | "start-requested"
@@ -1039,7 +1066,7 @@ export interface ActivityEntry {
   actor: ActivityActor;
   kind: ActivityKind;
   /** What the event is about. A run event is about the run; its ritual or vigil is in `links`. */
-  item: { type: "ritual" | "vigil" | "finding" | "run"; id: string; title: string };
+  item: { type: "ritual" | "vigil" | "finding" | "flare" | "run"; id: string; title: string };
   /** The run the event belongs to, when it has one. */
   run?: string;
   /** One line, with the name of who acted ("by web:altan"). Operator text in it is masked. */
@@ -1047,7 +1074,7 @@ export interface ActivityEntry {
   /** More lines: the answers of an ack, the checks of a sweep, the lines a follow-up was granted. */
   detail?: string[];
   /** Slugs and ids the page turns into links. */
-  links: { ritual?: string; run?: string; vigil?: string; finding?: string };
+  links: { ritual?: string; run?: string; vigil?: string; finding?: string; flare?: string };
   tone: ActivityTone;
 }
 
@@ -1195,6 +1222,8 @@ export interface WebContext {
   flares(): Promise<FlareRow[]>;
   /** One flare with its body (0.111.0). Null when the project or the key is unknown. */
   flare(project: string, key: string): FlareDetail | null;
+  /** Whether the email channel is set up on this host (0.112.0). Says nothing else: no address, no token. */
+  emailSetUp(): boolean;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
   /**

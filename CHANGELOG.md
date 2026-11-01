@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.112.0] - 2026-11-02
+
+### Added
+
+- The Flares place in the web app. `/flares`, `/w/<workspace>/flares` and `/w/<workspace>/flares/<key>` list and show flares. The place is in the sidebar, the drawer and the phone tab bar, and its count shows only when a flare is lit. The list shows lit flares first, with a link to the rest.
+- Answer and Accept risk on the flare page and on the Overview card. Accept risk on a flare of a vigil says before the tap that it also closes the vigil. A follow-up that the server refuses keeps the flare lit and shows the server's sentence.
+- Lit flares come first in "Needs you" on the Overview and count in the status strip.
+- The flare page shows the state of each alert channel. `FlareDetail` has `blocks` and `delivery`, and `WebContext` has `emailSetUp()`.
+- The Activity place has five kinds: `flare-lit`, `flare-answered`, `flare-accepted`, `flare-cleared` and `flare-reopened`.
+- A flagged item on a run page is marked and links to its flare.
+- Settings, Notifications shows "Email: set up" or "Email: not set up on this host". It shows no address and no token.
+
+### Changed
+
+- The phone tab bar has six tabs, and the Places tree has eight places per scope.
+
 ## [0.111.0] - 2026-11-02
 
 ### Added

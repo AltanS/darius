@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { ActivityOptions, FindingRow, HostStatus, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
+import { emailStatus } from "../core/email.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { configDir, stateDir } from "../core/paths.ts";
@@ -173,6 +174,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     findings: () => Promise.resolve(collectFindingRows()),
     flares: () => Promise.resolve(collectFlareRows()),
     flare: (project, key) => flareDetail(project, key),
+    emailSetUp: () => emailStatus().isSetUp,
     activity: (project, options) => collectActivity(project, options),
     pending: (project) => collectPending(project),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),

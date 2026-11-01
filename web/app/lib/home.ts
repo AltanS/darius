@@ -32,10 +32,11 @@
  * older open asks fold under it.
  */
 
-import type { ActivityEntry, HostStatus, MdBlock, PendingStart, ProjectActivityEntry, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
+import type { ActivityEntry, FlareRow, HostStatus, MdBlock, PendingStart, ProjectActivityEntry, ProjectStatus, ResultQuestion, RitualRow, RunDetail, RunRow, VigilRow, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, nextLine, vigilsDue, type Agenda, type NextLine } from "./agenda.ts";
 import { startingCheck } from "./check-poll.ts";
 import { answerCommand, clockTime, dayName, decideCommand, duration, hostDate, relativeDate, roughDuration, shortDate, shortRun } from "./format.ts";
+import { seenText as flareSeenText, statusBadge, worstFirst } from "./flares.ts";
 import { href } from "./paths.ts";
 import { isManual, type Kind } from "./kind.ts";
 import { answerBefore, pendingText, readerOf, readsAnswers, receiptText, type ReceiptFacts } from "./receipt.ts";
@@ -117,7 +118,7 @@ export interface AckTarget {
   run: string;
 }
 
-export type CardKind = "held" | "asks" | "failed" | "stuck" | "flagged" | "unreadable" | "done";
+export type CardKind = "flare" | "held" | "asks" | "failed" | "stuck" | "flagged" | "unreadable" | "done";
 
 /** One card in the main column: a thing that needs the operator, or a djinn that completed last night. */
 export interface Card {
@@ -151,6 +152,8 @@ export interface Card {
   actions: Action[];
   /** Set on a flagged vigil's card (0.95.0): "Check now" and the check that runs now. Null on any other card. */
   check: CardCheck | null;
+  /** Set on a lit flare's card (0.112.0): the flare, for its severity and its Answer and Accept buttons. Null on any other card. */
+  flare: FlareRow | null;
 }
 
 /** What a card needs to offer "Check now" for its vigil. */
@@ -297,11 +300,40 @@ function djinnState(clock: Clock, project: string, ritual: RitualRow, runs: read
 // --- cards ---------------------------------------------------------------------------------
 
 function blank(id: string, kind: CardKind, item: Kind | null, manual = false): Card {
-  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], held: null, ask: null, ack: null, report: null, fades: false, error: null, actions: [], check: null };
+  return { id, kind, item, manual, edge: null, word: { text: "", ink: "plain" }, side: null, title: "", href: "", meta: [], meta2: null, questions: [], held: null, ask: null, ack: null, report: null, fades: false, error: null, actions: [], check: null, flare: null };
 }
 
 function historyHref(run: ActivityRun): string {
   return run.item.startsWith("vigil/") ? href({ to: "vigil", ws: run.project, slug: run.slug }) : href({ to: "ritual", ws: run.project, slug: run.slug });
+}
+
+/** A short number from a text, for an element id: a flare key is free text and may hold spaces or colons. */
+function shortHash(text: string): string {
+  let hash = 5381;
+  for (const char of text) hash = ((hash * 33) ^ (char.codePointAt(0) ?? 0)) >>> 0;
+  return hash.toString(36);
+}
+
+/** The anchor of a flare's card: the strip's "flares" count links to the first one. */
+export function flareCardId(row: Pick<FlareRow, "project" | "key">): string {
+  return `flare-${shortHash(`${row.project}/${row.key}`)}`;
+}
+
+/** A lit flare in Needs you (0.112.0): it comes first, with its severity, where it is, how often it was seen and the two buttons. */
+function flareCard(clock: Clock, row: FlareRow): Card {
+  const target = href({ to: "flare", ws: row.project, key: row.key });
+  const badge = statusBadge(row.status);
+  return {
+    ...blank(flareCardId(row), "flare", null),
+    edge: "wait",
+    word: { text: badge.label, ink: badge.tone },
+    side: { text: when(clock, row.firstSeen.at), ink: "plain" },
+    title: row.title,
+    href: target,
+    meta: [row.project, row.target ?? null, flareSeenText(row.reports)].filter((part) => part !== null),
+    flare: row,
+    actions: [{ text: "Open the flare", href: target }],
+  };
 }
 
 function heldCard(clock: Clock, run: ActivityRun): Card {
@@ -534,7 +566,7 @@ function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus)
 }
 
 function needsSize(needs: ProjectNeeds): number {
-  return needs.held.length + needs.asks.length + needs.failed.length + needs.stuck.length + needs.flagged.length + (needs.unreadable ? 1 : 0);
+  return needs.held.length + needs.asks.length + needs.failed.length + needs.stuck.length + needs.flagged.length + needs.project.flares.lit + (needs.unreadable ? 1 : 0);
 }
 
 export interface NeedCounts {
@@ -615,6 +647,8 @@ export type DoneRow = DoneRun | DoneReceipt | DonePending;
 export interface HomeFeed {
   activity: readonly ProjectActivityEntry[];
   pending: readonly PendingStart[];
+  /** The flares of the scope, every status: the lit ones are cards in Needs you (0.112.0). Absent: none. */
+  flares?: readonly FlareRow[];
   /** False for the loopback viewer, whose cards draw no check line; a pending check then keeps its Now row. Default true. */
   canWrite?: boolean;
 }
@@ -914,7 +948,7 @@ export function doneLately(status: HostStatus, pending: readonly PendingStart[],
 function verdictTone(needs: readonly Card[]): Tone {
   const kinds = new Set(needs.map((card) => card.kind));
   if (kinds.has("failed") || kinds.has("flagged") || kinds.has("unreadable")) return "bad";
-  if (kinds.has("held") || kinds.has("asks")) return "wait";
+  if (kinds.has("held") || kinds.has("asks") || kinds.has("flare")) return "wait";
   return kinds.has("stuck") ? "late" : "ok";
 }
 
@@ -940,7 +974,7 @@ function cardSegment(needs: readonly Card[], kind: CardKind, label: string, tone
 /**
  * The status strip. A segment shows only above zero, and the strip not at all
  * when every segment is zero. The order: need you (held runs and runs that
- * ask), findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
+ * ask), lit flares, findings that need you, running (not the stuck ones), stuck, failed, flagged, unreadable, late
  * (rituals and dated vigils past due), due today, and vigils due (late or due
  * today, the number of the Vigils badge).
  */
@@ -956,6 +990,7 @@ function statusStrip(needs: readonly Card[], running: number, agenda: Agenda, wo
   const vigilsSegment: Segment[] = vigilsDueCount === 0 ? [] : [{ key: "vigils", label: "vigils due", count: vigilsDueCount, tone: "gold", href: vigilsHref, kind: "vigil" }];
   return [
     ...needSegment,
+    ...cardSegment(needs, "flare", "flares", "wait"),
     ...findingsSegment,
     ...runningSegment,
     ...cardSegment(needs, "stuck", "stuck", "late"),
@@ -1011,7 +1046,9 @@ export function homeView(status: HostStatus, readRun: ReadRun, scope: HomeScope 
   const states = all.flatMap((needs) => needs.states);
   const runs = all.flatMap((needs) => needs.runs).toSorted(newest);
 
+  const inScope = new Set(scoped.map((project) => project.name));
   const needs: Card[] = [
+    ...(feed.flares ?? []).filter((row) => row.status === "lit" && inScope.has(row.project)).toSorted(worstFirst).map((row) => flareCard(clock, row)),
     ...all.flatMap((entry) => entry.held).toSorted(newest).map((run) => heldCard(clock, run)),
     ...all
       .flatMap((entry) => entry.asks.map((stack) => ({ stack, ritual: entry.project.rituals.find((candidate) => `ritual/${candidate.slug}` === stack.main.item) })))

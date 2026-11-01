@@ -3,7 +3,7 @@
  * desktop and the drawer of a phone (the shell opens it with a
  * `<details data-menu>`; the drawer is closed by a press outside, Escape or a
  * link). The tree: All workspaces; each workspace with what needs you there;
- * the scope you are in, expanded to its seven places; the host pages; and a
+ * the scope you are in, expanded to its eight places; the host pages; and a
  * small host line at the end. At most one row is lit, and the row of the
  * scope you are in carries a check mark.
  */
@@ -18,7 +18,7 @@ import { Gem, NavIcon, type NavIconName } from "./nav-icons.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import { clockTime } from "../lib/format.ts";
 import { href, type Section } from "../lib/paths.ts";
-import type { TabCounts } from "../lib/scope.ts";
+import { NO_TABS, type TabCounts } from "../lib/scope.ts";
 
 interface SectionSpec {
   section: Section;
@@ -29,15 +29,16 @@ interface SectionSpec {
 
 const NO_BADGE: SectionSpec["badge"] = () => ({ count: 0, tone: "wait", text: "" });
 
-/** The four sections that are tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late. */
+/** The five sections that are tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late, the badge of Flares those lit. */
 export const TAB_SECTIONS: readonly SectionSpec[] = [
   { section: "vigils", label: "Vigils", badge: (tabs) => ({ count: tabs.vigils, tone: "wait", text: "due today or late" }) },
   { section: "rituals", label: "Rituals", badge: (tabs) => ({ count: tabs.rituals, tone: "late", text: "late" }) },
   { section: "findings", label: "Findings", badge: (tabs) => ({ count: tabs.findings, tone: "wait", text: "need you" }) },
+  { section: "flares", label: "Flares", badge: (tabs) => ({ count: tabs.flares, tone: "wait", text: "lit" }) },
   { section: "milestones", label: "Milestones", badge: NO_BADGE },
 ];
 
-/** The seven places of a scope: Overview comes first, Runs and Activity last (they are not tabs). */
+/** The eight places of a scope: Overview comes first, Runs and Activity last (they are not tabs). */
 const RUNS: SectionSpec = { section: "runs", label: "Runs", badge: NO_BADGE };
 const ACTIVITY: SectionSpec = { section: "activity", label: "Activity", badge: NO_BADGE };
 
@@ -52,6 +53,7 @@ interface SectionIconProps {
 export function SectionIcon({ section, size }: SectionIconProps): React.ReactNode {
   if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
   if (section === "findings") return <NavIcon name="finding" size={size} className="tab-ico" />;
+  if (section === "flares") return <NavIcon name="flame" size={size} className="tab-ico" />;
   if (section === "runs") return <NavIcon name="run" size={size} className="tab-ico" />;
   if (section === "activity") return <NavIcon name="activity" size={size} className="tab-ico" />;
   return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;
@@ -206,8 +208,8 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
 export function Places({ data, scope, lit, busy }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
-  const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: { vigils: 0, rituals: 0, findings: 0 }, icon: null }];
-  const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 }));
+  const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: NO_TABS, icon: null }];
+  const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? NO_TABS));
   return (
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
       <div className="places-head">

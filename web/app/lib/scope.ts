@@ -16,16 +16,20 @@ import { needCounts, scopeProjects, selftestLines, workspaceIcon, type HomeScope
 import type { Place } from "./paths.ts";
 import { readScopeCookie, readSettings, type Settings } from "./settings.ts";
 
-/** The badges on the tabs: vigils due today or late, rituals darius runs that are late, findings that need the operator. */
+/** The badges on the tabs: vigils due today or late, rituals darius runs that are late, findings that need the operator, flares that are lit. */
 export interface TabCounts {
   vigils: number;
   rituals: number;
   findings: number;
+  flares: number;
 }
+
+/** The counts of a place that has no workspace data yet: every badge is hidden. */
+export const NO_TABS: TabCounts = { vigils: 0, rituals: 0, findings: 0, flares: 0 };
 
 export function tabCounts(projects: readonly ProjectStatus[], today: string): TabCounts {
   const rituals = buildAgenda({ projects, today, only: "ritual" });
-  return { vigils: vigilsDue(projects, today), rituals: rituals.overdue, findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0) };
+  return { vigils: vigilsDue(projects, today), rituals: rituals.overdue, findings: projects.reduce((sum, project) => sum + project.findings.needsYou, 0), flares: projects.reduce((sum, project) => sum + project.flares.lit, 0) };
 }
 
 /** The default workspace from the settings, when this host has it; otherwise null (all workspaces). */

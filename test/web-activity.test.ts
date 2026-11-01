@@ -76,6 +76,11 @@ test("every kind of the union has an entry, with its who, actor and links", () =
     ["finding-closed", [line("finding.closed", "web:altan", { item: RITUAL, key: "post-12", note: "wontfix" })]],
     ["finding-reopened", [line("finding.reopened", "web:altan", { item: RITUAL, key: "post-12" })]],
     ["finding-reset", [line("finding.reset", "altan", { item: RITUAL, note: "start over" })]],
+    ["flare-lit", [line("flare.lit", "altan", { key: "cert", title: "Certificate expires", severity: "high", source: "script" })]],
+    ["flare-answered", [line("flare.answered", "web:altan", { key: "cert", note: "renewed", severity: "high" })]],
+    ["flare-accepted", [line("flare.accepted", "web:altan", { key: "cert", severity: "high" })]],
+    ["flare-cleared", [line("flare.cleared", "altan", { key: "cert" })]],
+    ["flare-reopened", [line("flare.reopened", "altan", { key: "cert" })]],
     ["ritual-lifecycle", [line("ritual.lifecycle", "altan", { item: RITUAL, state: "paused" })]],
     ["ritual-rescheduled", [line("ritual.rescheduled", "altan", { item: RITUAL, due: "2026-10-20" })]],
   ];
@@ -89,7 +94,7 @@ test("every kind of the union has an entry, with its who, actor and links", () =
     assert.ok(entry.text.includes(entry.who) || kind === "run-failed" || kind === "run-completed" || kind === "run-held", `${kind}: ${entry.text}`);
     seen.add(kind);
   }
-  assert.equal(seen.size, 20, "the union has 20 kinds, each tried once");
+  assert.equal(seen.size, 25, "the union has 25 kinds, each tried once");
   const source = readFileSync(new URL("../src/web/api.ts", import.meta.url), "utf8");
   for (const kind of seen) assert.ok(source.includes(`"${kind}"`), `${kind} is in the union`);
 });
@@ -290,4 +295,38 @@ test("WebContext.activity merges over projects, newest first, and runRows carrie
   assert.equal(child?.startedBy, "web");
   assert.equal(child?.followUpOf, RUN);
   assert.equal(child?.ackKind, null);
+});
+
+test("flare lines make flare entries: the flare is the item, its key is the link, and the title comes from the report", () => {
+  const entries = activityOf(PROJECT, [
+    line("flare.lit", "ci", { key: "cert", title: "Certificate expires", severity: "high", source: "ci:nightly", target: "shop.example.com" }),
+    line("flare.answered", "web:altan", { key: "cert", note: "renewed on the 3rd", severity: "high" }),
+  ]);
+  assert.deepEqual(entries.map((entry) => entry.kind), ["flare-answered", "flare-lit"], "newest first");
+  const [answered, lit] = entries;
+  assert.deepEqual(answered?.item, { type: "flare", id: "cert", title: "Certificate expires" }, "the title of the report, not the key");
+  assert.deepEqual(answered?.links, { flare: "cert" });
+  assert.equal(answered?.text, "Flare answered by web:altan: renewed on the 3rd");
+  assert.equal(lit?.text, "Flare lit by ci: Certificate expires, high");
+  assert.deepEqual(lit?.detail, ["Target: shop.example.com", "Source: ci:nightly"]);
+  assert.equal(lit?.tone, "wait");
+});
+
+test("a report of a flare that is lit already is not news; a worse one, or one after it closed, is", () => {
+  const lit = (severity: string) => line("flare.lit", "ci", { key: "cert", title: "Certificate expires", severity, source: "ci" });
+  const kinds = (lines: LedgerLine[]): string[] => activityOf(PROJECT, lines).map((entry) => `${entry.kind}:${entry.text.split(" by ")[0]}`);
+  assert.deepEqual(kinds([lit("high"), lit("high"), lit("low")]), ["flare-lit:Flare lit"], "seen again, or less bad: no entry");
+  assert.deepEqual(kinds([lit("medium"), lit("high")]), ["flare-lit:Flare raised at high", "flare-lit:Flare lit"], "a higher severity is news");
+  assert.deepEqual(
+    kinds([lit("high"), line("flare.accepted", "web:altan", { key: "cert", severity: "high" }), lit("high"), lit("critical")]),
+    ["flare-lit:Flare lit again at critical", "flare-accepted:Flare accepted", "flare-lit:Flare lit"],
+    "a report at the closed severity stays closed; a worse one lights it again",
+  );
+  assert.deepEqual(kinds([lit("high"), line("flare.cleared", "altan", { key: "cert" }), lit("low")]), ["flare-lit:Flare lit", "flare-cleared:Flare cleared", "flare-lit:Flare lit"], "after gone any report lights it");
+});
+
+test("flare notes are masked like every operator text, and a flare line with no key is left out", () => {
+  const entries = activityOf(PROJECT, [line("flare.accepted", "web:altan", { key: "cert", severity: "low", note: "token sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789 is fine" }), line("flare.answered", "web:altan", { note: "no key", severity: "low" })]);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.text.includes("sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789"), false);
 });

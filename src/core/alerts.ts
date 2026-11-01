@@ -349,6 +349,47 @@ export function flareAlerts(project: Project, ledger: readonly LedgerLine[], opt
   return alerts;
 }
 
+/** How one channel took the newest notice of a flare. */
+export interface ChannelDelivery {
+  channel: ChannelName;
+  /** `waiting`: the ledger holds neither `alert.sent` nor `alert.failed` for the notice. */
+  state: "sent" | "failed" | "waiting";
+  /** The host of the newest `alert.sent` or `alert.failed` line. */
+  host?: string;
+  at?: string;
+  /** How many `alert.failed` lines the notice has. */
+  tries: number;
+  /** The `error` of the newest `alert.failed` line, cut to one short line. Only when `state` is `failed`. */
+  reason?: string;
+}
+
+const REASON_MAX = 200;
+
+function deliveryOf(ledger: readonly LedgerLine[], key: string, channel: ChannelName): ChannelDelivery {
+  const own = ledger.filter((line) => line.key === key && (line.type === "alert.sent" || line.type === "alert.failed"));
+  const sent = own.findLast((line) => line.type === "alert.sent");
+  if (sent !== undefined) return { channel, state: "sent", host: sent.host, at: sent.at, tries: own.filter((line) => line.type === "alert.failed").length };
+  const failures = own.filter((line) => line.type === "alert.failed");
+  const last = failures.at(-1);
+  if (last === undefined) return { channel, state: "waiting", tries: 0 };
+  const error = isText(last.error) ? oneLine(last.error).slice(0, REASON_MAX) : "";
+  const failed: ChannelDelivery = { channel, state: "failed", host: last.host, at: last.at, tries: failures.length };
+  if (error !== "") failed.reason = error;
+  return failed;
+}
+
+/**
+ * Where the newest notice of a flare stands, one entry per channel it names
+ * (the web app's flare page). The newest notice is the one of the newest line
+ * that opened or raised the flare. A flare that delivers to the app only has
+ * no channel, so the list is empty. Reads the ledger and writes nothing.
+ */
+export function flareDelivery(project: Project, ledger: readonly LedgerLine[], key: string): ChannelDelivery[] {
+  const opening = flareOpenings(project, ledger).findLast((one) => one.flares.some((flare) => flare.key === key));
+  if (opening === undefined) return [];
+  return flareChannels(project, opening).map((channel) => deliveryOf(ledger, flareKey(opening.line.id, channel), channel));
+}
+
 // --- sending ------------------------------------------------------------------------
 
 export interface Delivery {
