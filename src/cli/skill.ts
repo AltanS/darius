@@ -124,6 +124,7 @@ const TAIL = `
 \`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, work, then \`run complete\`.
 \`run follow-up <run> --approve N|--item KEY\` is for a person: a new run of question N's lines as written, or of item KEY's proposal.
 \`finding close|reopen|reset\` are for a person; \`finding list|show\` read a ritual's keyed items.
+\`flare list|show\` read flares. \`flare light|answer|accept|clear|reopen\` are for a person or a script; a run sets \`"flare": true\` on a result item.
 On the wrong host \`run now|resume|follow-up\` refuse and print an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups

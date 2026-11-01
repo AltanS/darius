@@ -63,6 +63,7 @@ import { loadConfigIfPresent, type Config } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
 import { followUpRuns, ritualState } from "../core/due.ts";
 import { collectFindings, findingPromptLines } from "../core/finding-index.ts";
+import { collectFlares, flarePromptLines } from "../core/flare-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { takeLease, type LeaseOutcome } from "../core/lease.ts";
@@ -678,7 +679,7 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
   const ledger = readLedger(ctx.project);
   const handoff = latestHandoff(ctx.project, ledger, doc.header.slug, ctx.now);
   const { followUp } = ctx.options;
-  const prompt: PromptInput = { project, run, ritual: doc.header, body: doc.body, handoff };
+  const prompt: PromptInput = { project, run, ritual: doc.header, body: doc.body, handoff, flares: flarePromptLines(collectFlares(ctx.project, ledger), doc.header.slug) };
   if (followUp !== undefined) prompt.followUp = followUpSection(followUp, parentResult(ctx.project, ledger, followUp.parent));
   else prompt.findings = findingPromptLines(collectFindings(ctx.project, ledger).filter((finding) => finding.ritual === doc.header.slug));
   // A skill can grant tools of its own (`allowed-tools`), so a ritual that

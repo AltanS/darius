@@ -542,6 +542,33 @@ function walk(project: Project, ledger: readonly LedgerLine[]): Walked {
   return { tracks: context.tracks, openings };
 }
 
+// --- the run prompt -----------------------------------------------------------------
+
+/** Most open flares a prompt lists; the rest is a count. */
+export const PROMPT_FLARES_MAX = 40;
+
+export const FLARES_LEAD =
+  'These flares of this ritual are open. Check each one again. While the problem stands, report it with the same key and `"flare": true`, state needs-decision. When it is gone, report it with state fixed and the flag: that clears it. An answered or accepted flare stays closed unless it gets worse. The key is the text in braces.';
+
+/** The lines of the `## Open flares` section: the flares of `ritual` that are not gone. Empty when there are none. */
+export function flarePromptLines(flares: readonly Flare[], ritual: string): string[] {
+  const open = flares.filter((flare) => flare.ritual === ritual && flare.status !== "gone");
+  const lines = open.slice(0, PROMPT_FLARES_MAX).map((flare) => {
+    const target = flare.target === undefined ? "" : ` [${flare.target}]`;
+    return `- {${flare.key}} ${flare.severity} ${flare.status}: ${flare.title}${target} (since ${flare.firstSeen.at.slice(0, 10)})`;
+  });
+  if (open.length > PROMPT_FLARES_MAX) lines.push(`- (${String(open.length - PROMPT_FLARES_MAX)} more)`);
+  return lines;
+}
+
+/** The section as markdown lines, with its heading and lead; empty without lines. */
+export function flaresSection(lines: readonly string[]): string[] {
+  if (lines.length === 0) return [];
+  return ["## Open flares", "", FLARES_LEAD, "", ...lines, ""];
+}
+
+// --- the order of the list ----------------------------------------------------------
+
 const STATUS_ORDER: readonly FlareStatus[] = ["lit", "answered", "accepted", "gone"];
 
 function compareFlares(a: Flare, b: Flare): number {

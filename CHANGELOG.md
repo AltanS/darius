@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.107.0] - 2026-11-01
+
+### Added
+
+- `darius flare light|list|show|answer|accept|clear|reopen`. A script or a person lights a flare by key, with a title, a severity, and an optional target, body, source and delivery list. `list` shows lit flares by default. `answer --follow-up` starts a follow-up of the run that reported the flare, and writes the answer only when that run started. This release sends no flare alerts yet.
+- The run prompt documents `"flare": true` and lists the open flares of the ritual, so a run reuses the key. It says that a flare replaces a question about the same matter. `darius run start` prints the same list, and an approved flare item in a follow-up says to keep the flag.
+
+### Security
+
+- A run cannot write a flare by command. `darius flare` refuses its write verbs while `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and the gate denies those lines in every mode, whatever `may` or a grant says. `flare list` and `flare show` pass.
+
+### Changed
+
+- `darius help` and the skill's verb table use shorter summaries for `finding`, `run`, `ritual` and `marker`, to keep the skill under its size limit.
+
 ## [0.106.0] - 2026-11-01
 
 ### Added

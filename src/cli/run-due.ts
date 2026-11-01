@@ -341,6 +341,12 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   return byHandExitCode(report);
 }
 
+/** What a caller of runFollowUp may add. */
+export interface FollowUpHooks {
+  onStarted?: (run: string) => void;
+  print?: (line: string) => void;
+}
+
 /** `--approve N` values: whole numbers from 1. */
 function approveFlags(args: ParsedArgs): number[] {
   return (args.repeated.approve ?? []).map((raw) => {
@@ -366,8 +372,12 @@ function approveFlags(args: ParsedArgs): number[] {
  * `needs-decision` item with that key; the run carries out exactly those.
  * Right after the run starts, stderr gets one line, `darius run follow-up:
  * started run <id> on <host>`: the web page waits for it (src/web/action-api.ts).
+ *
+ * `hooks` serve a verb that starts a follow-up for its own reason (`flare
+ * answer --follow-up`, 0.107.0): `onStarted` runs right after that line,
+ * before the run works, and `print` takes the report instead of stdout.
  */
-export async function runFollowUp(args: ParsedArgs): Promise<number> {
+export async function runFollowUp(args: ParsedArgs, hooks: FollowUpHooks = {}): Promise<number> {
   // A run must never grant itself lines: the operator starts a follow-up, not a session darius started.
   const inRun = process.env.DARIUS_RUN ?? process.env.DARIUS_RUN_POLICY;
   if (inRun !== undefined && inRun !== "") return refuseResume(args, args.positional[1] ?? "", "run follow-up is for a person; a run darius started cannot start one");
@@ -404,6 +414,7 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
     followUp,
     onStarted: (run) => {
       console.error(`${STARTED_PREFIX}${run} on ${hostId()}`);
+      hooks.onStarted?.(run);
     },
   };
   if (isDryRun && !args.json) {
@@ -412,7 +423,9 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
     if (plan.items.length > 0) console.log(`approved item(s): ${plan.items.join(", ")}`);
   }
   const { report, cfg } = await runDue(options);
-  await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
+  const target: Parameters<typeof deliverReport>[1] = { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" };
+  if (hooks.print !== undefined) target.print = hooks.print;
+  await deliverReport(report, target);
   await alertBatch(report, "run follow-up");
   for (const failure of report.errors) console.error(`darius run follow-up: ${failure.project}: ${failure.error}`);
   const entry = report.projects[0]?.rituals[0];

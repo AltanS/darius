@@ -31,6 +31,8 @@ its whole tracker tree in the darius store, and `darius onboard` moves a repo th
   first real batch". You close it with a verdict.
 - **Held question**: a run stops when it reaches something the ritual's `hold` list names. It asks
   you. You answer in the terminal UI, and the run goes on.
+- **Flare**: a problem that needs you, such as a vulnerable dependency. A run or a script lights it by
+  key. It stays open until you answer it, accept it or it goes away.
 - **Policy**: the limits of a ritual. It sets the mode (`off`, `report` or `act`), the commands the
   run may use (`may`), and the patterns that stop it (`hold`).
 - **Store**: darius's own state. It lives outside your repo, in `~/.local/share/darius`.
@@ -160,7 +162,7 @@ store between hosts (steps 2 and 3 of [Install](#install)).
 - [Quick start](#quick-start-one-host-no-bucket)
 - [Install](#install), [Update](#update), [NixOS and Nix](#nixos-and-nix)
 - [Link a repo](#link-a-repo), [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)
-- [Milestones, specs and tasks](#milestones-specs-and-tasks), [Vigils](#vigils), [Runs](#runs), [Worktrees](#worktrees), [Exit codes](#exit-codes)
+- [Milestones, specs and tasks](#milestones-specs-and-tasks), [Vigils](#vigils), [Runs](#runs), [Flares](#flares), [Worktrees](#worktrees), [Exit codes](#exit-codes)
 - [Commands](#commands)
 - [Develop](#develop)
 - More: [Backups](docs/backups.md), [Marker reference](docs/marker.md), [Design](docs/concept.md)
@@ -536,6 +538,39 @@ so `claude` must be on `PATH`. Before the first unattended run on a host, prove 
 blocks what the policy says it blocks with `darius harness check` (exit 0 passed, 1 failed, 3
 inconclusive).
 
+## Flares
+
+A flare is a problem that needs you. The ritual does the check, and the flare is only the result.
+A flare has no schedule and does no work. It is kept by project and key, so a problem that is reported
+again stays one flare.
+
+A script or a CI job lights one with the CLI:
+
+```bash
+darius flare light dep/cve-2026-0001 --title "Vulnerable dependency" --severity high \
+  --target web/package.json --source ci:nightly --deliver push,email
+darius flare list                 # the lit flares; --all or --status answered|accepted|gone for more
+darius flare show dep/cve-2026-0001
+darius flare answer dep/cve-2026-0001 --note "Update it this week"
+darius flare accept dep/cve-2026-0001 --note "Not reachable from outside"
+darius flare clear dep/cve-2026-0001     # the problem is gone
+darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
+```
+
+- `light` on a lit key at the same or a lower severity exits `0` and says "already lit, seen again".
+  A higher severity raises the flare, and a report after it is gone lights it again. `--stdin` stores
+  a body. The key is one line of at most 120 characters. A longer key is refused, not cut.
+- A run lights a flare only through its result: an item with `"flare": true`, a `key` and the state
+  `needs-decision`. The state `fixed` clears it. A run cannot run the write verbs: the CLI refuses
+  them inside a run, and the gate denies them. It can run `flare list` and `flare show`.
+- An answer or an accept closes the flare at the severity it has. A later report at the same or a lower
+  severity leaves it closed. A higher severity lights it again.
+- A flare from a run goes away after two complete runs of that ritual that do not report it. A flare
+  from a script waits for `flare clear`. `flare clear` also ends a flare from a deleted ritual.
+- `answer --follow-up` starts a follow-up of the run that made the newest report, and carries out that
+  item's proposal. It writes the answer only when the run started. It waits for the run, and it exits
+  with the run's code. A flare from outside has no run, so it refuses that with exit `1`.
+
 ## Cadence and the first due date
 
 `cadence` takes `Nd`, `Nw` or `Nm`: `1d` is every day, `1w` every week, `2w` every two weeks, `1m`
@@ -572,6 +607,7 @@ the full reference.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius run ack <run> [--answer N=TEXT ...] [--note TEXT]`: answer a run's questions, one `--answer` per question, or dismiss a run with no answer. The answers reach the next run of the ritual and stay until a run that read them completes.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
+- `darius flare light|list|show|answer|accept|clear|reopen`: problems that need you, kept by key. See [Flares](#flares).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.

@@ -21,6 +21,7 @@ import {
   shellRuleRegex,
   splitShell,
   startsFollowUp,
+  writesFlare,
   type RunPolicy,
 } from "../src/harness/gate.ts";
 
@@ -741,6 +742,137 @@ test("a run never starts a follow-up, whatever may says, under any prefix", () =
   const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nNext: darius run follow-up ${RUN} --approve 1\nEOF`;
   assert.equal(decide(shell(complete), policy({ gate: "full", may: [] })), undefined, "the protocol's findings may name a follow-up");
   assert.equal(startsFollowUp("git log --oneline"), false);
+});
+
+// --- flares from inside a run (0.107.0) ---------------------------------------------------
+
+/** Every policy a run can have, each with a `may` that would allow the line. */
+function flarePolicies(): RunPolicy[] {
+  const may = ["Bash(darius *)", "Bash(env *)", "Bash(sudo *)", "Bash(setsid *)", "Bash(bash *)", "Bash(ssh *)", "Bash(date)", "Bash(*)"];
+  return [
+    policy({ may }),
+    policy({ gate: "full", may }),
+    policy({ mode: "report", may }),
+    policy({ gate: "full", mode: "report", may }),
+    policy({ gate: "full", may, grants: ["darius flare accept k"] }),
+    policy({ may, on_hold: "deny" }),
+  ];
+}
+
+/** One write verb in every form a line can hide it. */
+function flareWriteForms(verb: string): string[] {
+  return [
+    `darius flare ${verb} k --note n`,
+    `env -u DARIUS_RUN darius flare ${verb} k`,
+    `env -uDARIUS_RUN_POLICY darius flare ${verb} k`,
+    `FOO=1 nohup darius flare ${verb} k`,
+    `FOO=1 darius flare ${verb} k`,
+    `sudo -E darius flare ${verb} k`,
+    `setsid darius flare ${verb} k`,
+    `/home/u/.local/bin/darius flare ${verb} k`,
+    `./bin/darius flare ${verb} k`,
+    `bun src/cli.ts flare ${verb} k`,
+    `darius 'flare' '${verb}' k`,
+    `darius "flare" "${verb}" k`,
+    `darius $'flare' $"${verb}" k`,
+    `darius fl\\are ${verb} k`,
+    `darius fl''are ${verb} k`,
+    `darius  flare\t${verb} k`,
+    `darius flare \\\n ${verb} k`,
+    `bash -c "darius flare ${verb} k"`,
+    `ssh host-a darius flare ${verb} k`,
+    `date && darius flare ${verb} k`,
+    `date; darius flare ${verb} k`,
+    `date || darius flare ${verb} k`,
+    `date | darius flare ${verb} k`,
+    `date\ndarius flare ${verb} k`,
+    `(darius flare ${verb} k)`,
+    `echo $(darius flare ${verb} k)`,
+    `echo \`darius flare ${verb} k\``,
+    `darius flare ${verb} k > /tmp/out`,
+    `darius flare ${verb}>/tmp/out`,
+    `darius flare list; darius flare ${verb} k`,
+    `darius flare show k && darius flare ${verb} k`,
+    `darius flare show $(darius flare ${verb} k)`,
+    `darius flare --project p ${verb} k`,
+    `darius flare --project=p ${verb} k`,
+    `darius flare --json ${verb} k`,
+    `darius flare --note "x show" ${verb} k`,
+    `darius --project p flare ${verb} k`,
+    `darius --json flare ${verb} k`,
+    `bun src/cli.ts flare --note "x show" ${verb} k`,
+  ];
+}
+
+test("a run never lights or settles a flare, whatever may says, under any prefix", () => {
+  const verbs = ["light", "answer", "accept", "clear", "reopen"];
+  for (const scoped of flarePolicies()) {
+    for (const verb of verbs) {
+      for (const line of flareWriteForms(verb)) {
+        assert.match(decide(shell(line), scoped) ?? "", /a run never lights or settles a flare by command/u, line);
+        assert.equal(verdict(shell(line), scoped), "deny", `${line}: a deny, not a hold`);
+      }
+    }
+  }
+});
+
+test("a verb the gate cannot read after darius flare is denied: a variable, a substitution, xargs", () => {
+  const lines = [
+    "darius flare $VERB k",
+    'darius flare "$VERB" k',
+    "darius flare $(echo accept) k",
+    "darius flare `echo accept` k",
+    "echo accept | xargs darius flare",
+    "printf accept | xargs -I{} darius flare {} k",
+    "darius flare --note show $VERB k",
+    "/home/u/.local/bin/darius flare $VERB k",
+    "darius flare",
+  ];
+  for (const line of lines) assert.equal(writesFlare(line), true, line);
+});
+
+test("the gate does not deny a flare read, nor a line that only names a flare", () => {
+  const lines = [
+    "darius flare list",
+    "darius flare list --all --json",
+    "darius flare list --status answered",
+    "darius flare list --status accepted --json",
+    "darius flare show k",
+    "darius flare show k --json",
+    "darius flare show accept",
+    "darius flare show clear-the-cache",
+    "darius flare show dep/accept-risk --project p",
+    "darius flare --json list",
+    "darius flare --project p show k",
+    "darius flare --project=p list",
+    "darius --json flare list",
+    "darius flare --help",
+    "/home/u/.local/bin/darius flare list",
+    "./bin/darius flare show k",
+    "env FOO=1 darius flare list",
+    'bash -c "darius flare list"',
+    "date && darius flare list",
+    "darius flare list | head -5",
+    "darius flare list > /tmp/flares.txt",
+    "grep -rn flare src",
+    "cat src/core/flare-index.ts",
+    "cat docs/flare accept.md",
+    "ls test/flare-cli.test.ts",
+    "git log --grep flare",
+  ];
+  for (const line of lines) assert.equal(writesFlare(line), false, line);
+  for (const scoped of [policy({ may: ["Bash(*)"] }), policy({ gate: "full", may: ["Bash(*)"] }), policy({ mode: "report", may: ["Bash(*)"] }), policy({ gate: "full", mode: "report", may: ["Bash(*)"] })]) {
+    for (const line of ["darius flare list", "darius flare list --status answered --json", "darius flare show k", "darius flare show accept --json", "/home/u/.local/bin/darius flare list"]) {
+      assert.equal(decide(shell(line), scoped), undefined, line);
+    }
+  }
+});
+
+test("the protocol may name a flare: the heredoc body and a held question are text the shell never runs", () => {
+  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nNext: darius flare accept k\nEOF`;
+  assert.equal(decide(shell(complete), policy({ gate: "full", may: [] })), undefined);
+  const after = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nx\nEOF\ndarius flare accept k`;
+  assert.match(decide(shell(after), policy({ may: ["Bash(*)"] })) ?? "", /a run never lights or settles a flare/u, "a line after the body runs");
 });
 
 test("a run keeps its run markers: unset, env -u, env -i and an assignment are denied", () => {

@@ -239,7 +239,7 @@ function findingReset(args: ParsedArgs): number {
 export const findingCommand: Command = {
   name: "finding",
   flags: ["all", "open", "ritual", "who", "note"],
-  summary: "list, show, close, reopen and reset the findings rituals report across runs",
+  summary: "the findings rituals report across runs",
   audience: "session",
   usage: `finding ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {

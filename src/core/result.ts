@@ -142,7 +142,7 @@ export interface ResultSummary {
 }
 
 /** Texts are clipped to these lengths, in characters. */
-const TEXT_LIMITS = {
+export const TEXT_LIMITS = {
   summary: 240,
   label: 80,
   unit: 20,
@@ -217,7 +217,7 @@ function isControl(code: number): boolean {
 }
 
 /** Control characters out (a newline stays where texts may have lines, anything else becomes a space), then clipped. */
-function clean(text: string, max: number, keepNewlines = false): string {
+export function clean(text: string, max: number, keepNewlines = false): string {
   let out = "";
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;
@@ -243,6 +243,11 @@ function handoff(check: Checker, record: JsonRecord): string | undefined {
   return note === "" ? undefined : note;
 }
 
+/** A key as darius stores it: control characters out, whitespace collapsed, never clipped. */
+export function normalizeKey(text: string): string {
+  return clean(text, Number.MAX_SAFE_INTEGER).replaceAll(/\s+/gu, " ");
+}
+
 /** The item key, one line; longer than KEY_MAX characters is an error, not a clip: a cut key would split a finding. */
 function itemKey(check: Checker, record: JsonRecord, where: string): string | undefined {
   const value = record.key;
@@ -251,7 +256,7 @@ function itemKey(check: Checker, record: JsonRecord, where: string): string | un
     check.errors.push(`${where}.key: must be a string when set`);
     return undefined;
   }
-  const key = clean(value, Number.MAX_SAFE_INTEGER).replaceAll(/\s+/gu, " ");
+  const key = normalizeKey(value);
   const length = [...key].length;
   if (length > KEY_MAX) check.errors.push(`${where}.key: at most ${String(KEY_MAX)} characters, got ${String(length)}; make it shorter`);
   return key === "" ? undefined : key;
@@ -533,10 +538,12 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `flare` (optional, only ever true) lights a flare; see below. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
   "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",
+  "",
+  "`\"flare\": true` on an item lights a flare: a record that alerts the operator and stays open until they decide. Use it for a problem that needs the operator and must not be lost. It needs a `key`, and the state needs-decision, or fixed when the problem is gone, which clears the flare. A flare item is no finding. A flare replaces a question about the same matter: do not ask both. Reuse the key of an open flare listed above, with the flag, in every run while the problem stands. A run lights a flare only this way: it cannot run `darius flare light` or settle a flare, and it does not choose how the alert goes out.",
   "",
   "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. Put in `questions` only what needs a decision. A fix you made, or an item that needs code, is never a question. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",

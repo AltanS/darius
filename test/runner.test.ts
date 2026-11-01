@@ -42,6 +42,7 @@ import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
 import { failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
 import { findingCommand } from "../src/cli/finding.ts";
+import { flareCommand } from "../src/cli/flare.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
 import { followUpSection, planFollowUp } from "../src/runner/follow-up.ts";
 import { runDetail } from "../src/web/status.ts";
@@ -2707,6 +2708,127 @@ test("the run page data links a follow-up and its parent (0.48.0)", async () => 
   const child: string = JSON.parse(result.stdout).projects[0].rituals[0].run;
   assert.deepEqual([runDetail(project, parent)?.followUpOf, runDetail(project, parent)?.followUps], [null, [child]]);
   assert.deepEqual([runDetail(project, child)?.followUpOf, runDetail(project, child)?.followUps], [parent, []]);
+});
+
+// --- flares (0.107.0) ---------------------------------------------------------------------
+
+const FLARE_RESULT = {
+  v: 1,
+  status: "attention",
+  summary: "one flare",
+  items: [{ title: "Vulnerable dependency", severity: "high", state: "needs-decision", target: "web/package.json", key: "dep/cve-1", flare: true, proposal: { proposed: "Update it." } }],
+};
+
+test("the run prompt documents the flare field and lists the open flares of this ritual", async () => {
+  const ritual: Ritual = { id: "x", kind: "ritual", slug: "r", title: "R", created: "", updated: "", tags: [], cadence: "1d", anchor: "due", policy: { mode: "report", may: [], hold: [] } };
+  const prompt = buildPrompt({ project: "acme-web", run: "r1", ritual, body: "Do it.", flares: ["- {dep/cve-1} high lit: Vulnerable dependency (since 2026-11-01)"] });
+  assert.match(prompt, /## Open flares\n\nThese flares of this ritual are open\..*\n\n- \{dep\/cve-1\} high lit: Vulnerable dependency \(since 2026-11-01\)\n/u);
+  assert.ok(prompt.indexOf("## Open flares") < prompt.indexOf("## Protocol"));
+  assert.match(prompt, /`"flare": true` on an item lights a flare/u);
+  assert.match(prompt, /A flare replaces a question about the same matter/u);
+  assert.match(prompt, /it cannot run `darius flare light` or settle a flare/u);
+  const none = buildPrompt({ project: "acme-web", run: "r1", ritual, body: "Do it." });
+  assert.doesNotMatch(none, /## Open flares/u, "no flares, no section");
+  assert.match(none, /`"flare": true` on an item lights a flare/u, "the field is documented either way");
+
+  const project = "fl-prompt";
+  const parent = await seedParent(project, { result: FLARE_RESULT });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const now = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+  assert.equal(now.code, 0, now.stdout + now.stderr);
+  const child: string = JSON.parse(now.stdout).projects[0].rituals[0].run;
+  assert.notEqual(child, parent);
+  const scheduled = readFileSync(join(openProject(project).root, "runs", child, "prompt.md"), "utf8");
+  assert.match(scheduled, /- \{dep\/cve-1\} high lit: Vulnerable dependency \[web\/package\.json\] \(since /u);
+  assert.doesNotMatch(scheduled, /## Open findings/u, "a flare item is no finding");
+});
+
+test("flare answer --follow-up starts the follow-up first and writes the answer with its run; the item keeps its flag", async () => {
+  const project = "fl-follow";
+  const parent = await seedParent(project, { result: FLARE_RESULT });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const answered = await withFakeHerdr({}, () => runCli(flareCommand, ["answer", "dep/cve-1", "--note", "Update it", "--follow-up", "--who", "op", "--project", project, "--json"]));
+  assert.equal(answered.code, 0, answered.stdout + answered.stderr);
+  const out = JSON.parse(answered.stdout);
+  const child: string = out.followUpRun;
+  assert.equal(out.ok, true, "stdout holds one JSON object: the verb's answer");
+  assert.equal(out.runExit, 0);
+  assert.match(answered.stderr, new RegExp(`darius run follow-up: started run ${child} on `, "u"), "the web waits for this line");
+
+  const started = linesOf(project, "run.started").find((line) => line.run === child);
+  assert.equal(started?.follow_up_of, parent);
+  assert.deepEqual(started?.items, ["dep/cve-1"]);
+  assert.equal(started?.note, "Update it");
+  const [line] = linesOf(project, "flare.answered");
+  assert.equal(line?.follow_up_run, child);
+  assert.equal(line?.note, "Update it");
+  assert.equal(line?.severity, "high");
+  assert.equal(line?.who, "op");
+  const ledger = readLedger(openProject(project));
+  const at = (type: string): number => ledger.findIndex((one) => one.type === type && (one.run === child || type === "flare.answered"));
+  assert.ok(at("run.started") < at("flare.answered"), "the run started first");
+  assert.ok(at("flare.answered") < at("run.completed"), "the answer is written before the run works");
+
+  const prompt = readFileSync(join(openProject(project).root, "runs", child, "prompt.md"), "utf8");
+  assert.match(prompt, /## Open flares/u, "a follow-up may clear the flare, so it sees it");
+  assert.match(prompt, /- key: dep\/cve-1\n[\s\S]*flare: this item is a flare\. Report it with `"flare": true`/u);
+
+  const shown = JSON.parse((await runCli(flareCommand, ["show", "dep/cve-1", "--project", project, "--json"])).stdout);
+  assert.equal(shown.flare.answered.followUpRun, child);
+  const again = await withFakeHerdr({}, () => runCli(flareCommand, ["answer", "dep/cve-1", "--note", "Again", "--follow-up", "--project", project]));
+  assert.equal(again.code, 1, "a double tap starts no second follow-up");
+  assert.match(again.stdout, /is already answered by op; reopen it to answer again/u);
+  assert.equal(linesOf(project, "run.started").filter((one) => one.follow_up_of === parent).length, 1);
+});
+
+test("flare answer --follow-up writes no answer when the follow-up did not start", async () => {
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const answer = (project: string): Promise<CliRun> => withFakeHerdr({}, () => runCli(flareCommand, ["answer", "dep/cve-1", "--note", "Fix", "--follow-up", "--project", project]));
+
+  const busy = "fl-busy";
+  await seedParent(busy, { result: FLARE_RESULT });
+  const open: string = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", busy, "--json"])).stdout).run;
+  const running = await answer(busy);
+  assert.equal(running.code, 1, running.stdout);
+  assert.match(running.stdout, /is running; a follow-up starts when no run is open/u);
+  assert.match(running.stderr, /the follow-up did not start, so flare 'dep\/cve-1' stays lit/u);
+  assert.equal(linesOf(busy, "flare.answered").length, 0);
+  await runCli(runCommand, ["complete", open, "--project", busy, "--outcome", "failed"]);
+
+  const off = "fl-off";
+  await seedParent(off, { result: FLARE_RESULT, mode: "off" });
+  const skipped = await answer(off);
+  assert.equal(skipped.code, 1, skipped.stdout + skipped.stderr);
+  assert.equal(linesOf(off, "flare.answered").length, 0, "a skipped run leaves no answer");
+
+  const pinned = "fl-host";
+  await seedParent(pinned, { result: FLARE_RESULT });
+  const store = openProject(pinned);
+  const doc = store.readItem<Ritual>("ritual", "heartbeat");
+  assert.ok(doc !== null);
+  store.writeItem({ header: { ...doc.header, host: "host-b" }, body: doc.body }, { who: "test" });
+  const elsewhere = await answer(pinned);
+  assert.equal(elsewhere.code, 1, elsewhere.stdout);
+  assert.match(elsewhere.stdout, /which runs on host-b: ssh host-b darius flare answer dep\/cve-1 /u, "the verb for that host, so the answer is written with it");
+  assert.equal(linesOf(pinned, "flare.answered").length, 0);
+});
+
+test("policy-check: no run writes a flare, even with may Bash(darius *); a read passes", async () => {
+  for (const gate of [undefined, "full"]) {
+    const project = `pc-no-flare-${gate ?? "shell"}`;
+    const { policyFile } = seedRunningRun(project, "act");
+    if (gate !== undefined) writeFileSync(policyFile, JSON.stringify({ ...JSON.parse(readFileSync(policyFile, "utf8")), gate }));
+    for (const command of ["darius flare light k --title T --severity high", "env -u DARIUS_RUN darius flare accept k", "/home/u/.local/bin/darius flare clear k", "darius 'flare' \"answer\" k --note n"]) {
+      const result = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook(command));
+      assert.equal(result.code, 2, command);
+      assert.match(result.stdout, /a run never lights or settles a flare by command/u, command);
+    }
+    for (const command of ["darius flare list", "darius flare show k"]) {
+      const read = await runCli(policyCheckCommand, ["--policy", policyFile], bashHook(command));
+      assert.deepEqual([read.code, read.stdout], [0, ""], command);
+    }
+    assert.equal(linesOf(project, "run.held").length, 0, "a deny, not a hold");
+  }
 });
 
 test("run follow-up refuses what it cannot run, each with one line, and starts nothing", async () => {

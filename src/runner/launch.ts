@@ -25,6 +25,7 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findingsSection } from "../core/finding-index.ts";
+import { flaresSection } from "../core/flare-index.ts";
 import { handoffSection, type Handoff } from "../core/handoff.ts";
 import type { Document, Policy, Ritual } from "../core/model.ts";
 import { RESULT_PROMPT, STYLE_PROMPT } from "../core/result.ts";
@@ -61,6 +62,8 @@ export interface PromptInput {
   handoff?: Handoff | null;
   /** The lines of the `## Open findings` section (src/core/finding-index.ts); none for a follow-up run or the harness check. */
   findings?: readonly string[];
+  /** The lines of the `## Open flares` section (src/core/flare-index.ts). A follow-up run gets them too: it may be what clears the flare. */
+  flares?: readonly string[];
   /** The `## Follow-up` section of a follow-up run (src/runner/follow-up.ts). */
   followUp?: readonly string[];
   /** The run's gate scope (0.66.0). `full` adds the `## Shell commands` section; absent means `shell`. */
@@ -176,6 +179,7 @@ export function buildPrompt(input: PromptInput): string {
     "",
     ...handoffSection(input.handoff ?? null),
     ...findingsSection(input.findings ?? []),
+    ...flaresSection(input.flares ?? []),
     ...(input.followUp ?? []),
     "## Protocol",
     "",
