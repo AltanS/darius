@@ -594,8 +594,8 @@ const FLARE_WORD = /\bflare(?=[ ;&|()`<>]|$)/gu;
 const SHELL_BREAK = /[;&|()`<>]/u;
 /** A read: a read verb right after `flare`, after only the global flags a read takes. */
 const FLARE_READ = /^(?:--json |--project[= ]\S+ )*(?:list|show|--help|-h)(?: |$)/u;
-/** `darius` and its flags right before the word, under any path. */
-const DARIUS_BEFORE = /\bdarius(?: --?\S+(?: [^- ]\S*)?)* $/u;
+/** `darius` and its flags right before the word, under any path, or the CLI entry run by hand. */
+const DARIUS_BEFORE = /\b(?:darius|cli\.ts)(?: --?\S+(?: [^- ]\S*)?)* $/u;
 
 /**
  * True when the line may write a flare (`darius flare light|answer|accept|clear|reopen`),
@@ -613,6 +613,29 @@ export function writesFlare(command: string): boolean {
     if (FLARE_READ.test(words)) continue;
     if (DARIUS_BEFORE.test(plain.slice(0, match.index))) return true;
     if (words.split(" ").some((word) => FLARE_WRITE_VERBS.has(word))) return true;
+  }
+  return false;
+}
+
+/** The word `email`, not `email.ts`. */
+const EMAIL_WORD = /\bemail(?=[ ;&|()`<>]|$)/gu;
+/** A read: `status` right after `email`, after only the global flags a read takes. */
+const EMAIL_READ = /^(?:--json |--project[= ]\S+ )*(?:status|--help|-h)(?: |$)/u;
+
+/**
+ * True when the line may send mail or change the channel (`darius email set`,
+ * `darius email test`), under any prefix. Built as writesFlare, with one
+ * difference: the word must come right after `darius` or the CLI entry. "email",
+ * "set" and "test" are common words, so `git commit -m "fix email test"` must
+ * pass. A name hidden in a variable passes the gate, as for writesFlare, and
+ * meets the CLI wall (DARIUS_RUN), which clearsRunMarker keeps up (0.109.0).
+ */
+export function writesEmail(command: string): boolean {
+  const plain = plainShell(command);
+  for (const match of plain.matchAll(EMAIL_WORD)) {
+    const words = (plain.slice(match.index + "email".length).split(SHELL_BREAK)[0] ?? "").trim();
+    if (EMAIL_READ.test(words)) continue;
+    if (DARIUS_BEFORE.test(plain.slice(0, match.index))) return true;
   }
   return false;
 }
@@ -869,7 +892,8 @@ function hold(reason: string): GateDecision {
  * findings, and the ledger cannot tell the two apart. A granted line
  * (isGranted) passes the hold list, `may` and the report-mode verbs; a run
  * that is held stays held (decide checks that first). A line that starts a
- * follow-up, writes a flare (0.107.0) or clears the run's markers is denied
+ * follow-up, writes a flare (0.107.0), writes or tests the email channel
+ * (0.109.0) or clears the run's markers is denied
  * in every run, whatever `may` says (0.47.1).
  */
 function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall, isDariusBin: DariusBinCheck): GateDecision {
@@ -883,6 +907,7 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   // Before `may`, hold and grants (0.47.1): `Bash(darius *)` must not let a run start a follow-up.
   if (startsFollowUp(command)) return deny(`a run never starts a follow-up; a person does, outside the run: ${clip(command)}`);
   if (writesFlare(command)) return deny(`a run never lights or settles a flare by command; report it in the result block with "flare": true: ${clip(command)}`);
+  if (writesEmail(command)) return deny(`a run never sends mail or changes the email channel: ${clip(command)}`);
   if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;

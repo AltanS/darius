@@ -1,7 +1,7 @@
 /**
  * Flare notices (src/core/alerts.ts, "FLARES"): one notice per ledger line and
  * channel, sent by the host that wrote the line, with a trace when a channel is
- * not set up. The push service is a fake on loopback that counts requests.
+ * not set up. The push service and the mail provider are fakes on loopback.
  *
  * SAFETY: the state and config dirs are `mkdtemp` dirs, and DARIUS_PUSH_ORIGINS
  * names only the fake. Nothing here reaches a real push service or a real store.
@@ -9,8 +9,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createHash, webcrypto } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,9 +19,10 @@ import { join } from "node:path";
 import { parseArgs } from "../src/cli/args.ts";
 import { flareCommand } from "../src/cli/flare.ts";
 import { flareAlerts, flushAlerts, MAX_TRIES, NOT_SET_UP, sendAlerts, type Alert } from "../src/core/alerts.ts";
+import { emailSettingsFile, writeEmailSettings, type EmailSettings } from "../src/core/email.ts";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
-import { makePushKeys, subscribe, writePushKeys } from "../src/core/push.ts";
+import { makePushKeys, pushKeysFile, subscribe, writePushKeys } from "../src/core/push.ts";
 import { GLOBAL_PROJECT, openProject, putBlob, type Project } from "../src/core/store.ts";
 import { ulid } from "../src/core/ulid.ts";
 
@@ -42,13 +43,28 @@ interface FakeService {
   paths: string[];
   /** The HTTP status the next sends get. */
   status: number;
+  /** What reached the mail path. */
+  mail: Array<{ idempotencyKey: string; message: { from: string; to: string[]; subject: string; text: string } }>;
+  /** The HTTP status the next mails get. An error echoes the request. */
+  mailStatus: number;
 }
 
-const service: FakeService = { paths: [], status: 201 };
+const MAIL_PATH = "/private-path/send";
+const service: FakeService = { paths: [], status: 201, mail: [], mailStatus: 202 };
 
 const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-  request.resume();
+  let body = "";
+  request.setEncoding("utf8");
+  request.on("data", (chunk: string) => {
+    body += chunk;
+  });
   request.on("end", () => {
+    if (request.url === MAIL_PATH) {
+      service.mail.push({ idempotencyKey: String(request.headers["idempotency-key"]), message: JSON.parse(body) });
+      response.writeHead(service.mailStatus);
+      response.end(service.mailStatus < 300 ? "" : JSON.stringify({ authorization: request.headers.authorization, request: body }));
+      return;
+    }
     service.paths.push(request.url ?? "");
     response.writeHead(service.status);
     response.end();
@@ -400,4 +416,197 @@ test("flare light says on stderr that a channel is not set up, and still exits 0
   assert.equal(result.code, 0);
   assert.match(result.stderr, /:email: not set up on host/u);
   assert.equal(lines(project, "flare.lit").length, 1);
+});
+
+// --- email ------------------------------------------------------------------------------
+
+const TOKEN = "your-token-here";
+const MAIL_FROM = "darius@example.com";
+const MAIL_TO = ["ops@example.com", "second@example.com"];
+
+function emailSettings(more: Partial<EmailSettings> = {}): EmailSettings {
+  return { url: `${origin}${MAIL_PATH}`, token: TOKEN, from: MAIL_FROM, to: MAIL_TO, since: "2000-01-01T00:00:00.000Z", ...more };
+}
+
+/** Runs `body` with this file in the config dir, and takes it away after, because other tests need email not set up. */
+async function withEmail(settings: EmailSettings, body: () => Promise<void>): Promise<void> {
+  service.mail = [];
+  service.mailStatus = 202;
+  writeEmailSettings(settings);
+  try {
+    await body();
+  } finally {
+    rmSync(emailSettingsFile(), { force: true });
+  }
+}
+
+/** Every file under `dir`, with its text. */
+function filesUnder(dir: string): Array<{ path: string; text: string }> {
+  return readdirSync(dir, { recursive: true, encoding: "utf8" })
+    .map((name) => join(dir, name))
+    .filter((path) => statSync(path).isFile())
+    .map((path) => ({ path, text: readFileSync(path, "utf8") }));
+}
+
+/** The whole store, which is what syncs: no token, no address, no path of the provider's url. */
+function assertStoreClean(): void {
+  for (const { path, text } of filesUnder(process.env.DARIUS_STATE_DIR ?? "")) {
+    for (const secret of [TOKEN, MAIL_FROM, ...MAIL_TO, MAIL_PATH, "private-path"]) assert.equal(text.includes(secret), false, `${path} holds ${secret}`);
+  }
+}
+
+test("a flare notice goes out by email: the text, the hashed key and a recipient count, with no address or token in the store", async () => {
+  await withEmail(emailSettings({ web_url: "https://darius.example.com/" }), async () => {
+    const project = fresh("fa-mail");
+    const lit = light(project, "dep/cve 1", { deliver: ["email"], target: "web/package.json", title: "Vulnerable dependency" });
+    const key = `line:${lit.id}:email`;
+    assert.equal(await flush(project), 0, "nothing on push");
+    assert.equal(service.mail.length, 1);
+    const [mail] = service.mail;
+    assert.equal(mail?.idempotencyKey, createHash("sha256").update(key).digest("hex"));
+    assert.equal(mail?.message.from, MAIL_FROM);
+    assert.deepEqual(mail?.message.to, MAIL_TO);
+    assert.equal(mail?.message.subject, "flare: Vulnerable dependency");
+    assert.equal(mail?.message.text, ["Severity: high", "Project: fa-mail", "Target: web/package.json", "Link: https://darius.example.com/w/fa-mail/flares/dep%2Fcve%201"].join("\n"));
+    const [sentLine] = lines(project, "alert.sent");
+    assert.equal(sentLine?.key, key);
+    assert.equal(sentLine?.channel, "email");
+    assert.equal(sentLine?.devices, MAIL_TO.length);
+    await flushAlerts({ projects: [project.name] });
+    assert.equal(service.mail.length, 1, "sent once");
+    assertStoreClean();
+  });
+});
+
+test("a raised flare says so, and a run with many flares sends one mail with no flare body and no detail", async () => {
+  await withEmail(emailSettings(), async () => {
+    const project = fresh("fa-mail-many");
+    const header: Ritual = {
+      id: ulid(),
+      kind: "ritual",
+      slug: "scan",
+      title: "Scan",
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      tags: [],
+      anchor: "due",
+      policy: { mode: "report", may: [], hold: [] },
+      flare_deliver: ["email"],
+    };
+    project.writeItem({ header, body: "" }, { who: "test" });
+    const items = ["a", "b", "c", "d", "e"].map((key) => ({ key, detail: "THE-DETAIL", target: `t-${key}` }));
+    runWithFlares(project, "scan", items);
+    await flushAlerts({ projects: [project.name] });
+    assert.equal(service.mail.length, 1);
+    const message = service.mail[0]?.message;
+    assert.equal(message?.subject, "5 flares in scan");
+    assert.equal(message?.text, ["Project: fa-mail-many", "1. high: Flare a, t-a", "2. high: Flare b, t-b", "3. high: Flare c, t-c", "and 2 more"].join("\n"));
+    assert.equal(JSON.stringify(message).includes("THE-DETAIL"), false);
+
+    const single = fresh("fa-mail-raise");
+    light(single, "k", { deliver: ["email"], severity: "low" });
+    light(single, "k", { deliver: ["email"], severity: "critical" });
+    await flushAlerts({ projects: [single.name] });
+    assert.equal(service.mail[1]?.message.text, "Severity: low\nProject: fa-mail-raise");
+    assert.equal(service.mail[2]?.message.text, "Severity: critical, raised\nProject: fa-mail-raise");
+  });
+});
+
+test("a provider that fails and echoes the request leaves a scrubbed alert.failed, and retries stop at MAX_TRIES", async () => {
+  await withEmail(emailSettings(), async () => {
+    const project = fresh("fa-mail-fail");
+    const lit = light(project, "k", { deliver: ["email"] });
+    const key = `line:${lit.id}:email`;
+    service.mailStatus = 500;
+    for (let attempt = 0; attempt < MAX_TRIES + 2; attempt += 1) await flushAlerts({ projects: [project.name] });
+    assert.equal(service.mail.length, MAX_TRIES, "a broken provider costs at most MAX_TRIES requests");
+    assert.equal(failures(project, key).length, MAX_TRIES);
+    assert.equal(failures(project, key)[0]?.error, "127.0.0.1 answered 500");
+    assert.equal(failures(project, key)[0]?.channel, "email");
+    assert.equal(service.mail[2]?.idempotencyKey, service.mail[0]?.idempotencyKey, "the same notice, so the provider can drop a double");
+    assert.equal(service.mail[2]?.message.subject, "flare: Flare k", "a retry keeps the email text");
+    assertStoreClean();
+  });
+});
+
+test("a dead provider is a failed notice with a clean error, and not a stopped flush", async () => {
+  const dead = emailSettings({ url: "http://127.0.0.1:9/private-path/send" });
+  await withEmail(dead, async () => {
+    const project = fresh("fa-mail-dead");
+    const lit = light(project, "k", { deliver: ["email"] });
+    const delivery = await flushAlerts({ projects: [project.name] });
+    assert.equal(delivery?.sent, 0);
+    assert.match(String(failures(project, `line:${lit.id}:email`)[0]?.error), /^127\.0\.0\.1 did not answer/u);
+    assertStoreClean();
+  });
+});
+
+test("lines before since are not emailed, and leave no trace", async () => {
+  const project = fresh("fa-mail-since");
+  const old = light(project, "old", { deliver: ["email"] });
+  await withEmail(emailSettings({ since: tick() }), async () => {
+    const fresher = light(project, "new", { deliver: ["email"] });
+    await flushAlerts({ projects: [project.name] });
+    assert.deepEqual(service.mail.map((mail) => mail.message.subject), ["flare: Flare new"]);
+    assert.deepEqual(lines(project, "alert.sent").map((line) => line.key), [`line:${fresher.id}:email`]);
+    assert.equal(readLedger(project).some((line) => line.key === `line:${old.id}:email`), false);
+  });
+});
+
+test("a notice that failed as not set up is history once email is set up: setup does not email old flares", async () => {
+  const project = fresh("fa-mail-late");
+  const old = light(project, "old", { deliver: ["email"] });
+  await flushAlerts({ projects: [project.name] });
+  assert.equal(failures(project, `line:${old.id}:email`).length, 1, "a trace with tries left");
+  await withEmail(emailSettings({ since: tick() }), async () => {
+    await flushAlerts({ projects: [project.name] });
+    assert.deepEqual(service.mail, []);
+    assert.equal(failures(project, `line:${old.id}:email`).length, 1, "and no new trace");
+  });
+});
+
+test("a bad email.json does not stop the flush: push still goes out, and the trace gives the reason with no value", async () => {
+  const broken = [
+    { name: "wide", content: JSON.stringify(emailSettings()), mode: 0o644, reason: /^not set up on host: email\.json must be readable by its owner only/u },
+    { name: "syntax", content: `{"token":"${TOKEN}","to":["${MAIL_TO[0] ?? ""}"`, mode: 0o600, reason: /^not set up on host: email\.json is not valid JSON$/u },
+    { name: "field", content: JSON.stringify(emailSettings({ url: `http://mail.example.com${MAIL_PATH}` })), mode: 0o600, reason: /^not set up on host: email\.json: url must be https/u },
+  ];
+  for (const { name, content, mode, reason } of broken) {
+    writeFileSync(emailSettingsFile(), content, { mode });
+    chmodSync(emailSettingsFile(), mode);
+    try {
+      const project = fresh(`fa-mail-bad-${name}`);
+      const lit = light(project, "k", { deliver: ["push", "email"] });
+      assert.equal(await flush(project), 1, "push goes out");
+      assert.deepEqual(lines(project, "alert.sent").map((line) => line.channel), ["push"]);
+      assert.match(String(failures(project, `line:${lit.id}:email`)[0]?.error), reason);
+    } finally {
+      rmSync(emailSettingsFile(), { force: true });
+    }
+  }
+  assertStoreClean();
+});
+
+test("flare light sends its own email before it exits, and its stderr holds no value on a failure", async () => {
+  await withEmail(emailSettings(), async () => {
+    const project = fresh("fa-mail-light");
+    service.mailStatus = 403;
+    const result = await runFlare(project.name, ["light", "k", "--title", "Flare k", "--severity", "high", "--deliver", "email"]);
+    assert.equal(result.code, 0);
+    assert.equal(service.mail.length, 1);
+    assert.match(result.stderr, /127\.0\.0\.1 answered 403/u);
+    for (const secret of [TOKEN, MAIL_FROM, ...MAIL_TO, MAIL_PATH]) assert.equal(result.stderr.includes(secret), false, secret);
+  });
+});
+
+// Last: it takes the push keys away.
+test("email does not depend on push: a host without push keys still sends it", async () => {
+  rmSync(pushKeysFile(), { force: true });
+  await withEmail(emailSettings(), async () => {
+    const project = fresh("fa-mail-only");
+    light(project, "k", { deliver: ["email"] });
+    const delivery = await flushAlerts({ projects: [project.name] });
+    assert.equal(delivery?.sent, 1);
+    assert.equal(service.mail.length, 1);
+  });
 });

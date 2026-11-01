@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.109.0] - 2026-11-01
+
+### Added
+
+- Flare notices can go out by email. `darius email set --stdin` reads JSON settings (`url`, `token`, `from`, `to`, and optional `web_url` and `since`), and writes `<config>/email.json` with mode 0600 from the first byte. `since` becomes now when absent, so setup does not email old flares. A notice that failed as "not set up on host" before `since` is history too, and does not go out as a retry.
+- The request is `POST <url>` with a bearer token, an `Idempotency-Key` that is the SHA-256 of the notice key, and the JSON `{from, to, subject, text}`. Any 2xx is success. A redirect is a failure and is not followed. A request stops after 15 seconds.
+- The subject is `flare: <title>` or `N flares in <ritual>`. The body holds the severity, the project, the target, and a link when `web_url` is set. It never holds a flare body or a detail.
+- `darius email status` says set up or not set up, with the host of the url and the recipient count. `darius email test` sends one message and writes no ledger line. `emailStatus()` in `src/core/email.ts` gives the same facts to the web app.
+
+### Security
+
+- The token and the addresses stay in `email.json`. The ledger holds a recipient count, and an error holds the host and the status, never the provider's answer. The text of a failed fetch loses the token, every address and the path of the url first.
+- `email.json` is refused when its group or others have any access. A bad file counts as not set up, with a reason that quotes no value, so it does not stop the flush of other alerts. `url` must be https, or http on loopback or the tailnet, with no user, password, query or fragment.
+- A run cannot send mail or change the channel. `email set` and `email test` refuse while `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and the gate denies those lines in every mode. `email status` passes.
+
 ## [0.108.0] - 2026-11-01
 
 ### Added

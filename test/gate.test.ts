@@ -21,6 +21,7 @@ import {
   shellRuleRegex,
   splitShell,
   startsFollowUp,
+  writesEmail,
   writesFlare,
   type RunPolicy,
 } from "../src/harness/gate.ts";
@@ -814,6 +815,76 @@ test("a run never lights or settles a flare, whatever may says, under any prefix
       }
     }
   }
+});
+
+/** One email write verb in every form a line can hide it. */
+function emailWriteForms(verb: string): string[] {
+  return [
+    `darius email ${verb}`,
+    `darius email ${verb} --stdin`,
+    `env -u DARIUS_RUN darius email ${verb}`,
+    `FOO=1 nohup darius email ${verb}`,
+    `sudo -E darius email ${verb}`,
+    `/home/u/.local/bin/darius email ${verb}`,
+    `./bin/darius email ${verb}`,
+    `bun src/cli.ts email ${verb}`,
+    `darius 'email' '${verb}'`,
+    `darius "email" "${verb}"`,
+    `darius em\\ail ${verb}`,
+    `darius  email\t${verb}`,
+    `bash -c "darius email ${verb}"`,
+    `ssh host-a darius email ${verb}`,
+    `date && darius email ${verb}`,
+    `date\ndarius email ${verb}`,
+    `(darius email ${verb})`,
+    `echo $(darius email ${verb})`,
+    `darius email status; darius email ${verb}`,
+    `darius email --json ${verb}`,
+    `darius --json email ${verb}`,
+    `darius --project p email ${verb}`,
+    `cat settings.json | darius email ${verb} --stdin`,
+    `darius email ${verb} > /tmp/out`,
+  ];
+}
+
+test("the gate denies email set and email test in every form and mode, whatever may or a grant says", () => {
+  const scopes = [policy({ may: ["Bash(*)"] }), policy({ gate: "full", may: ["Bash(*)"] }), policy({ mode: "report", may: ["Bash(*)"] }), policy({ may: ["Bash(darius *)"] })];
+  for (const verb of ["set", "test"]) {
+    for (const line of emailWriteForms(verb)) {
+      assert.equal(writesEmail(line), true, line);
+      for (const scoped of scopes) assert.match(decide(shell(line), scoped) ?? "", /never sends mail/u, line);
+    }
+  }
+  assert.match(decide(shell("darius email test"), policy({ may: ["Bash(*)"], grants: ["darius email test"] })) ?? "", /never sends mail/u);
+});
+
+test("a verb the gate cannot read after darius email is denied: a variable, a substitution, xargs", () => {
+  for (const line of ["darius email $VERB", "darius email $(echo test)", "darius email `echo test`", "echo test | xargs darius email", "darius email"]) {
+    assert.equal(writesEmail(line), true, line);
+  }
+});
+
+test("the gate does not deny email status, nor a line that only says email, set or test", () => {
+  const lines = [
+    "darius email status",
+    "darius email status --json",
+    "darius email --json status",
+    "darius --json email status",
+    "darius email --help",
+    "/home/u/.local/bin/darius email status",
+    "date && darius email status",
+    'git commit -m "fix email test"',
+    'git commit -m "set email set up"',
+    "grep -rn email test",
+    "grep email set",
+    "pnpm vitest run email test",
+    'echo "email test passed"',
+    "cat src/core/email.ts",
+    "ls test/flare-email.test.ts",
+    "git log --author=email set",
+  ];
+  for (const line of lines) assert.equal(writesEmail(line), false, line);
+  for (const line of ["darius email status", "darius email status --json"]) assert.equal(decide(shell(line), policy({ may: ["Bash(*)"] })), undefined, line);
 });
 
 test("a verb the gate cannot read after darius flare is denied: a variable, a substitution, xargs", () => {

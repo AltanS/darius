@@ -571,6 +571,43 @@ darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
   item's proposal. It writes the answer only when the run started. It waits for the run, and it exits
   with the run's code. A flare from outside has no run, so it refuses that with exit `1`.
 
+### Flares by email
+
+A host can email its flare notices through an HTTP mail API. There is no SMTP. Write the settings to a
+file that only you can read (run `umask 077` first):
+
+```json
+{
+  "url": "https://mail.example.com/v1/send",
+  "token": "your-token-here",
+  "from": "darius@example.com",
+  "to": ["you@example.com"],
+  "web_url": "https://darius.example.com"
+}
+```
+
+Then feed the file to darius on stdin, and delete it:
+
+```bash
+darius email set --stdin < email-settings.json && rm email-settings.json
+darius email status               # set up or not, the host of the url, the recipient count
+darius email test                 # sends one message
+```
+
+- Each host has its own `<config>/email.json`. darius writes it with mode 0600, and refuses a file that
+  its group or others can read. It is never synced and never in a snapshot.
+- `url` must be https, or http on loopback or the tailnet. It may not hold a user, a password or a
+  query. `web_url` is optional, and adds a link to each message.
+- darius sends `POST <url>` with `Authorization: Bearer <token>`, an `Idempotency-Key`, and the JSON
+  `{from, to, subject, text}`. Any 2xx is success. A request stops after 15 seconds, and darius tries one
+  notice at most three times.
+- A message holds the title, severity, project, target and link. It never holds a flare body or a detail.
+- Flares from before `set` send no mail. Add `since` to the JSON to choose another start.
+- The token and the addresses stay in that file: not in the store, the ledger, a log or an error.
+- A run cannot use `email set` or `email test`. It can use `email status`.
+
+To use the channel, name it: `flare light --deliver email`, or `flare_deliver = ["email"]` on a ritual.
+
 ## Cadence and the first due date
 
 `cadence` takes `Nd`, `Nw` or `Nm`: `1d` is every day, `1w` every week, `2w` every two weeks, `1m`
@@ -608,6 +645,7 @@ the full reference.
 - `darius run ack <run> [--answer N=TEXT ...] [--note TEXT]`: answer a run's questions, one `--answer` per question, or dismiss a run with no answer. The answers reach the next run of the ritual and stay until a run that read them completes.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
 - `darius flare light|list|show|answer|accept|clear|reopen`: problems that need you, kept by key. See [Flares](#flares).
+- `darius email status|set|test`: the email channel of flare notices. See [Flares by email](#flares-by-email).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.
