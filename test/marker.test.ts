@@ -579,6 +579,29 @@ test("follow_up_may and follow_up: the hash of a ritual without them is the hash
   assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nfollow_up_may = ["Read"]\n`)));
 });
 
+// --- flare_deliver (0.108.0) --------------------------------------------------------
+
+test("flare_deliver: a list of push and email, [] for the app only, deduped; absent is no key", () => {
+  assert.deepEqual(firstRitual(`${RITUAL}mode = "report"\nflare_deliver = ["push", "email", "push"]\n`).flareDeliver, ["push", "email"]);
+  assert.deepEqual(firstRitual(`${RITUAL}mode = "report"\nflare_deliver = []\n`).flareDeliver, [], "an empty list is kept: it means the app only");
+  assert.equal(firstRitual(`${RITUAL}mode = "report"\n`).flareDeliver, undefined);
+});
+
+test("flare_deliver: anything but a list of known channels is refused with its line", () => {
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nflare_deliver = "push"\n`), /:\d+: flare_deliver must be a list/u);
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nflare_deliver = ["sms"]\n`), /:\d+: flare_deliver must be a list of push and email, got "sms"/u);
+});
+
+test("flare_deliver: the hash of a ritual without it is unchanged, and a ritual with it differs", () => {
+  const text = 'v = 3\nproject = "acme"\nmax_mode = "act"\ntz = "Europe/Berlin"\n[policies.p]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'x\']\n[rituals.daily]\ntitle = "Daily"\ncadence = "1d"\nskill = "daily"\npolicy = "p"\nmay_extra = ["Read"]\n[rituals.own]\ntitle = "Own"\nskill = "own"\nmode = "report"\nmay = ["Grep"]\nhold = [\'y\']\non_hold = "deny"\n';
+  // The same golden hashes as the 0.68.0 test above: this release adds no key to a ritual that lacks the new one.
+  const golden = ["e2266101cb605a9f4e3d22fdcc306342e134b74f17b7cf9260abeeb91c9763a7", "b4669ae2b1675a679c4137d2433c1af8ae848db81fb57fc82605d0ffd441e34c"];
+  assert.deepEqual(readMarker(checkout(text))?.rituals.map((ritual) => definitionHash(ritual)), golden);
+  const plain = firstRitual(`${RITUAL}mode = "report"\n`);
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nflare_deliver = []\n`)));
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nflare_deliver = ["email"]\n`)));
+});
+
 test("--resolved lists follow_up_may after hold, sorted, and nothing when there is none", () => {
   const ritual = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\nfollow_up_may = ["Bash(z *)", "Bash(a *)"]\n`);
   assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report", "hold: x", "follow_up_may: Bash(a *)", "follow_up_may: Bash(z *)"]);

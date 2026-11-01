@@ -31,6 +31,7 @@
  * and a mistake on the command line exits 2.
  */
 
+import { flushAlerts } from "../core/alerts.ts";
 import {
   collectFlares,
   FLARE_ACCEPTED,
@@ -263,11 +264,14 @@ function litLine(args: ParsedArgs, project: Project, key: string): LedgerLineInp
 }
 
 /**
- * The one place `flare light` sends alerts: it will flush this project's
- * notices before the verb exits. Nothing sends flare alerts yet.
+ * The one place `flare light` sends alerts: it flushes this project's notices
+ * before the verb exits, and no other project's. A notice that could not go
+ * out is reported on stderr; the flare is lit either way, so the exit code
+ * does not change.
  */
-function flushOwnAlerts(_project: Project): void {
-  // The flare alert work fills this in.
+async function flushOwnAlerts(project: Project): Promise<void> {
+  const delivery = await flushAlerts({ projects: [project.name] });
+  for (const failure of delivery?.failed ?? []) console.error(`darius flare: alert: ${failure}`);
 }
 
 /** What the report did, in one sentence. */
@@ -279,7 +283,7 @@ function lightSentence(flare: Flare): string {
   return `✓ flare '${flare.key}' already ${flare.status}, seen again; it stays closed`;
 }
 
-function flareLight(args: ParsedArgs): number {
+async function flareLight(args: ParsedArgs): Promise<number> {
   const key = requireKey(args, "light");
   const project = currentProject(args);
   const line = litLine(args, project, key);
@@ -287,7 +291,7 @@ function flareLight(args: ParsedArgs): number {
     appendLine(project, line);
     return lookup(project, key);
   });
-  flushOwnAlerts(project);
+  await flushOwnAlerts(project);
   if (args.json) printJson({ ok: true, project: project.name, key, status: flare.status, severity: flare.severity, reports: flare.reports });
   else console.log(lightSentence(flare));
   return 0;

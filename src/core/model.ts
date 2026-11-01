@@ -76,6 +76,11 @@ export interface Ritual extends ItemHeader {
    * ritual runs headless, without herdr. Absent: attended, in a herdr tab.
    */
   follow_up?: "headless";
+  /**
+   * `flare_deliver` in the marker (0.108.0): the channels for the flares a run
+   * of this ritual lights (`push`, `email`). `[]` is the app only. Absent: push.
+   */
+  flare_deliver?: string[];
   /** `definitionHash` of the mirrored definition. */
   def_hash?: string;
   /** The short commit of the checkout that reconcile read; absent outside git. */

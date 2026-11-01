@@ -435,6 +435,22 @@ test("on_hold deny mirrors into the store item, and the prompt and policy.json c
   assert.ok(plain.includes("a match holds the run"), "the default prompt is as before");
 });
 
+test("flare_deliver mirrors into the store item, an empty list stays, and a removed key leaves the mirror (0.108.0)", { skip: NO_GIT }, () => {
+  const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\nmax_mode = "act"\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\nmode = "report"\nflare_deliver = ["email"]\n[rituals.quiet]\ntitle = "Quiet"\nskill = "quiet"\nmode = "report"\nflare_deliver = []\n[rituals.plain]\ntitle = "Plain"\nskill = "plain"\nmode = "report"\n';
+  const { project, dir } = setup({ git: true, marker });
+  assert.equal(reconcileProject(project, dir, HOST, T1).ok, true);
+  assert.deepEqual(ritual(project, "daily").flare_deliver, ["email"]);
+  assert.deepEqual(ritual(project, "quiet").flare_deliver, [], "the app only is not the same as absent");
+  assert.equal(ritual(project, "plain").flare_deliver, undefined);
+  assert.doesNotMatch(readItemText(project, "ritual", "plain") ?? "", /flare_deliver/u);
+  assert.match(readItemText(project, "ritual", "quiet") ?? "", /flare_deliver: \[\]/u);
+  assert.equal(reconcileProject(project, dir, HOST, T2).unchanged.includes("daily"), true, "a second reconcile finds nothing new");
+  writeFileSync(join(dir, ".darius.toml"), marker.replace('project = "acme-web"', `project = "${project.name}"`).replace('flare_deliver = ["email"]\n', ""));
+  commitAll(dir, "drop");
+  assert.ok(reconcileProject(project, dir, HOST, T3).updated.includes("daily"));
+  assert.equal(ritual(project, "daily").flare_deliver, undefined, "a removed key leaves the mirror");
+});
+
 test("follow_up_may and follow_up = headless mirror into the store item and read back; only a follow-up's run files merge it (0.69.0)", { skip: NO_GIT }, () => {
   const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\nmax_mode = "act"\n[policies.guarded]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'\\bpush\\b\']\nfollow_up_may = ["Bash(pnpm cli blocks update *)"]\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "guarded"\nfollow_up = "headless"\n';
   const { project, dir } = setup({ git: true, marker });

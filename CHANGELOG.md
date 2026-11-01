@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.108.0] - 2026-11-01
+
+### Added
+
+- Flare notices. A ledger line that opens or raises flares sends one notice per channel, not one per flare, so a run result with a hundred items gives one push. The key is `line:<line id>:<channel>`. The notice names one flare, or says "N flares in <ritual>" and lists three. It is short plain text, with no flare body and no detail. Only the host that wrote the line sends it. A repeat report at the same severity sends nothing; a severity rise or a relight after gone sends once.
+- The marker ritual key `flare_deliver = ["push", "email"]` chooses the channels for the flares a run of that ritual lights. `[]` means the app only. Absent means push, and leaves the definition hash unchanged. A `flare.lit` line uses its own `deliver`. Update every host to 0.108.0 before a marker uses the key, because an older host refuses it.
+- `darius flare light` sends its own project's notices before it exits. A notice that could not go out is reported on stderr, and the exit code stays 0.
+
+### Changed
+
+- Alerts send in one pass per channel, each with its own readiness check. A retried notice keeps the channel of its failed line. Existing alerts keep their keys, and a host without push keys still sends nothing and records nothing for them.
+- A flare notice on a channel this host has not set up writes `alert.failed` with the reason "not set up on host", so it does not vanish without a trace. That counts toward the three tries. Email is not set up anywhere yet, so every email notice gets that trace until the email spec.
+
 ## [0.107.0] - 2026-11-01
 
 ### Added

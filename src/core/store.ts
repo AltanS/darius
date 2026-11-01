@@ -279,7 +279,7 @@ export function withFileLock<R>(lockPath: string, fn: () => R, timing: LockTimin
 const RITUAL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "cadence", "anchor",
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
-  "source", "at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
+  "source", "at", "tz", "from", "args", "timeout", "follow_up", "flare_deliver", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
 const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "follow_up_may", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
@@ -303,6 +303,8 @@ interface FieldReader {
   requiredString(key: string): string;
   optionalString(key: string): string | undefined;
   stringList(key: string): string[];
+  /** The list at `key`, an empty list included; undefined when the key is absent. */
+  optionalList(key: string): string[] | undefined;
   boolean(key: string, fallback: boolean): boolean;
   optionalInteger(key: string): number | undefined;
   nestedMap(key: string): FieldReader | undefined;
@@ -328,6 +330,12 @@ function readerFor(map: FrontmatterMap, where: string): FieldReader {
     stringList(key) {
       const value = map[key];
       if (value === undefined) return [];
+      if (!isList(value)) throw fail(`'${key}' must be a list`);
+      return [...value];
+    },
+    optionalList(key) {
+      const value = map[key];
+      if (value === undefined) return undefined;
       if (!isList(value)) throw fail(`'${key}' must be a list`);
       return [...value];
     },
@@ -439,6 +447,8 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
     if (followUp !== "headless") throw new Error(`${where}: 'follow_up' must be headless or attended, got '${followUp}'`);
     ritual.follow_up = followUp;
   }
+  const flareDeliver = reader.optionalList("flare_deliver");
+  if (flareDeliver !== undefined) ritual.flare_deliver = flareDeliver;
 }
 
 function decodeVigil(reader: FieldReader): Vigil {
@@ -547,6 +557,7 @@ function encodeHeader(item: Item): FrontmatterHeader {
     putIfSet(entries, "host", item.host);
     putIfSet(entries, "source", item.source);
     for (const key of ["at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
+    if (item.flare_deliver !== undefined) entries.flare_deliver = [...item.flare_deliver];
     putIfSet(entries, "def_dirty", item.def_dirty === undefined ? undefined : String(item.def_dirty));
     putIfSet(entries, "def_host", item.def_host);
     putIfSet(entries, "def_at", item.def_at);
