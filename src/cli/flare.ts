@@ -19,6 +19,9 @@
  *                  run. It starts `run follow-up <run> --item <key> --note N`
  *                  first, and writes `flare.answered` only when the run started.
  *   flare accept <key> [--note N] [--who W]
+ *                  on a flare whose newest report came from `vigil:<slug>` it
+ *                  also closes that vigil as failed, when the vigil exists and
+ *                  is open (0.110.0). The accept line comes first.
  *   flare clear <key> [--note N] [--who W]
  *   flare reopen <key> [--note N] [--who W]
  *
@@ -48,8 +51,11 @@ import type { Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { clean, KEY_MAX, normalizeKey, SEVERITIES, TEXT_LIMITS, type Severity } from "../core/result.ts";
 import { sshDariusLine } from "../core/ssh.ts";
+import { closeVigilForFlare } from "../core/sweep.ts";
+import { vigilOfSource } from "../core/vigil-flare.ts";
 import { getBlobText, openProject, putBlob, type Project } from "../core/store.ts";
 import { ritualHost } from "../core/workdir.ts";
+import { errorMessage } from "../runtime.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
 import { runFollowUp, verbArgv } from "./run-due.ts";
 
@@ -339,6 +345,44 @@ function settleLine(input: SettleInput): LedgerLineInput {
   return line;
 }
 
+/** What a settle verb prints with `--json`. */
+interface SettledJson {
+  ok: true;
+  project: string;
+  key: string;
+  /** Only for an accepted flare of a vigil: the slug, and what happened to it. */
+  vigil?: string;
+  vigilClose?: string;
+}
+
+interface Settled {
+  refused: string | undefined;
+  flare: Flare;
+}
+
+/** What accepting a flare did to its vigil. `none`: the flare is not a vigil's. */
+type VigilClose = { slug: string; done: "closed" | "already-closed" | "no-vigil" | "failed" } | { done: "none" };
+
+/**
+ * An accepted flare of a vigil closes that vigil as failed (0.110.0): nothing
+ * is left to wait for. The accept line is already written when this runs, so a
+ * failure here leaves the decision on record; it says so on stderr. A vigil
+ * that is gone or already closed is fine. An answer leaves the vigil armed.
+ */
+function closeVigilOfAccept(project: Project, flare: Flare, who: string): VigilClose {
+  const slug = vigilOfSource(flare.source);
+  if (slug === undefined) return { done: "none" };
+  try {
+    return { slug, done: closeVigilForFlare(project, { slug, flareKey: flare.key, who }) };
+  } catch (cause) {
+    console.error(
+      `darius flare accept: flare '${flare.key}' is accepted and stays accepted, but vigil '${slug}' was not closed: ${errorMessage(cause)}. ` +
+        `Close it yourself: darius vigil close ${slug} --verdict failed --reason "flare accepted"`,
+    );
+    return { slug, done: "failed" };
+  }
+}
+
 /** Writes one line under the project lock: the flare is read again inside it, so two operators cannot settle it twice. */
 function flareSettle(args: ParsedArgs, verb: Settle): number {
   const key = requireKey(args, verb);
@@ -346,16 +390,26 @@ function flareSettle(args: ParsedArgs, verb: Settle): number {
   if (verb === "answer" && note === undefined) throw new UsageError("flare answer: missing --note");
   const project = currentProject(args);
   const who = stringFlag(args, "who") ?? defaultWho();
-  const refused = project.withLock((): string | undefined => {
-    const flare = lookup(project, key);
-    const reason = settleRefusal(verb, flare);
-    if (reason === undefined) appendLine(project, settleLine({ verb, flare, who, note }));
-    return reason;
+  const { refused, flare } = project.withLock((): Settled => {
+    const found = lookup(project, key);
+    const reason = settleRefusal(verb, found);
+    if (reason === undefined) appendLine(project, settleLine({ verb, flare: found, who, note }));
+    return { refused: reason, flare: found };
   });
   if (refused !== undefined) return refuse(args, refused);
-  if (args.json) printJson({ ok: true, project: project.name, key });
-  else console.log(`✓ ${SETTLE[verb].done} flare '${key}'`);
-  return 0;
+  const vigil: VigilClose = verb === "accept" ? closeVigilOfAccept(project, flare, who) : { done: "none" };
+  if (args.json) {
+    const settled: SettledJson = { ok: true, project: project.name, key };
+    if (vigil.done !== "none") {
+      settled.vigil = vigil.slug;
+      settled.vigilClose = vigil.done;
+    }
+    printJson(settled);
+  } else {
+    console.log(`✓ ${SETTLE[verb].done} flare '${key}'`);
+    if (vigil.done === "closed") console.log(`  closed vigil '${vigil.slug}' as failed`);
+  }
+  return vigil.done === "failed" ? 1 : 0;
 }
 
 /** Refuses a follow-up that belongs on another host, and prints this verb for that host, so the answer is written with it. */

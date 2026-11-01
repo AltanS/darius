@@ -2,6 +2,23 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.110.0] - 2026-11-01
+
+### Added
+
+- A vigil can light a flare. `darius vigil add <slug> --in 7d --flare high [--flare-deliver push,email|none]`, and `vigil set <slug> --flare high | --no-flare`. A sweep that reads `failed` lights the flare `vigil:<slug>` with the vigil title, your severity, and a target that names the failure kind and the failing step. The vigil stays armed, and a daily repeat is a report with no notice. A dry run, a classify run, and the outcomes `skipped`, `pending`, `finding` and `awaiting-manual` light nothing.
+- A close as `held` clears the flare, by the sweep or by `vigil close --verdict held`. It writes `flare.cleared` only when that flare exists. `vigil close --verdict failed` leaves the flare open.
+- `flare accept` on a flare of a vigil also closes the vigil as `failed`, after it writes the accept line. A vigil that is gone or already closed is fine. If the close fails, the accept stays on record, stderr says so and the exit code is 1. `flare answer` leaves the vigil armed.
+- `--in <N>d|w|m` on `vigil add` and `vigil set` is a due date counted from today. darius stores the date. It does not combine with `--due`.
+- A sweep that lit a flare sends the notices of its own project before it exits, after it gives its lease back. A failed send never fails the sweep.
+- `vigil show` prints the flare setting. `vigil list --json` keeps every field.
+
+### Changed
+
+- `--flare` is refused on a vigil with no date and no `--gate-command`, because its checks never fail, and on a slug whose flare key would pass 120 characters.
+- The legacy route refuses `--flare`, `--flare-deliver` and `--in` with "unknown option", exit 2, and drops none of them.
+- **Update every host before a vigil uses `flare`.** An older host refuses a vigil item that holds the new `flare` and `flare_deliver` keys. To go back, run `vigil set <slug> --no-flare` on each vigil first.
+
 ## [0.109.0] - 2026-11-01
 
 ### Added

@@ -69,6 +69,7 @@ import { appendLine, defaultWho } from "./ledger.ts";
 import { UsageError } from "./model.ts";
 import type { Document, Item, Kind, Policy, Profile, Ritual, Vigil } from "./model.ts";
 import { projectDir, stateDir } from "./paths.ts";
+import { SEVERITIES, type Severity } from "./result.ts";
 
 export interface Project {
   name: string;
@@ -288,7 +289,7 @@ const PROFILE_KEYS: readonly string[] = [
 ];
 const VIGIL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "from", "due", "until",
-  "gate_command", "heavy", "agent", "tags", "imported_from",
+  "gate_command", "heavy", "agent", "tags", "imported_from", "flare", "flare_deliver",
 ];
 
 function isScalar(value: FrontmatterValue): value is FrontmatterScalar {
@@ -451,6 +452,12 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
   if (flareDeliver !== undefined) ritual.flare_deliver = flareDeliver;
 }
 
+function toFlareSeverity(value: string, where: string): Severity {
+  const severity = SEVERITIES.find((candidate) => candidate === value);
+  if (severity === undefined) throw new Error(`${where}: 'flare' must be one of ${SEVERITIES.join(", ")}, got '${value}'`);
+  return severity;
+}
+
 function decodeVigil(reader: FieldReader): Vigil {
   reader.rejectUnknown(VIGIL_KEYS);
   const vigil: Vigil = {
@@ -468,6 +475,10 @@ function decodeVigil(reader: FieldReader): Vigil {
     const value = reader.optionalString(key);
     if (value !== undefined) vigil[key] = value;
   }
+  const flare = reader.optionalString("flare");
+  if (flare !== undefined) vigil.flare = toFlareSeverity(flare, `vigil '${vigil.slug}'`);
+  const flareDeliver = reader.optionalList("flare_deliver");
+  if (flareDeliver !== undefined) vigil.flare_deliver = flareDeliver;
   return vigil;
 }
 
@@ -583,6 +594,8 @@ function encodeHeader(item: Item): FrontmatterHeader {
   putIfSet(entries, "agent", item.agent);
   entries.tags = [...item.tags];
   putIfSet(entries, "imported_from", item.imported_from);
+  putIfSet(entries, "flare", item.flare);
+  if (item.flare_deliver !== undefined) entries.flare_deliver = [...item.flare_deliver];
   return entries;
 }
 

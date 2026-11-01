@@ -745,7 +745,7 @@ A run never starts a follow-up. The gate denies a shell line that holds `run fol
 
 ## Flares
 
-Status: 2026-11-01, 0.106.0 (the index), 0.107.0 (the CLI, the gate walls and the prompt), 0.108.0 (the notices), 0.109.0 (email). This is an operator request outside the migration phases: the operator asked for it directly, so the scope rule in CLAUDE.md does not block it. The web page comes in a later release.
+Status: 2026-11-01, 0.106.0 (the index), 0.107.0 (the CLI, the gate walls and the prompt), 0.108.0 (the notices), 0.109.0 (email), 0.110.0 (a vigil that lights a flare). This is an operator request outside the migration phases: the operator asked for it directly, so the scope rule in CLAUDE.md does not block it. The web page comes in a later release.
 
 A flare is a problem that needs the operator: "check this every 7 days, and light a flare if it finds something". The ritual does the check, and the flare is only the result. A flare has no schedule and does no work. Findings push once per run, hold no lasting decision and come only from runs, so they do not cover this.
 
@@ -777,6 +777,16 @@ The token and the addresses never reach the store, the ledger, a log, stdout or 
 
 A run must not send mail or change the channel. `email set` and `email test` exit 1 while `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and `writesEmail` in `src/harness/gate.ts` denies the line in every mode, before grants, `may` and the hold list. It is built as `writesFlare`, with one difference: the word `email` must come right after `darius` or the CLI entry. "Email", "set" and "test" are common words, so `git commit -m "fix email test"` must pass. A name hidden in a variable passes the gate and meets the CLI wall, and `clearsRunMarker` keeps that wall up. `email status` passes.
 
+**A vigil that lights a flare (0.110.0).** The operator's request: "run a vigil in 7 days, close it if the check passes, light a flare if it fails". A Command such as `check || darius flare light` would make the check pass and close the vigil, so it is not a workaround. The vigil keeps two optional header keys, `flare` (a severity) and `flare_deliver` (as the ritual key: `push`, `email`, `[]` for the app only), stored as no key when not set. `vigil add|set --in <N>d|w|m` resolves a local `due` date when it is written, and does not combine with `--due`. `--flare` is refused on a vigil with no `due` and no `gate_command`, because `sweepEvent` never yields `failed` and the flag could never fire. `--flare`, `--flare-deliver` and `--no-flare` are for vigils the store owns: the legacy route (`parseArgs` of the frozen CLI) exits 2 with "unknown option", and drops nothing.
+
+A sweep outcome `failed`, outside a dry run and classify, appends `flare.lit` with key and source `vigil:<slug>`, the vigil title, the vigil's severity and `deliver`, and a `target` of `<fail_kind>, step #<n>: <text>`, so a broken guard does not read as the event. The key must pass the key rules of `result.ts` (at most 120 characters), so a slug of more than 114 characters cannot take `--flare`. `skipped`, `pending`, `finding` and `awaiting-manual` light nothing, and an environment that writes no `vigil.swept` lights nothing. The vigil stays armed, as the Outcomes rule says: a machine cannot tell a shut precondition from a broken guard. A daily repeat is one more `flare.lit` at the same severity: a report with no notice, because the notice is per opening line.
+
+The sweep flushes its own project after it lit a flare, as `flare light` does, and only then. The flush runs after the lease is finished or released, so a slow send cannot hold a lease past its limit. It never fails the sweep: a failed send leaves an `alert.failed` line, the stderr gets one line, and the exit code does not change.
+
+A close as `held` appends `flare.cleared` for `vigil:<slug>` inside the same lock, in `closeHeld` for the sweep and in `closeVigil` for `vigil close --verdict held`. It writes the line only when the flare exists, is not gone, and was last reported by that vigil, because the index skips any other `flare.cleared`. A close as `failed` leaves the flare open. `flare accept` on a flare whose newest source is `vigil:<slug>` writes `flare.accepted` first, then closes the vigil as `failed` with `by: "flare"`, when the vigil exists and is open. A vigil that is gone or already closed is fine. If the close throws, the accept stays on record, stderr says so, and the verb exits 1. `flare answer` leaves the vigil armed: it keeps watching, and a pass closes it and clears the flare.
+
+Two edges. `flare clear` on a vigil that is still armed lights the flare again at the next failing sweep, because the vigil never stopped. `flare reopen` after an accept leaves a flare only a person can end, because the accept closed the vigil and no sweep reports on it. A host older than 0.110.0 refuses a vigil item with the new keys (`readItem` rejects unknown keys), so every host must update before a vigil uses `flare`. Removing the keys first (`vigil set --no-flare`) is the rollback.
+
 ## Vigil auto-execution
 
 A vigil check is a shell command with an expectation. darius runs it. No LLM is involved. The rules are ported from the legacy vigil sweep script (read first-hand 2026-09-28) because they are measured on 60 real vigils. Two changes only: the event gate can fire itself through `gate_command`, and evidence goes to the ledger instead of into the vigil file.
@@ -791,7 +801,7 @@ A vigil check is a shell command with an expectation. darius runs it. No LLM is 
 
 **Outcomes and closing.**
 - Every executable check passed and no manual item remains, and the gate allows: append `vigil.swept{outcome:"held"}` then `vigil.closed{verdict:"held", by:"sweep"}`. The vigil is closed.
-- Any executable check failed or timed out: `vigil.swept{outcome:"failed"}`. The vigil stays armed and is flagged in `due` and in the report. `failed` is never auto-closed; a failing check is as likely a shut precondition as a broken guard. `--close-failed` exists for the operator, not for the timer.
+- Any executable check failed or timed out: `vigil.swept{outcome:"failed"}`. The vigil stays armed and is flagged in `due` and in the report. A vigil with a `flare` key also lights its flare (see "Flares", 0.110.0). `failed` is never auto-closed; a failing check is as likely a shut precondition as a broken guard. `--close-failed` exists for the operator, not for the timer.
 - All executables passed but a manual item is unanswered: `vigil.swept{outcome:"awaiting-manual"}`. Stays armed, not flagged as failed.
 - Event-gated, gate not fired: `vigil.swept{gate:"not-fired"}` only. Nothing else runs.
 - Heavy without `--include-heavy`, or no executable check: reported, nothing runs, nothing is written except the daily `swept{outcome:"skipped"}` line.

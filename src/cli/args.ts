@@ -48,6 +48,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "all",
   "heavy",
   "no-heavy",
+  "no-flare",
   "remote",
   "systemd",
   "keep-stopped",

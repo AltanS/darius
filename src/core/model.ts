@@ -8,6 +8,8 @@
  * (docs/concept.md, "Domain model": "Store facts, compute status").
  */
 
+import type { Severity } from "./result.ts";
+
 export type Kind = "ritual" | "vigil" | "profile";
 
 export interface ItemHeader {
@@ -101,6 +103,14 @@ export interface Vigil extends ItemHeader {
   gate_command?: string;
   heavy: boolean;
   agent?: string;
+  /**
+   * The severity of the flare a failing sweep lights (0.110.0, docs/concept.md,
+   * "Flares"). Absent: a failing check lights nothing. A host older than
+   * 0.110.0 refuses a vigil that carries this key.
+   */
+  flare?: Severity;
+  /** The channels for that flare (`push`, `email`). `[]` is the app only. Absent: push. */
+  flare_deliver?: string[];
 }
 
 /**

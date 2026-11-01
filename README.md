@@ -517,7 +517,8 @@ darius vigil set-body cache-soak --stdin < body.md
 darius vigil close cache-soak --verdict held
 ```
 
-`--due` waits for a date. `--until` waits for an event that you name. The body has a
+`--due` waits for a date. `--in 7d` (or `2w`, `1m`) is a due date counted from today. darius stores the
+date, not the phrase. `--due` and `--in` exclude each other. `--until` waits for an event that you name. The body has a
 `## Verification Checklist` with items that carry a `Command:`. `set-body --stdin` replaces the body
 and keeps the header.
 
@@ -530,6 +531,36 @@ The daily sweep runs the Commands of every vigil that is due. What it reports:
 - `pending`: not every check passed yet. This is not a failure.
 - `awaiting-manual`: the checks passed but a manual item is still open.
 - `skipped`: nothing ran. The vigil is heavy, has no Command, or is not due.
+
+### A vigil that lights a flare
+
+"Check this in 7 days. If it holds, close it. If it fails, tell me."
+
+```bash
+darius vigil add xyz --in 7d --flare high --stdin < body.md
+darius vigil add xyz --in 7d --flare high --flare-deliver push,email --stdin < body.md
+darius vigil set xyz --flare medium        # change it; --flare-deliver none means the app only
+darius vigil set xyz --no-flare            # remove both keys
+```
+
+- A sweep that reads `failed` lights the flare `vigil:<slug>` with the vigil title, your severity, and
+  a target that names the kind of failure and the failing step. The vigil stays armed, so the next
+  daily sweep checks again. A repeat at the same severity is one more report and sends no notice.
+- A sweep that closes the vigil as `held` clears the flare. So does `vigil close --verdict held`.
+  `vigil close --verdict failed` leaves the flare open.
+- `flare accept` on that flare also closes the vigil as `failed`: nothing is left to wait for. If the
+  close fails, the accept stays on record and darius says so on stderr. `flare answer` leaves the
+  vigil armed. It keeps watching, and a passing check closes it and clears the flare.
+- A sweep that reports `skipped`, `pending`, `finding` or `awaiting-manual`, a dry run, and a classify
+  run light nothing. The sweep sends the notice of a flare it lit before it exits, for its own project
+  only. A failed send never fails the sweep.
+- `--flare` needs a date (`--due` or `--in`) or a `--gate-command`. A vigil with only `--until` never
+  reads as failed, so darius refuses the flag and says why.
+- The check must be a Command. A check that needs judgment stays a ritual.
+- Two edges. `flare clear` on a vigil that is still armed lights the flare again at the next sweep.
+  `flare reopen` after an accept leaves a flare that only a person can end, because the vigil is closed.
+- **Update every host before a vigil uses `flare`.** An older host refuses a vigil item that holds an
+  unknown key. Only vigils that the store owns take these flags; the legacy route refuses them.
 
 ## Runs
 
@@ -567,6 +598,8 @@ darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
   severity leaves it closed. A higher severity lights it again.
 - A flare from a run goes away after two complete runs of that ritual that do not report it. A flare
   from a script waits for `flare clear`. `flare clear` also ends a flare from a deleted ritual.
+- A vigil can light a flare when its check fails; see [A vigil that lights a flare](#a-vigil-that-lights-a-flare).
+  Accepting such a flare closes the vigil.
 - `answer --follow-up` starts a follow-up of the run that made the newest report, and carries out that
   item's proposal. It writes the answer only when the run started. It waits for the run, and it exits
   with the run's code. A flare from outside has no run, so it refuses that with exit `1`.
