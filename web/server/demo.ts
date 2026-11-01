@@ -261,6 +261,7 @@ function project(now: number): ProjectStatus {
     milestones: milestones(),
     milestonesArchived: 41,
     findings: findingCounts(demoFindings(now).filter((row) => row.project === "demo-shop")),
+    flares: { lit: 0 },
   };
 }
 
@@ -288,6 +289,7 @@ function atlas(now: number): ProjectStatus {
     milestones: [],
     milestonesArchived: 0,
     findings: findingCounts(demoFindings(now).filter((row) => row.project === "atlas-docs")),
+    flares: { lit: 0 },
   };
 }
 
@@ -307,6 +309,7 @@ function fieldNotes(now: number): ProjectStatus {
     milestones: [],
     milestonesArchived: 0,
     findings: { needsYou: 0, open: 0 },
+    flares: { lit: 0 },
   };
 }
 
@@ -618,6 +621,8 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     system: () => demoSystem(Date.now()),
     backups: () => demoBackups(Date.now()),
     findings: () => Promise.resolve(demoFindings(Date.now())),
+    flares: () => Promise.resolve([]),
+    flare: () => null,
     activity: () => [],
     pending: (name) => starts.list(name),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),

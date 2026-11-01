@@ -14,10 +14,13 @@
  *   flare list [--all] [--status S] [--json]
  *                  default: the lit flares
  *   flare show <key> [--json]
- *   flare answer <key> --note N [--follow-up] [--who W]
+ *   flare answer <key> --note N [--follow-up [--on HOST]] [--who W]
  *                  `--follow-up` needs a flare whose newest report came from a
  *                  run. It starts `run follow-up <run> --item <key> --note N`
  *                  first, and writes `flare.answered` only when the run started.
+ *                  `--on HOST` runs this verb on HOST over ssh, the host of the
+ *                  ritual (0.111.0), as `run follow-up --on` does. The answer is
+ *                  then written there, and only when the run started there.
  *   flare accept <key> [--note N] [--who W]
  *                  on a flare whose newest report came from `vigil:<slug>` it
  *                  also closes that vigil as failed, when the vigil exists and
@@ -42,7 +45,11 @@ import {
   FLARE_CLEARED,
   FLARE_LIT,
   FLARE_REOPENED,
+  FLARE_STATUSES,
+  flareSettleRefusal,
+  FOLLOW_UP_NOT_STARTED,
   type Flare,
+  type FlareSettle,
   type FlareStatus,
   type FlareStep,
 } from "../core/flare-index.ts";
@@ -57,10 +64,9 @@ import { getBlobText, openProject, putBlob, type Project } from "../core/store.t
 import { ritualHost } from "../core/workdir.ts";
 import { errorMessage } from "../runtime.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
-import { runFollowUp, verbArgv } from "./run-due.ts";
+import { forwardOn, runFollowUp, verbArgv } from "./run-due.ts";
 
 const VERBS = "light | list | show | answer | accept | clear | reopen";
-const STATUSES: readonly FlareStatus[] = ["lit", "answered", "accepted", "gone"];
 const CHANNELS: ReadonlySet<string> = new Set(["push", "email"]);
 /** The source of a report that names none. */
 const DEFAULT_SOURCE = "cli";
@@ -204,10 +210,10 @@ function describeFlare(flare: Flare, body: string | null): string[] {
 function shownStatuses(args: ParsedArgs): readonly FlareStatus[] {
   const raw = stringFlag(args, "status");
   if (raw !== undefined && args.flags.all === true) throw new UsageError("use --all or --status, not both");
-  if (args.flags.all === true) return STATUSES;
+  if (args.flags.all === true) return FLARE_STATUSES;
   if (raw === undefined) return ["lit"];
-  const status = STATUSES.find((candidate) => candidate === raw);
-  if (status === undefined) throw new UsageError(`--status takes ${STATUSES.join(", ")}, got '${raw}'`);
+  const status = FLARE_STATUSES.find((candidate) => candidate === raw);
+  if (status === undefined) throw new UsageError(`--status takes ${FLARE_STATUSES.join(", ")}, got '${raw}'`);
   return [status];
 }
 
@@ -310,25 +316,10 @@ const SETTLE = {
   accept: { type: FLARE_ACCEPTED, done: "accepted" },
   clear: { type: FLARE_CLEARED, done: "cleared" },
   reopen: { type: FLARE_REOPENED, done: "reopened" },
-} as const;
-
-type Settle = keyof typeof SETTLE;
-
-/** Why `verb` cannot act on the flare now, or undefined when it can. The index skips such a line, so it must not be written. */
-function settleRefusal(verb: Settle, flare: Flare): string | undefined {
-  const named = `flare '${flare.key}'`;
-  if (verb === "reopen") {
-    if (flare.status === "gone") return `${named} is gone; only a new report lights it again`;
-    return flare.status === "lit" ? `${named} is lit; there is nothing to reopen` : undefined;
-  }
-  if (flare.status === "gone") return `${named} is already gone`;
-  if (verb === "answer" && flare.status === "answered") return `${named} is already answered by ${flare.answered?.who ?? "someone"}; reopen it to answer again`;
-  if (verb === "accept" && flare.status === "accepted") return `${named} is already accepted by ${flare.accepted?.who ?? "someone"}; reopen it to accept again`;
-  return undefined;
-}
+} as const satisfies Record<FlareSettle, { type: string; done: string }>;
 
 interface SettleInput {
-  verb: Settle;
+  verb: FlareSettle;
   flare: Flare;
   who: string;
   note: string | undefined;
@@ -384,7 +375,7 @@ function closeVigilOfAccept(project: Project, flare: Flare, who: string): VigilC
 }
 
 /** Writes one line under the project lock: the flare is read again inside it, so two operators cannot settle it twice. */
-function flareSettle(args: ParsedArgs, verb: Settle): number {
+function flareSettle(args: ParsedArgs, verb: FlareSettle): number {
   const key = requireKey(args, verb);
   const note = noteFlag(args);
   if (verb === "answer" && note === undefined) throw new UsageError("flare answer: missing --note");
@@ -392,7 +383,7 @@ function flareSettle(args: ParsedArgs, verb: Settle): number {
   const who = stringFlag(args, "who") ?? defaultWho();
   const { refused, flare } = project.withLock((): Settled => {
     const found = lookup(project, key);
-    const reason = settleRefusal(verb, found);
+    const reason = flareSettleRefusal(verb, found);
     if (reason === undefined) appendLine(project, settleLine({ verb, flare: found, who, note }));
     return { refused: reason, flare: found };
   });
@@ -432,9 +423,12 @@ async function flareAnswerFollowUp(args: ParsedArgs): Promise<number> {
   const key = requireKey(args, "answer");
   const note = noteFlag(args);
   if (note === undefined) throw new UsageError("flare answer: missing --note");
-  const project = currentProject(args);
+  const name = resolveProject(stringFlag(args, "project"));
+  const forwarded = forwardOn(args, name, "answer", "flare");
+  if (forwarded !== undefined) return forwarded;
+  const project = openProject(name);
   const flare = lookup(project, key);
-  const refused = settleRefusal("answer", flare);
+  const refused = flareSettleRefusal("answer", flare);
   if (refused !== undefined) return refuse(args, refused);
   const { run: parent, ritual } = flare;
   if (parent === undefined || ritual === undefined) {
@@ -461,7 +455,7 @@ async function flareAnswerFollowUp(args: ParsedArgs): Promise<number> {
   });
   const [run] = started;
   if (run === undefined) {
-    console.error(`darius flare answer: the follow-up did not start, so flare '${key}' stays ${flare.status}`);
+    console.error(`${FOLLOW_UP_NOT_STARTED}, so flare '${key}' stays ${flare.status}`);
     return code === 0 ? 1 : code;
   }
   if (args.json) printJson({ ok: true, project: project.name, key, followUpRun: run, runExit: code });
@@ -477,10 +471,11 @@ function refuseInRun(args: ParsedArgs, verb: string): number | undefined {
   return refuse(args, `flare ${verb} is for a person or a script; a run reports a flare in its result block with "flare": true`);
 }
 
-async function flareWrite(args: ParsedArgs, verb: Settle | "light"): Promise<number> {
+async function flareWrite(args: ParsedArgs, verb: FlareSettle | "light"): Promise<number> {
   const refused = refuseInRun(args, verb);
   if (refused !== undefined) return refused;
   if (args.flags["follow-up"] === true && verb !== "answer") throw new UsageError(`flare ${verb} takes no --follow-up; flare answer does`);
+  if (args.flags.on !== undefined && args.flags["follow-up"] !== true) throw new UsageError(`flare ${verb} takes no --on; only flare answer --follow-up does`);
   if (verb === "light") return flareLight(args);
   if (args.flags["follow-up"] === true) return flareAnswerFollowUp(args);
   return flareSettle(args, verb);
@@ -488,7 +483,7 @@ async function flareWrite(args: ParsedArgs, verb: Settle | "light"): Promise<num
 
 export const flareCommand: Command = {
   name: "flare",
-  flags: ["all", "status", "who", "note", "title", "severity", "target", "deliver", "source", "follow-up"],
+  flags: ["all", "status", "who", "note", "title", "severity", "target", "deliver", "source", "follow-up", "on"],
   summary: "light, list, show and settle flares: problems that need the operator, kept by key",
   usage: `flare ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {

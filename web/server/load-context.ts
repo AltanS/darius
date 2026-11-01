@@ -21,6 +21,8 @@ export function loadContext(context: WebContext): AppLoadContext {
     system: () => context.system(),
     backups: () => context.backups(),
     findings: () => context.findings(),
+    flares: () => context.flares(),
+    flare: (project, key) => context.flare(project, key),
     activity: (project, options) => context.activity(project, options),
     pending: (project) => context.pending(project),
     followUp: (project, run) => context.followUp(project, run),

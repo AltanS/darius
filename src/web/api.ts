@@ -197,6 +197,70 @@ export interface FindingStep {
   note?: string;
 }
 
+// --- flares (0.111.0) ----------------------------------------------------------------------
+
+export type FlareRowStatus = "lit" | "answered" | "accepted" | "gone";
+
+export type FlareStepKind = "lit" | "report" | "raised" | "answered" | "accepted" | "cleared" | "reopened" | "gone";
+
+export interface FlareSeen {
+  at: string;
+  line: string;
+  run?: string;
+}
+
+export interface FlareStep {
+  at: string;
+  kind: FlareStepKind;
+  severity: ResultSeverity;
+  line: string;
+  run?: string;
+  who?: string;
+  note?: string;
+}
+
+/**
+ * One flare, as `darius flare list --json` gives it, with the project it
+ * belongs to. Every text is untrusted plain text: anyone who lights a flare
+ * writes it. The app draws it as text, never as HTML.
+ */
+export interface FlareRow {
+  project: string;
+  key: string;
+  title: string;
+  severity: ResultSeverity;
+  target?: string;
+  status: FlareRowStatus;
+  /** The ritual and the run of the newest report, when a run made it. */
+  ritual?: string;
+  run?: string;
+  /** Plain text: `ritual:<slug>`, `vigil:<slug>`, or what the source said, such as `ci:nightly`. */
+  source: string;
+  firstSeen: FlareSeen;
+  lastSeen: FlareSeen;
+  reports: number;
+  /** A report came in since the flare was closed, at the same or a lower severity. */
+  stillReported: boolean;
+  bodySha?: string;
+  /** The channels the report named; an empty list means the app only. Absent for a report from a run. */
+  deliver?: string[];
+  /** Each only while it is in force. */
+  answered?: { at: string; who: string; note: string; severity: ResultSeverity; followUpRun?: string };
+  accepted?: { at: string; who: string; severity: ResultSeverity; note?: string };
+  cleared?: { at: string; who: string; note?: string };
+  history: FlareStep[];
+}
+
+/** One flare with its body text; `body` is null with no body, or a blob not on this host yet. */
+export interface FlareDetail {
+  row: FlareRow;
+  body: string | null;
+}
+
+export interface FlareCounts {
+  lit: number;
+}
+
 /** One finding of a ritual, as `darius finding list --json` gives it, with the project it belongs to. Every text is untrusted plain text. */
 export interface FindingRow {
   project: string;
@@ -451,6 +515,8 @@ export interface ProjectStatus {
   milestonesArchived: number;
   /** The findings its rituals report, counted (0.62.0). */
   findings: FindingCounts;
+  /** How many of its flares are lit (0.111.0). */
+  flares: FlareCounts;
   /** Set when darius could not read the project; the lists are then empty. */
   error: string | null;
 }
@@ -1125,6 +1191,10 @@ export interface WebContext {
   backups(): BackupsStatus;
   /** The findings of every project of this host (0.62.0), worst first within a project. */
   findings(): Promise<FindingRow[]>;
+  /** The flares of every project of this host (0.111.0), worst first within a project, every status. */
+  flares(): Promise<FlareRow[]>;
+  /** One flare with its body (0.111.0). Null when the project or the key is unknown. */
+  flare(project: string, key: string): FlareDetail | null;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
   /**

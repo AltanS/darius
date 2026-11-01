@@ -602,7 +602,29 @@ darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
   Accepting such a flare closes the vigil.
 - `answer --follow-up` starts a follow-up of the run that made the newest report, and carries out that
   item's proposal. It writes the answer only when the run started. It waits for the run, and it exits
-  with the run's code. A flare from outside has no run, so it refuses that with exit `1`.
+  with the run's code. A flare from outside has no run, so it refuses that with exit `1`. On another
+  host's ritual it prints the ssh command; `--on <host>` runs the verb there.
+
+### Flares over HTTP
+
+`darius serve` has the same actions for the app and for a caller on your tailnet:
+
+```bash
+curl -s "http://host-a:4747/api/flares?project=acme&status=lit"
+curl -s "http://host-a:4747/api/flare?project=acme&key=dep/cve-2026-0001"
+curl -s http://host-a:4747/api/flare/light -H 'content-type: application/json' -d '{
+  "project": "acme", "key": "dep/cve-2026-0001", "title": "Vulnerable dependency",
+  "severity": "high", "target": "web/package.json", "source": "ci:nightly", "deliver": "push,email"
+}'
+```
+
+- Both reads answer JSON for any viewer that passes the access check. A flare's text is untrusted.
+- `POST /api/flare/light` needs a tailnet identity. A browser page of another site cannot call it. It also
+  takes `body`, which goes to the CLI on stdin. `deliver` is `push`, `email`, `push,email` or `none`. The whole
+  request is at most 4096 bytes. A local script uses the CLI: the loopback caller is refused.
+- `POST /api/flare/answer` `{project, key, note, followUp?}` and `POST /api/flare/accept` `{project, key, note?}`
+  come from the page only: they need its `Origin`. With `followUp` a follow-up that cannot start is a `409`
+  with a sentence, and the flare stays as it was.
 
 ### Flares by email
 

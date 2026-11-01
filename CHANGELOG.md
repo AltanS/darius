@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.111.0] - 2026-11-02
+
+### Added
+
+- `GET /api/flares?project=&status=` and `GET /api/flare?project=&key=` read flares as JSON, for any viewer that passes the access check. Flare text is untrusted, and it leaves as JSON data only.
+- `POST /api/flare/answer` and `POST /api/flare/accept` settle a flare from the page. They have the guards of `POST /api/finding/close`.
+- `POST /api/flare/light` lets a CI job or a script on the tailnet light a flare. It is the one write with no same-Origin rule: no `Origin` passes, `Origin: null` or another site does not. The loopback viewer is refused. `deliver` is `push`, `email`, `push,email` or `none`. A `source` of `ritual:` or `vigil:` and a `vigil:` key are refused.
+- `darius flare answer --follow-up --on <host>` runs the verb on the ritual's host over ssh. `POST /api/flare/answer` with `followUp` uses it, and answers 409 with a sentence when the follow-up cannot start. A refused follow-up writes no `flare.answered`.
+- The status JSON has `flares: { lit }` per project. No field changed. `WebContext` has `flares()` and `flare()`.
+
+### Fixed
+
+- A forwarded verb (`--on`) sends a flag value that starts with `-` as `--flag=value`, and puts a positional that starts with `-` after `--`. Before, `--note -h` printed the help on the other host, exited 0 and did nothing.
+
 ## [0.110.0] - 2026-11-01
 
 ### Added

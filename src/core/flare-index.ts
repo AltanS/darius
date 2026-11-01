@@ -55,6 +55,14 @@ const RITUAL_PREFIX = "ritual/";
 
 export type FlareStatus = "lit" | "answered" | "accepted" | "gone";
 
+export const FLARE_STATUSES: readonly FlareStatus[] = ["lit", "answered", "accepted", "gone"];
+
+/** The verbs a person settles a flare with. */
+export type FlareSettle = "answer" | "accept" | "clear" | "reopen";
+
+/** How `flare answer --follow-up` starts the line it ends with when no run started. The reason is on the line before it. */
+export const FOLLOW_UP_NOT_STARTED = "darius flare answer: the follow-up did not start";
+
 /** Where a report came from: the ledger line, and the run when a run reported it. */
 export interface FlareSeen {
   at: string;
@@ -605,6 +613,19 @@ function toFlare(track: Track): Flare {
 }
 
 /** The flares of the project, lit first, then by severity and recency. Reads the ledger when none is given. */
+/** Why `verb` cannot act on the flare now, or undefined when it can. The index skips such a line, so it must not be written. */
+export function flareSettleRefusal(verb: FlareSettle, flare: Flare): string | undefined {
+  const named = `flare '${flare.key}'`;
+  if (verb === "reopen") {
+    if (flare.status === "gone") return `${named} is gone; only a new report lights it again`;
+    return flare.status === "lit" ? `${named} is lit; there is nothing to reopen` : undefined;
+  }
+  if (flare.status === "gone") return `${named} is already gone`;
+  if (verb === "answer" && flare.status === "answered") return `${named} is already answered by ${flare.answered?.who ?? "someone"}; reopen it to answer again`;
+  if (verb === "accept" && flare.status === "accepted") return `${named} is already accepted by ${flare.accepted?.who ?? "someone"}; reopen it to accept again`;
+  return undefined;
+}
+
 export function collectFlares(project: Project, ledger?: readonly LedgerLine[]): Flare[] {
   const { tracks } = walk(project, ledger ?? readLedger(project));
   return [...tracks.values()].map(toFlare).toSorted(compareFlares);
