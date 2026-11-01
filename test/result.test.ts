@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import type { JsonValue } from "../src/core/model.ts";
 import { cutResult, HANDOFF_MAX, parseResult, readSummary, summarizeResult, type RunResult } from "../src/core/result.ts";
 
 function block(json: string): string {
@@ -231,4 +232,24 @@ test("a proposal on an item that is not needs-decision is refused", () => {
   for (const state of ["open", "fixed", "needs-code", "not-verified"]) {
     assert.deepEqual(errorsOf(withItems([{ ...DECISION, state, proposal: { proposed: "x" } }])), [`items[0].proposal: only a needs-decision item carries a proposal; this item is ${state}`], state);
   }
+});
+
+function withItem(item: Record<string, JsonValue>): string {
+  return JSON.stringify({ v: 1, status: "ok", summary: "s", items: [{ title: "T", severity: "low", ...item }] });
+}
+
+test("the flare flag needs a key and a state of needs-decision or fixed", () => {
+  const flagged = parsed(withItem({ key: "k", state: "needs-decision", flare: true })).items[0];
+  assert.equal(flagged?.flare, true, "the flag is kept");
+  assert.equal(parsed(withItem({ key: "k", state: "fixed", flare: true })).items[0]?.flare, true, "a fixed flagged item clears the flare");
+  assert.equal("flare" in (parsed(withItem({ key: "k", state: "open" })).items[0] ?? {}), false, "no flag, no field");
+  assert.equal("flare" in (parsed(withItem({ key: "k", state: "open", flare: false })).items[0] ?? {}), false, "false is no flag");
+  assert.equal("flare" in (parsed(withItem({ state: "open", flare: null })).items[0] ?? {}), false, "null is no flag");
+  assert.deepEqual(errorsOf(withItem({ state: "needs-decision", flare: true })), ["items[0].flare: a flare item needs a key"]);
+  assert.deepEqual(errorsOf(withItem({ key: "k", state: "open", flare: true })), [
+    "items[0].flare: a flare item is needs-decision, or fixed to clear the flare; this item is open",
+  ]);
+  assert.equal(errorsOf(withItem({ key: "k", state: "needs-code", flare: true })).length, 1);
+  assert.equal(errorsOf(withItem({ state: "open", flare: true })).length, 2, "both problems are listed");
+  assert.deepEqual(errorsOf(withItem({ key: "k", state: "needs-decision", flare: "yes" })), ["items[0].flare: must be true when set"]);
 });

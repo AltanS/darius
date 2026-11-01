@@ -359,7 +359,7 @@ export function collectFindings(project: Project, ledger: readonly LedgerLine[])
     const isFull = line.outcome === "complete" && !followUps.has(line.run);
     if (isFull) fullRuns.set(ritual, [...(fullRuns.get(ritual) ?? []), order]);
     const seen: FindingSeen = { run: line.run, at: line.at };
-    for (const [key, entry] of itemsByKey(result.items)) report(tracks, { ritual, seen, order, isFull, reset: resetFor(resets, ritual) }, key, entry);
+    for (const [key, entry] of itemsByKey(result.items.filter((candidate) => candidate.flare !== true))) report(tracks, { ritual, seen, order, isFull, reset: resetFor(resets, ritual) }, key, entry);
   });
   return [...tracks.values()].map((track) => toFinding(track, fullRuns)).toSorted(compareFindings);
 }

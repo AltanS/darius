@@ -18,6 +18,7 @@ export interface Item {
   group?: string;
   target?: string;
   detail?: string;
+  flare?: true;
 }
 
 /** A project whose clock starts on 2026-10-01 and moves one hour per line, so ledger order is time order. */

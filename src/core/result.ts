@@ -27,6 +27,11 @@
  * and a proposal that silently went away would hide that the model put it
  * on the wrong item.
  *
+ * `flare` (0.106.0) marks an item as a flare: the operator hears about it by
+ * key, outside the findings index (src/core/flare-index.ts). It needs a `key`
+ * and the state `needs-decision`, or `fixed`, which clears the flare. Any
+ * other state is an error, so a flare never hides behind an open item.
+ *
  * `handoff` (0.26.0) is a note of at most HANDOFF_MAX characters for the
  * next run of the same ritual (src/core/handoff.ts). It is the one text
  * darius does not clip: a cut note can lose its meaning, so a longer one is
@@ -74,6 +79,8 @@ export interface ResultItem {
   detail?: string;
   /** The exact change a `needs-decision` item proposes (0.69.0); the operator approves it by `key`. */
   proposal?: ResultProposal;
+  /** True when the item lights a flare (0.106.0); needs a `key`. Absent otherwise, never false. */
+  flare?: true;
 }
 
 /** The change a `needs-decision` item proposes (0.69.0). Plain text; newlines stay. */
@@ -333,7 +340,26 @@ function item(check: Checker, record: JsonRecord, where: string): ResultItem {
   if (detail !== undefined) out.detail = detail;
   const change = proposal(check, record, where, out.state);
   if (change !== undefined) out.proposal = change;
+  if (flareFlag(check, record, where, out)) out.flare = true;
   return out;
+}
+
+/**
+ * An item's `flare` flag (0.106.0). False or absent is no flag. True needs a
+ * key, and a state of needs-decision or fixed; the check reports the rest.
+ */
+function flareFlag(check: Checker, record: JsonRecord, where: string, entry: ResultItem): boolean {
+  const value = record.flare;
+  if (value === undefined || value === null || value === false) return false;
+  if (value !== true) {
+    check.errors.push(`${where}.flare: must be true when set`);
+    return false;
+  }
+  if (entry.key === undefined) check.errors.push(`${where}.flare: a flare item needs a key`);
+  if (entry.state !== "needs-decision" && entry.state !== "fixed") {
+    check.errors.push(`${where}.flare: a flare item is needs-decision, or fixed to clear the flare; this item is ${entry.state}`);
+  }
+  return true;
 }
 
 /** One proposal text: control characters out, newlines kept, never clipped; longer than `max` is an error. */

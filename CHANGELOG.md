@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.106.0] - 2026-11-01
+
+### Added
+
+- The flare index, `src/core/flare-index.ts`. It derives one flare per key from the ledger and the result blobs: lit, answered, accepted or gone. It reads the lines `flare.lit`, `flare.answered`, `flare.accepted`, `flare.cleared` and `flare.reopened`. A flare goes gone on a clear, on a fixed report, or after two clean full runs of the ritual that reported it. This release has no CLI verb, alert or web page for flares yet.
+- A result item may carry `"flare": true`. It needs a `key` and the state `needs-decision`, or `fixed` to clear the flare. `darius run complete` refuses any other state.
+
+### Changed
+
+- An item flagged `flare: true` is no finding. It leaves the findings index.
+
 ## [0.105.2] - 2026-10-30
 
 ### Changed
