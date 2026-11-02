@@ -25,16 +25,22 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { accessSync, appendFileSync, constants, readdirSync, realpathSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { delimiter, join } from "node:path";
 
+import { boxMarkerPath } from "./box-inside.ts";
 import { loadConfigIfPresent, type Config } from "./config.ts";
 import { isMaskedFile } from "./credentials.ts";
 import { configDir } from "./paths.ts";
 
-/** How this launch runs: masked behind `prefix`, off by the host's choice, or unmasked because the sandbox failed. */
-export type Sandbox = { state: "mask"; prefix: string[] } | { state: "off" } | { state: "unmasked"; problem: string };
+/**
+ * How this launch runs: masked behind `prefix`, off by the host's choice,
+ * unmasked because the mask failed, or in the box (0.120.0). The box is built
+ * per launch (src/runner/box-launch.ts) and fails closed: a box that cannot be
+ * built skips the ritual as `box-broken`, it never runs unboxed.
+ */
+export type Sandbox = { state: "mask"; prefix: string[] } | { state: "off" } | { state: "unmasked"; problem: string } | { state: "box" };
 
 /** What the mask hides: files behind the bound /dev/null, folders behind a tmpfs. */
 export interface MaskedPaths {
@@ -50,7 +56,6 @@ const KEYS_DIR = "keys";
 /** Where a run's launcher writes what the report does not need. */
 const RUN_LOG = "run.log";
 const FIX = 'Install bubblewrap and allow unprivileged user namespaces, or set [run] sandbox = "off" in config.toml.';
-const BOX_NOT_WIRED = '[run] sandbox = "box" is set, but this darius does not launch runs in the box yet. Runs start without any sandbox. Set [run] sandbox = "off" or "mask" until a darius that launches in the box.';
 
 function isExecutable(path: string): boolean {
   try {
@@ -124,23 +129,24 @@ export function maskedPaths(cfg: Config | null): MaskedPaths {
   return { files: [...files], dirs: [...dirs] };
 }
 
-/** `DARIUS_RUN_SANDBOX` (`mask` or `off`) overrides `[run] sandbox` for one process, as the suite does. Any other value is ignored. */
+/** `DARIUS_RUN_SANDBOX` (`mask`, `off` or `box`) overrides `[run] sandbox` for one process, as the suite does. Any other value is ignored. */
 function sandboxChoice(cfg: Config | null | undefined): string {
   const env = process.env.DARIUS_RUN_SANDBOX?.trim();
-  if (env === "mask" || env === "off") return env;
+  if (env === "mask" || env === "off" || env === "box") return env;
   return cfg?.run.sandbox ?? "off";
 }
 
 /**
- * How to launch a run on this host now. Never throws for a sandbox failure: a
+ * How to launch a run on this host now. Never throws for a mask failure: a
  * bwrap that is missing or fails its probe, with or without the masks, gives
- * `unmasked`. An unknown `[run] sandbox` throws in loadConfig, as any bad key.
+ * `unmasked`. `box` is returned as chosen: the launch builds and probes the
+ * box itself (src/runner/box-launch.ts). An unknown `[run] sandbox` throws in
+ * loadConfig, as any bad key.
  */
 export function resolveSandbox(): Sandbox {
   const cfg = loadConfigIfPresent();
   const choice = sandboxChoice(cfg);
-  // The box plan exists (src/core/box.ts), but no launch uses it yet: say so in run.log and doctor instead of staying silent.
-  if (choice === "box") return { state: "unmasked", problem: BOX_NOT_WIRED };
+  if (choice === "box") return { state: "box" };
   // Opt-in: inside the namespace root-owned files read as another owner, and ssh then refuses its own config (0.114.1).
   if (choice !== "mask") return { state: "off" };
   const probe = probeBwrap();
@@ -175,6 +181,10 @@ export function noteSandbox(runDir: string, sandbox: Sandbox): void {
 export function sandboxWarning(): string | undefined {
   try {
     const sandbox = resolveSandbox();
+    if (sandbox.state === "box") {
+      const probe = probeBwrap();
+      return "problem" in probe ? `WARN: [run] sandbox = "box", and every unattended run on this host is skipped as box-broken. ${probe.problem}` : undefined;
+    }
     return sandbox.state === "unmasked" ? `WARN: unattended runs on this host start unmasked and can read darius secret files. ${sandbox.problem}` : undefined;
   } catch (cause) {
     return `WARN: cannot read the sandbox setting: ${cause instanceof Error ? cause.message : String(cause)}`;
@@ -185,9 +195,11 @@ export function sandboxWarning(): string | undefined {
  * True when this process runs inside the mask: a direct file of the config dir
  * is the bound /dev/null. Alerts must not flush here. The channels look "not
  * set up", which would use up a notice's tries. The runner flushes after the
- * run, outside the mask.
+ * run, outside the mask. The same holds in the box (0.120.0): its marker file
+ * is there only inside one.
  */
 export function isInsideMask(): boolean {
+  if (existsSync(boxMarkerPath())) return true;
   try {
     return readdirSync(configDir()).some((name) => isMaskedFile(join(configDir(), name)));
   } catch {

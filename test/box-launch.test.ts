@@ -1,0 +1,639 @@
+/**
+ * Every launch path goes through the box (src/runner/box-launch.ts, 0.120.0):
+ * run-due headless, `run now`, `run resume`, a follow-up, a herdr tab, the
+ * gate check per harness version, and the gate preflight of each. A fake
+ * bwrap records each call, checks the box dir, skips `darius box enter`, and
+ * runs the harness with the broker socket set, so `run complete` goes through
+ * the broker. After each launch the box dir, with the proxy and broker
+ * sockets, is gone, also on a throw and a timeout. Each fail-closed reason
+ * skips the ritual as `box-broken` and starts no harness.
+ *
+ * Everything lives in a throwaway tree: HOME, the store, the config dir and
+ * XDG_RUNTIME_DIR. No real bwrap, herdr, tailnet or harness is reached here;
+ * test/box-real.test.ts proves the box on the real bwrap.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { parseArgs } from "../src/cli/args.ts";
+import { harnessCommand } from "../src/cli/harness.ts";
+import type { Command } from "../src/cli/registry.ts";
+import { runCommand } from "../src/cli/run.ts";
+import { runDueCommand } from "../src/cli/run-due.ts";
+import { appendLine, readLedger } from "../src/core/ledger.ts";
+import { writeLink } from "../src/core/links.ts";
+import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
+import { openProject } from "../src/core/store.ts";
+import { ulid } from "../src/core/ulid.ts";
+import { claudeHarness } from "../src/harness/claude.ts";
+import { webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
+import { runDue } from "../src/runner/run-due.ts";
+import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
+
+// Short: the box dir's sockets live under the runtime dir, and a Unix socket path has at most 108 bytes.
+const SANDBOX = mkdtempSync(join(tmpdir(), "dbl-"));
+const HOME = join(SANDBOX, "h");
+const RUNTIME = join(SANDBOX, "rt");
+const BIN = join(SANDBOX, "bin");
+const LOGS = join(SANDBOX, "logs");
+for (const dir of [HOME, RUNTIME, BIN, LOGS]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+process.env.HOME = HOME;
+process.env.XDG_RUNTIME_DIR = RUNTIME;
+process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
+process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
+process.env.CLAUDE_CONFIG_DIR = join(SANDBOX, "claude");
+process.env.DARIUS_HERDR = join(SANDBOX, "no-herdr");
+process.env.DARIUS_TAILSCALE = join(SANDBOX, "no-tailscale");
+process.env.DARIUS_RUN_SANDBOX = "box";
+delete process.env.DARIUS_PROJECT;
+delete process.env.DARIUS_RUN;
+delete process.env.DARIUS_RUN_POLICY;
+delete process.env.SSH_AUTH_SOCK;
+mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
+
+const REPO = join(import.meta.dirname, "..");
+symlinkSync(join(REPO, "bin", "darius"), join(BIN, "darius"));
+
+/** bash by full path. The Nix build sandbox has no /usr/bin/env for a shebang to use. */
+const BASH =
+  (process.env.PATH ?? "")
+    .split(":")
+    .map((dir) => join(dir, "bash"))
+    .find((candidate) => candidate.startsWith("/") && existsSync(candidate)) ?? "/bin/bash";
+
+function script(name: string, body: string): string {
+  const file = join(BIN, name);
+  writeFileSync(file, `#!${BASH}\n${body}`);
+  chmodSync(file, 0o755);
+  return file;
+}
+
+const BWRAP_LOG = join(LOGS, "bwrap");
+/**
+ * The fake bwrap. `--dev-bind / / true` is the probe. Otherwise it reads the
+ * box dir from `--ro-bind <dir> /run/darius`, skips the flags; `true` alone is
+ * the layout probe. It skips `darius box enter ... --`, writes one `launch`
+ * line with whether both sockets are there, and runs the rest with the broker
+ * socket set. FAKE_BWRAP_FAIL=probe|layout makes that step fail.
+ */
+const FAKE_BWRAP = script(
+  "fake-bwrap",
+  `printf 'call %s\\n' "$*" >> "${BWRAP_LOG}"
+if [ "\${1:-}" = --dev-bind ]; then
+  [ "\${FAKE_BWRAP_FAIL:-}" = probe ] && { echo "bwrap: No permissions to create a new namespace" >&2; exit 1; }
+  exit 0
+fi
+box=""
+while [ $# -gt 0 ] && [ "$1" != -- ]; do
+  if [ "$1" = --ro-bind ] && [ "\${3:-}" = /run/darius ]; then box="$2"; fi
+  shift
+done
+[ $# -gt 0 ] && shift
+if [ "$*" = true ]; then
+  [ "\${FAKE_BWRAP_FAIL:-}" = layout ] && { echo "bwrap: Can't find source path /nowhere: No such file or directory" >&2; exit 1; }
+  exit 0
+fi
+if [ "\${2:-}" = box ] && [ "\${3:-}" = enter ]; then
+  [ -e "$box/box.json" ] || { echo "fake bwrap: no box marker in $box" >&2; exit 1; }
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+  shift
+fi
+p=no; b=no
+[ -S "$box/proxy.sock" ] && p=yes
+[ -S "$box/broker.sock" ] && b=yes
+printf 'launch box=%s proxy=%s broker=%s %s\\n' "$box" "$p" "$b" "$*" >> "${BWRAP_LOG}"
+export DARIUS_BOX_BROKER="$box/broker.sock"
+exec "$@"
+`,
+);
+
+const CLAUDE_LOG = join(LOGS, "claude");
+mkdirSync(CLAUDE_LOG);
+/** The fake harness: `complete` and `hold` call darius as a run does, `sleep` ignores SIGTERM. The gate check (project _global) obeys the gate. */
+const FAKE_CLAUDE = script(
+  "fake-claude",
+  `set -euo pipefail
+if [ "\${1:-}" = --version ]; then printf '%s (Claude Code)\\n' "\${FAKE_CLAUDE_VERSION:-2.1.999}"; exit 0; fi
+printf '%s\\n' "$PWD" > "${CLAUDE_LOG}/\${DARIUS_RUN:-no-run}"
+if [ "$DARIUS_PROJECT" = _global ]; then
+  main="$(printf '%s' "\${2:-}" | grep -o 'touch [^ ]*' | sed -n 1p | cut -d' ' -f2)"
+  if printf '{"tool_name":"Bash","tool_input":{"command":"touch %s"},"session_id":"fake-check"}' "$main" | darius policy-check --policy "$DARIUS_RUN_POLICY" >/dev/null; then touch "$main"; fi
+  printf '{"type":"result","is_error":false,"session_id":"fake-check","total_cost_usd":0.0004,"result":"checked"}\\n'
+  exit 0
+fi
+case "\${FAKE_CLAUDE_MODE:-complete}" in
+  complete)
+    printf 'box ok\\n\`\`\`darius-result\\n{"v":1,"status":"ok","summary":"box ok"}\\n\`\`\`\\n' \\
+      | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
+  hold) darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" >/dev/null ;;
+  sleep) trap '' TERM; sleep 29.3 ;;
+esac
+printf '{"type":"result","is_error":false,"session_id":"fake-session","total_cost_usd":0.001,"result":"done"}\\n'
+`,
+);
+
+const HERDR_DIR = join(LOGS, "herdr");
+mkdirSync(HERDR_DIR);
+/** A fake herdr: enough of the CLI for a tab. `agent prompt` runs the fake harness with the tab's env. */
+const FAKE_HERDR = script(
+  "fake-herdr",
+  `set -euo pipefail
+dir="${HERDR_DIR}"
+printf '%s\\n' "$*" >> "$dir/calls"
+case "$1 \${2:-}" in
+  "status "*) printf 'server:\\n  status: running\\n' ;;
+  "workspace list") printf '{"result":{"type":"workspace_list","workspaces":[]}}\\n' ;;
+  "workspace create") printf '{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\\n' ;;
+  "tab create")
+    : > "$dir/tab.env"
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--env" ]; then printf 'export %q\\n' "$2" >> "$dir/tab.env"; shift; fi
+      shift
+    done
+    n=$(( $(cat "$dir/tab-count" 2>/dev/null || echo 1) + 1 )); echo "$n" > "$dir/tab-count"
+    printf '{"result":{"tab":{"tab_id":"w9:t%s"},"root_pane":{"pane_id":"w9:p%s"}}}\\n' "$n" "$n" ;;
+  "agent start") printf '{"result":{"type":"agent_started"}}\\n' ;;
+  "agent prompt")
+    ( set +u; . "$dir/tab.env"; "${FAKE_CLAUDE}" -p >/dev/null 2>&1 ) &
+    printf '{"result":{"type":"agent_prompted"}}\\n' ;;
+  "agent get") printf '{"result":{"agent":{"agent_status":"working"}}}\\n' ;;
+  "tab close") printf '{"result":{"type":"ok"}}\\n' ;;
+  "pane run") printf '{"result":{"type":"ok"}}\\n' ;;
+  "pane wait-output")
+    if [ -e "$dir/alias-lost" ]; then printf '{"error":{"code":"timeout","message":"no match"}}\\n' >&2; exit 1; fi
+    printf '{"result":{"type":"ok"}}\\n' ;;
+  "pane process-info")
+    names="$(cat "$dir/foreground" 2>/dev/null || echo bwrap)"
+    printf '{"result":{"process_info":{"foreground_processes":[{"name":"%s","pid":1}]}}}\\n' "$names" ;;
+  *) printf '{"error":{"code":"unknown","message":"fake herdr: %s"}}\\n' "$*" >&2; exit 1 ;;
+esac
+`,
+);
+
+process.env.DARIUS_BWRAP = FAKE_BWRAP;
+process.env.DARIUS_CLAUDE = FAKE_CLAUDE;
+process.env.PATH = `${BIN}:${process.env.PATH ?? ""}`;
+// The fake's default version passed its gate check, so a run starts at once.
+appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
+
+const REPORT_POLICY: Policy = { mode: "report", may: ["Bash(darius *)", "Bash(date)"], hold: ["git push"] };
+const ACT_POLICY: Policy = { ...REPORT_POLICY, mode: "act" };
+
+function seedRitual(project: string, policy: Policy = REPORT_POLICY): string {
+  const now = new Date().toISOString();
+  const header: Ritual = { id: ulid(), kind: "ritual", slug: "heartbeat", title: "Heartbeat", created: now, updated: now, tags: [], cadence: "1d", anchor: "due", policy };
+  openProject(project, { create: true }).writeItem({ header, body: "Run `date`, then complete the run.\n" }, { who: "test" });
+  return "heartbeat";
+}
+
+/** A checkout of `project`, linked on this host. */
+function linkedCheckout(project: string, marker = ""): string {
+  const dir = join(SANDBOX, `${project}-co`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".darius.toml"), `project = "${project}"\n${marker}`);
+  writeLink(project, dir);
+  return dir;
+}
+
+interface CliRun {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function runCli(command: Command, argv: string[], stdin?: string): Promise<CliRun> {
+  const args = parseArgs(argv);
+  if (stdin !== undefined) args.stdin = stdin;
+  const out: string[] = [];
+  const err: string[] = [];
+  const { log, error } = console;
+  console.log = (...parts: string[]) => out.push(parts.join(" "));
+  console.error = (...parts: string[]) => err.push(parts.join(" "));
+  try {
+    const code = await command.run(args);
+    return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+}
+
+interface Entry {
+  slug: string;
+  action: string;
+  reason?: string;
+  detail?: string;
+  run?: string;
+  end?: string;
+  timedOut?: boolean;
+  surface?: string;
+}
+
+function entryOf(stdout: string): Entry | undefined {
+  // SAFETY: run-due --json prints the batch report.
+  const report = JSON.parse(stdout) as { projects: { rituals: Entry[] }[] };
+  return report.projects[0]?.rituals[0];
+}
+
+async function runDueJson(project: string, extra: string[] = []): Promise<{ code: number; entry: Entry | undefined; stdout: string }> {
+  const result = await runCli(runDueCommand, ["--unattended", "--json", "--project", project, ...extra]);
+  return { code: result.code, entry: entryOf(result.stdout), stdout: result.stdout };
+}
+
+function bwrapLines(): string[] {
+  return existsSync(BWRAP_LOG) ? readFileSync(BWRAP_LOG, "utf8").trim().split("\n") : [];
+}
+
+/** The launch lines since the log was cleared. */
+function launches(): { box: string; proxy: boolean; broker: boolean; command: string }[] {
+  return bwrapLines().flatMap((line) => {
+    const match = /^launch box=(\S*) proxy=(yes|no) broker=(yes|no) (.*)$/u.exec(line);
+    return match === null ? [] : [{ box: match[1] ?? "", proxy: match[2] === "yes", broker: match[3] === "yes", command: match[4] ?? "" }];
+  });
+}
+
+/** The full bwrap argv of the call that ran `fragment`. */
+function callWith(fragment: string): string {
+  return bwrapLines().find((line) => line.startsWith("call ") && line.includes(fragment)) ?? "";
+}
+
+function linesOf(project: string, type: string): LedgerLine[] {
+  return readLedger(openProject(project)).filter((line) => line.type === type);
+}
+
+function boxDirs(runtime = RUNTIME): string[] {
+  const dir = join(runtime, "darius-box");
+  return existsSync(dir) ? readdirSync(dir) : [];
+}
+
+function fresh(): void {
+  rmSync(BWRAP_LOG, { force: true });
+}
+
+/** Each launch went through bwrap and `box enter` with both sockets up, and the box is gone now. */
+function assertBoxedAndClosed(): void {
+  const seen = launches();
+  assert.ok(seen.length > 0, bwrapLines().join("\n"));
+  for (const launch of seen) {
+    assert.ok(launch.proxy && launch.broker, `the proxy and the broker listen during the launch: ${JSON.stringify(launch)}`);
+    assert.equal(existsSync(launch.box), false, `the box dir ${launch.box} is removed, with both sockets`);
+    assert.equal(existsSync(join(launch.box, "proxy.sock")), false);
+    assert.equal(existsSync(join(launch.box, "broker.sock")), false);
+  }
+  assert.ok(bwrapLines().every((line) => !line.startsWith("call ") || line.startsWith("call --dev-bind") || line.includes(" box enter ") || line.endsWith(" -- true")), "every launch is box enter");
+  assert.deepEqual(boxDirs(), [], "no box dir is left");
+}
+
+// --- every path goes through the box ---------------------------------------------------
+
+test("run-due headless: the preflight and the harness run in the box with both sockets up, run complete goes through the broker, and the box is gone after", async () => {
+  fresh();
+  const project = "bx-headless";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, entry, stdout } = await runDueJson(project);
+  assert.equal(code, 0, stdout);
+  assert.equal(entry?.action, "started", stdout);
+  assert.equal(entry?.end, "complete");
+  const run = entry?.run ?? "";
+  const seen = launches();
+  assert.ok(seen.some((launch) => launch.command.includes("policy-check") && launch.command.endsWith("--preflight")), "the preflight runs in the box");
+  assert.ok(seen.some((launch) => launch.command.startsWith(`${FAKE_CLAUDE} -p `)), "the harness runs in the box");
+  assertBoxedAndClosed();
+  const runDir = join(openProject(project).root, "runs", run);
+  const broker = readFileSync(join(runDir, "broker.jsonl"), "utf8");
+  assert.match(broker, /"argv":\["run","complete"/u, "run complete went through the broker");
+  assert.equal(linesOf(project, "run.completed")[0]?.who, `claude:${run}`, "the broker names the run as who");
+  const call = callWith(`${FAKE_CLAUDE} -p`);
+  assert.ok(call.includes(" --new-session "), "headless: a new session");
+  assert.ok(call.includes(" --unshare-net "));
+  // No checkout: the run works in its store dir, which the box shows read-only.
+  assert.ok(call.includes(` --ro-bind ${openProject(project).root} ${openProject(project).root} `), call);
+  assert.equal(existsSync(join(runDir, "run.log")), false, "a boxed run has nothing to say");
+});
+
+test("report mode: the work dir is read-only in the box; act mode: writable", async () => {
+  for (const [project, policy, flag] of [["bx-report", REPORT_POLICY, "--ro-bind"], ["bx-act", ACT_POLICY, "--bind"]] as const) {
+    fresh();
+    const dir = linkedCheckout(project);
+    seedRitual(project, policy);
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.end, "complete", stdout);
+    assert.equal(readFileSync(join(CLAUDE_LOG, entry?.run ?? ""), "utf8").trim(), dir, "the harness runs in the checkout");
+    assert.ok(callWith(`${FAKE_CLAUDE} -p`).includes(` ${flag} ${dir} ${dir} `), `${project}: ${flag} ${dir}`);
+    assertBoxedAndClosed();
+  }
+});
+
+test("run now and run resume go through the box; a hold through the broker holds the run", async () => {
+  fresh();
+  const project = "bx-now";
+  const slug = seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "hold";
+  const now = await runCli(runCommand, ["now", slug, "--project", project, "--json"]);
+  assert.equal(entryOf(now.stdout)?.end, "held", now.stdout + now.stderr);
+  const run = entryOf(now.stdout)?.run ?? "";
+  assertBoxedAndClosed();
+  assert.match(readFileSync(join(openProject(project).root, "runs", run, "broker.jsonl"), "utf8"), /"argv":\["run","hold"/u);
+  assert.equal(linesOf(project, "run.held")[0]?.who, `claude:${run}`);
+
+  fresh();
+  const answered = await runCli(runCommand, ["answer", run, "1", "yes", "--project", project]);
+  assert.equal(answered.code, 0, answered.stdout + answered.stderr);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const resumed = await runCli(runCommand, ["resume", run, "--project", project, "--json"]);
+  assert.equal(resumed.code, 0, resumed.stdout + resumed.stderr);
+  assert.equal(entryOf(resumed.stdout)?.end, "complete", resumed.stdout);
+  assert.ok(launches().some((launch) => launch.command.startsWith(`${FAKE_CLAUDE} -p `)), bwrapLines().join("\n"));
+  assertBoxedAndClosed();
+});
+
+test("a follow-up goes through the box", async () => {
+  const project = "bx-follow";
+  linkedCheckout(project);
+  const slug = seedRitual(project, ACT_POLICY);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const first = await runDueJson(project);
+  const parent = first.entry?.run ?? "";
+  assert.equal(first.entry?.end, "complete", first.stdout);
+  fresh();
+  const { report } = await runDue({ projects: [project], only: slug, isDryRun: false, who: "test", timeoutMs: 60_000, followUp: { parent, approved: [], grants: ["date"], headless: true } });
+  const entry = report.projects[0]?.rituals[0];
+  assert.equal(entry?.action, "started", JSON.stringify(report));
+  assert.equal(entry?.followUpOf, parent);
+  assert.equal(entry?.end, "complete");
+  assertBoxedAndClosed();
+});
+
+test("the gate check per harness version runs in the box, with its work dir writable, and records sandbox box", async () => {
+  fresh();
+  process.env.FAKE_CLAUDE_VERSION = "2.1.900";
+  try {
+    const result = await runCli(harnessCommand, ["check", "claude", "--json"]);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    const check = readLedger(openProject("_global")).findLast((line) => line.type === "harness.checked" && line.version === "2.1.900");
+    assert.equal(check?.outcome, "passed", JSON.stringify(check));
+    assert.equal(check?.sandbox, "box");
+    const call = callWith(`${FAKE_CLAUDE} -p`);
+    assert.match(call, / --bind (\S*darius-harness-check-\S*) \1 /u, "the check's work dir is writable: the gate, not the mount, must stop the marker");
+    assertBoxedAndClosed();
+  } finally {
+    delete process.env.FAKE_CLAUDE_VERSION;
+  }
+});
+
+// --- herdr ------------------------------------------------------------------------------
+
+async function withHerdr<T>(files: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  rmSync(join(HERDR_DIR, "calls"), { force: true });
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(HERDR_DIR, name), text);
+  process.env.DARIUS_HERDR = FAKE_HERDR;
+  process.env.DARIUS_HERDR_POLL_MS = "50";
+  try {
+    return await fn();
+  } finally {
+    process.env.DARIUS_HERDR = join(SANDBOX, "no-herdr");
+    delete process.env.DARIUS_HERDR_POLL_MS;
+    for (const name of Object.keys(files)) rmSync(join(HERDR_DIR, name), { force: true });
+  }
+}
+
+function herdrCalls(): string[] {
+  return readFileSync(join(HERDR_DIR, "calls"), "utf8").trim().split("\n");
+}
+
+const HERDR_MARKER = 'v = 2\n[profiles.watch]\nsurface = "herdr"\n[defaults]\nritual = "watch"\n';
+
+test("herdr: the tab's alias runs bwrap and box enter, without --new-session and with the tab's TERM; the box closes after the run", async () => {
+  fresh();
+  const project = "bx-herdr";
+  linkedCheckout(project, HERDR_MARKER);
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { entry, stdout } = await withHerdr({}, () => runDueJson(project));
+  assert.equal(entry?.surface, "herdr", stdout);
+  assert.equal(entry?.end, "complete", stdout);
+  const typed = herdrCalls().find((line) => line.startsWith("pane run ") && line.includes("alias claude='")) ?? "";
+  // The alias text as the tab's shell stores it.
+  const alias = typed.replaceAll(String.raw`'\''`, "'");
+  assert.ok(alias.includes(`'${FAKE_BWRAP}' '--ro-bind' '/' '/'`), alias);
+  assert.ok(alias.includes(" 'box' 'enter' "), alias);
+  assert.ok(alias.endsWith(" '--' 'claude''; echo darius-mask''-ready"), "herdr types the harness argv after the alias");
+  assert.ok(alias.includes(`'--setenv' 'TERM' ${TAB_TERM} `), "the tab's shell fills in its own TERM");
+  assert.equal(alias.includes("--new-session"), false, "the TUI keeps its terminal");
+  assert.ok(alias.includes("'--unshare-net'"));
+  assert.deepEqual(boxDirs(), [], "the box is closed after the run");
+});
+
+test("herdr: bwrap not in the foreground closes the tab and skips as box-broken; the run is failed", async () => {
+  const project = "bx-herdr-fg";
+  linkedCheckout(project, HERDR_MARKER);
+  seedRitual(project);
+  const { entry, stdout } = await withHerdr({ foreground: "claude" }, () => runDueJson(project));
+  assert.equal(entry?.action, "skipped", stdout);
+  assert.equal(entry?.reason, "box-broken");
+  assert.match(entry?.detail ?? "", /herdr shows no bwrap in the tab's foreground/u);
+  assert.ok(herdrCalls().some((line) => line.startsWith("tab close ")), "the tab is closed");
+  assert.equal(herdrCalls().some((line) => line.startsWith("agent prompt ")), false, "the harness gets no prompt");
+  assert.equal(linesOf(project, "run.completed")[0]?.outcome, "failed", "the run does not stay open");
+  assert.match(readFileSync(join(openProject(project).root, "runs", entry?.run ?? "", "run.log"), "utf8"), /box: the herdr tab was closed, herdr shows no bwrap/u);
+  assert.deepEqual(boxDirs(), []);
+});
+
+test("herdr: an alias the tab's shell does not take closes the tab before the agent starts, as box-broken", async () => {
+  const project = "bx-herdr-alias";
+  linkedCheckout(project, HERDR_MARKER);
+  seedRitual(project);
+  const { entry, stdout } = await withHerdr({ "alias-lost": "" }, () => runDueJson(project));
+  assert.equal(entry?.reason, "box-broken", stdout);
+  assert.match(entry?.detail ?? "", /did not take the box alias/u);
+  assert.equal(herdrCalls().some((line) => line.startsWith("agent start ")), false, "no agent starts unboxed");
+  assert.ok(herdrCalls().some((line) => line.startsWith("tab close ")));
+  assert.deepEqual(boxDirs(), []);
+});
+
+test("maskLine leaves the tab's TERM for the tab's shell and quotes every other word", () => {
+  const line = maskLine("claude", ["/usr/bin/bwrap", "--setenv", "TERM", TAB_TERM, "--setenv", "X", "$HOME"]);
+  // The alias text, as the shell stores it: words in single quotes, the tab's TERM in double quotes.
+  const alias = /^ alias claude='(.*)'; echo darius-mask''-ready$/u.exec(line)?.[1]?.replaceAll(String.raw`'\''`, "'");
+  assert.equal(alias, `'/usr/bin/bwrap' '--setenv' 'TERM' "$TERM" '--setenv' 'X' '$HOME' 'claude'`);
+});
+
+// --- closed on a throw and on a timeout --------------------------------------------------
+
+function request(project: string): SandboxRequest {
+  const root = openProject(project, { create: true }).root;
+  const dir = join(root, "runs", ulid());
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "policy.json"), '{"v":1}\n');
+  const run = dir.slice(dir.lastIndexOf("/") + 1);
+  return { run: { id: run, dir, policy: join(dir, "policy.json"), project, who: `claude:${run}` }, workDir: root, isReport: true, hasTty: false, ritual: {}, harness: claudeHarness, envPass: [] };
+}
+
+test("withRunSandbox: a body that throws still closes the proxy and the broker and removes the box dir", async () => {
+  const req = request("bx-throw");
+  let seen = "";
+  await assert.rejects(
+    withRunSandbox(req, async (sandbox) => {
+      assert.equal(sandbox.state, "box");
+      assert.equal(sandbox.isBox, true);
+      seen = join(RUNTIME, "darius-box", req.run.id);
+      assert.ok(existsSync(join(seen, "proxy.sock")) && existsSync(join(seen, "broker.sock")) && existsSync(join(seen, "box.json")), "the box is up in the body");
+      assert.equal(sandbox.prefix?.at(-1), "--", "the prefix ends with box enter's --");
+      throw new Error("the launch broke");
+    }),
+    /the launch broke/u,
+  );
+  assert.notEqual(seen, "");
+  assert.equal(existsSync(seen), false, "the box dir is gone after the throw");
+});
+
+test("a run that times out ends, and its box is closed", async () => {
+  fresh();
+  const project = "bx-timeout";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "sleep";
+  try {
+    const { entry, stdout } = await runDueJson(project, ["--timeout", "1"]);
+    assert.equal(entry?.end, "failed", stdout);
+    assert.equal(entry?.timedOut, true);
+    assertBoxedAndClosed();
+  } finally {
+    process.env.FAKE_CLAUDE_MODE = "complete";
+  }
+});
+
+// --- fail closed ------------------------------------------------------------------------
+
+/** A run-due that must skip as box-broken: no run starts, no harness runs, run.log in the run dir says why. */
+async function assertBoxBroken(project: string, why: RegExp): Promise<void> {
+  fresh();
+  seedRitual(project);
+  const before = readdirSync(CLAUDE_LOG).length;
+  const { code, entry, stdout } = await runDueJson(project);
+  assert.equal(code, 1, `a broken box fails the batch: ${stdout}`);
+  assert.equal(entry?.action, "skipped", stdout);
+  assert.equal(entry?.reason, "box-broken", stdout);
+  assert.match(entry?.detail ?? "", why);
+  assert.equal(linesOf(project, "run.started").length, 0, "no run started");
+  assert.equal(readdirSync(CLAUDE_LOG).length, before, "no harness ran");
+  assert.equal(launches().length, 0, "nothing launched in or out of a box");
+  const runs = join(openProject(project).root, "runs");
+  const dirs = existsSync(runs) ? readdirSync(runs) : [];
+  assert.equal(dirs.length, 1, "the run dir stays, for run.log");
+  assert.deepEqual(readdirSync(join(runs, dirs[0] ?? "")), ["run.log"], "only run.log is left");
+  assert.match(readFileSync(join(runs, dirs[0] ?? "", "run.log"), "utf8"), /box: this run does not start, the box could not be built: /u);
+  assert.deepEqual(boxDirs(), [], "no box dir is left");
+}
+
+test("box-broken: bwrap missing", async () => {
+  process.env.DARIUS_BWRAP = join(SANDBOX, "no-bwrap");
+  try {
+    await assertBoxBroken("bx-no-bwrap", /bwrap is not on PATH/u);
+  } finally {
+    process.env.DARIUS_BWRAP = FAKE_BWRAP;
+  }
+});
+
+test("box-broken: the bwrap probe fails, and the box layout is refused", async () => {
+  for (const [fail, why] of [["probe", /No permissions to create a new namespace/u], ["layout", /bwrap refused the box layout .*Can't find source path/u]] as const) {
+    process.env.FAKE_BWRAP_FAIL = fail;
+    try {
+      await assertBoxBroken(`bx-fail-${fail}`, why);
+    } finally {
+      delete process.env.FAKE_BWRAP_FAIL;
+    }
+  }
+});
+
+test("box-broken: a [box] writable path that resolves into ~/.ssh is refused", async () => {
+  mkdirSync(join(HOME, ".ssh"), { recursive: true });
+  symlinkSync(join(HOME, ".ssh"), join(HOME, "cachelink"));
+  const config = join(process.env.DARIUS_CONFIG_DIR ?? "", "config.toml");
+  writeFileSync(config, '[box]\nwritable = ["~/cachelink"]\n');
+  try {
+    await assertBoxBroken("bx-writable", /\[box\] writable "~\/cachelink" is refused: it resolves to .*\.ssh/u);
+  } finally {
+    rmSync(config, { force: true });
+    rmSync(join(HOME, "cachelink"), { force: true });
+  }
+});
+
+/** A runtime dir of `length` characters, so the box dir's socket paths have a known length. */
+function runtimeOf(length: number): string | undefined {
+  const base = join(SANDBOX, "r");
+  if (base.length + 2 > length) return undefined;
+  return join(base, "x".repeat(length - base.length - 1));
+}
+
+test("box-broken: a proxy or a broker that does not start", async (t) => {
+  // <runtime>/darius-box/<26-character run id>/proxy.sock: 49 characters after the runtime dir. Linux takes 108.
+  const cases = [
+    { project: "bx-no-proxy", runtime: runtimeOf(60), why: /EINVAL|ENAMETOOLONG|too long/u },
+    { project: "bx-no-broker", runtime: runtimeOf(59), why: /EINVAL|ENAMETOOLONG|too long/u },
+  ];
+  if (cases.some((one) => one.runtime === undefined)) {
+    t.skip("the temp dir path is too long to aim the socket paths");
+    return;
+  }
+  for (const one of cases) {
+    const runtime = one.runtime ?? "";
+    mkdirSync(runtime, { recursive: true, mode: 0o700 });
+    process.env.XDG_RUNTIME_DIR = runtime;
+    try {
+      await assertBoxBroken(one.project, one.why);
+      assert.deepEqual(boxDirs(runtime), []);
+    } finally {
+      process.env.XDG_RUNTIME_DIR = RUNTIME;
+    }
+  }
+});
+
+test("box-broken: no XDG_RUNTIME_DIR", async () => {
+  delete process.env.XDG_RUNTIME_DIR;
+  try {
+    await assertBoxBroken("bx-no-runtime", /XDG_RUNTIME_DIR/u);
+  } finally {
+    process.env.XDG_RUNTIME_DIR = RUNTIME;
+  }
+});
+
+test("box-broken before the gate check of a new harness version: no check line, and the ritual skips as box-broken", async () => {
+  fresh();
+  const project = "bx-check-broken";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_VERSION = "2.1.901";
+  process.env.DARIUS_BWRAP = join(SANDBOX, "no-bwrap");
+  try {
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.reason, "box-broken", stdout);
+    assert.match(entry?.detail ?? "", /the gate check could not run: box-broken: bwrap is not on PATH/u);
+    assert.equal(readLedger(openProject("_global")).some((line) => line.type === "harness.checked" && line.version === "2.1.901"), false, "nothing was checked, so nothing is recorded");
+  } finally {
+    delete process.env.FAKE_CLAUDE_VERSION;
+    process.env.DARIUS_BWRAP = FAKE_BWRAP;
+  }
+});
+
+// --- the proxy policy -------------------------------------------------------------------
+
+test("webPorts: 4747 and 4748, DARIUS_WEB_URL of web.env and next.env by host and port, DARIUS_WEB_PORT", () => {
+  const dir = join(SANDBOX, "webenv");
+  mkdirSync(dir, { recursive: true });
+  assert.deepEqual(webPorts(dir), [{ host: "", port: 4747 }, { host: "", port: 4748 }]);
+  writeFileSync(join(dir, "web.env"), 'export DARIUS_WEB_URL="https://darius.example.com"\nDARIUS_WEB_PORT=4800\n');
+  writeFileSync(join(dir, "next.env"), "DARIUS_WEB_URL=http://host.example.net:4749/\nDARIUS_WEB_URL=not a url\n");
+  assert.deepEqual(webPorts(dir), [
+    { host: "", port: 4747 },
+    { host: "", port: 4748 },
+    { host: "", port: 4800 },
+    { host: "", port: 4749 },
+    { host: "darius.example.com", port: 443 },
+    { host: "host.example.net", port: 4749 },
+  ]);
+});

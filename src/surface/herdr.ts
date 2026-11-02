@@ -42,6 +42,12 @@
  * first prompt. After the start it asks herdr whether bwrap is in the
  * foreground. A mask that did not take leaves a line in the run's log, and the
  * run goes on, as a sandbox failure never stops a ritual.
+ *
+ * The box (0.120.0) uses the same alias: `bwrap ... -- darius box enter ... --`,
+ * without `--new-session`, so the TUI keeps its terminal, and with the tab's
+ * own TERM (TAB_TERM). The box fails closed: an alias the shell does not take,
+ * or a foreground without bwrap (or a herdr that cannot say), closes the tab,
+ * and the launch ends with `boxBroken`.
  */
 
 import { spawn } from "node:child_process";
@@ -183,8 +189,14 @@ export interface HerdrPlan {
   timeoutMs: number;
   pollMs: number;
   graceMs: number;
-  /** The argv of the sandbox to run the harness in (src/core/sandbox.ts), when it is masked. */
+  /** The argv of the sandbox to run the harness in (src/core/sandbox.ts), when it is masked or in the box. */
   sandbox?: readonly string[] | undefined;
+  /**
+   * The sandbox is the box (0.120.0): it fails closed. When the alias does not
+   * take, or herdr does not show bwrap in the foreground, the tab is closed and
+   * the launch ends with `boxBroken`.
+   */
+  isBox?: boolean;
   /** The run's phase in the ledger. */
   phase(): "running" | "held" | "closed";
   /** Holds the run with one question. */
@@ -305,7 +317,15 @@ const MASK_MARK = "darius-mask-ready";
 const MASK_MARK_TYPED = "darius-mask''-ready";
 const NO_MASK = "sandbox: this run starts UNMASKED, it can read darius secret files";
 
+/**
+ * A word of the box argv that the tab's shell fills in when it runs the alias:
+ * the tab's own TERM. The box clears the env, and the runner (a systemd unit)
+ * has no TERM of its own, but the harness's TUI needs the tab's.
+ */
+export const TAB_TERM = '"$TERM"';
+
 function shellQuote(word: string): string {
+  if (word === TAB_TERM) return word;
   return `'${word.replaceAll("'", String.raw`'\''`)}'`;
 }
 
@@ -390,7 +410,15 @@ async function waitUntilReady(plan: HerdrPlan, name: string, started: number): P
   }
 }
 
-/** Runs the harness in a new herdr tab until the run ends. Never throws: a herdr failure comes back as `spawnError`. */
+/** Closes the tab of a box launch that cannot prove its box, and ends the launch as `boxBroken`. */
+async function closeBroken(plan: HerdrPlan, tab: string, started: number, reason: string): Promise<LaunchResult> {
+  await runHerdr(plan.target, ["tab", "close", tab]);
+  const result = ended(started, { note: `the tab was closed: ${reason}` });
+  result.boxBroken = reason;
+  return result;
+}
+
+/** Runs the harness in a new herdr tab until the run ends. Never throws: a herdr failure comes back as `spawnError`, a box that does not take as `boxBroken`. */
 export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
   const started = Date.now();
   const earlier = recordedTabs(plan.runDir);
@@ -402,9 +430,13 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
     tab = opened.tab;
     writeFileSync(join(plan.runDir, TAB_FILE), `${JSON.stringify({ tabs: [...earlier, tab], agent: name })}\n`);
     const isMasked = plan.sandbox !== undefined && (await maskTab(plan, plan.sandbox, opened.pane));
+    if (plan.isBox === true && !isMasked) return await closeBroken(plan, tab, started, "the tab's shell did not take the box alias");
     if (plan.sandbox !== undefined && !isMasked) appendRunLog(plan.runDir, `${NO_MASK}: the tab's shell did not take the alias`);
     const start = await startAgent(plan, name, opened.pane);
-    if (isMasked && (await bwrapInForeground(plan, opened.pane)) === false) appendRunLog(plan.runDir, `${NO_MASK}: herdr shows no bwrap in the tab's foreground`);
+    const inForeground = isMasked ? await bwrapInForeground(plan, opened.pane) : undefined;
+    // The box fails closed: a herdr that cannot say counts as no bwrap.
+    if (plan.isBox === true && inForeground !== true) return await closeBroken(plan, tab, started, "herdr shows no bwrap in the tab's foreground");
+    if (isMasked && inForeground === false) appendRunLog(plan.runDir, `${NO_MASK}: herdr shows no bwrap in the tab's foreground`);
     if (start === "blocked") {
       const ready = await waitUntilReady(plan, name, started);
       if (!ready.ready) {

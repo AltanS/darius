@@ -39,11 +39,14 @@
  *      process on this host is stale at once. When the lease cannot be taken
  *      the ritual is skipped (`lease-held`, quiet, exit 0) and the report says so.
  *   4. Write the run files, let the harness adapter (src/harness/) wire the
- *      gate, and run the gate preflight: a gate that does not deny a
- *      synthetic call skips the ritual as `gate-broken` before any run
- *      exists. Then append `run.started` under the project lock (the same
- *      check as `darius run start`) and launch the harness headless
- *      (src/surface/headless.ts).
+ *      gate, and open the run's sandbox (src/runner/box-launch.ts): with
+ *      `[run] sandbox = "box"`, a box that cannot be built skips the ritual
+ *      as `box-broken` before any run exists. In that sandbox, run the gate
+ *      preflight: a gate that does not deny a synthetic call skips the ritual
+ *      as `gate-broken` before any run exists. Then append `run.started`
+ *      under the project lock (the same check as `darius run start`) and
+ *      launch the harness headless (src/surface/headless.ts) or in a herdr
+ *      tab, in the same sandbox, which closes after the launch.
  *   5. After the harness exits, read the run back. Completed or held by the model
  *      or by the hook: leave it. Still running: append
  *      `run.completed{outcome:"failed"}` with the result as a blob.
@@ -67,11 +70,12 @@ import { collectCandles, candlePromptLines } from "../core/candle-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { takeLease, type LeaseOutcome } from "../core/lease.ts";
-import { isAboveCap, MARKER_FILE, type Marker } from "../core/marker.ts";
+import { isAboveCap, MARKER_FILE, type Marker, type RepoRitual } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
-import { noteSandbox, resolveSandbox, sandboxPrefix } from "../core/sandbox.ts";
+import type { RitualBoxKeys } from "../core/box.ts";
+import { appendRunLog } from "../core/sandbox.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
@@ -88,6 +92,7 @@ import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget,
 import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
 import { harnessReadiness, type Readiness } from "./harness-check.ts";
 import { acknowledgeRun, recordHold } from "./hold.ts";
+import { withRunSandbox, type RunSandbox, type SandboxRequest } from "./box-launch.ts";
 import { buildEnv, followUpRitual, gateCommand, preflightGate, writeRunFiles, type PromptInput } from "./launch.ts";
 import { readSessionNote, resumeMessage, writeSessionNote } from "./resume.ts";
 import { missingTools } from "./tools.ts";
@@ -480,7 +485,8 @@ function rejectedFindings(runDir: string): string | null {
 
 function failureBlob(launch: LaunchResult, facts: ResultFacts, harness: string, runDir: string): string {
   let reason = `${harness} exited without completing or holding the run`;
-  if (launch.spawnError !== undefined) reason = launch.spawnError.includes("is not on PATH") ? launch.spawnError : `${harness} did not start: ${launch.spawnError}`;
+  if (launch.boxBroken !== undefined) reason = `box-broken: ${launch.boxBroken}; the herdr tab was closed`;
+  else if (launch.spawnError !== undefined) reason = launch.spawnError.includes("is not on PATH") ? launch.spawnError : `${harness} did not start: ${launch.spawnError}`;
   else if (launch.exitCode === 127) reason = `${harness} is not on PATH: install it or set the profile's command`;
   else if (launch.timedOut) reason = `${harness} was stopped after the run timeout (${String(launch.durationMs)} ms)`;
   const blob: JsonValue = {
@@ -610,16 +616,18 @@ interface RunTarget {
   warnings: string[];
   /** The run budget: the ritual's git `timeout`, else the unit's. The lease follows it. */
   timeoutMs: number;
+  /** The ritual's box keys from the marker (`net`, `reach`, `writable`, `ssh_agent`, `tools`); empty without one. */
+  box: RitualBoxKeys;
 }
 
-/** A run ready to launch on either surface. */
+/** A run ready to launch on either surface, once its sandbox is open. */
 interface PreparedRun {
   files: RunFiles;
   launch: HarnessLaunch;
   bin: string;
   env: ChildEnv;
-  /** The argv of the mask (src/core/sandbox.ts), when this run has one. */
-  sandbox: readonly string[] | undefined;
+  /** The gate command line the preflight runs, inside the run's sandbox. */
+  gate: string[];
   /** The harness session a resume goes on with; undefined for a new session. */
   sessionId?: string;
   /** sha256 of policy.json as written, for the run.started or run.resumed line. */
@@ -672,10 +680,11 @@ async function readiness(ctx: ProjectContext, harness: HarnessAdapter): Promise<
 }
 
 /**
- * Writes the run files, lets the adapter wire the gate, and proves the gate
- * works before anything is started. The run id exists, the run does not yet.
+ * Writes the run files and lets the adapter wire the gate. The run id
+ * exists, the run does not yet. The preflight comes next, in the run's
+ * sandbox (runRitual).
  */
-function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gateBroken: string; files: RunFiles } {
+function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun {
   const { doc, run } = target;
   const { profile, harness } = target.resolution;
   const project = ctx.project.name;
@@ -704,16 +713,11 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
       : { message: `Follow up run ${followUp.parent} of ritual ${doc.header.slug} now. Run id ${run}. Follow the protocol and the Follow-up section in your system prompt.` };
   const launch = harness.prepare({ ritual: doc.header, run, files, profile, scope, gate, ...message, ...resume });
   const env = buildEnv({ project, run, files, harness });
-  const resolved = resolveSandbox();
-  noteSandbox(files.dir, resolved);
-  const sandbox = sandboxPrefix(resolved);
-  const broken = preflightGate(gate, harness, env, sandbox);
-  if (broken !== undefined) return { gateBroken: broken, files };
   const bin = harnessBin(ctx, harness);
   // A follow-up reads nothing for good, whether it starts or resumes after a hold.
   const isFollowUpRun = followUp !== undefined || followUpRuns(ledger).has(run);
   const isReading = !isFollowUpRun && resume?.sessionId === undefined;
-  const prepared: PreparedRun = { files, launch, bin, env, sandbox, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
+  const prepared: PreparedRun = { files, launch, bin, env, gate, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
   if (resume?.sessionId !== undefined) prepared.sessionId = resume.sessionId;
   return prepared;
 }
@@ -742,10 +746,10 @@ function envNumber(name: string, fallback: number): number {
   return Number(raw);
 }
 
-function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): Promise<LaunchResult> {
+function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun, sandbox: RunSandbox): Promise<LaunchResult> {
   const { run, cwd, doc, timeoutMs } = target;
   if (target.surface.surface === "headless") {
-    return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs, sandbox: prepared.sandbox });
+    return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs, sandbox: sandbox.prefix });
   }
   const project = ctx.project;
   return launchHerdr({
@@ -761,7 +765,8 @@ function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: Prepa
     timeoutMs,
     pollMs: envNumber("DARIUS_HERDR_POLL_MS", DEFAULT_POLL_MS),
     graceMs: envNumber("DARIUS_HERDR_WAIT_GRACE_MS", DEFAULT_WAIT_GRACE_MS),
-    sandbox: prepared.sandbox,
+    sandbox: sandbox.prefix,
+    isBox: sandbox.isBox,
     phase: () => viewRun(readLedger(project), run).phase ?? "running",
     hold: (question) => {
       recordHold({ project: project.name, run }, { question, who: `herdr:${run}` });
@@ -769,12 +774,20 @@ function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: Prepa
   });
 }
 
-async function launchRun(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): Promise<RitualEntry> {
+async function launchRun(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun, sandbox: RunSandbox): Promise<RitualEntry> {
   const { doc, run, resolution } = target;
-  const launch = await launchOnSurface(ctx, target, prepared);
+  const launch = await launchOnSurface(ctx, target, prepared, sandbox);
   const facts = resolution.harness.parseResult(launch.stdout);
   if (facts.sessionId !== undefined) writeSessionNote(prepared.files.dir, { harness: resolution.harness.id, session_id: facts.sessionId });
   const { end, questions, result } = finalizeRun(ctx, run, { launch, facts, harness: resolution.harness.id });
+  if (launch.boxBroken !== undefined) {
+    // The tab is closed and the run is failed (finalizeRun): a box the surface cannot prove never runs on.
+    appendRunLog(prepared.files.dir, `box: the herdr tab was closed, ${launch.boxBroken}`);
+    const entry = skipped(doc.header.slug, "box-broken", launch.boxBroken);
+    entry.run = run;
+    entry.end = end;
+    return entry;
+  }
   const entry: RitualEntry = {
     ...launchFacts(resolution, target.surface, target.warnings),
     slug: doc.header.slug,
@@ -848,23 +861,62 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
   if ("blocked" in lease) return skipped(slug, lease.blocked === "lease-offline" ? "lease-offline" : "lease-held", lease.detail);
   try {
     const prepared = prepareRun(ctx, { ...target, run });
-    if ("gateBroken" in prepared) {
-      discard(prepared.files);
-      return skipped(slug, "gate-broken", prepared.gateBroken);
+    const { harness } = target.resolution;
+    // The one way to a launch: the preflight and the harness run in the same sandbox (src/runner/box-launch.ts).
+    const sandboxed = await withRunSandbox(sandboxRequest(ctx, { ...target, run }, prepared), async (sandbox): Promise<{ entry: RitualEntry; isDiscarded?: true }> => {
+      const broken = preflightGate(prepared.gate, harness, prepared.env, sandbox.prefix);
+      if (broken !== undefined) return { entry: skipped(slug, "gate-broken", broken), isDiscarded: true };
+      const started =
+        resume === undefined
+          ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill), answersRead: prepared.answersRead })
+          : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha, answersRead: prepared.answersRead });
+      if ("blockedBy" in started) return { entry: skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`), isDiscarded: true };
+      if (ctx.options.followUp !== undefined) ackParent(ctx, ctx.options.followUp, started.run);
+      ctx.options.onStarted?.(started.run);
+      return { entry: await launchRun(ctx, { ...target, run: started.run }, prepared, sandbox) };
+    });
+    if ("boxBroken" in sandboxed) {
+      // No run started. The run dir keeps only run.log, which says why.
+      if (resume === undefined) discardButLog(prepared.files.dir);
+      return skipped(slug, "box-broken", sandboxed.boxBroken);
     }
-    const started =
-      resume === undefined
-        ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill), answersRead: prepared.answersRead })
-        : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha, answersRead: prepared.answersRead });
-    if ("blockedBy" in started) {
-      discard(prepared.files);
-      return skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`);
-    }
-    if (ctx.options.followUp !== undefined) ackParent(ctx, ctx.options.followUp, started.run);
-    ctx.options.onStarted?.(started.run);
-    return await launchRun(ctx, { ...target, run: started.run }, prepared);
+    if (sandboxed.ran.isDiscarded === true) discard(prepared.files);
+    return sandboxed.ran.entry;
   } finally {
     await lease.handle.release();
+  }
+}
+
+/** What the run's sandbox needs: the run, its work dir and mode, the surface, the marker's box keys, the harness and env_pass. */
+function sandboxRequest(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): SandboxRequest {
+  const { harness, profile } = target.resolution;
+  return {
+    run: { id: target.run, dir: prepared.files.dir, policy: prepared.files.policy, project: ctx.project.name, who: `${harness.id}:${target.run}` },
+    workDir: target.cwd,
+    isReport: target.doc.header.policy.mode === "report",
+    hasTty: target.surface.surface === "herdr",
+    ritual: target.box,
+    harness,
+    envPass: profile.envPass ?? [],
+  };
+}
+
+/** The box keys of the marker's ritual, only those; none without a marker. */
+function boxKeys(ritual: RepoRitual | undefined): RitualBoxKeys {
+  const keys: RitualBoxKeys = {};
+  if (ritual === undefined) return keys;
+  if (ritual.net !== undefined) keys.net = ritual.net;
+  if (ritual.reach !== undefined) keys.reach = ritual.reach;
+  if (ritual.writable !== undefined) keys.writable = ritual.writable;
+  if (ritual.sshAgent !== undefined) keys.sshAgent = ritual.sshAgent;
+  if (ritual.tools !== undefined) keys.tools = ritual.tools;
+  return keys;
+}
+
+/** Removes a run dir's files but run.log: a run that never started keeps only the line that says why. */
+function discardButLog(dir: string): void {
+  for (const name of existsSync(dir) ? readdirSync(dir) : []) {
+    if (name !== "run.log") rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
@@ -887,7 +939,8 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     const { skill } = doc.header;
     const skillCheck = skill === undefined || where.from === "store" ? { warnings: [] } : skillPreflight(slug, skill, { dir: where.dir, isByHand });
     if ("skip" in skillCheck) return skillCheck.skip;
-    const timeoutMs = where.marker?.rituals.find((ritual) => ritual.slug === slug)?.timeoutMs ?? ctx.options.timeoutMs;
+    const repoRitual = where.marker?.rituals.find((ritual) => ritual.slug === slug);
+    const timeoutMs = repoRitual?.timeoutMs ?? ctx.options.timeoutMs;
     const markerWarnings = [...dirtyWarnings(ctx, isByHand), ...skillCheck.warnings];
     if (followUp !== undefined && where.from === "store") {
       return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
@@ -918,7 +971,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);
     const surface = chosen;
     const ready = await readiness(ctx, resolution.harness);
-    if (!ready.ready) return skipped(slug, "harness-unchecked", ready.detail);
+    if (!ready.ready) return skipped(slug, ready.isBoxBroken === true ? "box-broken" : "harness-unchecked", ready.detail);
     if (ctx.options.isDryRun) {
       const warnings = [...markerWarnings, ...(ready.pending === undefined ? [] : [ready.pending])];
       const entry: RitualEntry = { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
@@ -933,7 +986,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       const retry = `darius harness check ${resolution.harness.id}`;
       return skipped(slug, "subagents-unproven", `an act ritual with subagents needs the gate check of ${resolution.harness.id} ${ready.version} to prove them on this host; run ${retry}`);
     }
-    return await runRitual(ctx, { doc: proven.doc, cwd: where.dir, resolution, surface, warnings: [...markerWarnings, ...proven.warnings], timeoutMs });
+    return await runRitual(ctx, { doc: proven.doc, cwd: where.dir, resolution, surface, warnings: [...markerWarnings, ...proven.warnings], timeoutMs, box: boxKeys(repoRitual) });
   } catch (cause) {
     return skipped(slug, "error", errorMessage(cause));
   }

@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -23,7 +23,13 @@ import { boxPlan, type BoxPlan } from "../src/core/box.ts";
 import { boxEnterPlanFields, boxFiles, hostBoxFiles, writeBoxFiles } from "../src/core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../src/core/box-host.ts";
 import { decide, startBoxProxy, type Decide } from "../src/core/box-proxy.ts";
+import { appendLine, readLedger } from "../src/core/ledger.ts";
+import type { Policy, Ritual } from "../src/core/model.ts";
+import { openProject } from "../src/core/store.ts";
+import { ulid } from "../src/core/ulid.ts";
 import { dariusBin } from "../src/runner/launch.ts";
+import type { RitualEntry } from "../src/runner/report.ts";
+import { runDue } from "../src/runner/run-due.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
@@ -537,4 +543,112 @@ test("real bwrap: box enter passes the exit code and a signal death out of the b
     assert.equal(ran.code, code, `${argv.join(" ")}: ${ran.stderr}`);
     removeBox(plan);
   }
+});
+
+// --- a ritual run in the box, end to end (spec 05) ---------------------------------
+
+/**
+ * The fake harness of the run-due proofs, a shell script in the fake home.
+ * It first tries to forge a store file. `complete` then completes through the
+ * broker; `hold` holds through the broker; `sleep` starts a child that ignores
+ * SIGTERM and writes a heartbeat into the run's scratch dir, then ignores
+ * SIGTERM itself.
+ */
+function fakeHarness(tree: Tree, bash: string): string {
+  const path = join(tree.home, "fake-claude");
+  writeFileSync(
+    path,
+    [
+      `#!${bash}`,
+      'if [ "${1:-}" = --version ]; then echo "2.1.999 (Claude Code)"; exit 0; fi',
+      'scratch="$(dirname "$DARIUS_RUN_POLICY")/scratch"',
+      'printf "%s\\n" "$PWD" > "$scratch/pwd"',
+      `if touch ${join(tree.store, "acme-forged")} 2>/dev/null; then echo yes > "$scratch/forged"; fi`,
+      // The box clears the env: the mode comes from a file in the fake home.
+      'case "$(cat "$HOME/fake-mode")" in',
+      "  complete)",
+      "    printf 'boxed\\n```darius-result\\n{\"v\":1,\"status\":\"ok\",\"summary\":\"boxed run\"}\\n```\\n' \\",
+      '      | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin > "$scratch/complete.out" 2>&1 ;;',
+      '  hold) darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" > "$scratch/hold.out" 2>&1 ;;',
+      "  sleep)",
+      "    trap '' TERM",
+      `    ( trap '' TERM; while :; do date +%s%N > "$scratch/beat"; sleep 0.1; done ) &`,
+      "    sleep 60 ;;",
+      "esac",
+      `printf '{"type":"result","is_error":false,"session_id":"fake-session","total_cost_usd":0,"result":"done"}\\n'`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** The run-due env for `tree`: the box, the real bwrap, the fake harness, darius on PATH in the fake home. */
+function boxedRunEnv(tree: Tree): void {
+  const bash = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "bash")).find((candidate) => candidate.startsWith("/") && existsSync(candidate)) ?? "/bin/bash";
+  const localBin = join(tree.home, ".local", "bin");
+  mkdirSync(localBin, { recursive: true });
+  symlinkSync(dariusBin(), join(localBin, "darius"));
+  process.env.PATH = `${localBin}${delimiter}${process.env.PATH ?? ""}`;
+  process.env.DARIUS_CLAUDE = fakeHarness(tree, bash);
+  process.env.DARIUS_BWRAP = REAL_BWRAP ?? "";
+  process.env.DARIUS_RUN_SANDBOX = "box";
+  process.env.DARIUS_TAILSCALE = join(tree.base, "no-tailscale");
+  delete process.env.DARIUS_PROJECT;
+  delete process.env.DARIUS_RUN;
+  delete process.env.DARIUS_RUN_POLICY;
+  // The fake's version passed its gate check on this host.
+  appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
+}
+
+function seedBoxedRitual(project: string): void {
+  const now = new Date().toISOString();
+  const policy: Policy = { mode: "report", may: ["Bash(darius *)"], hold: ["git push"] };
+  const header: Ritual = { id: ulid(), kind: "ritual", slug: "heartbeat", title: "Heartbeat", created: now, updated: now, tags: [], cadence: "1d", anchor: "due", policy };
+  openProject(project, { create: true }).writeItem({ header, body: "Complete the run.\n" }, { who: "test" });
+}
+
+async function boxedRun(project: string, mode: string, timeoutMs = 120_000): Promise<RitualEntry | undefined> {
+  writeFileSync(join(process.env.HOME ?? "", "fake-mode"), mode);
+  seedBoxedRitual(project);
+  const { report } = await runDue({ projects: [project], isDryRun: false, who: "test", timeoutMs, now: {} });
+  return report.projects[0]?.rituals[0];
+}
+
+test("real bwrap: a ritual run in the box completes through the broker, a hold through the broker holds it, a timeout ends the tree, and each box is gone after", { skip: SKIP, timeout: 300_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  boxedRunEnv(tree);
+
+  const done = await boxedRun("acme-done", "complete");
+  assert.equal(done?.action, "started", JSON.stringify(done));
+  assert.equal(done?.end, "complete", JSON.stringify(done));
+  const doneDir = join(tree.store, "acme-done", "runs", done?.run ?? "");
+  assert.match(readFileSync(join(doneDir, "broker.jsonl"), "utf8"), /"argv":\["run","complete".*"exit":0/u, "run complete went through the broker");
+  assert.equal(existsSync(join(doneDir, "scratch", "forged")), false, "the store is read-only in the box");
+  assert.equal(existsSync(join(tree.store, "acme-forged")), false);
+  assert.equal(readFileSync(join(doneDir, "scratch", "pwd"), "utf8").trim(), join(tree.store, "acme-done"), "no checkout: the run works in its store dir");
+  const completed = readLedger(openProject("acme-done")).find((line) => line.type === "run.completed");
+  assert.equal(completed?.who, `claude:${done?.run ?? ""}`);
+  assert.equal(completed?.outcome, "complete");
+
+  const held = await boxedRun("acme-hold", "hold");
+  assert.equal(held?.end, "held", JSON.stringify(held));
+  const heldLine = readLedger(openProject("acme-hold")).find((line) => line.type === "run.held");
+  assert.deepEqual(heldLine?.questions, ["may I push?"]);
+  assert.match(readFileSync(join(tree.store, "acme-hold", "runs", held?.run ?? "", "broker.jsonl"), "utf8"), /"argv":\["run","hold"/u);
+
+  const started = Date.now();
+  const slow = await boxedRun("acme-slow", "sleep", 2_000);
+  assert.equal(slow?.timedOut, true, JSON.stringify(slow));
+  assert.equal(slow?.end, "failed");
+  assert.ok(Date.now() - started < 30_000, "the timeout ends the run, not the 60 s sleep");
+  const beat = join(tree.store, "acme-slow", "runs", slow?.run ?? "", "scratch", "beat");
+  assert.ok(existsSync(beat), "the child ran in the box");
+  const last = readFileSync(beat, "utf8");
+  await new Promise((wait) => setTimeout(wait, 600));
+  assert.equal(readFileSync(beat, "utf8"), last, "the child that ignored SIGTERM is gone: the tree ended with the box");
+
+  const boxes = join(tree.runtime, "darius-box");
+  assert.deepEqual(existsSync(boxes) ? readdirSync(boxes) : [], [], "every box dir is removed, with its sockets");
 });

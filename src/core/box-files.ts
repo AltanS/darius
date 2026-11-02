@@ -163,10 +163,18 @@ export function boxFiles(input: BoxFilesInput): BoxFile[] {
   return files;
 }
 
+/**
+ * `darius box enter ... --`: the command the box runs, without the harness.
+ * A launch puts the harness after it, as it does after the mask's prefix.
+ */
+export function boxEnterPrefix(darius: string, relayPort: number = BOX_RELAY_PORT): string[] {
+  return [darius, "box", "enter", "--relay-port", String(relayPort), "--proxy", BOX_PROXY_SOCKET, "--"];
+}
+
 /** The command the box runs: `darius box enter`, which starts the relay and then the harness. */
 export function boxEnterCommand(darius: string, harnessArgv: readonly string[], relayPort: number = BOX_RELAY_PORT): string[] {
   if (harnessArgv.length === 0) throw new BoxError("the box needs a harness command to run");
-  return [darius, "box", "enter", "--relay-port", String(relayPort), "--proxy", BOX_PROXY_SOCKET, "--", ...harnessArgv];
+  return [...boxEnterPrefix(darius, relayPort), ...harnessArgv];
 }
 
 // --- where the box can see a path -------------------------------------------------

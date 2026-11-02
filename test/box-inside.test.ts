@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,7 @@ import {
   wrapperScript,
   writeBoxFiles,
 } from "../src/core/box-files.ts";
-import { connectAuthority, connectTunnel, exitCodeOf, readBoxMarker, startRelay } from "../src/core/box-inside.ts";
+import { connectAuthority, connectTunnel, enterBox, exitCodeOf, forwardedSignals, readBoxMarker, startRelay } from "../src/core/box-inside.ts";
 import { decide, startBoxProxy, type BoxPolicy, type BoxProxy, type Decide } from "../src/core/box-proxy.ts";
 
 const DARIUS = fileURLToPath(new URL("../bin/darius", import.meta.url));
@@ -424,6 +424,24 @@ test("darius box enter forwards SIGTERM, SIGINT and SIGHUP to the program", asyn
     });
     assert.equal(ran.code, code, `${signal}: ${ran.stderr}`);
   }
+});
+
+test("box enter on a terminal does not send SIGINT a second time: the kernel sends Ctrl-C to the whole foreground group", async () => {
+  assert.deepEqual(forwardedSignals(false), ["SIGTERM", "SIGINT", "SIGHUP"]);
+  assert.deepEqual(forwardedSignals(true), ["SIGTERM", "SIGHUP"]);
+  const run = async (isStdinTty: boolean): Promise<number> => {
+    const ready = `${fresh("ready")}.txt`;
+    const program = `process.on("SIGINT", () => process.exit(42)); process.on("SIGTERM", () => process.exit(41)); require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setInterval(() => {}, 1000);`;
+    const entered = enterBox({ relayPort: 0, proxySocket: join(DIR, "none.sock"), argv: [process.execPath, "-e", program], markerPath: marker(), stderr: new PassThrough(), isStdinTty });
+    for (let tries = 0; tries < 200 && !existsSync(ready); tries += 1) await new Promise((done) => setTimeout(done, 25));
+    // What a Ctrl-C does to `box enter` itself; on a terminal the harness gets its own copy from the kernel.
+    process.emit("SIGINT", "SIGINT");
+    await new Promise((done) => setTimeout(done, 200));
+    process.emit("SIGTERM", "SIGTERM");
+    return entered;
+  };
+  assert.equal(await run(false), 42, "no terminal: SIGINT is passed on");
+  assert.equal(await run(true), 41, "a terminal: SIGINT is not passed on, and box enter is still there to pass SIGTERM");
 });
 
 test("the relay of darius box enter reaches the proxy while the program runs", async () => {

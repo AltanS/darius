@@ -137,6 +137,17 @@ export interface EnterInput {
   markerPath: string;
   /** Where the lines of `box enter` itself go. */
   stderr: Writable;
+  /**
+   * True when stdin is a terminal (a herdr tab). The kernel then sends the
+   * SIGINT of Ctrl-C to the whole foreground process group, the harness
+   * included, so `box enter` must not send it a second time.
+   */
+  isStdinTty?: boolean;
+}
+
+/** The signals `box enter` passes on: SIGINT only when no terminal sends it to the harness itself. */
+export function forwardedSignals(isStdinTty: boolean): NodeJS.Signals[] {
+  return FORWARDED_SIGNALS.filter((signal) => !(isStdinTty && signal === "SIGINT"));
 }
 
 /** The exit code of a child: its own, or 128 plus the signal number. */
@@ -148,9 +159,10 @@ export function exitCodeOf(code: number | null, signal: NodeJS.Signals | null): 
 
 /**
  * Checks the box marker, starts the relay, runs `argv` with this process's
- * stdio and env, passes SIGTERM, SIGINT and SIGHUP on, and returns its exit
- * code (128 + the signal number when a signal ended it). A program that
- * cannot start gives 127.
+ * stdio and env, passes SIGTERM, SIGINT and SIGHUP on (SIGINT only when stdin
+ * is not a terminal: a terminal sends it to the harness itself), and returns
+ * its exit code (128 + the signal number when a signal ended it). A program
+ * that cannot start gives 127.
  */
 export async function enterBox(input: EnterInput): Promise<number> {
   const [program, ...args] = input.argv;
@@ -158,12 +170,14 @@ export async function enterBox(input: EnterInput): Promise<number> {
   readBoxMarker(input.markerPath);
   const relay = await startRelay(input.relayPort, input.proxySocket);
   const handlers = new Map<NodeJS.Signals, () => void>();
+  const passed = forwardedSignals(input.isStdinTty === true);
   try {
     return await new Promise<number>((resolve) => {
       const child = spawn(program, args, { stdio: "inherit" });
       for (const signal of FORWARDED_SIGNALS) {
+        // Each signal keeps a handler, so `box enter` never dies before the harness.
         const handler = (): void => {
-          child.kill(signal);
+          if (passed.includes(signal)) child.kill(signal);
         };
         handlers.set(signal, handler);
         process.on(signal, handler);

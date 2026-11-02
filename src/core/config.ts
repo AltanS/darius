@@ -74,7 +74,7 @@ export interface Config {
    * `mask` (opt-in since 0.114.1): in bubblewrap, with darius secret files hidden from the
    * run's process tree (src/core/sandbox.ts). `off` (default): without bubblewrap. Inside
    * the mask, no_new_privs is on, so sudo and rootless podman fail. `box` (0.117.0): the run's
-   * own sandbox (src/core/box.ts). This version reads it, but launches nothing in the box yet.
+   * own sandbox (src/core/box.ts). Every launch uses it since 0.120.0 (src/runner/box-launch.ts).
    */
   run: { sandbox: RunSandbox };
   /**

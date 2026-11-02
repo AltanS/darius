@@ -10,6 +10,11 @@
  * then kills the harness with SIGKILL, so the harness gets no grace time. Its
  * children get the SIGTERM, and the SIGKILL 5 s later. An exit code passes
  * through; a harness killed by a signal reads as exit 128 + the signal.
+ *
+ * The box (0.120.0) puts bwrap in front the same way, with `--new-session`: the
+ * harness gets its own session, so the group signal reaches only bwrap. bwrap
+ * dies of it, and the box's own pid namespace ends with it, which kills the
+ * whole tree inside.
  */
 
 import { spawn } from "node:child_process";
@@ -41,6 +46,8 @@ export interface LaunchResult {
   stdout: string;
   stderrTail: string;
   spawnError?: string;
+  /** The herdr surface could not prove the box (0.120.0): the tab was closed. Why. */
+  boxBroken?: string;
 }
 
 const KILL_GRACE_MS = 5_000;

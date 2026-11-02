@@ -3,8 +3,10 @@
  *
  *   box enter --relay-port N [--proxy PATH] -- <command> [args...]
  *       Inside the box only. Starts the relay on 127.0.0.1:N to the proxy
- *       socket, runs the command, passes SIGTERM, SIGINT and SIGHUP on, and
- *       exits with its code (128 + the signal number on a signal).
+ *       socket, runs the command, passes SIGTERM, SIGINT and SIGHUP on (SIGINT
+ *       only when stdin is not a terminal, which sends it to the whole
+ *       foreground group itself), and exits with its code (128 + the signal
+ *       number on a signal).
  *   box connect <host> <port> [--proxy PATH]
  *       The ssh ProxyCommand in the box: a tunnel through the proxy on stdin
  *       and stdout. A refusal is the proxy's one line on stderr, exit 1.
@@ -13,6 +15,8 @@
  * reads any marker, link or store, so nothing here touches the store or the
  * config. `--proxy` defaults to /run/darius/proxy.sock.
  */
+
+import { isatty } from "node:tty";
 
 import { BOX_PROXY_SOCKET } from "../core/box.ts";
 import { boxMarkerPath, connectTunnel, enterBox } from "../core/box-inside.ts";
@@ -53,6 +57,7 @@ async function runEnter(args: ParsedArgs): Promise<number> {
     argv,
     markerPath: boxMarkerPath(),
     stderr: process.stderr,
+    isStdinTty: isatty(0),
   });
 }
 

@@ -38,12 +38,12 @@ import { join } from "node:path";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import type { Project } from "../core/store.ts";
-import { noteSandbox, resolveSandbox, sandboxPrefix } from "../core/sandbox.ts";
 import { localToday } from "../core/sweep.ts";
 import { ulid } from "../core/ulid.ts";
 import type { HarnessAdapter, ResolvedProfile } from "../harness/contract.ts";
 import { errorMessage } from "../runtime.ts";
-import { launchHeadless } from "../surface/headless.ts";
+import { launchHeadless, type LaunchResult } from "../surface/headless.ts";
+import { withRunSandbox, type RunSandbox, type SandboxRequest } from "./box-launch.ts";
 import { buildEnv, gateCommand, preflightGate, writeRunFiles } from "./launch.ts";
 
 export const CHECK_TIMEOUT_MS = 180_000;
@@ -62,10 +62,12 @@ export interface HarnessCheck {
   costUsd?: number;
   detail?: string;
   run?: string;
+  /** The box could not be built (0.120.0): nothing ran, and no `harness.checked` line was written. */
+  boxBroken?: true;
 }
 
-/** Whether a harness may start runs on this host now. */
-export type Readiness = { ready: true; version: string; subagents: boolean; pending?: string } | { ready: false; detail: string };
+/** Whether a harness may start runs on this host now. `isBoxBroken`: its check could not build the box, so a ritual skips as `box-broken`. */
+export type Readiness = { ready: true; version: string; subagents: boolean; pending?: string } | { ready: false; detail: string; isBoxBroken?: true };
 
 // --- version ------------------------------------------------------------------------
 
@@ -160,7 +162,9 @@ function deniedShell(runDir: string): DeniedShell {
 /**
  * Runs the check for `harness` at `version` and appends its line to the
  * `_global` ledger. The run dir under `_global/runs/<run>/` stays, with its
- * gate log; the working dir and the marker go.
+ * gate log; the working dir and the marker go. A check whose box cannot be
+ * built (0.120.0) starts nothing and appends no line: it comes back with
+ * `boxBroken`.
  */
 export async function runHarnessCheck(input: {
   harness: HarnessAdapter;
@@ -179,7 +183,7 @@ export async function runHarnessCheck(input: {
   const marker = join(cwd, "marker");
   const subMarker = join(cwd, "marker-subagent");
   const check: HarnessCheck = { harness: harness.id, version, outcome: "inconclusive", subagents: "inconclusive", run };
-  const sandbox = resolveSandbox();
+  let state: RunSandbox["state"] = "off";
   try {
     const profile: ResolvedProfile = {
       harness: harness.id,
@@ -192,12 +196,32 @@ export async function runHarnessCheck(input: {
     const gate = gateCommand(files, harness);
     const launch = harness.prepare({ ritual, run, files, profile, scope: "full", gate, message: checkMessage(marker, subMarker) });
     const env = buildEnv({ project: global.name, run, files, harness });
-    // The same launch as a run, so the proof covers the mask (0.114.0).
-    noteSandbox(files.dir, sandbox);
-    const prefix = sandboxPrefix(sandbox);
-    const broken = preflightGate(gate, harness, env, prefix);
-    if (broken === undefined) {
-      const result = await launchHeadless({ bin, argv: launch.headless, cwd, env, timeoutMs: input.timeoutMs ?? CHECK_TIMEOUT_MS, sandbox: prefix });
+    // The same launch as a run, so the proof covers the mask (0.114.0) and the box (0.120.0).
+    // The work dir stays writable in the box, though the ritual is in report mode: the proof is that the gate, not the mount, stops the marker.
+    const request: SandboxRequest = {
+      run: { id: run, dir: files.dir, policy: files.policy, project: global.name, who: `${harness.id}:${run}` },
+      workDir: cwd,
+      isReport: false,
+      hasTty: false,
+      ritual: {},
+      harness,
+      envPass: [],
+    };
+    const sandboxed = await withRunSandbox(request, async (sandbox): Promise<{ broken: string } | { result: LaunchResult }> => {
+      state = sandbox.state;
+      const broken = preflightGate(gate, harness, env, sandbox.prefix);
+      if (broken !== undefined) return { broken };
+      return { result: await launchHeadless({ bin, argv: launch.headless, cwd, env, timeoutMs: input.timeoutMs ?? CHECK_TIMEOUT_MS, sandbox: sandbox.prefix }) };
+    });
+    if ("boxBroken" in sandboxed) {
+      // Nothing ran, so nothing was checked: no ledger line, and the next batch tries again.
+      check.detail = `box-broken: ${sandboxed.boxBroken}`;
+      check.boxBroken = true;
+      return check;
+    }
+    const outcome = sandboxed.ran;
+    if ("result" in outcome) {
+      const { result } = outcome;
       const facts = harness.parseResult(result.stdout);
       if (facts.costUsd !== undefined) check.costUsd = facts.costUsd;
       const denied = deniedShell(files.dir);
@@ -222,7 +246,7 @@ export async function runHarnessCheck(input: {
       }
     } else {
       check.outcome = "failed";
-      check.detail = `the gate failed its preflight: ${broken}`;
+      check.detail = `the gate failed its preflight: ${outcome.broken}`;
     }
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -235,7 +259,7 @@ export async function runHarnessCheck(input: {
     outcome: check.outcome,
     subagents: check.subagents,
     run,
-    sandbox: sandbox.state,
+    sandbox: state,
   };
   if (check.costUsd !== undefined) line.cost_usd = check.costUsd;
   if (check.detail !== undefined) line.detail = check.detail;
@@ -278,5 +302,6 @@ export async function harnessReadiness(input: {
   input.onCheck(check);
   if (check.outcome === "passed") return { ready: true, version, subagents: check.subagents === "passed" };
   const why = check.detail === undefined ? "" : `: ${check.detail}`;
+  if (check.boxBroken === true) return { ready: false, detail: `${harness.id} ${version}: the gate check could not run${why}`, isBoxBroken: true };
   return { ready: false, detail: `${harness.id} ${version}: the gate check was ${check.outcome}${why}; run ${retry}` };
 }

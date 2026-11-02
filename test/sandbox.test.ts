@@ -111,15 +111,16 @@ test("[run] sandbox: off by default, mask with one line, an unknown value refuse
   }
 });
 
-test("[run] sandbox = \"box\": read, but no launch uses it yet, so runs say they start without a sandbox", () => {
+test("[run] sandbox = \"box\": the launch builds the box; doctor warns when bwrap is missing, as every run then skips", () => {
   delete process.env.DARIUS_RUN_SANDBOX;
   try {
     isolatedConfig('host = "a"\n\n[run]\nsandbox = "box"\n', () => {
       assert.equal(loadConfig().run.sandbox, "box");
-      const sandbox = resolveSandbox();
-      assert.equal(sandbox.state, "unmasked");
-      assert.match(sandbox.state === "unmasked" ? sandbox.problem : "", /does not launch runs in the box yet/u);
-      assert.match(sandboxWarning() ?? "", /^WARN: .*sandbox = "box" is set/u);
+      assert.deepEqual(resolveSandbox(), { state: "box" }, "box is not probed here: the launch probes it and fails closed");
+      withBwrap(join(SANDBOX, "no-bwrap"), () => {
+        assert.match(sandboxWarning() ?? "", /^WARN: \[run\] sandbox = "box", and every unattended run on this host is skipped as box-broken\. bwrap is not on PATH/u);
+      });
+      withBwrap(FAKE_BWRAP, () => assert.equal(sandboxWarning(), undefined));
     });
   } finally {
     process.env.DARIUS_RUN_SANDBOX = "mask";

@@ -32,6 +32,7 @@ export type SkipReason =
   | "no-workdir"
   | "policy-capped"
   | "gate-broken"
+  | "box-broken"
   | "harness-unchecked"
   | "subagents-unproven"
   | "tool-missing"
@@ -117,6 +118,7 @@ export type ReportScope = "digest" | "news" | "all";
 export const FAILING_SKIPS: ReadonlySet<string> = new Set([
   "error",
   "gate-broken",
+  "box-broken",
   "harness-unchecked",
   "profile-invalid",
   "subagents-unproven",
@@ -128,7 +130,7 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Skip details darius writes itself. The others (gate-broken, error) can hold
+ * Skip details darius writes itself. The others (gate-broken, box-broken, error) can hold
  * a stderr tail or an exception text, and an alert never carries those: they
  * can hold environment text.
  */

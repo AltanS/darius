@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.120.0] - 2026-11-02
+
+### Added
+
+- Runs launch in the box with `[run] sandbox = "box"`. Every launch goes through one function (`src/runner/box-launch.ts`): run-due, `run now`, `run resume` and `run follow-up`, headless or in a herdr tab, the gate check per harness version, and the gate preflight, in the same box as the harness. `claude --version` stays outside.
+- Per launch darius probes bwrap, builds the plan, writes the box dir, runs the mounts once with `true`, and starts the proxy and the broker. Afterwards it closes both and removes the box dir, also on an error or a timeout.
+- The proxy's policy comes from the ritual's `net` and `reach`, the harness hosts, this host's interface and tailnet addresses, and the web ports: 4747, 4748, and `DARIUS_WEB_URL` and `DARIUS_WEB_PORT` of `web.env` and `next.env`. Each decision is one line in `<run>/net.jsonl`.
+- The box fails closed. Missing bwrap, a failed probe, a refused path, or a proxy or broker that does not start skips the ritual as `box-broken`, a failing skip. The reason is in the report and in `<run>/run.log`, and no harness starts. The mask still fails open.
+- A gate check of a new harness version that cannot build its box writes no `harness.checked` line; the ritual skips as `box-broken`.
+- herdr: the tab's alias runs bwrap and `darius box enter` without `--new-session`, with the tab's own `TERM`. When the alias does not take or herdr shows no bwrap in the foreground, the tab is closed, the run fails, and the ritual skips as `box-broken`.
+- Report mode shows the work dir read-only. The gate check keeps its work dir writable: the gate, not the mount, must stop its marker.
+- No verb flushes alerts inside a box, as in the mask. `darius doctor` warns when `box` is set and bwrap fails its probe.
+- `darius box enter` passes SIGINT on only when its stdin is not a terminal. In a herdr tab the kernel already sends Ctrl-C to the harness, which would get it twice.
+
 ## [0.119.0] - 2026-11-02
 
 ### Added

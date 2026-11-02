@@ -5,7 +5,7 @@
  * the host (home, uid, runtime dir, store and config dirs, the mask list)
  * comes in through `BoxFacts`, so the tests can drive every rule without a
  * real bwrap. `src/core/box-host.ts` reads those facts on a real host and
- * prepares the copies the plan names. Nothing launches through the plan yet.
+ * prepares the copies the plan names. src/runner/box-launch.ts launches through it.
  *
  * The layout, in order. A later mount covers an earlier one, so the order
  * is the rule:
