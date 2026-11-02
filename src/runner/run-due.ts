@@ -75,7 +75,7 @@ import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } 
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
 import type { RitualBoxKeys } from "../core/box.ts";
-import { appendRunLog } from "../core/sandbox.ts";
+import { appendRunLog, isBoxChosen } from "../core/sandbox.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
@@ -90,6 +90,7 @@ import { errorMessage } from "../runtime.ts";
 import { launchHeadless, type ChildEnv, type LaunchResult } from "../surface/headless.ts";
 import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE, type TabRun } from "../surface/herdr.ts";
 import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
+import { boxReadiness, type BoxReadiness } from "./box-check.ts";
 import { harnessReadiness, type Readiness } from "./harness-check.ts";
 import { acknowledgeRun, recordHold } from "./hold.ts";
 import { withRunSandbox, type RunSandbox, type SandboxRequest } from "./box-launch.ts";
@@ -284,8 +285,8 @@ interface ProjectContext {
   options: RunDueOptions;
   /** What the checkout's marker said at the start of this project's batch. Absent without a checkout here. */
   repo?: RepoState;
-  /** Shared by every project of the batch: one version check per harness, and the report that lists the checks. */
-  batch: { readiness: Map<string, Readiness>; report: BatchReport };
+  /** Shared by every project of the batch: one version check per harness, one box gate, and the report that lists the checks. */
+  batch: { readiness: Map<string, Readiness>; box?: BoxReadiness; report: BatchReport };
 }
 
 /** The checkout's marker as this batch sees it. */
@@ -680,6 +681,31 @@ async function readiness(ctx: ProjectContext, harness: HarnessAdapter): Promise<
 }
 
 /**
+ * The box gate (src/runner/box-check.ts), asked once per batch, before the
+ * gate check of a harness, which runs in the box too. With `[run] sandbox =
+ * "box"` a boxed run needs a passing `box.checked` of this host and darius
+ * version; without one the box check runs here, outside dry runs. run-due,
+ * `run now`, `run resume` and `run follow-up` all come through here.
+ */
+async function boxGate(ctx: ProjectContext): Promise<BoxReadiness> {
+  const known = ctx.batch.box;
+  if (known !== undefined) return known;
+  const { report } = ctx.batch;
+  const result = await boxReadiness({
+    today: ctx.today,
+    isDryRun: ctx.options.isDryRun,
+    who: ctx.options.who,
+    isBox: isBoxChosen(ctx.cfg),
+    openGlobal: () => ctx.global ?? (ctx.options.isDryRun ? null : openProject(GLOBAL_PROJECT, { create: true })),
+    onCheck: (check) => {
+      report.boxChecks = [...(report.boxChecks ?? []), check];
+    },
+  });
+  ctx.batch.box = result;
+  return result;
+}
+
+/**
  * Writes the run files and lets the adapter wire the gate. The run id
  * exists, the run does not yet. The preflight comes next, in the run's
  * sandbox (runRitual).
@@ -970,10 +996,13 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp, doc.header);
     if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);
     const surface = chosen;
+    const boxed = await boxGate(ctx);
+    if (!boxed.ready) return skipped(slug, "box-broken", boxed.detail);
     const ready = await readiness(ctx, resolution.harness);
     if (!ready.ready) return skipped(slug, ready.isBoxBroken === true ? "box-broken" : "harness-unchecked", ready.detail);
     if (ctx.options.isDryRun) {
-      const warnings = [...markerWarnings, ...(ready.pending === undefined ? [] : [ready.pending])];
+      const pending = [boxed.pending, ready.pending].filter((note) => note !== undefined);
+      const warnings = [...markerWarnings, ...pending];
       const entry: RitualEntry = { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
       if (followUp !== undefined) {
         entry.followUpOf = followUp.parent;

@@ -136,6 +136,11 @@ function sandboxChoice(cfg: Config | null | undefined): string {
   return cfg?.run.sandbox ?? "off";
 }
 
+/** True when this host runs its rituals in the box (`[run] sandbox = "box"` or `DARIUS_RUN_SANDBOX=box`). Probes nothing. */
+export function isBoxChosen(cfg: Config | null = loadConfigIfPresent()): boolean {
+  return sandboxChoice(cfg) === "box";
+}
+
 /**
  * How to launch a run on this host now. Never throws for a mask failure: a
  * bwrap that is missing or fails its probe, with or without the masks, gives

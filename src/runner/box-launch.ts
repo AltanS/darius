@@ -87,9 +87,12 @@ export interface RunSandbox {
 /** What `withRunSandbox` gives back: the body's value, or why the box could not be built. */
 export type SandboxEnd<T> = { ran: T } | { boxBroken: string };
 
-/** One open box: the argv prefix, and how to close it. */
-interface OpenBox {
+/** One open box: the argv prefix, the proxy's policy, the darius path the box runs, and how to close it. */
+export interface OpenBox {
   prefix: string[];
+  policy: BoxPolicy;
+  /** The darius CLI as the box sees it. */
+  darius: string;
   close(): Promise<void>;
 }
 
@@ -190,9 +193,11 @@ function netLog(runDir: string): (line: string) => void {
 /**
  * Builds the box for one launch and starts its proxy and broker. Throws a
  * BoxError, or the error of the step that failed, after closing what it
- * started and removing the box dir.
+ * started and removing the box dir. `darius box check`
+ * (src/runner/box-check.ts) opens its box here too, whatever `[run] sandbox`
+ * says, so the check proves the layout a run gets.
  */
-async function openBox(request: SandboxRequest): Promise<OpenBox> {
+export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   const probe = probeBwrap();
   if ("problem" in probe) throw new BoxError(probe.problem);
   const cfg = loadConfigIfPresent();
@@ -250,7 +255,7 @@ async function openBox(request: SandboxRequest): Promise<OpenBox> {
     throw cause;
   }
   for (const warning of plan.warnings) appendRunLog(request.run.dir, warning);
-  return { prefix: plan.argv, close };
+  return { prefix: plan.argv, policy, darius: filesInput.darius, close };
 }
 
 /** True when something listens on the Unix socket at `path`. */

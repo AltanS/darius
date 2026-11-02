@@ -34,6 +34,7 @@ import { claudeHarness } from "../src/harness/claude.ts";
 import { clearStaleBox, webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
+import { VERSION } from "../src/version.ts";
 
 // Short: the box dir's sockets live under the runtime dir, and a Unix socket path has at most 108 bytes.
 const SANDBOX = mkdtempSync(join(tmpdir(), "dbl-"));
@@ -178,8 +179,9 @@ esac
 process.env.DARIUS_BWRAP = FAKE_BWRAP;
 process.env.DARIUS_CLAUDE = FAKE_CLAUDE;
 process.env.PATH = `${BIN}:${process.env.PATH ?? ""}`;
-// The fake's default version passed its gate check, so a run starts at once.
+// The fake's default version passed its gate check, and this darius version its box check, so a run starts at once.
 appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
+appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, bwrap: "0.0.0", kernel: "test", outcome: "pass", failed: [], skipped: [] });
 
 const REPORT_POLICY: Policy = { mode: "report", may: ["Bash(darius *)", "Bash(date)"], hold: ["git push"] };
 const ACT_POLICY: Policy = { ...REPORT_POLICY, mode: "act" };

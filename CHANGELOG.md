@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.121.0] - 2026-11-03
+
+### Added
+
+- `darius box check [--json]` proves the box on this host with no paid call. It opens the box with the same function a run uses, for a throwaway project in a temp store, and runs a fake harness inside. Each step is pass, fail or skip with a reason: box, store-write, policy-write, claude-settings-write, secret-masked, docker-socket, tailscale-socket, system-bus, systemd-run, web-api, ssh-port, public-https, tiocsti and broker-complete. Exit 0 pass, 1 fail.
+- The web-api and ssh-port steps send one CONNECT through the box proxy to every own address, and expect a refusal. A tunnel that opens is closed at once, unused. public-https sends one CONNECT to the harness API; offline, it is skipped with a note, and offline never fails the check.
+- The tiocsti step needs `dev.tty.legacy_tiocsti` = 0. A kernel without the knob fails, because a herdr launch runs without `--new-session`.
+- Each check appends `box.checked` to `_global`: host, darius version, bwrap version, kernel, pass or fail, and the failed and skipped steps.
+- With `[run] sandbox = "box"`, run-due, `run now`, `run resume` and `run follow-up` need a passing `box.checked` of this host and darius version. Without one they run the box check first. A failed check skips every ritual as `box-broken`; one that failed today is not run again until `darius box check` or the next day.
+- `darius box status [--json]` lists the newest box check per host and darius version. `darius doctor` shows the box state and the newest box check on this host.
+
+### Changed
+
+- Only `darius box enter` and `darius box connect` skip the marker, link and store reads; `box check` and `box status` run on the normal path.
+
 ## [0.120.0] - 2026-11-02
 
 ### Added

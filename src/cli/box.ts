@@ -10,26 +10,41 @@
  *   box connect <host> <port> [--proxy PATH]
  *       The ssh ProxyCommand in the box: a tunnel through the proxy on stdin
  *       and stdout. A refusal is the proxy's one line on stderr, exit 1.
+ *   box check [--json]
+ *       Outside: proves the box on this host with a fake harness, no paid
+ *       call (src/runner/box-check.ts), and appends `box.checked` to
+ *       `_global`. Exit 0 pass, 1 fail.
+ *   box status [--json]
+ *       The newest box check per host and darius version, newest first.
  *
- * Both read only what the box shows. src/cli.ts runs this command before it
- * reads any marker, link or store, so nothing here touches the store or the
- * config. `--proxy` defaults to /run/darius/proxy.sock.
+ * `enter` and `connect` read only what the box shows. src/cli.ts runs those
+ * two before it reads any marker, link or store, so they touch neither the
+ * store nor the config. `--proxy` defaults to /run/darius/proxy.sock.
+ * `check` and `status` run outside, on the normal path.
  */
 
 import { isatty } from "node:tty";
 
 import { BOX_PROXY_SOCKET } from "../core/box.ts";
 import { boxMarkerPath, connectTunnel, enterBox } from "../core/box-inside.ts";
+import { defaultWho } from "../core/ledger.ts";
+import { GLOBAL_PROJECT, openProject } from "../core/store.ts";
+import { describeListed, globalLedger, newestBoxChecks, runBoxCheck, type BoxCheck, type BoxStep } from "../runner/box-check.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const HELP = [
   "usage: darius box enter --relay-port N [--proxy PATH] -- <command> [args...]",
   "       darius box connect <host> <port> [--proxy PATH]",
+  "       darius box check [--json]",
+  "       darius box status [--json]",
   "",
   "enter    inside the box: start the relay on 127.0.0.1:N to the proxy socket, run the command, pass its exit code and signals",
   "connect  the ssh ProxyCommand in the box: a tunnel through the proxy on stdin and stdout",
+  "check    prove the box on this host with a fake harness (no paid call) and record box.checked; exit 0 pass, 1 fail",
+  "status   the newest box check per host and darius version",
   "",
-  `--proxy defaults to ${BOX_PROXY_SOCKET}. The runner starts both verbs; you do not run them by hand.`,
+  `--proxy defaults to ${BOX_PROXY_SOCKET}. The runner starts enter and connect; you do not run them by hand.`,
+  "run-due runs box check by itself before the first boxed run of a darius version.",
 ].join("\n");
 
 const PORT = /^[1-9][0-9]{0,4}$/u;
@@ -73,6 +88,37 @@ async function runConnect(args: ParsedArgs): Promise<number> {
   return 1;
 }
 
+const STEP_MARK = { pass: "✓", fail: "!", skip: "·" } satisfies Record<BoxStep["outcome"], string>;
+
+function describeCheck(check: BoxCheck): string[] {
+  const lines = check.steps.map((entry) => `${STEP_MARK[entry.outcome]} ${entry.name}: ${entry.outcome}, ${entry.reason}`);
+  const failed = check.failed.length === 0 ? "" : `, failed: ${check.failed.join(", ")}`;
+  const mark = check.outcome === "pass" ? "✓" : "!";
+  lines.push(`${mark} box check ${check.outcome} on ${check.host}: darius ${check.darius}, bwrap ${check.bwrap}, kernel ${check.kernel}${failed}`);
+  return lines;
+}
+
+async function runCheck(args: ParsedArgs): Promise<number> {
+  if (args.positional.length > 1) throw new UsageError("usage: darius box check [--json]");
+  const global = openProject(GLOBAL_PROJECT, { create: true });
+  const check = await runBoxCheck({ global, who: defaultWho() });
+  if (args.json) console.log(JSON.stringify({ ok: check.outcome === "pass", ...check }));
+  else console.log(describeCheck(check).join("\n"));
+  return check.outcome === "pass" ? 0 : 1;
+}
+
+function runStatus(args: ParsedArgs): number {
+  if (args.positional.length > 1) throw new UsageError("usage: darius box status [--json]");
+  const checks = newestBoxChecks(globalLedger());
+  if (args.json) {
+    console.log(JSON.stringify({ checks }));
+    return 0;
+  }
+  if (checks.length === 0) console.log("· no box checks yet; run darius box check, or run-due runs one before the first boxed run");
+  for (const entry of checks) console.log(describeListed(entry));
+  return 0;
+}
+
 async function run(args: ParsedArgs): Promise<number> {
   const verb = args.positional[0];
   switch (verb) {
@@ -80,6 +126,10 @@ async function run(args: ParsedArgs): Promise<number> {
       return runEnter(args);
     case "connect":
       return runConnect(args);
+    case "check":
+      return runCheck(args);
+    case "status":
+      return runStatus(args);
     case undefined:
       throw new UsageError(HELP);
     default:
@@ -89,8 +139,8 @@ async function run(args: ParsedArgs): Promise<number> {
 
 export const boxCommand: Command = {
   name: "box",
-  summary: "the run sandbox: enter (inside, starts the relay and the harness) and connect (the ssh ProxyCommand)",
-  usage: "box enter|connect",
+  summary: "the run sandbox: check and status on this host; enter and connect run inside the box",
+  usage: "box check|status|enter|connect",
   help: HELP,
   flags: ["relay-port", "proxy"],
   run,

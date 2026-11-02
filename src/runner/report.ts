@@ -15,6 +15,7 @@
 import { errorMessage } from "../runtime.ts";
 import type { Alert } from "../core/alerts.ts";
 import type { ResultSummary } from "../core/result.ts";
+import type { BoxCheck } from "./box-check.ts";
 import type { HarnessCheck } from "./harness-check.ts";
 
 /** What run-due did with one due ritual. */
@@ -100,6 +101,8 @@ export interface BatchReport {
   globalSync?: string;
   /** The gate checks this batch ran, one per new harness version (src/runner/harness-check.ts). */
   harnessChecks?: HarnessCheck[];
+  /** The box checks this batch ran, at most one (src/runner/box-check.ts). */
+  boxChecks?: BoxCheck[];
 }
 
 /**
@@ -229,6 +232,14 @@ function describeCheck(check: HarnessCheck, host: string): string {
   return `${mark} ${check.harness} ${check.version}: gate check ${check.outcome}${subagents} on ${host}${cost}${detail}`;
 }
 
+/** `✓ box check pass on host-a: darius 0.121.0, ...`. A check that ran is always news. */
+function describeBoxCheck(check: BoxCheck): string {
+  const mark = check.outcome === "pass" ? "✓" : "!";
+  const failed = check.failed.length === 0 ? "" : `, failed: ${check.failed.join(", ")}`;
+  const skipped = check.skipped.length === 0 ? "" : `, skipped: ${check.skipped.join(", ")}`;
+  return `${mark} box check ${check.outcome} on ${check.host}: darius ${check.darius}, bwrap ${check.bwrap}, kernel ${check.kernel}${failed}${skipped}`;
+}
+
 /** Plain-text lines for the webhook or the journal. Empty when nothing is worth saying (never for a digest). */
 export function formatReport(report: BatchReport, scope: ReportScope = "all"): string[] {
   const lines: string[] = [];
@@ -242,6 +253,7 @@ export function formatReport(report: BatchReport, scope: ReportScope = "all"): s
   for (const project of scope === "news" ? [] : report.projects) {
     for (const warning of project.warnings ?? []) lines.push(`! ${project.project}: ${warning}`);
   }
+  for (const check of report.boxChecks ?? []) lines.push(describeBoxCheck(check));
   for (const check of report.harnessChecks ?? []) lines.push(describeCheck(check, report.host));
   for (const failure of report.errors) lines.push(`! ${failure.project}: ${failure.error}`);
   if (scope === "digest" && lines.length === 0) {

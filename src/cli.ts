@@ -27,6 +27,7 @@ import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
 import { channelProblems } from "./core/alerts.ts";
+import { boxDoctorLines } from "./runner/box-check.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
@@ -153,8 +154,9 @@ async function dispatch(argv: string[]): Promise<number> {
   }
 
   const name = resolveCommandName(first);
-  // `box` runs inside the box: it reads no marker, link or store, and writes nothing.
-  if (name === "box") return runBoxed(argv);
+  // `box enter` and `box connect` run inside the box: they read no marker, link or store, and write nothing.
+  // `box check` and `box status` run outside and take the normal path.
+  if (name === "box" && (argv[1] === "enter" || argv[1] === "connect")) return runBoxed(argv);
   const ask = helpAsk(argv.slice(1));
   if (ask.kind === "ambiguous") {
     console.error(`darius: -h after --${ask.flag} is ambiguous. For help, put -h first. For a value, write --${ask.flag}=-h.`);
@@ -219,7 +221,7 @@ async function dispatch(argv: string[]): Promise<number> {
   }
 }
 
-/** `darius box ...`: help or the command itself, with nothing read before it. */
+/** `darius box enter|connect ...`: help or the command itself, with nothing read before it. */
 async function runBoxed(argv: string[]): Promise<number> {
   const command = getCommand("box");
   if (command === undefined) throw new Error("darius: the box command is not registered");
@@ -391,8 +393,25 @@ function printChannelProblems(argv: readonly string[]): void {
   process.stdout.write(`\n## Alert channels\n\n${lines.join("\n")}\n`);
 }
 
+/** After a full `doctor`: the box state and the newest box check on this host (0.121.0). A warning only: the exit code stays the legacy one. */
+function printBoxState(argv: readonly string[]): void {
+  let lines: string[];
+  try {
+    lines = boxDoctorLines();
+  } catch (cause) {
+    lines = [`WARN: cannot read the box state: ${errorMessage(cause)}`];
+  }
+  if (lines.length === 0) return;
+  if (argv.includes("--json")) {
+    for (const line of lines) console.error(`darius: box: ${line}`);
+    return;
+  }
+  process.stdout.write(`\n## Box\n\n${lines.map((line) => `  ${line}`).join("\n")}\n`);
+}
+
 function printDoctorNotes(argv: readonly string[]): void {
   printChannelProblems(argv);
+  printBoxState(argv);
   const notes = doctorNotes(process.cwd());
   if (notes.length === 0) return;
   if (argv.includes("--json")) {

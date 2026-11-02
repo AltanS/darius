@@ -31,6 +31,7 @@ import { dariusBin } from "../src/runner/launch.ts";
 import type { RitualEntry } from "../src/runner/report.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
+import { VERSION } from "../src/version.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
 const REAL_BWRAP = (process.env.PATH ?? "")
@@ -600,6 +601,8 @@ function boxedRunEnv(tree: Tree): void {
   delete process.env.DARIUS_RUN_POLICY;
   // The fake's version passed its gate check on this host.
   appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
+  // test/box-check.test.ts runs the box check itself; here it passed.
+  appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, bwrap: "0.0.0", kernel: "test", outcome: "pass", failed: [], skipped: [] });
 }
 
 function seedBoxedRitual(project: string): void {
