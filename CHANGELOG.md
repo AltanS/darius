@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.5] - 2026-11-02
+
+### Fixed
+
+- The Notifications settings page names a broken `push.json` and how to fix it, instead of "answered 500". `GET /api/push/key` gives the reason, with no value from the file.
+- A vigil flare's target reads "A check failed, step 1: ...". It showed the raw word "unknown" and a step count from zero.
+
 ## [0.113.4] - 2026-11-02
 
 ### Fixed

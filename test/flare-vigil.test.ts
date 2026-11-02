@@ -261,8 +261,7 @@ test("a failed sweep lights vigil:<slug> with the title, severity, source, deliv
   assert.equal(lit?.severity, "high");
   assert.equal(lit?.source, "vigil:guard");
   assert.deepEqual(lit?.deliver, ["push", "email"]);
-  assert.match(String(lit?.target), /^(pending|broken|unknown), step #0: it holds$/u, "the kind of failure and the failing step");
-  assert.equal(lit?.target, `${swept.fail_kind}, step #0: it holds`);
+  assert.match(String(lit?.target), /^A check (is still pending|could not run|failed), step 1: it holds$/u, "the kind of failure in words and the failing step, counted from one");
 
   const found = flareOf(project, "vigil:guard");
   assert.equal(found?.status, "lit");

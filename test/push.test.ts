@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -288,4 +288,21 @@ test("without keys or without a device, nothing is sent and nothing piles up", a
   appendLine(project, { who: "timer", type: "run.completed", item: "ritual/heartbeat", run: "Q1", outcome: "failed" });
   assert.equal(await sendAlerts(project, []), null);
   assert.equal(readLedger(project).some((line) => line.type.startsWith("alert.")), false);
+});
+
+test("GET /api/push/key names a broken file and quotes no value from it", () => {
+  const before = process.env.DARIUS_CONFIG_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "darius-push-bad-"));
+  process.env.DARIUS_CONFIG_DIR = dir;
+  try {
+    writeFileSync(join(dir, "push.json"), '{"private": "sk-or-v1-your-key-here"');
+    const reply = pushApi({ method: "GET", path: "/api/push/key", headers: new Headers(), body: "" }, "x");
+    assert.equal(reply.status, 500);
+    assert.match(String(reply.body.error), /push\.json is not valid JSON/u);
+    assert.equal(JSON.stringify(reply.body).includes("sk-or-v1"), false);
+  } finally {
+    if (before === undefined) delete process.env.DARIUS_CONFIG_DIR;
+    else process.env.DARIUS_CONFIG_DIR = before;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
