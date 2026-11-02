@@ -8,8 +8,8 @@
  *
  *   shell  (default) the harness's own allowlist enforces `may`, so the gate
  *          checks shell calls for `hold` and the report-mode write verbs and
- *          leaves every other tool to the allowlist. This is what every run
- *          did before the contract existed.
+ *          leaves every other tool to the allowlist, but for the secret path
+ *          check of read tools, which runs first in both scopes (0.114.0).
  *   full   the harness's permission system is off or cannot express the
  *          policy, so the gate enforces all of it: `may` for shell and other
  *          tools, `hold`, the write verbs, and a decision per ToolClass.
@@ -30,9 +30,20 @@
  * is told why and goes on within the policy, as it does when a native
  * allowlist refuses a call. Holding on those would end a run on its first
  * stray `ls` (architect review, 2026-09-28).
+ *
+ * The gate is no boundary against a hostile run: a run is the operator's own
+ * Unix user (docs/concept.md, "What the gate does not stop"). The path rule
+ * for read tools is exact within the gate. The text rules for shell commands
+ * only stop a confused run.
  */
 
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+
+import { loadConfigIfPresent } from "../core/config.ts";
 import type { Policy } from "../core/model.ts";
+import { claudeDir, configDir } from "../core/paths.ts";
 import type { ToolCall } from "./contract.ts";
 
 /** What `policy.json` holds; `darius policy-check` reads it back. */
@@ -663,6 +674,228 @@ export function clearsRunMarker(command: string): boolean {
   return CLEARS_RUN_MARKER.test(plainShell(command));
 }
 
+// --- secret paths ----------------------------------------------------------------------
+
+/** The paths a run does not read (secretPaths). Each is as it was configured; the checks resolve them. */
+export interface SecretPaths {
+  /** Whole folders: everything inside is secret. */
+  dirs: string[];
+  /** Single files. */
+  files: string[];
+  /** `~/.ssh`: only the private material inside it is secret (isSshSecret). */
+  sshDir: string;
+  /** The home folder, for the spellings in shell text. */
+  home: string;
+}
+
+/** An env value, where an empty string counts as unset. */
+function envValue(name: string): string | undefined {
+  const value = process.env[name];
+  return value === undefined || value === "" ? undefined : value;
+}
+
+/** `remote.credentials` from config.toml. A config that cannot be read must not change a verdict: it names no path. */
+function configuredCredentials(): string[] {
+  try {
+    const credentials = loadConfigIfPresent()?.remote?.credentials;
+    return credentials === undefined ? [] : [credentials];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The one list of secret paths: the darius config dir as a whole folder, so a
+ * new file is covered, wherever DARIUS_CONFIG_DIR and XDG_CONFIG_HOME point;
+ * the configured `remote.credentials`; ssh private keys; the AWS, Claude and
+ * GitHub login files. The gate reads only names here. It opens none of these
+ * files. `config.toml` is the one exception: it holds no secret, every darius
+ * verb reads it for the host id, and only it can name `remote.credentials`.
+ */
+export function secretPaths(): SecretPaths {
+  const home = homedir();
+  const xdg = envValue("XDG_CONFIG_HOME");
+  const configHomes = [join(home, ".config"), ...(xdg === undefined ? [] : [xdg])];
+  return {
+    dirs: [configDir(), ...configHomes.map((dir) => join(dir, "darius"))],
+    files: [
+      ...configuredCredentials(),
+      join(home, ".aws", "credentials"),
+      join(claudeDir(home), ".credentials.json"),
+      join(home, ".claude", ".credentials.json"),
+      ...configHomes.map((dir) => join(dir, "gh", "hosts.yml")),
+    ],
+    sshDir: join(home, ".ssh"),
+    home,
+  };
+}
+
+/** `~`, `$HOME` and `${HOME}` at the start of a path, as the home folder. */
+function expandHomeWord(path: string, home: string): string {
+  const word = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/u.exec(path)?.[0];
+  return word === undefined ? path : `${home}${path.slice(word.length)}`;
+}
+
+/** The path with symlinks resolved in the longest part that exists. `..` in the rest is resolved by its text. */
+function realLongest(path: string): string {
+  let head = path;
+  const rest: string[] = [];
+  while (head.length > 1) {
+    try {
+      return resolve(realpathSync(head), ...rest);
+    } catch {
+      rest.unshift(head.slice(head.lastIndexOf("/") + 1));
+      head = head.slice(0, head.lastIndexOf("/")) || "/";
+    }
+  }
+  return resolve("/", ...rest);
+}
+
+/** A tool's path as an absolute one with `~`, `$HOME`, `..` and symlinks resolved; a relative path starts at the call's cwd. */
+function canonicalPath(path: string, cwd: string | undefined, home: string): string {
+  const expanded = expandHomeWord(path, home);
+  return realLongest(isAbsolute(expanded) ? expanded : `${cwd ?? process.cwd()}/${expanded}`);
+}
+
+function isInside(path: string, folder: string): boolean {
+  return path === folder || path.startsWith(folder === "/" ? "/" : `${folder}/`);
+}
+
+/** What a run may read in `~/.ssh`. A key can have any name, so everything else there is secret. */
+const SSH_PUBLIC_NAME = /^(?:known_hosts(?:\.old)?|config|authorized_keys|.*\.pub)$/u;
+
+function isSshSecret(path: string, sshDir: string): boolean {
+  return path !== sshDir && isInside(path, sshDir) && !SSH_PUBLIC_NAME.test(path.slice(path.lastIndexOf("/") + 1));
+}
+
+/** A path as an absolute one with `~`, `$HOME` and `..` resolved by its text only, so a symlink stays a symlink. */
+function lexicalPath(path: string, cwd: string | undefined, home: string): string {
+  return resolve(cwd ?? process.cwd(), expandHomeWord(path, home));
+}
+
+/**
+ * Why a read tool may not touch this call's path, or undefined. A search with
+ * no path walks the working dir. A read with no path is allowed. The path
+ * counts as written and as resolved: a key in `~/.ssh` may be a symlink to a
+ * folder that is not secret, and a link elsewhere may lead into a secret one.
+ */
+function secretReadRefusal(call: ToolCall, secrets: SecretPaths): string | undefined {
+  if (call.class !== "read") return undefined;
+  const asked = call.path === undefined || call.path === "" ? (call.isSearch === true ? call.cwd : undefined) : call.path;
+  if (asked === undefined) return undefined;
+  const paths = [lexicalPath(asked, call.cwd, secrets.home), canonicalPath(asked, call.cwd, secrets.home)];
+  const both = (path: string): string[] => [path, realLongest(path)];
+  const dirs = secrets.dirs.flatMap(both);
+  const files = secrets.files.flatMap(both);
+  const sshDirs = both(secrets.sshDir);
+  const isSecret = paths.some((path) => dirs.some((dir) => isInside(path, dir)) || files.includes(path) || sshDirs.some((sshDir) => isSshSecret(path, sshDir)));
+  if (isSecret) return `a run does not read secret paths (${call.name} ${clip(asked)}); use a darius verb, or report what is missing in the result block`;
+  // A search walks the tree below its root, so a root above a secret would read it.
+  if (call.isSearch !== true || !paths.some((path) => [...dirs, ...files, ...sshDirs].some((secret) => isInside(secret, path)))) return undefined;
+  return `${call.name} in ${clip(asked)} would also search secret paths; search a narrower folder`;
+}
+
+/** The characters a path word can go on with: `.config/darius-x` is another folder. */
+const PATH_ENDS = String.raw`(?![\w.-])`;
+/** Nothing that belongs to a longer path before the word: `/tmp/home/me/.ssh` is not the home folder's. */
+const PATH_STARTS = String.raw`(?<![\w./~$-])`;
+/** One path segment in shell text. */
+const SEGMENT = String.raw`[^\s/;&|()<>]*`;
+
+function escapedAlternatives(words: readonly string[]): string {
+  return [...new Set(words)].map((word) => escapeRegex(word)).join("|");
+}
+
+/** The ways a shell line can spell the home folder: `~`, `~me`, `$HOME`, `${HOME}`, the absolute path. `/home` and `/var/home` are one folder on some systems. */
+function homeSpellings(home: string): string {
+  const absolute = [home, realLongest(home)].flatMap((path) => (path.startsWith("/var/home/") ? [path, path.slice("/var".length)] : [path]));
+  return String.raw`(?:~[\w.-]*|\$HOME|\$\{HOME\}|${escapedAlternatives(absolute)})`;
+}
+
+/** The text form of secretPaths: every path as a shell line spells it. */
+function secretPathText(secrets: SecretPaths): RegExp {
+  const home = homeSpellings(secrets.home);
+  const ssh = String.raw`\.ssh/(?!(?:known_hosts(?:\.old)?|config|authorized_keys|${SEGMENT}\.pub)${PATH_ENDS})(?:${SEGMENT}/)*${SEGMENT}[\w*?]`;
+  const underHome = [String.raw`\.config/darius`, ssh, String.raw`\.aws/credentials`, String.raw`\.claude/\.credentials\.json`, String.raw`\.config/gh/hosts\.yml`];
+  const variables = [
+    String.raw`\$\{?DARIUS_CONFIG_DIR\}?`,
+    String.raw`\$\{?XDG_CONFIG_HOME\}?/(?:darius|gh/hosts\.yml)`,
+    String.raw`\$\{?CLAUDE_CONFIG_DIR\}?/\.credentials\.json`,
+  ];
+  const named = [...secrets.dirs, ...secrets.files].flatMap((path) => [path, realLongest(path)]);
+  return new RegExp(`${PATH_STARTS}(?:${home}/(?:${underHome.join("|")})|${variables.join("|")}|${escapedAlternatives(named)})${PATH_ENDS}`, "u");
+}
+
+/**
+ * An ssh client told which key to use: `ssh -i KEY`, `scp -i KEY`, `-o
+ * IdentityFile=KEY`. The client uses the key and prints nothing of it, so this
+ * is no read, and rituals rely on it. Only the path after the option is taken
+ * out. Another path on the line still counts.
+ */
+const SSH_USES_KEY = /(\b(?:ssh|scp|sftp)\b[^;&|\n]*?)\s(?:-i\s*|-o\s*IdentityFile[=\s]\s*)[^\s;&|]+/gu;
+
+/**
+ * True when the line names a secret path in a usual spelling: `~/`, `$HOME/`,
+ * `${HOME}/`, the absolute home path, `$XDG_CONFIG_HOME/darius`,
+ * `$DARIUS_CONFIG_DIR`, or the configured path itself. Quotes and backslashes
+ * are dropped first, so `"$HOME"/.ssh/id_rsa` counts.
+ *
+ * THIS IS A HEURISTIC FOR A CONFUSED RUN, AND NO MORE. `cd ~/.config; cat
+ * darius/*`, a `cd ~/.ssh` first, a name in a variable and python all
+ * pass it. A bare file name never counts, because a run that works on darius
+ * names `push.json` and `credentials.ts` in source paths. A repo path never
+ * counts, because the words must follow a spelling of the home folder.
+ * `darius push status` passes: it names no path, and the verb reads what it
+ * needs. A false match is only a deny (0.114.0).
+ */
+export function namesSecretPath(command: string, secrets: SecretPaths = secretPaths()): boolean {
+  const text = command.replaceAll(/["'\\]/gu, "");
+  return secretPathText(secrets).test(text.replaceAll(SSH_USES_KEY, "$1"));
+}
+
+// --- web writes ------------------------------------------------------------------------
+
+/**
+ * Every write path of the web API: src/web/action-api.ts, push-api.ts and
+ * snapshot-api.ts. A test holds this list to the `POST` lines of those files.
+ */
+const WEB_WRITE_PATHS: readonly string[] = [
+  "/api/flare/light",
+  "/api/flare/answer",
+  "/api/flare/accept",
+  "/api/run/follow-up",
+  "/api/run/ack",
+  "/api/run/ack-earlier",
+  "/api/run/answer",
+  "/api/finding/close",
+  "/api/finding/reopen",
+  "/api/vigil/check",
+  "/api/push/subscribe",
+  "/api/push/unsubscribe",
+  "/api/snapshots/run",
+  "/api/snapshots/settings",
+  "/api/snapshots/credentials",
+  "/api/snapshots/credentials/clear",
+  "/api/snapshots/check",
+  "/api/snapshots/delete",
+];
+
+/** A write path, and not a longer one: `/api/run/follow-up/ready`, `/api/flares` and `/api/flare?key=` read. */
+const WEB_WRITE = new RegExp(String.raw`(?:${escapedAlternatives(WEB_WRITE_PATHS)})(?![\w/-])`, "u");
+
+/**
+ * True when the line names a write path of the web API, with quotes and
+ * backslashes dropped. Read paths pass. The README documents these endpoints,
+ * so a run denied at `darius flare light` may try them next. THIS IS A
+ * HEURISTIC FOR A CONFUSED RUN: a path built from a variable passes, and the
+ * web app cannot tell a run from the operator's browser on the same device
+ * (docs/concept.md, "What the gate does not stop"). A false match is only a
+ * deny (0.114.0).
+ */
+export function callsWebWrite(command: string): boolean {
+  return WEB_WRITE.test(command.replaceAll(/["'\\]/gu, ""));
+}
+
 // --- decision ------------------------------------------------------------------------
 
 function firstMatch(command: string, patterns: readonly string[]): string | undefined {
@@ -893,10 +1126,12 @@ function hold(reason: string): GateDecision {
  * (isGranted) passes the hold list, `may` and the report-mode verbs; a run
  * that is held stays held (decide checks that first). A line that starts a
  * follow-up, writes a flare (0.107.0), writes or tests the email channel
- * (0.109.0) or clears the run's markers is denied
- * in every run, whatever `may` says (0.47.1).
+ * (0.109.0), names a secret path or a web write path (0.114.0, both only
+ * heuristics for a confused run) or clears the run's markers is denied in
+ * every run, whatever `may` says (0.47.1).
  */
-function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall, isDariusBin: DariusBinCheck): GateDecision {
+function decideShell(command: string, policy: RunPolicy, scope: GateScope, call: ToolCall, context: { isDariusBin: DariusBinCheck; secrets: SecretPaths }): GateDecision {
+  const { isDariusBin, secrets } = context;
   const { agentId } = call;
   const protocol = protocolVerb(command, policy.run, isDariusBin);
   if (protocol === "complete" && agentId !== undefined) {
@@ -908,6 +1143,8 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (startsFollowUp(command)) return deny(`a run never starts a follow-up; a person does, outside the run: ${clip(command)}`);
   if (writesFlare(command)) return deny(`a run never lights or settles a flare by command; report it in the result block with "flare": true: ${clip(command)}`);
   if (writesEmail(command)) return deny(`a run never sends mail or changes the email channel: ${clip(command)}`);
+  if (namesSecretPath(command, secrets)) return deny(`a run does not read secret paths; use a darius verb, or report what is missing in the result block: ${clip(command)}`);
+  if (callsWebWrite(command)) return deny(`a run never writes through the web API; report it in the result block: ${clip(command)}`);
   if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;
@@ -958,11 +1195,15 @@ function decideSubagent(call: ToolCall, policy: RunPolicy): GateDecision {
 }
 
 /** What the gate does with this tool call. Throws on an invalid regex. */
-export function decide(call: ToolCall, context: { policy: RunPolicy; isHeld: boolean; isDariusBin?: DariusBinCheck }): GateDecision {
+export function decide(call: ToolCall, context: { policy: RunPolicy; isHeld: boolean; isDariusBin?: DariusBinCheck; secrets?: SecretPaths }): GateDecision {
   const { policy } = context;
   const scope = policy.gate ?? "shell";
+  const secrets = context.secrets ?? secretPaths();
+  // First, in both scopes (0.114.0): a read tool never opens a secret path, held or not.
+  const secretRead = secretReadRefusal(call, secrets);
+  if (secretRead !== undefined) return deny(secretRead);
   if (scope === "shell" && (call.class !== "shell" || call.command === undefined)) return ALLOW;
   if (context.isHeld) return hold(`run ${policy.run} is held; stop now and wait for an operator`);
-  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call, context.isDariusBin ?? (() => false));
+  if (call.class === "shell" && call.command !== undefined) return decideShell(call.command, policy, scope, call, { isDariusBin: context.isDariusBin ?? (() => false), secrets });
   return decideTool(call, policy);
 }

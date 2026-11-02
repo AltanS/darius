@@ -16,6 +16,7 @@
  * secret typed into a note is shown masked, as the vigil page does.
  */
 
+import type { FlareOpened, FlareOpening } from "../core/flare-index.ts";
 import { maskSecrets } from "../core/mask-secrets.ts";
 import type { JsonValue, LedgerLine } from "../core/model.ts";
 import type { ActivityActor, ActivityEntry, ActivityKind, ActivityOptions, ActivityTone, PendingStart, RunRow } from "./api.ts";
@@ -24,6 +25,13 @@ import type { ActivityActor, ActivityEntry, ActivityKind, ActivityOptions, Activ
 interface ActivityInput extends ActivityOptions {
   /** The title of a ritual or vigil by its slug; the entry falls back to the slug. */
   titleOf?: (type: "ritual" | "vigil", id: string) => string | undefined;
+  /**
+   * What `flareOpenings` (src/core/flare-index.ts) made of this project's ledger. A flare that a
+   * run reported has no `flare.*` line, so its opening is the only sign of it here. Each opening
+   * whose line is not a `flare.lit` line (a `run.completed`) gives one row per flare. The caller
+   * reads the blobs, so this file stays pure. Absent: those rows are left out.
+   */
+  openings?: readonly FlareOpening[];
 }
 
 const RUN_ID = /^[0-9A-Z]{26}$/u;
@@ -245,8 +253,9 @@ function severityRank(value: JsonValue | undefined): number {
 /**
  * What the walk knows of one flare key. A report of a lit flare is not news;
  * a report of a closed flare is news only at a higher severity; a `gone` or an
- * unknown key takes any report. A flare that a run reported has no
- * `flare.lit` line, so its first line here is the operator's.
+ * unknown key takes any report. A run's report has no `flare.lit` line: the
+ * opening of its `run.completed` line gives the row and sets the track (see
+ * `openingEntries`), and the index decides whether it was news.
  */
 interface FlareTrack {
   status: "lit" | "closed" | "gone";
@@ -298,11 +307,33 @@ function flareEntry(line: LedgerLine, tracks: Map<string, FlareTrack>): Built | 
   return { kind: "flare-reopened", text: `Flare reopened by ${line.who}${tail}`, tone: "wait", subject: title };
 }
 
+/**
+ * The rows of one `run.completed` line that opened or raised flares: one per
+ * flare, as an operator's `flare.lit` gives one. The index already decided
+ * that each was news (a re-report of a lit flare is no opening), so these rows
+ * do not ask the track, but they set it, and the rows after them read right.
+ * The ritual stands where an operator's name would. Text is untrusted and is
+ * masked like the other rows.
+ */
+function openingEntries(line: LedgerLine, flares: readonly FlareOpened[], tracks: Map<string, FlareTrack>): Array<{ built: Built; key: string }> {
+  return flares.map((flare) => {
+    const known = tracks.get(flare.key);
+    const who = shown(flare.ritual ?? line.who);
+    const title = shown(flare.title);
+    tracks.set(flare.key, { status: "lit", rank: severityRank(flare.severity), title });
+    const detail = flare.target === undefined ? [] : [`Target: ${shown(flare.target)}`];
+    if (flare.kind === "opened") return { key: flare.key, built: detailed({ kind: "flare-lit", text: `Flare lit by ${who}: ${title}, ${flare.severity}`, tone: "wait", subject: title }, detail) };
+    const again = known?.status === "closed" ? "lit again" : "raised";
+    return { key: flare.key, built: detailed({ kind: "flare-lit", text: `Flare ${again} at ${flare.severity} by ${who}`, tone: "wait", subject: title }, detail) };
+  });
+}
+
 const FLARE_LINES: ReadonlySet<string> = new Set(["flare.lit", "flare.answered", "flare.accepted", "flare.cleared", "flare.reopened"]);
 
 // --- the list -----------------------------------------------------------------------------
 
-function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems: ReadonlyMap<string, string>): ActivityEntry | null {
+/** `flareKey` is the key of a row made from a run's opening: that line has no `key` of its own. */
+function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems: ReadonlyMap<string, string>, flareKey?: string): ActivityEntry | null {
   const run = text(line.run);
   const subject = subjectOf(line.item ?? (run === null ? undefined : runItems.get(run)));
   const title = (type: "ritual" | "vigil", slug: string): string => input.titleOf?.(type, slug) ?? slug;
@@ -314,10 +345,16 @@ function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems:
     return made;
   };
   if (built.kind.startsWith("flare-")) {
-    const key = text(line.key);
+    const key = flareKey ?? text(line.key);
     if (key === null) return null;
     links.flare = key;
-    return entry({ type: "flare", id: key, title: built.subject ?? key });
+    const made = entry({ type: "flare", id: key, title: built.subject ?? key });
+    // A row made from a run's opening also names the run that reported it.
+    if (flareKey !== undefined && run !== null) {
+      links.run = run;
+      made.run = run;
+    }
+    return made;
   }
   if (built.kind.startsWith("finding-")) {
     const key = text(line.key);
@@ -398,11 +435,20 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
   const entries: ActivityEntry[] = [];
   const evidence = new Map<string, LedgerLine[]>();
   const flares = new Map<string, FlareTrack>();
+  const opened = new Map<string, readonly FlareOpened[]>();
+  for (const opening of input.openings ?? []) {
+    if (opening.line.type !== "flare.lit") opened.set(opening.line.id, opening.flares);
+  }
   for (const line of lines) {
     if (line.project !== project) continue;
     if (line.type === "evidence" && line.item !== undefined) {
       evidence.set(line.item, [...(evidence.get(line.item) ?? []), line]);
       continue;
+    }
+    // The flare rows come before the run's own row, and in reverse, so the newest-first list reads the run, then what it lit, in the order of the result.
+    for (const { built, key } of openingEntries(line, opened.get(line.id) ?? [], flares).toReversed()) {
+      const row = entryOf(line, built, input, runItems, key);
+      if (row !== null && matches(line, row, input)) entries.push(row);
     }
     const folded = line.type === "vigil.swept" && line.item !== undefined ? (evidence.get(line.item) ?? []) : [];
     if (line.type === "vigil.swept" && line.item !== undefined) evidence.delete(line.item);

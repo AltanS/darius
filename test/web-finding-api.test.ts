@@ -147,7 +147,7 @@ test("reopen: it runs finding reopen with the ritual, the project, the note and 
   const answer: PushApiReply = await findingApi(reopenRequest({ ...REOPEN, note: "  fixed\nit was wrong " }), { who: "owner on phone" }, stub);
   assert.equal(answer.status, 200);
   assert.deepEqual(answer.body, { ok: true });
-  assert.deepEqual(stub.calls, [["finding", "reopen", "--ritual", "check", "--project", PROJECT, "--note", "fixed it was wrong", "--who", "web:owner on phone", "--json", "--", "shut-1"]]);
+  assert.deepEqual(stub.calls, [["finding", "reopen", "--ritual=check", `--project=${PROJECT}`, "--note=fixed it was wrong", "--who=web:owner on phone", "--json", "--", "shut-1"]]);
   const flagLike = await findingApi(reopenRequest({ ...REOPEN, key: "--odd" }), OWNER, stub);
   assert.equal(flagLike.status, 200);
   assert.deepEqual(stub.calls[1]?.slice(-2), ["--", "--odd"], "a key that looks like a flag stays a key");

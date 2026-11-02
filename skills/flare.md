@@ -78,7 +78,7 @@ darius flare light dep/cve-1 --title "Vulnerable dependency" --severity high --t
 
 - A ritual: `flare_deliver` in `.darius.toml`. A vigil: `--flare-deliver`. The CLI: `--deliver`. Each takes `push`, `email`, or `none`.
 - `none` means the app only. Default is `push`.
-- Email needs `darius email set` on each host that sends. Without it the notice fails with "not set up on host", and the flare still shows in the app.
+- Email needs `darius email set` on each host that sends. Without it darius notes "not set up on host" once per notice, and the flare still shows in the app. `darius email set` says how many open flares it could not send.
 - A run cannot choose a channel. Only the marker can. Every host must run the same version first.
 
 ## What a run never does

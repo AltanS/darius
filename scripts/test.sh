@@ -43,6 +43,9 @@ export DARIUS_SSH="$SANDBOX/no-ssh"
 # `darius snapshot status` reads the snapshot timer through systemctl --user.
 # No test may ask the operator's real user manager; tests inject a fake.
 export DARIUS_SYSTEMCTL="$SANDBOX/no-systemctl"
+# bubblewrap: a run in the suite starts unmasked. test/sandbox.test.ts proves the
+# mask on the real bwrap when the host has one; other tests use a fake.
+export DARIUS_BWRAP="$SANDBOX/no-bwrap"
 # Claude Code's config dir: `darius setup` refreshes a stamped skill file
 # there, and `darius skill install` writes one. No test may touch ~/.claude.
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude"

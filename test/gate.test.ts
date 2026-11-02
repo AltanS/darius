@@ -6,24 +6,32 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { allowedTools, claudeHarness, disallowedTools } from "../src/harness/claude.ts";
 import type { ToolCall, ToolClass } from "../src/harness/contract.ts";
 import {
+  callsWebWrite,
   clearsRunMarker,
   decide as gateDecide,
   grantRefusal,
   holdView,
   mayAllowsShell,
   mayRefusal,
+  namesSecretPath,
   normalizeGrant,
   isProtocolCommand,
+  secretPaths,
   shellRuleRegex,
   splitShell,
   startsFollowUp,
   writesEmail,
   writesFlare,
+  type GateDecision,
   type RunPolicy,
+  type SecretPaths,
 } from "../src/harness/gate.ts";
 
 const RUN = "01GATERUN";
@@ -1005,4 +1013,360 @@ test("a grant names the command itself, never a shell or loader that runs code t
   for (const line of ["pnpm -C tools cli fc --post 12 --confirm", "node scripts/report.mjs", "python3 -m tool", "git push origin main", "bashful --x", "./bash-like"]) {
     assert.equal(grantRefusal(line), undefined, line);
   }
+});
+
+// --- secret paths and web writes (0.114.0) -----------------------------------------------
+
+const HOME = mkdtempSync(join(tmpdir(), "darius-gate-home-"));
+const REAL_HOME = realpathSync(HOME);
+const SECRETS: SecretPaths = {
+  dirs: [join(HOME, ".config", "darius")],
+  files: [join(HOME, ".aws", "credentials"), join(HOME, ".claude", ".credentials.json"), join(HOME, ".config", "gh", "hosts.yml"), "/srv/secrets/s3-keys"],
+  sshDir: join(HOME, ".ssh"),
+  home: HOME,
+};
+const BOTH_SCOPES = [policy({ may: ["Bash(*)"] }), policy({ gate: "full", may: ["Bash(*)"] }), policy({ mode: "report", may: ["Bash(*)"] }), policy({ gate: "full", mode: "report", may: ["Bash(*)"], on_hold: "deny" })];
+mkdirSync(join(HOME, ".config", "darius"), { recursive: true });
+mkdirSync(join(HOME, ".ssh"), { recursive: true });
+symlinkSync(join(HOME, ".config", "darius"), join(HOME, "cfg-link"));
+writeFileSync(join(HOME, ".ssh", "id_rsa"), "");
+symlinkSync(join(HOME, ".ssh", "id_rsa"), join(HOME, "key-link"));
+
+function read(name: string, path: string | undefined, cwd = CWD): ToolCall {
+  const call: ToolCall = { class: "read", name, cwd };
+  if (path !== undefined) call.path = path;
+  if (name === "Grep" || name === "Glob") call.isSearch = true;
+  return call;
+}
+
+function secretVerdict(call: ToolCall, runPolicy: RunPolicy, isHeld = false): GateDecision {
+  return gateDecide(call, { policy: runPolicy, isHeld, secrets: SECRETS });
+}
+
+function secretShell(command: string, runPolicy: RunPolicy): GateDecision {
+  return secretVerdict(shell(command), runPolicy);
+}
+
+test("a read tool never opens a secret path, in both scopes, first, however the path is spelled", () => {
+  const paths = [
+    join(HOME, ".config/darius/credentials"),
+    join(HOME, ".config/darius/a-new-file"),
+    join(HOME, ".config/darius/keys/one"),
+    join(HOME, ".config/darius"),
+    join(HOME, ".aws/credentials"),
+    join(HOME, ".claude/.credentials.json"),
+    join(HOME, ".config/gh/hosts.yml"),
+    join(HOME, ".ssh/id_rsa"),
+    join(HOME, ".ssh/deploy_rsa"),
+    join(HOME, ".ssh/work_ed25519"),
+    "/srv/secrets/s3-keys",
+    `${HOME}/projects/../.config/darius/push.json`,
+    join(HOME, "cfg-link/push.json"),
+    join(HOME, "key-link"),
+    join(REAL_HOME, ".config/darius/push.json"),
+  ];
+  for (const scoped of BOTH_SCOPES) {
+    for (const name of ["Read", "NotebookRead"]) {
+      for (const path of paths) {
+        const decision = secretVerdict(read(name, path), scoped);
+        assert.equal(decision.verdict, "deny", `${name} ${path}`);
+        assert.match(decision.verdict === "allow" ? "" : decision.reason, /does not read secret paths/u);
+      }
+    }
+    assert.equal(secretVerdict(read("Read", join(HOME, ".config/darius/push.json")), scoped, true).verdict, "deny", "first: a held run gets the deny too");
+  }
+});
+
+test("the home words and a relative path resolve before the compare", () => {
+  for (const path of ["~/.config/darius/push.json", "$HOME/.ssh/id_rsa", "${HOME}/.aws/credentials", "~/projects/x/../../.ssh/id_rsa"]) {
+    assert.equal(secretVerdict(read("Read", path), policy()).verdict, "deny", path);
+  }
+  assert.equal(secretVerdict(read("Read", ".config/darius/push.json", HOME), policy()).verdict, "deny", "relative to the call's cwd");
+  assert.equal(secretVerdict(read("Read", "../.ssh/id_rsa", join(HOME, "projects")), policy()).verdict, "deny");
+  assert.equal(secretVerdict(read("Read", ".config/darius/push.json", "/srv/checkout"), policy()).verdict, "allow", "the same words in a repo");
+});
+
+test("a search above a secret is denied with the advice to search narrower; other searches pass", () => {
+  for (const scoped of BOTH_SCOPES) {
+    for (const name of ["Grep", "Glob"]) {
+      for (const root of [HOME, "~", join(HOME, ".config"), "~/.config", "/", join(HOME, ".ssh"), join(HOME, ".aws"), `${HOME}/projects/..`]) {
+        const decision = secretVerdict(read(name, root), scoped);
+        assert.equal(decision.verdict, "deny", `${name} ${root}`);
+        assert.match(decision.verdict === "allow" ? "" : decision.reason, /search a narrower folder/u);
+      }
+      assert.equal(secretVerdict(read(name, join(HOME, ".config/darius")), scoped).verdict, "deny", "inside");
+      assert.equal(secretVerdict(read(name, "/srv/checkout/src"), scoped).verdict, "allow");
+      assert.equal(secretVerdict(read(name, "src"), scoped).verdict, "allow", "relative to the cwd");
+      assert.equal(secretVerdict(read(name, join(HOME, "projects/x")), scoped).verdict, "allow");
+      assert.equal(secretVerdict(read(name, join(HOME, ".config/other")), scoped).verdict, "allow");
+      assert.equal(secretVerdict(read(name, undefined), scoped).verdict, "allow", "no path is the working dir");
+    }
+  }
+  assert.equal(secretVerdict(read("Read", HOME), policy()).verdict, "allow", "Read walks no tree");
+});
+
+test("known_hosts, ssh config, public names and source paths pass the read check", () => {
+  for (const scoped of BOTH_SCOPES) {
+    for (const path of [join(HOME, ".ssh/known_hosts"), join(HOME, ".ssh/config"), join(HOME, ".ssh/authorized_keys"), "src/core/push.ts", "src/core/credentials.ts", "/srv/checkout/.config/darius/push.json", join(HOME, ".config/darius-other/x"), join(HOME, ".aws/config")]) {
+      assert.equal(secretVerdict(read("Read", path), scoped).verdict, "allow", path);
+    }
+  }
+});
+
+test("the matcher change leaves a read call's verdict alone: shell scope allows it, also when held", () => {
+  assert.equal(secretVerdict(read("Read", "src/x.ts"), policy(), true).verdict, "allow");
+  assert.equal(secretVerdict(read("Grep", "src"), policy(), true).verdict, "allow");
+  assert.equal(secretVerdict(read("Read", "src/x.ts"), policy({ gate: "full" }), true).verdict, "hold", "full scope holds a held run, as before");
+});
+
+function input(tool_name: string, tool_input: Record<string, string>): ToolCall {
+  return claudeHarness.gateInput({ tool_name, tool_input, cwd: "/srv/x" });
+}
+
+test("the adapter hands the gate a search root: Grep and Glob path, a Glob pattern's fixed part, none for the working dir", () => {
+  assert.deepEqual(input("Grep", { pattern: "x", path: "~/.config" }), { class: "read", name: "Grep", cwd: "/srv/x", path: "~/.config", isSearch: true });
+  assert.deepEqual(input("Grep", { pattern: "x" }), { class: "read", name: "Grep", cwd: "/srv/x", isSearch: true });
+  assert.equal(input("Glob", { pattern: "**/*.ts" }).path, undefined);
+  assert.equal(input("Glob", { pattern: "**/*.ts", path: "src" }).path, "src");
+  assert.equal(input("Glob", { pattern: "/home/me/.ssh/id_*" }).path, "/home/me/.ssh");
+  assert.equal(input("Glob", { pattern: "/*" }).path, "/");
+  assert.equal(input("Glob", { pattern: "~/.config/darius/*" }).path, "~/.config/darius");
+  assert.equal(input("Glob", { pattern: ".config/darius/*", path: "/home/me" }).path, "/home/me/.config/darius");
+  assert.equal(input("Glob", { pattern: "../.ssh/*" }).path, "../.ssh");
+  assert.equal(input("Read", { file_path: "/a/b" }).path, "/a/b");
+  assert.equal(input("Read", { file_path: "/a/b" }).isSearch, undefined);
+  assert.equal(input("NotebookRead", { notebook_path: "/a/n.ipynb" }).path, "/a/n.ipynb");
+});
+
+test("a Glob pattern that names a folder above a secret meets the gate", () => {
+  const call = claudeHarness.gateInput({ tool_name: "Glob", tool_input: { pattern: `${HOME}/.config/*` }, cwd: CWD });
+  assert.equal(secretVerdict(call, policy()).verdict, "deny");
+});
+
+test("secretPaths: the config dir by DARIUS_CONFIG_DIR and XDG_CONFIG_HOME, and remote.credentials from config.toml", () => {
+  const before = { dir: process.env.DARIUS_CONFIG_DIR, xdg: process.env.XDG_CONFIG_HOME, home: process.env.HOME };
+  const config = mkdtempSync(join(tmpdir(), "darius-gate-config-"));
+  writeFileSync(join(config, "config.toml"), 'host = "a"\n\n[remote]\nendpoint = "https://s3.example.com"\nbucket = "b"\ncredentials = "/srv/secrets/elsewhere"\n');
+  process.env.DARIUS_CONFIG_DIR = config;
+  process.env.XDG_CONFIG_HOME = "/srv/xdg";
+  process.env.HOME = HOME;
+  try {
+    const secrets = secretPaths();
+    assert.ok(secrets.dirs.includes(config));
+    assert.ok(secrets.dirs.includes("/srv/xdg/darius"));
+    assert.ok(secrets.dirs.includes(join(HOME, ".config", "darius")));
+    assert.ok(secrets.files.includes("/srv/secrets/elsewhere"));
+    assert.ok(secrets.files.includes("/srv/xdg/gh/hosts.yml"));
+    assert.equal(secrets.sshDir, join(HOME, ".ssh"));
+    assert.equal(namesSecretPath("cat /srv/secrets/elsewhere", secrets), true);
+    assert.equal(namesSecretPath(`cat ${config}/push.json`, secrets), true);
+    assert.equal(gateDecide(read("Read", "/srv/secrets/elsewhere"), { policy: policy(), isHeld: false }).verdict, "deny", "the default list, without a test's own");
+    writeFileSync(join(config, "config.toml"), 'host = "a"\n\n[run]\nsandbox = "maybe"\n');
+    assert.ok(secretPaths().dirs.includes(config), "a config that does not load still leaves the list");
+  } finally {
+    process.env.DARIUS_CONFIG_DIR = before.dir;
+    if (before.xdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = before.xdg;
+    process.env.HOME = before.home;
+  }
+});
+
+/** Every usual spelling of one path under the home folder. */
+function spellings(tail: string): string[] {
+  return [
+    `~/${tail}`,
+    `$HOME/${tail}`,
+    `\${HOME}/${tail}`,
+    `"$HOME"/${tail}`,
+    `"$HOME/${tail}"`,
+    `'${HOME}/${tail}'`,
+    `~me/${tail}`,
+    `${HOME}/${tail}`,
+    `${REAL_HOME}/${tail}`,
+  ];
+}
+
+test("the gate denies a shell line that names a secret path, in every spelling and mode, whatever may or a grant says", () => {
+  const tails = [".config/darius", ".config/darius/push.json", ".config/darius/", ".ssh/id_rsa", ".ssh/id_*", ".ssh/deploy_rsa", ".ssh/*_ed25519", ".ssh/sub/key_rsa", ".aws/credentials", ".claude/.credentials.json", ".config/gh/hosts.yml"];
+  for (const tail of tails) {
+    for (const path of spellings(tail)) {
+      for (const line of [`cat ${path}`, `cd ${path}`, `scp host:x ${path}`, `date; cat ${path} | head`, `tar czf /tmp/x ${path}`, `F=${path}`]) {
+        assert.equal(namesSecretPath(line, SECRETS), true, line);
+      }
+    }
+  }
+  const named = ["cat $XDG_CONFIG_HOME/darius/push.json", "cat ${XDG_CONFIG_HOME}/darius/credentials", "ls $XDG_CONFIG_HOME/darius", "cat $XDG_CONFIG_HOME/gh/hosts.yml", "cat $DARIUS_CONFIG_DIR/push.json", "cat ${DARIUS_CONFIG_DIR}/credentials", 'ls "$DARIUS_CONFIG_DIR"', "cat $CLAUDE_CONFIG_DIR/.credentials.json", "cat /srv/secrets/s3-keys"];
+  for (const line of named) assert.equal(namesSecretPath(line, SECRETS), true, line);
+  for (const scoped of [...BOTH_SCOPES, policy({ may: ["Bash(*)"], grants: ["cat ~/.ssh/id_rsa"] })]) {
+    const decision = secretShell("cat ~/.ssh/id_rsa", scoped);
+    assert.equal(decision.verdict, "deny");
+    assert.match(decision.verdict === "allow" ? "" : decision.reason, /does not read secret paths/u);
+  }
+});
+
+test("the text check passes bare names, source paths, a repo's own folder, ssh's public files and darius verbs", () => {
+  const lines = [
+    "cat src/core/push.ts",
+    "cat src/core/credentials.ts",
+    "grep -rn push.json src",
+    "grep -rn credentials src/core",
+    "ls test/flare-email.test.ts",
+    "cat push.json",
+    "cat credentials",
+    "git log -- src/core/email.ts",
+    "cat .config/darius/x",
+    "cat ./.config/darius/x",
+    "cat /tmp/home/.config/darius/x",
+    "cat /srv/repo/.config/darius/x",
+    `cat ${HOME}/projects/darius/.config/darius/x`,
+    `cat ${HOME}/projects/x/.ssh/id_rsa`,
+    "cat ~/.config/darius-other/x",
+    "cat ~/.config/darius.bak/x",
+    "cat ~/.ssh/known_hosts",
+    "cat $HOME/.ssh/config",
+    "ls ~/.ssh",
+    "ssh host date",
+    "ssh-keygen -F host.example.com",
+    "cat ~/.aws/config",
+    "cat ~/.claude/settings.json",
+    "cat ~/.config/gh/config.yml",
+    "DARIUS_CONFIG_DIR=/tmp/x darius run list",
+    "darius push status",
+    "darius push status --json",
+    "darius email status",
+    "darius flare list",
+    "/home/u/.local/bin/darius push status",
+  ];
+  for (const line of lines) assert.equal(namesSecretPath(line, SECRETS), false, line);
+  for (const scoped of BOTH_SCOPES) {
+    for (const line of ["cat src/core/push.ts", "cat ~/.ssh/known_hosts", "grep -rn push.json src", "darius push status"]) {
+      assert.equal(secretShell(line, scoped).verdict, "allow", line);
+    }
+  }
+});
+
+test("known gaps of the text check, pinned so nobody reads it as a boundary", () => {
+  for (const line of ["cd ~/.config; cat darius/*", "cd ~/.ssh; cat *", 'D=.config/darius; cat "$HOME/$D/push.json"', `python3 -c "import glob; print(open(glob.glob('.'+'ssh/*')[0]).read())"`]) {
+    assert.equal(namesSecretPath(line, SECRETS), false, line);
+  }
+});
+
+test("the protocol may name a secret path: the heredoc body is text the shell never runs", () => {
+  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nThe file ~/.config/darius/push.json is missing; /api/flare/light is denied.\nEOF`;
+  assert.equal(secretShell(complete, policy({ gate: "full", may: [] })).verdict, "allow");
+});
+
+const WEB_WRITES = [
+  "/api/flare/light",
+  "/api/flare/answer",
+  "/api/flare/accept",
+  "/api/run/follow-up",
+  "/api/run/ack",
+  "/api/run/ack-earlier",
+  "/api/run/answer",
+  "/api/finding/close",
+  "/api/finding/reopen",
+  "/api/vigil/check",
+  "/api/push/subscribe",
+  "/api/push/unsubscribe",
+  "/api/snapshots/run",
+  "/api/snapshots/settings",
+  "/api/snapshots/credentials",
+  "/api/snapshots/credentials/clear",
+  "/api/snapshots/check",
+  "/api/snapshots/delete",
+];
+
+test("the gate denies a line that names a web write path, in every mode, with the reason to use the result block", () => {
+  for (const path of WEB_WRITES) {
+    for (const line of [`curl -X POST http://host:4747${path} -d '{}'`, `curl "$URL${path}"`, `wget --post-data=x 'https://host${path}'`, `python3 -c "print('${path}')"`, `curl http://host${path}?x=1`, `curl http\\://host${path}`]) {
+      assert.equal(callsWebWrite(line), true, line);
+    }
+  }
+  for (const scoped of [...BOTH_SCOPES, policy({ may: ["Bash(*)"], grants: ["curl http://host/api/flare/light"] })]) {
+    const decision = secretShell("curl http://host/api/flare/light", scoped);
+    assert.equal(decision.verdict, "deny");
+    assert.match(decision.verdict === "allow" ? "" : decision.reason, /never writes through the web API; report it in the result block/u);
+  }
+});
+
+test("read paths of the web API pass, and so does a source path", () => {
+  const lines = [
+    "curl http://host:4747/api/flares",
+    "curl 'http://host:4747/api/flares?project=p&status=lit'",
+    "curl 'http://host:4747/api/flare?project=p&key=k'",
+    "curl http://host:4747/api/pending?ids=a,b",
+    "curl http://host:4747/api/status.json",
+    "curl http://host:4747/api/push/key",
+    "curl 'http://host:4747/api/run/follow-up/ready?project=p&run=r'",
+    "cat src/web/action-api.ts",
+    "cat src/web/push-api.ts",
+    "grep -rn flare src/web",
+    "ls web/app/routes",
+  ];
+  for (const line of lines) assert.equal(callsWebWrite(line), false, line);
+  for (const scoped of BOTH_SCOPES) assert.equal(secretShell("curl http://host:4747/api/flares", scoped).verdict, "allow");
+});
+
+test("the write list follows the source: every POST line of the web API counts as a write", () => {
+  const sources = ["action-api.ts", "push-api.ts", "snapshot-api.ts"].map((name) => readFileSync(join(import.meta.dirname, "..", "src", "web", name), "utf8"));
+  const documented = sources.flatMap((text) => [...text.matchAll(/POST (\/api\/[\w/-]+)/gu)].map((match) => match[1] ?? ""));
+  assert.ok(documented.length >= WEB_WRITES.length, documented.join(" "));
+  for (const path of documented) assert.equal(callsWebWrite(`curl http://host${path}`), true, `${path} is a write path the gate does not know`);
+});
+
+test("an ssh client told which key to use is no read of the key; any other path on the line still counts", () => {
+  for (const line of [
+    "ssh -i ~/.ssh/work.key web@host uptime",
+    "scp -i ~/.ssh/work.key tools/x.py web@host:/tmp/ && ssh -i ~/.ssh/work.key web@host 'python3 /tmp/x.py'",
+    `sftp -i ${HOME}/.ssh/id_ed25519 web@host`,
+    'rsync -a -e "ssh -i ~/.ssh/work.key" src/ host:dst/',
+    'GIT_SSH_COMMAND="ssh -i ~/.ssh/work.key" git fetch',
+    "ssh -o IdentityFile=~/.ssh/work.key web@host uptime",
+    "ssh -i$HOME/.ssh/work.key web@host uptime",
+  ]) assert.equal(namesSecretPath(line, SECRETS), false, line);
+  for (const line of [
+    "cat ~/.ssh/work.key",
+    "ssh -i ~/.ssh/work.key web@host; cat ~/.ssh/work.key",
+    "ssh -i ~/.ssh/work.key web@host && cat ~/.config/darius/push.json",
+    "curl -i ~/.ssh/work.key",
+    "scp ~/.ssh/work.key web@host:/tmp/",
+  ]) assert.equal(namesSecretPath(line, SECRETS), true, line);
+});
+
+test("every file in ~/.ssh is secret but the public ones, in text and in a read tool", () => {
+  for (const name of ["deploy.pem", "work.key", "id_ed25519", "sub/deep_key", "*"]) {
+    assert.equal(namesSecretPath(`cat ~/.ssh/${name}`, SECRETS), true, name);
+    if (name !== "*") assert.equal(secretVerdict(read("Read", `~/.ssh/${name}`), policy()).verdict, "deny", name);
+  }
+  for (const name of ["known_hosts", "known_hosts.old", "config", "authorized_keys", "id_ed25519.pub"]) {
+    assert.equal(namesSecretPath(`cat ~/.ssh/${name}`, SECRETS), false, name);
+    assert.equal(secretVerdict(read("Read", `~/.ssh/${name}`), policy()).verdict, "allow", name);
+  }
+});
+
+test("a symlink inside a secret folder is denied by its name, even when its target lies outside", () => {
+  const outside = mkdtempSync(join(tmpdir(), "darius-gate-outside-"));
+  const key = join(HOME, ".ssh", "linked_key");
+  const toml = join(HOME, ".config", "darius", "linked.json");
+  writeFileSync(join(outside, "real"), "");
+  symlinkSync(join(outside, "real"), key);
+  symlinkSync(join(outside, "real"), toml);
+  try {
+    assert.equal(secretVerdict(read("Read", key), policy()).verdict, "deny", "the link's own path is in ~/.ssh");
+    assert.equal(secretVerdict(read("Read", toml), policy()).verdict, "deny", "the link's own path is in the config dir");
+    assert.equal(secretVerdict(read("Read", join(outside, "real")), policy()).verdict, "allow", "the target itself is not secret");
+  } finally {
+    rmSync(key);
+    rmSync(toml);
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a search with no path walks the cwd, so a cwd above a secret is refused", () => {
+  assert.equal(secretVerdict(read("Grep", undefined, HOME), policy()).verdict, "deny");
+  assert.equal(secretVerdict(read("Glob", undefined, join(HOME, ".config")), policy()).verdict, "deny");
+  assert.equal(secretVerdict(read("Grep", undefined, join(HOME, ".ssh")), policy()).verdict, "deny");
+  assert.equal(secretVerdict(read("Grep", undefined, CWD), policy()).verdict, "allow");
+  assert.equal(secretVerdict(read("Read", undefined, HOME), policy()).verdict, "allow", "a read with no path reads nothing");
 });

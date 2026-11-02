@@ -301,10 +301,12 @@ export function buildEnv(input: { project: string; run: string; files: RunFiles;
 /**
  * Runs the gate command line with the adapter's synthetic call and
  * `--preflight`, which decides as usual but always denies and writes nothing.
+ * It goes through the run's sandbox, because the hook runs inside it and a hook
+ * that cannot start lets the call through.
  * Returns undefined when the gate answered with the harness's deny, else why not.
  */
-export function preflightGate(gate: readonly string[], harness: HarnessAdapter, env: ChildEnv): string | undefined {
-  const [program = "", ...args] = gate;
+export function preflightGate(gate: readonly string[], harness: HarnessAdapter, env: ChildEnv, sandbox: readonly string[] = []): string | undefined {
+  const [program = "", ...args] = [...sandbox, ...gate];
   const expected = harness.denyOutput("preflight", true);
   const result = spawnSync(program, [...args, "--preflight"], {
     input: harness.preflightPayload,

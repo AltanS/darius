@@ -84,6 +84,11 @@ export const GLOBAL_FLAGS: ReadonlySet<string> = new Set(["json", "help", "stdin
  */
 const VALUE_OR_BARE_FLAGS: ReadonlySet<string> = new Set(["hosts"]);
 
+/** True for a flag that never takes a value (`--json`), by its name without the dashes. */
+export function isBooleanFlag(name: string): boolean {
+  return BOOLEAN_FLAGS.has(name);
+}
+
 function looksLikeFlag(token: string): boolean {
   return token.startsWith("--") && token.length > 2;
 }

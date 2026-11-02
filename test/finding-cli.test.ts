@@ -4,6 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -225,4 +226,49 @@ test("finding reopen --note writes the note on the line; show lists the close an
     json.finding.history.map((step: { kind: string }) => step.kind),
     ["report", "closed", "reopened", "closed", "reopened"],
   );
+});
+
+interface CliProcess {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** The real CLI on the sandbox store: the arguments go through `wantsHelp` first, which `parseArgs` alone does not show. */
+function realCli(argv: string[]): CliProcess {
+  const bin = join(import.meta.dirname, "..", "bin", "darius");
+  const result = spawnSync(bin, argv, { cwd: SANDBOX, env: { ...process.env, DARIUS_WHO: "tester" }, encoding: "utf8", input: "", timeout: 30_000 });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+test("a note of -h: after the flag it is ambiguous and nothing runs; as --note=-h it is stored (0.113.3)", () => {
+  const seed = seeded("fc-dash-h");
+  const closeLines = (): number => readLedger(seed.project).filter((line) => line.type === "finding.closed").length;
+  const ambiguous = realCli(["finding", "close", "banner-3", "--ritual", "check", "--project", "fc-dash-h", "--note", "-h"]);
+  assert.equal(ambiguous.code, 2);
+  assert.equal(ambiguous.stderr.trim(), "darius: -h after --note is ambiguous. For help, put -h first. For a value, write --note=-h.");
+  assert.equal(ambiguous.stdout, "", "no help text");
+  assert.equal(closeLines(), 0, "nothing ran");
+
+  const stored = realCli(["finding", "close", "banner-3", "--ritual", "check", "--project", "fc-dash-h", "--note=-h"]);
+  assert.equal(stored.code, 0, stored.stderr);
+  assert.equal(readLedger(seed.project).findLast((line) => line.type === "finding.closed")?.note, "-h");
+});
+
+test("help still works: --help anywhere, -h first or after a word or a switch, and nothing after a bare --", () => {
+  seeded("fc-help-forms");
+  for (const argv of [["finding", "-h"], ["finding", "close", "-h"], ["finding", "close", "banner-3", "-h"], ["finding", "list", "--json", "-h"], ["finding", "close", "--note", "--help"]]) {
+    const run = realCli(argv);
+    assert.equal(run.code, 0, `${argv.join(" ")}: ${run.stderr}`);
+    assert.match(run.stdout, /darius finding/u, argv.join(" "));
+  }
+  const after = realCli(["finding", "close", "banner-3", "--ritual", "check", "--project", "fc-help-forms", "--", "-h"]);
+  assert.notEqual(after.code, 2, "-h after -- is a positional, not a help request");
+  assert.doesNotMatch(after.stdout, /Usage|^darius finding/mu);
+});
+
+test("a legacy verb gets the same rule", () => {
+  const run = realCli(["mark", "--status", "-h"]);
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /-h after --status is ambiguous/u);
 });

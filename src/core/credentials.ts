@@ -15,6 +15,20 @@ import { errorMessage } from "../runtime.ts";
 
 /** The group and other permission bits. A credentials file must have none of them set. */
 export const GROUP_OTHER_BITS = 0o077;
+
+/**
+ * True when the file is the bound /dev/null of the run sandbox (src/core/sandbox.ts).
+ * A settings file is never a device, and opening this one fails with EACCES,
+ * so a reader says what happened instead of a wrong reason.
+ */
+export function isMaskedFile(path: string): boolean {
+  try {
+    return statSync(path).isCharacterDevice();
+  } catch {
+    return false;
+  }
+}
+
 const SECTION_HEADER = /^\[([A-Za-z0-9_-]+)\]$/;
 const KEY_VALUE = /^([A-Za-z0-9_]+)\s*=\s*(.*)$/;
 
@@ -61,6 +75,7 @@ export interface Credentials {
  * group or other any access, and never puts a key value in a thrown message.
  */
 export function loadCredentials(path: string): Credentials {
+  if (isMaskedFile(path)) throw new Error(`${path}: the sandbox mask hides this file from an unattended run. Run this verb outside the run.`);
   let mode: number;
   try {
     mode = statSync(path).mode & 0o777;

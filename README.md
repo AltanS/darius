@@ -249,6 +249,23 @@ units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "snapshot"
 `darius setup --systemd` enables the listed units. It disables and removes the others, but
 touches only the unit files it wrote. `darius update` reruns it, preserving your choices.
 
+### Unattended runs: the mask
+
+A host starts each unattended run through bubblewrap, which hides darius secret files from the run's
+whole process tree: every file directly in the config dir but `config.toml` and `links.toml`, `keys/`,
+and `remote.credentials`. Without bwrap a run still starts, unmasked, and `darius doctor` warns. To turn
+it off on a host:
+
+```toml
+[run]
+sandbox = "off"   # "mask" is the default
+```
+
+Inside the mask no_new_privs is on, so `sudo` and rootless podman fail. `darius sync` fails there too,
+because it needs `credentials`. The mask is not a full boundary: a run is your own Unix user, and
+`systemd-run --user` or ssh to the same host starts a process outside it. See "What the gate does not
+stop" in `docs/concept.md`.
+
 ### Backups
 
 A darius host keeps one backup of its store: a daily `tar.gz` file, called a snapshot. It stays on
@@ -595,7 +612,7 @@ darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
   app only, and no key means `push`. A run cannot choose its channel. `darius email set` must have run on a host
   that sends email.
 - A run lights a flare only through its result: an item with `"flare": true`, a `key` and the state
-  `needs-decision`. The state `fixed` clears it. A run cannot run the write verbs: the CLI refuses
+  `needs-decision`. The state `fixed` clears it. A confused run cannot run the write verbs: the CLI refuses
   them inside a run, and the gate denies them. It can run `flare list` and `flare show`.
 - An answer or an accept closes the flare at the severity it has. A later report at the same or a lower
   severity leaves it closed. A higher severity lights it again.
@@ -688,7 +705,7 @@ nothing: `mode` is `store`, `git` or `none`, and `trackerRoot` is the absolute p
 - `2`: usage. A missing argument, an unknown option, a bad value, an unknown verb.
 - `3`: the environment gave no answer (no bucket, no `bash`, no harness).
 
-`--help` or `-h` anywhere in a command prints its usage and exits `0`; nothing else runs. With
+`--help` or `-h` anywhere in a command prints its usage and exits `0`; nothing else runs. `-h` right after a flag that takes a value (`--note -h`) is ambiguous: it exits `2` and runs nothing. Write `--note=-h` for the value. With
 `--json`, stdout holds JSON only, also on an error: `{"ok":false,"error":"...","code":2}`.
 
 ## Commands

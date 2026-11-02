@@ -22,6 +22,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { findMarker } from "./marker.ts";
 import { findTrackerDir, projectDir } from "./paths.ts";
+import { sandboxWarning } from "./sandbox.ts";
 import { treeDir } from "./tree.ts";
 
 /** The env var that names the store tree for the legacy engine. */
@@ -320,15 +321,17 @@ export function nestedLegacyFix(folder: string): string {
  *               project does not own (0.105.0), with the fix
  */
 export function doctorNotes(cwd: string): string[] {
+  // Per host, not per tree (0.114.0): a run without the mask can read darius secret files.
+  const sandbox = sandboxWarning();
+  const notes: string[] = sandbox === undefined ? [] : [sandbox];
   let where: TrackerWhere;
   let marker: ReturnType<typeof findMarker>;
   try {
     where = resolveTrackerRoot(cwd);
     marker = findMarker(cwd);
   } catch {
-    return [];
+    return notes;
   }
-  const notes: string[] = [];
   const nested = marker === null ? null : nestedLegacyTracker(cwd, marker.dir);
   if (nested !== null && marker !== null) {
     notes.push(`NOTE: ${nested} is a legacy tracker folder in a repo below the project ${marker.project} (${marker.dir}), and that project does not own it. To move it into the store: ${nestedLegacyFix(nested)}.`);

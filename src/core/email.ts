@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
 import { isLoopbackOrTailnet } from "./config.ts";
-import { GROUP_OTHER_BITS } from "./credentials.ts";
+import { GROUP_OTHER_BITS, isMaskedFile } from "./credentials.ts";
 import type { JsonValue } from "./model.ts";
 import { configDir } from "./paths.ts";
 import { endpointHost, scrubForLedger } from "./redact.ts";
@@ -156,6 +156,7 @@ function checkedSettings(raw: JsonValue, where: string): EmailSettings {
 
 /** The text of the file, after the mode check. No error here holds a path. */
 function readOwnerOnly(file: string): string {
+  if (isMaskedFile(file)) throw new Error(`the sandbox mask hides ${FILE_NAME} from an unattended run`);
   let mode: number;
   try {
     mode = statSync(file).mode & 0o777;

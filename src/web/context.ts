@@ -9,9 +9,10 @@ import { randomBytes } from "node:crypto";
 import type { ActivityOptions, FindingRow, HostStatus, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
 import { emailStatus } from "../core/email.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
+import { flareOpenings, type FlareOpening } from "../core/flare-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { configDir, stateDir } from "../core/paths.ts";
-import { listProjects, openProject } from "../core/store.ts";
+import { listProjects, openProject, type Project } from "../core/store.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
 import { followUpReadiness } from "../runner/follow-up-ready.ts";
@@ -79,7 +80,7 @@ export function collectActivity(project: string | null, options: ActivityOptions
         return titles.get(key);
       };
       // Each project gives at most `limit` entries: the merged newest `limit` come from those.
-      const own = activityOf(name, ledgerOf(name), { ...options, titleOf });
+      const own = withRunFlares(name, store, ledgerOf(name), { ...options, titleOf });
       const waiting = pendingActivity(starts.filter((start) => start.project === name), { ...options, titleOf });
       const merged = [...own, ...waiting].toSorted(newestFirst);
       const cut = options.limit === undefined ? merged : merged.slice(0, Math.max(0, options.limit));
@@ -90,6 +91,27 @@ export function collectActivity(project: string | null, options: ActivityOptions
   });
   const merged = project === null ? entries.toSorted(newestFirst) : entries;
   return options.limit === undefined ? merged : merged.slice(0, Math.max(0, options.limit));
+}
+
+/**
+ * `activityOf`, with the flare rows of the runs in it. Finding what a run opened reads
+ * every result of the project (about 50 ms for 2000 runs under Node, more under Bun), so it
+ * runs only when the window holds a row of a completed run: a window without one holds no
+ * flare row of a run either.
+ */
+function withRunFlares(name: string, store: Project, ledger: readonly LedgerLine[], input: Parameters<typeof activityOf>[2]): ReturnType<typeof activityOf> {
+  const plain = activityOf(name, ledger, input);
+  if (!plain.some((entry) => entry.kind === "run-completed" || entry.kind === "run-failed")) return plain;
+  return activityOf(name, ledger, { ...input, openings: runOpenings(store, ledger) });
+}
+
+/** The flares a project's runs opened or raised, once per call. A ledger or a result that does not read gives none, not an error. */
+function runOpenings(store: Project, ledger: readonly LedgerLine[]): FlareOpening[] {
+  try {
+    return flareOpenings(store, ledger);
+  } catch {
+    return [];
+  }
 }
 
 function newestFirst(left: { at: string }, right: { at: string }): number {
@@ -175,6 +197,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     flares: () => Promise.resolve(collectFlareRows()),
     flare: (project, key) => flareDetail(project, key),
     emailSetUp: () => emailStatus().isSetUp,
+    emailProblem: () => emailStatus().problem,
     activity: (project, options) => collectActivity(project, options),
     pending: (project) => collectPending(project),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),

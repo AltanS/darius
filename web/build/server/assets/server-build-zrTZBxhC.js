@@ -21805,7 +21805,7 @@ async function check(version) {
 	};
 	if (!response.ok) return {
 		kind: "failed",
-		text: `The host answered ${response.status} for its push key.`
+		text: await field(response, "error").catch(() => null) ?? `The host answered ${response.status} for its push key.`
 	};
 	const key = await field(response, "key");
 	if (key === null) return {
@@ -21936,7 +21936,15 @@ var settings_notifications_exports = /* @__PURE__ */ __exportAll({
 	meta: () => meta$5
 });
 function loader$8({ context }) {
-	return { emailSetUp: context.emailSetUp() };
+	return {
+		emailSetUp: context.emailSetUp(),
+		emailProblem: context.emailProblem()
+	};
+}
+/** A broken file reads as a problem with its reason, not as a quiet "not set up". The reason holds no value. */
+function emailLine(isSetUp, problem) {
+	if (problem !== null) return `Email: not set up on this host. Problem: ${problem}`;
+	return isSetUp ? "Email: set up" : "Email: not set up on this host";
 }
 var meta$5 = () => [{ title: "Notifications | Settings | darius" }];
 var settings_notifications_default = withComponentProps(function SettingsNotifications({ loaderData }) {
@@ -21954,7 +21962,7 @@ var settings_notifications_default = withComponentProps(function SettingsNotific
 				help: "No address is shown.",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "st-value",
-					children: loaderData.emailSetUp ? "Email: set up" : "Email: not set up on this host"
+					children: emailLine(loaderData.emailSetUp, loaderData.emailProblem)
 				})
 			})
 		})]
@@ -24511,7 +24519,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-notifications-BnLLipFW.js",
+			"module": "/assets/settings-notifications-d6mlmGGV.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dcz7o3_7.js",
 				"/assets/jsx-runtime-DAtKG4JV.js",
@@ -24792,8 +24800,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-bafbc254.js",
-	"version": "bafbc254",
+	"url": "/assets/manifest-26746cb7.js",
+	"version": "26746cb7",
 	"sri": void 0
 };
 //#endregion

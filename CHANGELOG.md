@@ -2,6 +2,71 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.114.0] - 2026-11-02
+
+### Added
+
+- The mask: the launcher starts an unattended run through bubblewrap, so its whole process tree cannot open darius secret files. Headless, herdr, `run resume` and the gate check launch the same way, and the gate preflight runs inside it.
+- `[run] sandbox = "mask" | "off"` in `config.toml`, default `mask`. An unknown value is refused.
+- Without bwrap, or when a probe fails, a run starts unmasked and writes one line to `<run>/run.log`. `darius doctor` warns with the fix.
+- The gate: a Read, Grep, Glob or NotebookRead inside a secret path is denied first, in both scopes, with `~`, `$HOME` and `..` resolved, the path counted as written and with symlinks resolved. Every file in `~/.ssh` but the public ones is a secret path. A Grep or Glob above a secret path is told to search a narrower folder.
+- The gate: `namesSecretPath` and `callsWebWrite` deny a shell line that names a secret path or a write path of the web API, in every mode. Both are heuristics for a confused run. `ssh -i KEY`, `scp -i KEY` and `-o IdentityFile=KEY` pass, because the client only uses the key.
+- `docs/concept.md`: "The mask" and "What the gate does not stop". `docs/backlog.md`: a separate Unix user for runs, S3 bucket versioning, a Tailscale ACL.
+
+### Changed
+
+- The hook's matcher in scope shell is `Bash|Read|Grep|Glob|NotebookRead|LS`, so the secret path check can fire. Every other verdict stays. The gate check always runs in scope `full`, and does not depend on this text.
+- `harness.checked` records `sandbox`.
+- Inside the mask, `push status` and `email status` say the mask hides the file, `darius sync` names it, and no verb flushes alerts, so a notice keeps its tries.
+
+### Fixed
+
+- `docs/concept.md` no longer says the gate stops a run that calls `POST /api/flare/light` by the tailnet address. It stops a confused run. Nothing stops a hostile one.
+## [0.113.5] - 2026-11-02
+
+### Fixed
+
+- The Notifications settings page names a broken `push.json` and how to fix it, instead of "answered 500". `GET /api/push/key` gives the reason, with no value from the file.
+- A vigil flare's target reads "A check failed, step 1: ...". It showed the raw word "unknown" and a step count from zero.
+
+## [0.113.4] - 2026-11-02
+
+### Fixed
+
+- The Activity place shows a flare that a run reports. Before, only `flare.*` ledger lines made flare rows, so a flare lit by a ritual's result had no row. Each opening of a `run.completed` line (from `flareOpenings`) now gives a `flare-lit` row: "Flare lit by <ritual>: <title>, <severity>", or "raised" or "lit again", with the same tone and flare link as an operator's row and a link to the run. A re-report of a lit flare gives no row. The text is masked like the other rows, and a missing or malformed result gives no row. The openings are read only when the window holds a completed run.
+
+## [0.113.3] - 2026-11-02
+
+### Fixed
+
+- A flag value of `-h` no longer prints help and writes nothing. `--help` anywhere before a bare `--` is still help, and a bare `-h` is help too, except right after a bare `--flag` that takes a value. Then `darius` exits 2 with "-h after --note is ambiguous. For help, put -h first. For a value, write --note=-h." and runs nothing. `--note=-h` stores `-h`. This holds for native and legacy verbs.
+- Argument injection in the web actions: a note of `--project=other` was passed as two argv words and read as a flag. Every value from a request now goes as one `--flag=value` word through `flagArg` in `src/web/action-api.ts`, and a run id, key or slug goes after `--`. This covers follow-up, ack, answer, resume, run now, finding close and reopen, vigil check and the flare actions.
+- The project that routes a verb (`--project`) is read before a bare `--` only, so a key after `--` cannot pick the project.
+
+## [0.113.2] - 2026-11-02
+
+### Fixed
+
+- A flare notice on a channel that is not set up no longer uses up its tries. An `alert.failed` line whose error starts with "not set up on host" is a trace, not a try, also in an old ledger. The trace is written once per key and reason, not once per flush, and a different reason writes one new trace.
+- A notice that waited for a repair goes out only if a flare of its opening is still lit. If all are answered, accepted or gone, it is not sent and no line is written. This covers new notices and retries rebuilt from a failed line. A line older than the channel's `since` stays history.
+
+### Added
+
+- `darius email set` prints `<n> open flares were not sent on email. They stay in the app.` when open flares asked for email and were not sent. It prints nothing at 0 and writes nothing.
+
+## [0.113.1] - 2026-11-02
+
+### Fixed
+
+- A `push.json` that cannot be read no longer stops the flush. Push closes with the reason "not set up on host: push.json ..." as email does, and the reason quotes no key. The messages of `readPushKeys` name the file by base name.
+- `flushAlerts` catches per project. A project that throws is one `<project>: <message>` entry in `failed`, and the others still go.
+- An alert from a ledger line older than 24 hours does not go out after a channel is repaired, so there is no burst of old news. A flare notice is not held to that limit.
+
+### Changed
+
+- `darius doctor` ends with an "Alert channels" warning for a `push.json` or `email.json` that cannot be read, with the reason and no value.
+- Settings, Notifications shows the reason on its email line when `email.json` is broken. `WebContext` has `emailProblem()`.
+
 ## [0.113.0] - 2026-11-02
 
 ### Added

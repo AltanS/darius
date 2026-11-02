@@ -730,6 +730,7 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     flares: () => Promise.resolve(demoFlares(Date.now())),
     flare: (name, key) => demoFlareDetail(Date.now(), name, key),
     emailSetUp: () => false,
+    emailProblem: () => null,
     activity: () => [],
     pending: (name) => starts.list(name),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),

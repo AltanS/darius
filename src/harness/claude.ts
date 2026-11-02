@@ -2,8 +2,9 @@
  * The Claude Code adapter (docs/concept.md, "App design" > "Unattended
  * runner", and "Harnesses, profiles and surfaces").
  *
- * Per run it writes `<run>/settings.json`: a PreToolUse hook on Bash that
- * runs the gate, exec form (no shell, so no quoting). The executable is
+ * Per run it writes `<run>/settings.json`: a PreToolUse hook that runs the
+ * gate, exec form (no shell, so no quoting), on Bash and the read tools in
+ * scope shell, and on every tool in scope full. The executable is
  * config `[runner] claude`, else `$DARIUS_CLAUDE`, else `claude` on PATH.
  *
  * Two facts from the Claude Code hook docs (code.claude.com/docs/en/hooks,
@@ -141,10 +142,17 @@ export function disallowedTools(policy: Policy, permissions: ResolvedProfile["pe
   return tools;
 }
 
-/** Scope shell: the hook sees Bash only, as the allowlist handles the rest. Scope full: it sees every tool. */
+/**
+ * The hook's matcher in scope shell (0.114.0): Bash, and the read tools, so the
+ * secret path check can fire. The gate allows every other call of a read tool
+ * there. Claude Code reads a matcher as a regex.
+ */
+export const SHELL_SCOPE_MATCHER = "Bash|Read|Grep|Glob|NotebookRead|LS";
+
+/** Scope shell: the hook sees Bash and the read tools, as the allowlist handles the rest. Scope full: it sees every tool. */
 function hookSettings(gate: readonly string[], scope: GateScope): JsonValue {
   const [command = "", ...args] = gate;
-  const matcher = scope === "full" ? "*" : "Bash";
+  const matcher = scope === "full" ? "*" : SHELL_SCOPE_MATCHER;
   return {
     hooks: {
       PreToolUse: [{ matcher, hooks: [{ type: "command", command, args }] }],
@@ -220,6 +228,29 @@ function isJsonNumber(value: JsonValue | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/**
+ * Where a Glob call really starts: its `path`, and the part of its pattern
+ * before the first wildcard, so `/home/me/.ssh/*` and `.config/darius/*` count.
+ * Undefined means the working dir.
+ */
+function globRoot(path: string | undefined, pattern: string): string | undefined {
+  const words = pattern.split("/");
+  const wild = words.findIndex((word) => /[*?[{]/u.test(word));
+  const fixed = (wild === -1 ? words.slice(0, -1) : words.slice(0, wild)).join("/");
+  if (fixed === "") return pattern.startsWith("/") ? "/" : path;
+  const isAnchored = /^(?:\/|~|\$HOME|\$\{HOME\})/u.test(fixed);
+  return isAnchored || path === undefined ? fixed : `${path}/${fixed}`;
+}
+
+/** The path of a tool call: the file a tool targets, or where a search starts. */
+function toolPath(name: string, input: { readonly [key: string]: JsonValue }): string | undefined {
+  const { file_path: file, notebook_path: notebook, path, pattern } = input;
+  if (isJsonText(file)) return file;
+  if (isJsonText(notebook)) return notebook;
+  const root = isJsonText(path) ? path : undefined;
+  return name === "Glob" && isJsonText(pattern) ? globRoot(root, pattern) : root;
+}
+
 function parseResultObject(stdout: string): { readonly [key: string]: JsonValue } | null {
   const text = stdout.trim();
   if (text === "") return null;
@@ -271,8 +302,9 @@ export const claudeHarness: HarnessAdapter = {
     if (isJsonText(payload.agent_id)) call.agentId = payload.agent_id;
     // The session's current dir: it follows a `cd` in an earlier Bash call.
     if (isJsonText(payload.cwd) && payload.cwd !== "") call.cwd = payload.cwd;
-    const path = isJsonRecord(toolInput) ? (toolInput.file_path ?? toolInput.notebook_path) : undefined;
-    if (isJsonText(path)) call.path = path;
+    const path = isJsonRecord(toolInput) ? toolPath(name, toolInput) : undefined;
+    if (path !== undefined) call.path = path;
+    if (name === "Grep" || name === "Glob") call.isSearch = true;
     const isolation = isJsonRecord(toolInput) ? toolInput.isolation : undefined;
     if (isolation !== undefined && isolation !== null && isolation !== "") call.isolation = isJsonText(isolation) ? isolation : JSON.stringify(isolation);
     return call;

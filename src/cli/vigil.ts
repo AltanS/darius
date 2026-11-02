@@ -79,6 +79,7 @@ import type { LeaseBlock } from "../core/lease.ts";
 import type { Document, Vigil } from "../core/model.ts";
 import { projectDir, resolveProject } from "../core/paths.ts";
 import { createS3, type S3 } from "../core/s3.ts";
+import { isInsideMask } from "../core/sandbox.ts";
 import { itemRef, listProjects, openProject, type Project } from "../core/store.ts";
 import { coolVigilSweepLease, heldVigilChecks, pruneSweepLeases, takeSweepLease, takeVigilSweepLease, vigilLeaseTtlMs } from "../core/sweep-lease.ts";
 import { projectWorkdir } from "../core/workdir.ts";
@@ -710,6 +711,7 @@ async function sweepSingle(project: Project, run: SweepOptions, single: NonNulla
  * left an `alert.failed` line, and is tried again at the next flush.
  */
 async function flushSweepAlerts(project: Project): Promise<void> {
+  if (isInsideMask()) return;
   try {
     const delivery = await flushAlerts({ projects: [project.name] });
     for (const failure of delivery?.failed ?? []) console.error(`darius vigil sweep: alert: ${failure}`);

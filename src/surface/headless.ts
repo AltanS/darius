@@ -3,9 +3,18 @@
  * (docs/concept.md, "Harnesses, profiles and surfaces" > "Surfaces"). It runs
  * in its own process group; on timeout the group gets SIGTERM, then SIGKILL
  * 5 s later. Nothing here knows which harness it runs.
+ *
+ * A masked launch (src/core/sandbox.ts) puts bwrap in front. bwrap stays as the
+ * group leader and the harness shares its group, so the group signal still
+ * reaches every process. bwrap dies of the SIGTERM, and `--die-with-parent`
+ * then kills the harness with SIGKILL, so the harness gets no grace time. Its
+ * children get the SIGTERM, and the SIGKILL 5 s later. An exit code passes
+ * through; a harness killed by a signal reads as exit 128 + the signal.
  */
 
 import { spawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
 
@@ -20,6 +29,8 @@ export interface LaunchPlan {
   cwd: string;
   env: ChildEnv;
   timeoutMs: number;
+  /** The argv of the sandbox to run the harness in (src/core/sandbox.ts), when it is masked. */
+  sandbox?: readonly string[] | undefined;
 }
 
 export interface LaunchResult {
@@ -33,6 +44,7 @@ export interface LaunchResult {
 }
 
 const KILL_GRACE_MS = 5_000;
+const GROUP_POLL_MS = 100;
 const STDOUT_CAP = 1_048_576;
 const STDERR_TAIL = 8_192;
 
@@ -43,6 +55,31 @@ function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   } catch {
     // The group is already gone.
   }
+}
+
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Waits for what is left of a timed-out group until `deadline`, then kills it.
+ * The leader can end long before the grace time: a child that ignores SIGTERM
+ * and holds no pipe lets "close" fire, and darius may exit right after, so the
+ * timer's SIGKILL alone would never come.
+ */
+async function endGroup(pid: number | undefined, deadline: number): Promise<void> {
+  if (pid === undefined) return;
+  while (groupAlive(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, GROUP_POLL_MS);
+    });
+  }
+  signalGroup(pid, "SIGKILL");
 }
 
 /** The spawn failure as one line that names the fix when the program is missing. */
@@ -58,6 +95,27 @@ interface ChildEnd {
   signal: string | null;
 }
 
+function isProgram(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the program would start with this env. bwrap would hide a missing one behind its own exit code. */
+function canStart(bin: string, env: ChildEnv): boolean {
+  if (bin.includes("/")) return isProgram(bin);
+  return (env.PATH ?? "").split(delimiter).some((dir) => isProgram(join(dir, bin)));
+}
+
+/** The program and its arguments, program first. A harness that cannot start spawns bare, so the failure reads as it always did. */
+function launchLine(plan: LaunchPlan): string[] {
+  if (plan.sandbox === undefined || !canStart(plan.bin, plan.env)) return [plan.bin, ...plan.argv];
+  return [...plan.sandbox, plan.bin, ...plan.argv];
+}
+
 /** Runs the harness to exit or timeout. Never throws: a spawn failure comes back as `spawnError`. */
 export async function launchHeadless(plan: LaunchPlan): Promise<LaunchResult> {
   const started = Date.now();
@@ -65,7 +123,8 @@ export async function launchHeadless(plan: LaunchPlan): Promise<LaunchResult> {
   let stderr = "";
   let timedOut = false;
   let spawnError: string | undefined;
-  const child = spawn(plan.bin, plan.argv, {
+  const [program = plan.bin, ...args] = launchLine(plan);
+  const child = spawn(program, args, {
     cwd: plan.cwd,
     env: plan.env,
     detached: true,
@@ -96,6 +155,7 @@ export async function launchHeadless(plan: LaunchPlan): Promise<LaunchResult> {
   });
   const end = await Promise.race([closed, failedToStart]);
   clearTimeout(killTimer);
+  if (timedOut) await endGroup(child.pid, started + plan.timeoutMs + KILL_GRACE_MS);
   const result: LaunchResult = {
     exitCode: end.code,
     signal: end.signal,

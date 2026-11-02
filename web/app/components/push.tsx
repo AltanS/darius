@@ -59,7 +59,7 @@ async function check(version: string): Promise<PushState> {
   const registration = await registerWorker(version);
   const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
   if (response.status === 404) return { kind: "unavailable", text: "This server has no notification endpoints. The dev server has none: run darius serve." };
-  if (!response.ok) return { kind: "failed", text: `The host answered ${response.status} for its push key.` };
+  if (!response.ok) return { kind: "failed", text: (await field(response, "error").catch(() => null)) ?? `The host answered ${response.status} for its push key.` };
   const key = await field(response, "key");
   if (key === null) return { kind: "unavailable", text: "No push keys on this host yet (darius push keys)." };
   const subscription = await registration.pushManager.getSubscription();

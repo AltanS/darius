@@ -14,7 +14,7 @@
  * inconclusive environment.
  */
 
-import { parseArgs, readStdin } from "./cli/args.ts";
+import { isBooleanFlag, parseArgs, readStdin } from "./cli/args.ts";
 import { registerCommands } from "./cli/commands.ts";
 import { commandHelp, getCommand, listCommands, register, UsageError, type Command, type ParsedArgs } from "./cli/registry.ts";
 import { isInteractive } from "./cli/tui.ts";
@@ -26,6 +26,7 @@ import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } fr
 import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
+import { channelProblems } from "./core/alerts.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
@@ -91,13 +92,40 @@ function resolveCommandName(first: string | undefined): string {
   return first;
 }
 
-/** True when `--help` or `-h` is among `args`, before a bare `--`. */
-function wantsHelp(args: readonly string[]): boolean {
+/** What the words after the command say about help. `ambiguous` names the flag whose value `-h` may be. */
+type HelpAsk = { kind: "none" } | { kind: "help" } | { kind: "ambiguous"; flag: string };
+
+/** The name of a bare `--flag` that takes a value, else undefined: `--note` yes; `--note=x`, `--json`, `-h` and text no. */
+function valueFlagName(token: string | undefined): string | undefined {
+  if (token === undefined || !token.startsWith("--") || token.length <= 2 || token.includes("=")) return undefined;
+  const name = token.slice(2);
+  return isBooleanFlag(name) ? undefined : name;
+}
+
+/**
+ * Looks for `--help` and `-h` before a bare `--`, as the CLI does before it
+ * parses the line. `--help` is help. A bare `-h` is help too, unless the word
+ * right before it is a bare `--flag` that takes a value: `--note -h` may mean
+ * the note `-h`, and guessing would print help and write nothing (or write
+ * what nobody meant), so it is `ambiguous` and nothing runs. `--note=-h` is
+ * never help.
+ */
+function helpAsk(args: readonly string[]): HelpAsk {
+  let previous: string | undefined;
   for (const token of args) {
-    if (token === "--") return false;
-    if (token === "--help" || token === "-h") return true;
+    if (token === "--") return { kind: "none" };
+    if (token === "--help") return { kind: "help" };
+    if (token === "-h") {
+      const flag = valueFlagName(previous);
+      return flag === undefined ? { kind: "help" } : { kind: "ambiguous", flag };
+    }
+    previous = token;
   }
-  return false;
+  return { kind: "none" };
+}
+
+function wantsHelp(args: readonly string[]): boolean {
+  return helpAsk(args).kind === "help";
 }
 
 /** The line for a verb nobody knows: the closest verbs when there are any (docs/concept.md, "CLI contract"). */
@@ -125,6 +153,11 @@ async function dispatch(argv: string[]): Promise<number> {
   }
 
   const name = resolveCommandName(first);
+  const ask = helpAsk(argv.slice(1));
+  if (ask.kind === "ambiguous") {
+    console.error(`darius: -h after --${ask.flag} is ambiguous. For help, put -h first. For a value, write --${ask.flag}=-h.`);
+    return 2;
+  }
   const owned = ownedKinds(argv, process.cwd());
   // A broken marker must never send a vigil write to the legacy writer.
   if (!owned.ok && name === "vigil" && argv[1] !== "sweep" && !wantsHelp(argv.slice(1))) {
@@ -315,7 +348,24 @@ function isFullDoctor(argv: readonly string[]): boolean {
   return argv[0] === "doctor" && !argv.includes("--quick") && !argv.includes("--help") && !argv.includes("-h");
 }
 
+/**
+ * After a full `doctor`: a push or email file that cannot be read is a
+ * problem. It names the file and the reason, and never a value. It is a
+ * warning, as the tree conflicts are: the exit code stays the legacy one.
+ */
+function printChannelProblems(argv: readonly string[]): void {
+  const problems = channelProblems();
+  if (problems.length === 0) return;
+  if (argv.includes("--json")) {
+    for (const problem of problems) console.error(`darius: WARN: alert channel: ${problem}`);
+    return;
+  }
+  const lines = problems.map((problem) => `  WARN: ${problem}. Alerts on that channel wait until the file is fixed.`);
+  process.stdout.write(`\n## Alert channels\n\n${lines.join("\n")}\n`);
+}
+
 function printDoctorNotes(argv: readonly string[]): void {
+  printChannelProblems(argv);
   const notes = doctorNotes(process.cwd());
   if (notes.length === 0) return;
   if (argv.includes("--json")) {

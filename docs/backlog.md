@@ -50,6 +50,14 @@ The flare design note (2026-11-01) left these out on purpose. Flares shipped in 
 - A reopen API: `flare reopen` and `flare clear` are CLI only.
 - Follow-up for a flare from outside: `answer --follow-up` needs a newest report from a run. A flare from a script or a vigil has no parent run.
 
+## Run isolation
+
+What the gate and the mask cannot do (concept, "What the gate does not stop").
+
+- A full boundary for runs: a separate Unix user for runs, and a broker that writes the store for them. This is a design decision for the operator, not a feature to pick up by default. It costs a second user on every host, a new daemon that every write verb goes through, a second login for the harness, and every checkout readable and writable by that user. It is the only thing that stops a hostile run. A token in the web page does not help, because a run can fetch the page.
+- S3 bucket versioning, as protection against a run that deletes data. A delete keeps the older version, so the bucket survives what the mask does not stop.
+- A Tailscale ACL as the cross-host step: a run host reaches only the ports it needs on other hosts, so a run on one host cannot call the web API of another.
+
 ## Marker v3 follow-ups
 
 Left out of the v3 design on purpose (design section 14).

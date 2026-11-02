@@ -105,11 +105,12 @@ export type OwnedKinds =
   | { ok: true; kinds: ReadonlySet<OwnedKind>; marker: Marker | null }
   | { ok: false; error: string };
 
-/** The `--project P` or `--project=P` value in `argv`, the last one. Undefined when there is none. */
+/** The `--project P` or `--project=P` value in `argv` before a bare `--`, the last one. Undefined when there is none. After `--` a word is a positional, so a key that spells a flag sets nothing. */
 function projectFlag(argv: readonly string[]): string | undefined {
   let found: string | undefined;
-  argv.forEach((token, index) => {
-    if (token === "--project") found = argv[index + 1];
+  const flags = argv.includes("--") ? argv.slice(0, argv.indexOf("--")) : argv;
+  flags.forEach((token, index) => {
+    if (token === "--project") found = flags[index + 1];
     else if (token.startsWith("--project=")) found = token.slice("--project=".length);
   });
   return found === undefined || found === "" ? undefined : found;

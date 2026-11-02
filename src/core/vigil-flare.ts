@@ -77,9 +77,16 @@ export interface FlareFailure {
   step: { index: number; text: string } | undefined;
 }
 
+/** The kind in words: `unknown` only means no rule named the failure, and that is the plain case. */
+function kindInWords(failKind: string): string {
+  if (failKind === "pending") return "A check is still pending";
+  if (failKind === "broken") return "A check could not run";
+  return "A check failed";
+}
+
 function targetOf(failure: FlareFailure): string {
-  const step = failure.step === undefined ? "" : `, step #${String(failure.step.index)}: ${failure.step.text}`;
-  return clean(`${failure.failKind}${step}`, TEXT_LIMITS.target);
+  const step = failure.step === undefined ? "" : `, step ${String(failure.step.index + 1)}: ${failure.step.text}`;
+  return clean(`${kindInWords(failure.failKind)}${step}`, TEXT_LIMITS.target);
 }
 
 export interface LightInput {

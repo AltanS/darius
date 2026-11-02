@@ -153,7 +153,7 @@ async function writeConfigDir(sseKek: boolean, bucket: string, noDeletePrefix: s
 }
 
 async function removeContainer(name: string): Promise<void> {
-  await execFileAsync("podman", ["rm", "--force", "--time", "0", name]).catch(() => undefined);
+  await execFileAsync("podman", ["rm", "--force", "--volumes", "--time", "0", name]).catch(() => undefined);
 }
 
 /** Retry `ensureBucket` until the gateway answers: /status can go green before the filer serves. */

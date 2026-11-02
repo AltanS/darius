@@ -71,6 +71,7 @@ import { isAboveCap, MARKER_FILE, type Marker } from "../core/marker.ts";
 import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
+import { noteSandbox, resolveSandbox, sandboxPrefix } from "../core/sandbox.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
@@ -617,6 +618,8 @@ interface PreparedRun {
   launch: HarnessLaunch;
   bin: string;
   env: ChildEnv;
+  /** The argv of the mask (src/core/sandbox.ts), when this run has one. */
+  sandbox: readonly string[] | undefined;
   /** The harness session a resume goes on with; undefined for a new session. */
   sessionId?: string;
   /** sha256 of policy.json as written, for the run.started or run.resumed line. */
@@ -701,13 +704,16 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun | { gat
       : { message: `Follow up run ${followUp.parent} of ritual ${doc.header.slug} now. Run id ${run}. Follow the protocol and the Follow-up section in your system prompt.` };
   const launch = harness.prepare({ ritual: doc.header, run, files, profile, scope, gate, ...message, ...resume });
   const env = buildEnv({ project, run, files, harness });
-  const broken = preflightGate(gate, harness, env);
+  const resolved = resolveSandbox();
+  noteSandbox(files.dir, resolved);
+  const sandbox = sandboxPrefix(resolved);
+  const broken = preflightGate(gate, harness, env, sandbox);
   if (broken !== undefined) return { gateBroken: broken, files };
   const bin = harnessBin(ctx, harness);
   // A follow-up reads nothing for good, whether it starts or resumes after a hold.
   const isFollowUpRun = followUp !== undefined || followUpRuns(ledger).has(run);
   const isReading = !isFollowUpRun && resume?.sessionId === undefined;
-  const prepared: PreparedRun = { files, launch, bin, env, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
+  const prepared: PreparedRun = { files, launch, bin, env, sandbox, policySha, answersRead: isReading && handoff !== null ? [...handoff.answerIds] : [] };
   if (resume?.sessionId !== undefined) prepared.sessionId = resume.sessionId;
   return prepared;
 }
@@ -739,7 +745,7 @@ function envNumber(name: string, fallback: number): number {
 function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): Promise<LaunchResult> {
   const { run, cwd, doc, timeoutMs } = target;
   if (target.surface.surface === "headless") {
-    return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs });
+    return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs, sandbox: prepared.sandbox });
   }
   const project = ctx.project;
   return launchHerdr({
@@ -755,6 +761,7 @@ function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: Prepa
     timeoutMs,
     pollMs: envNumber("DARIUS_HERDR_POLL_MS", DEFAULT_POLL_MS),
     graceMs: envNumber("DARIUS_HERDR_WAIT_GRACE_MS", DEFAULT_WAIT_GRACE_MS),
+    sandbox: prepared.sandbox,
     phase: () => viewRun(readLedger(project), run).phase ?? "running",
     hold: (question) => {
       recordHold({ project: project.name, run }, { question, who: `herdr:${run}` });

@@ -17,6 +17,7 @@
 
 import type { JsonValue } from "../core/model.ts";
 import { readPushKeys, subscribe, unsubscribe, type PushResult } from "../core/push.ts";
+import { errorMessage } from "../runtime.ts";
 import { GLOBAL_PROJECT, openProject } from "../core/store.ts";
 
 export const PUSH_API_PREFIX = "/api/push/";
@@ -65,7 +66,12 @@ export function pushApi(request: { method: string; path: string; headers: Header
   const { method, path, headers } = request;
   if (path === `${PUSH_API_PREFIX}key`) {
     if (method !== "GET" && method !== "HEAD") return { status: 405, body: { ok: false, error: "GET only" } };
-    return { status: 200, body: { key: readPushKeys()?.public ?? null } };
+    // A broken file is the page's to explain: the message names the file and quotes no value.
+    try {
+      return { status: 200, body: { key: readPushKeys()?.public ?? null } };
+    } catch (cause) {
+      return { status: 500, body: { ok: false, error: errorMessage(cause) } };
+    }
   }
   const isSubscribe = path === `${PUSH_API_PREFIX}subscribe`;
   if (!isSubscribe && path !== `${PUSH_API_PREFIX}unsubscribe`) return { status: 404, body: { ok: false, error: "no such endpoint" } };
