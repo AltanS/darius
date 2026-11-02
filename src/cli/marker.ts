@@ -340,7 +340,7 @@ export const markerCommand: Command = {
   help: USAGE,
   flags: ["write", "resolved"],
   summary:
-    "check a repo's .darius.toml as run-due reads it: errors and warnings; --resolved <slug> prints a ritual's policy; marker factor [--write] moves shared rules into [policies.*]",
+    "check .darius.toml as run-due reads it; marker factor [--write] moves shared rules into [policies.*]",
   audience: "session",
   usage: "marker check [dir] [--resolved <slug>]",
   async run(args: ParsedArgs): Promise<number> {

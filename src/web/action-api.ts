@@ -150,6 +150,51 @@
  * The guards are the follow-up's (`guard()`): the Origin, JSON, MAX_BODY and a
  * tailnet identity, and the loopback viewer is refused for the same reason: a
  * check runs the vigil's Commands.
+ *
+ * Flares have two reads and three writes (0.111.0; docs/concept.md, "Flares"):
+ *
+ *   GET /api/flares?project=&status=   200 { ok: true, flares: [FlareRow] }
+ *                             both optional: every project, every status
+ *   GET /api/flare?project=&key=       200 { ok: true, flare: FlareRow, body } | 404 { ok: false, error }
+ *   POST /api/flare/answer    body { project, key, note, followUp? }
+ *                             200 { ok: true }
+ *                             | 202 { ok: true, run, host, id, at }  (followUp: the run started)
+ *                             | 202 { ok: true, pending: true, host, id, at, message }
+ *                             | 409 or 503 { ok: false, error }
+ *   POST /api/flare/accept    body { project, key, note? }
+ *                             200 { ok: true } | 409 { ok: false, error }
+ *   POST /api/flare/light     body { project, key, title, severity, target?, body?, deliver?, source? }
+ *                             200 { ok: true } | 400, 403, 409, 413 or 415 { ok: false, error }
+ *
+ * A read needs only what `darius serve` checked first, so the loopback viewer
+ * reads too. A browser request marked `Sec-Fetch-Site: cross-site` is refused,
+ * as in pendingApi. Flare text is untrusted: anyone who lights a flare writes
+ * it. It leaves as JSON data only, and the app draws it as text.
+ *
+ * `answer` and `accept` have the guards of `findingApi`: a tailnet identity,
+ * the page's Origin, JSON, MAX_BODY, a known project, no other body key.
+ *
+ * `light` is the one write a non-browser calls, such as a CI job on the
+ * tailnet, so it is the one write with no same-Origin rule. A browser always
+ * sends `Origin` on a POST, and curl sends none. The guards, in this order:
+ * not the loopback viewer (any local process is that viewer, and a local
+ * script has the CLI); `Origin: null` refused; an `Origin` that is present
+ * must match; no `Origin` passes; `Sec-Fetch-Site` `cross-site` or `same-site`
+ * refused; a JSON content type; MAX_BODY; no other body key; a known project.
+ * This stops a web page. It does not stop a run on another tailnet host, which
+ * can send any header: the gate and report mode stop that.
+ *
+ * Each write runs the CLI as an argv list with no shell. `--` goes before the
+ * key, and each free text goes as `--flag=value`, because the CLI looks for
+ * `-h` and `--help` before it parses the line. `--note -h` would print the
+ * help, exit 0 and write nothing. `body` reaches the CLI on stdin.
+ *
+ * `answer` with `followUp` starts `darius flare answer --follow-up` detached,
+ * because that verb waits for the run. It checks readiness first as
+ * POST /api/run/follow-up does, adds `--on <host>` when the ritual belongs to
+ * another host, and waits for the "started run" line. The CLI writes
+ * `flare.answered` only when the run started, so a refused follow-up is a 409
+ * and leaves the flare as it was.
  */
 
 import { spawn } from "node:child_process";
@@ -160,7 +205,9 @@ import { fileURLToPath } from "node:url";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { answerProblem, type QuestionAnswer } from "../core/answers.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
+import { FLARE_STATUSES, flareSettleRefusal } from "../core/flare-index.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
+import { clean, KEY_MAX, normalizeKey, SEVERITIES, TEXT_LIMITS, type Severity } from "../core/result.ts";
 import { isSlug, itemRef, listProjects, openProject } from "../core/store.ts";
 import { SWEEP_COOLDOWN_MS, vigilStatus } from "../core/sweep.ts";
 import { ritualHost } from "../core/workdir.ts";
@@ -169,6 +216,7 @@ import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
 import { viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
 import type { FollowUpReadiness, PendingPollEntry } from "./api.ts";
+import { collectFlareRows, flareDetail } from "./flares.ts";
 import { markEnded, pollStarts, recordPending, type LedgerView, type PendingInput } from "./pending.ts";
 import { MAX_BODY, isSameOrigin, type PushApiReply } from "./push-api.ts";
 
@@ -222,8 +270,8 @@ export interface CliAnswer {
   error: string;
 }
 
-/** Runs the CLI with `argv` and waits for it. */
-export type CliRunner = (argv: readonly string[]) => Promise<CliAnswer>;
+/** Runs the CLI with `argv` and waits for it. `input` goes to its stdin. */
+export type CliRunner = (argv: readonly string[], input?: string) => Promise<CliAnswer>;
 
 /** The first line of a CLI answer: the `error` of its `--json` output, else the first line of stderr. */
 function cliError(stdout: string, stderr: string): string {
@@ -237,11 +285,15 @@ function cliError(stdout: string, stderr: string): string {
   return line.replace(/^darius: /u, "").trim() || "the command failed";
 }
 
-export const runCli: CliRunner = (argv) =>
+export const runCli: CliRunner = (argv, input) =>
   new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
-    const child = spawn(CLI, [...argv], { stdio: ["ignore", "pipe", "pipe"], timeout: CLI_TIMEOUT_MS });
+    const child = spawn(CLI, [...argv], { stdio: ["pipe", "pipe", "pipe"], timeout: CLI_TIMEOUT_MS });
+    child.stdin.on("error", () => {
+      // The CLI ended before it read its input: its exit code says what happened.
+    });
+    child.stdin.end(input ?? "");
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
@@ -434,6 +486,11 @@ function guard(request: ActionRequest, viewer: ActionViewer, loopbackReason: str
   if (request.method !== "POST") return { reply: fail(405, "POST only") };
   if (viewer.local === true) return { reply: fail(403, loopbackReason) };
   if (!isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return { reply: fail(403, "the request must come from the darius page") };
+  return jsonPayload(request, tooLarge);
+}
+
+/** The last guards of a write, in order: content type, size, JSON. */
+function jsonPayload(request: ActionRequest, tooLarge: string): Guarded {
   if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return { reply: fail(415, "send JSON") };
   if (request.body.length > MAX_BODY) return { reply: fail(413, tooLarge) };
   try {
@@ -738,7 +795,7 @@ interface Spawned {
  * forwards to, if any.
  */
 async function spawnWatched(
-  deps: ActionDeps,
+  deps: Pick<ActionDeps, "start" | "waitMs">,
   watch: { project: string; run: string; logName: string; line: RegExp; host: string; record: (spawned: Spawned) => string },
   build: () => { argv: string[]; on: string | undefined } | { failed: string },
 ): Promise<RunNowOutcome> {
@@ -1131,4 +1188,308 @@ export async function vigilApi(request: ActionRequest, viewer: ActionViewer, dep
   watchEnd(id, started);
   const outcome = await waitForOutcome(started, { log, offset, waitMs: deps.waitMs ?? CHECK_WAIT_MS, line: SWEEP_STARTED_LINE });
   return checkReply(outcome, () => logSince(log, offset), { id, host: hostId(), at });
+}
+
+// --- flares (0.111.0) --------------------------------------------------------------------
+
+const FLARES_PATH = "/api/flares";
+const FLARE_PATH = "/api/flare";
+const FLARE_API_PREFIX = "/api/flare/";
+const FLARE_ANSWER_PATH = `${FLARE_API_PREFIX}answer`;
+const FLARE_ACCEPT_PATH = `${FLARE_API_PREFIX}accept`;
+const FLARE_LIGHT_PATH = `${FLARE_API_PREFIX}light`;
+
+/** Why the loopback viewer cannot settle a flare; the same reason as a finding: a run could settle its own. */
+export const LOOPBACK_FLARE_SETTLE = "settling a flare needs a tailnet identity; open the page by its tailnet address";
+/** Why the loopback viewer cannot light a flare: any local process is that viewer, and a local script has the CLI. */
+export const LOOPBACK_FLARE_LIGHT = "lighting a flare over HTTP needs a tailnet identity; on this host use darius flare light";
+
+const ANSWER_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "followUp"]);
+const ACCEPT_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note"]);
+const LIGHT_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "title", "severity", "target", "body", "deliver", "source"]);
+/** Push, email, both with a comma, or none (the app only): what `--deliver` takes, in the form it takes. */
+const FLARE_DELIVER = /^(?:none|(?:push|email)(?:,(?:push|email))*)$/u;
+/** The source of a report over HTTP that names none. */
+const FLARE_SOURCE_DEFAULT = "api";
+/** darius writes these sources itself. `flare accept` closes the vigil a source of `vigil:<slug>` names, so a caller may not claim one. */
+const RESERVED_FLARE_SOURCE = /^(?:ritual|vigil):/u;
+/** A vigil's own flare key: a report from outside would end its link to the vigil. */
+const RESERVED_FLARE_KEY = /^vigil:/u;
+
+/** What the flare endpoints need from the host; tests stub all of it. */
+export interface FlareDeps {
+  run: CliRunner;
+  readiness: (project: string, run: string) => Promise<FollowUpReadiness>;
+  start: FollowUpStarter;
+  /** How long a follow-up waits for its outcome; OUTCOME_WAIT_MS when absent. Tests shorten it. */
+  waitMs?: number;
+}
+
+const DEFAULT_FLARE_DEPS: FlareDeps = { run: runCli, readiness: followUpReadiness, start: startDetachedFollowUp };
+
+/** Whether `darius serve` hands this path to `flareApi`. */
+export function isFlarePath(path: string): boolean {
+  return path === FLARES_PATH || path === FLARE_PATH || path.startsWith(FLARE_API_PREFIX);
+}
+
+/** One request to a flare path, already past the access check. */
+export async function flareApi(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps = DEFAULT_FLARE_DEPS): Promise<PushApiReply> {
+  switch (request.path) {
+    case FLARES_PATH:
+      return readFlares(request);
+    case FLARE_PATH:
+      return readFlare(request);
+    case FLARE_ANSWER_PATH:
+      return answerFlare(request, viewer, deps);
+    case FLARE_ACCEPT_PATH:
+      return acceptFlare(request, viewer, deps);
+    case FLARE_LIGHT_PATH:
+      return lightFlare(request, viewer, deps);
+    default:
+      return fail(404, "no such endpoint");
+  }
+}
+
+// The reads.
+
+/** The guards of a read: GET or HEAD, and no page of another site. A read changes nothing, so it has no Origin check. */
+function flareReadRefusal(request: ActionRequest): PushApiReply | undefined {
+  if (request.method !== "GET" && request.method !== "HEAD") return fail(405, "GET only");
+  if (request.headers.get("sec-fetch-site") === "cross-site") return fail(403, "the request must come from the darius page");
+  return undefined;
+}
+
+function isFlareStatus(status: string): boolean {
+  return FLARE_STATUSES.some((known) => known === status);
+}
+
+/** Rows hold only JSON values; the round trip makes them one. */
+function jsonOf<T>(value: T): JsonValue {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function readFlares(request: ActionRequest): PushApiReply {
+  const refused = flareReadRefusal(request);
+  if (refused !== undefined) return refused;
+  const query = new URLSearchParams(request.query ?? "");
+  const project = query.get("project") ?? "";
+  const status = query.get("status") ?? "";
+  if (project !== "" && !PROJECT_NAME.test(project)) return fail(400, "project must be a project name");
+  if (project !== "" && !listProjects().includes(project)) return fail(400, `no project ${project}`);
+  if (status !== "" && !isFlareStatus(status)) return fail(400, `status must be one of ${FLARE_STATUSES.join(", ")}`);
+  const rows = collectFlareRows(project === "" ? null : project).filter((row) => status === "" || row.status === status);
+  return { status: 200, body: { ok: true, flares: jsonOf(rows) } };
+}
+
+function readFlare(request: ActionRequest): PushApiReply {
+  const refused = flareReadRefusal(request);
+  if (refused !== undefined) return refused;
+  const query = new URLSearchParams(request.query ?? "");
+  const project = query.get("project") ?? "";
+  if (!PROJECT_NAME.test(project)) return fail(400, "project must be a project name");
+  if (!listProjects().includes(project)) return fail(400, `no project ${project}`);
+  const named = readFlareKey(query.get("key") ?? undefined);
+  if ("error" in named) return fail(400, named.error);
+  const detail = flareDetail(project, named.key);
+  if (detail === null) return fail(404, `no flare '${named.key}' in ${project}`);
+  return { status: 200, body: { ok: true, flare: jsonOf(detail.row), body: detail.body } };
+}
+
+// The body of a write.
+
+/** A flare key: one line, not blank, at most KEY_MAX characters, refused and not clipped. The CLI stores it normalized, so it is compared so. */
+function readFlareKey(value: JsonValue | undefined): { key: string } | { error: string } {
+  const problem = { error: `key must be one line of plain text, at most ${String(KEY_MAX)} characters` };
+  if (!isText(value) || /\p{Cc}/u.test(value)) return problem;
+  const key = normalizeKey(value);
+  return key === "" || [...key].length > KEY_MAX ? problem : { key };
+}
+
+/** A one-line text: absent, or plain text of at most `max` characters, refused and not clipped. It comes back as the CLI stores it, so a check of its start holds. */
+function readLine(value: JsonValue | undefined, name: string, max: number): { text?: string } | { error: string } {
+  if (value === undefined || value === null) return {};
+  if (!isText(value)) return { error: `${name} must be text` };
+  if (/\p{Cc}/u.test(value)) return { error: `${name}: one line of plain text, no control characters` };
+  const text = clean(value, Number.MAX_SAFE_INTEGER);
+  if (text.length > max) return { error: `${name}: at most ${String(max)} characters` };
+  return text === "" ? {} : { text };
+}
+
+function unknownField(parsed: { readonly [key: string]: JsonValue }, known: ReadonlySet<string>): string | undefined {
+  const extra = Object.keys(parsed).find((key) => !known.has(key));
+  return extra === undefined ? undefined : `unknown field ${extra.slice(0, 40)}`;
+}
+
+type SettleBody = { project: string; key: string; note?: string; followUp: boolean } | { error: string };
+
+function readSettleBody(parsed: JsonValue, known: ReadonlySet<string>): SettleBody {
+  if (!isRecord(parsed)) return { error: `send { ${[...known].join(", ")} }` };
+  const extra = unknownField(parsed, known);
+  if (extra !== undefined) return { error: extra };
+  const { project, followUp } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  const named = readFlareKey(parsed.key);
+  if ("error" in named) return named;
+  const note = readNote(parsed.note);
+  if ("error" in note) return note;
+  if (followUp !== undefined && followUp !== true && followUp !== false) return { error: "followUp must be true or false" };
+  return { project, key: named.key, ...note, followUp: followUp === true };
+}
+
+interface LightBody {
+  project: string;
+  key: string;
+  title: string;
+  severity: Severity;
+  target?: string;
+  source: string;
+  deliver?: string;
+  body?: string;
+}
+
+/** Every field of a light, checked. Severity and deliver are checked here, before the CLI, so only known words reach its argv. */
+function readLightBody(parsed: JsonValue): LightBody | { error: string } {
+  if (!isRecord(parsed)) return { error: "send { project, key, title, severity, target?, body?, deliver?, source? }" };
+  const extra = unknownField(parsed, LIGHT_FLARE_KEYS);
+  if (extra !== undefined) return { error: extra };
+  const { project, severity, deliver, body } = parsed;
+  if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
+  const named = readFlareKey(parsed.key);
+  if ("error" in named) return named;
+  if (RESERVED_FLARE_KEY.test(named.key)) return { error: "key: vigil: keys belong to vigils" };
+  const title = readLine(parsed.title, "title", TEXT_LIMITS.title);
+  if ("error" in title) return title;
+  if (title.text === undefined) return { error: "title is required" };
+  const known = SEVERITIES.find((candidate) => candidate === severity);
+  if (known === undefined) return { error: `severity must be one of ${SEVERITIES.join(", ")}` };
+  const target = readLine(parsed.target, "target", TEXT_LIMITS.target);
+  if ("error" in target) return target;
+  const source = readLine(parsed.source, "source", TEXT_LIMITS.target);
+  if ("error" in source) return source;
+  if (source.text !== undefined && RESERVED_FLARE_SOURCE.test(source.text)) return { error: "source: ritual: and vigil: sources are darius's own" };
+  if (deliver !== undefined && deliver !== null && (!isText(deliver) || !FLARE_DELIVER.test(deliver))) return { error: "deliver must be push, email, push,email or none" };
+  if (body !== undefined && body !== null && !isText(body)) return { error: "body must be text" };
+  const light: LightBody = { project, key: named.key, title: title.text, severity: known, source: source.text ?? FLARE_SOURCE_DEFAULT };
+  if (target.text !== undefined) light.target = target.text;
+  if (isText(deliver)) light.deliver = deliver;
+  if (isText(body) && body.trim() !== "") light.body = body;
+  return light;
+}
+
+// The writes.
+
+/** A CLI call that waited for its answer: 200, 409 with its sentence, or 502 when a signal ended it. */
+function cliReply(answer: CliAnswer): PushApiReply {
+  if (answer.killed === true) return fail(502, `darius did not finish: ${answer.error}`);
+  return answer.code === 0 ? { status: 200, body: { ok: true } } : fail(409, answer.error);
+}
+
+/** The argv of `answer` and `accept`. Free text as `--flag=value`, the key after `--`. */
+function settleArgv(verb: "answer" | "accept", body: { project: string; key: string; note?: string }, viewer: ActionViewer): string[] {
+  const argv = ["flare", verb, "--project", body.project, `--who=web:${viewer.who}`, "--json"];
+  if (body.note !== undefined) argv.push(`--note=${body.note}`);
+  argv.push("--", body.key);
+  return argv;
+}
+
+async function acceptFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_FLARE_SETTLE);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readSettleBody(guarded.parsed, ACCEPT_FLARE_KEYS);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  const found = flareDetail(body.project, body.key);
+  if (found === null) return fail(400, `no flare '${body.key}' in ${body.project}`);
+  const refused = flareSettleRefusal("accept", found.row);
+  if (refused !== undefined) return fail(409, refused);
+  return cliReply(await deps.run(settleArgv("accept", body, viewer)));
+}
+
+async function answerFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_FLARE_SETTLE);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readSettleBody(guarded.parsed, ANSWER_FLARE_KEYS);
+  if ("error" in body) return fail(400, body.error);
+  if (body.note === undefined) return fail(400, "note is required: an answer says what was decided");
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  const found = flareDetail(body.project, body.key);
+  if (found === null) return fail(400, `no flare '${body.key}' in ${body.project}`);
+  const refused = flareSettleRefusal("answer", found.row);
+  if (refused !== undefined) return fail(409, refused);
+  if (!body.followUp) return cliReply(await deps.run(settleArgv("answer", body, viewer)));
+  const { run, ritual, source } = found.row;
+  if (run === undefined || ritual === undefined) {
+    return fail(409, `flare '${body.key}' has no run to follow up: its newest report came from ${source}. Answer it without a follow-up, and act on it yourself.`);
+  }
+  return startFlareFollowUp({ project: body.project, key: body.key, note: body.note, run, ritual }, viewer, deps);
+}
+
+interface FlareFollowUp {
+  project: string;
+  key: string;
+  note: string;
+  run: string;
+  ritual: string;
+}
+
+/**
+ * As POST /api/run/follow-up: ready first, here or on the ritual's host, then
+ * the CLI detached, because `flare answer --follow-up` waits for the run. The
+ * CLI writes `flare.answered` when the run started, and only then.
+ */
+async function startFlareFollowUp(flare: FlareFollowUp, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
+  const { project, key, note, run, ritual } = flare;
+  const ready = await deps.readiness(project, run);
+  if (!ready.ready) return fail(409, ready.reason);
+  if (!ready.items.some((item) => item.key === key)) return fail(409, `run ${run} has no open decision on flare '${key}' to follow up. Answer it without a follow-up.`);
+  const on = ready.via === undefined ? undefined : ready.host;
+  // The name comes from the store. A name that starts with `-` would reach ssh as an option.
+  if (on !== undefined && !HOST_NAME.test(on)) return fail(409, "the follow-up did not start: the ritual's host name is not valid");
+  const who = `web:${viewer.who}`;
+  const argv = ["flare", "answer", "--follow-up", "--project", project, `--note=${note}`, `--who=${who}`];
+  if (on !== undefined) argv.push("--on", on);
+  argv.push("--", key);
+  const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "follow-up", project, ritual, parent: run, host: ready.host });
+  const outcome = await spawnWatched(deps, { project, run, logName: "follow-up.log", line: STARTED_LINE, host: ready.host, record }, () => ({ argv, on }));
+  return flareFollowUpReply(outcome, ready.host);
+}
+
+function flareFollowUpReply(outcome: RunNowOutcome, host: string): PushApiReply {
+  const ask = outcome.ask;
+  if ("failed" in outcome) return fail(409, outcome.failed);
+  if ("started" in outcome) return { status: 202, body: withAsked({ ok: true, run: outcome.started, host: outcome.host }, ask) };
+  if ("pending" in outcome) return { status: 202, body: withAsked({ ok: true, pending: true, host, message: pendingMessage(host) }, ask) };
+  const isSsh = outcome.ended === SSH_EXIT || outcome.ended === null;
+  return fail(isSsh ? 503 : 409, endedReason(outcome, host), ask?.id);
+}
+
+/** The guards of `light`, in the order docs/concept.md lists them. A browser sends `Origin` on every POST; a CI job sends none. */
+function lightGuard(request: ActionRequest, viewer: ActionViewer): Guarded {
+  if (request.method !== "POST") return { reply: fail(405, "POST only") };
+  if (viewer.local === true) return { reply: fail(403, LOOPBACK_FLARE_LIGHT) };
+  const origin = request.headers.get("origin");
+  if (origin === "null") return { reply: fail(403, "a request with Origin: null cannot light a flare") };
+  if (origin !== null && !isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return { reply: fail(403, "the request must come from the darius page") };
+  const site = request.headers.get("sec-fetch-site");
+  if (site === "cross-site" || site === "same-site") return { reply: fail(403, "a page of another site cannot light a flare") };
+  return jsonPayload(request, "too large");
+}
+
+/** The argv of `light`. Free text as `--flag=value`, the key after `--`, the body on stdin only. */
+function lightArgv(body: LightBody, viewer: ActionViewer): string[] {
+  const argv = ["flare", "light", "--project", body.project, `--who=web:${viewer.who}`, `--title=${body.title}`, `--severity=${body.severity}`, `--source=${body.source}`, "--json"];
+  if (body.target !== undefined) argv.push(`--target=${body.target}`);
+  if (body.deliver !== undefined) argv.push(`--deliver=${body.deliver}`);
+  if (body.body !== undefined) argv.push("--stdin");
+  argv.push("--", body.key);
+  return argv;
+}
+
+async function lightFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
+  const guarded = lightGuard(request, viewer);
+  if ("reply" in guarded) return guarded.reply;
+  const body = readLightBody(guarded.parsed);
+  if ("error" in body) return fail(400, body.error);
+  if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
+  return cliReply(await deps.run(lightArgv(body, viewer), body.body));
 }

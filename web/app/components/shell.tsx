@@ -1,8 +1,8 @@
 /**
  * The frame around every page. It has four parts. A phone has a top bar that
  * is also the button of the drawer (the caption and the name of the scope, a
- * chevron, a dot when another scope needs you), and a bar of five tabs at the
- * bottom: Overview, Vigils, Rituals, Findings, Milestones. A desktop (1024 px
+ * chevron, a dot when another scope needs you), and a bar of six tabs at the
+ * bottom: Overview, Vigils, Rituals, Findings, Flares, Milestones. A desktop (1024 px
  * and wider) has neither: a fixed sidebar takes their place. Both are in the
  * page always; CSS decides which one shows. The third part is Places (the
  * tree, `places.tsx`), the fourth is `<main>`. Over them floats the connection
@@ -25,7 +25,7 @@ import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import { BUSY_AFTER_MS, isLoading } from "../lib/busy.ts";
 import type { Kind } from "../lib/kind.ts";
 import { href, placeOf, type Place, type Section } from "../lib/paths.ts";
-import { effectiveScope, type TabCounts } from "../lib/scope.ts";
+import { effectiveScope, NO_TABS, type TabCounts } from "../lib/scope.ts";
 import { scopeCookieText } from "../lib/settings.ts";
 import { useAfter } from "../lib/use-after.ts";
 
@@ -115,7 +115,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   // Runs and Activity are places, not tabs: they light a Places row and no tab.
   const tabLit = section === "runs" || section === "activity" ? null : section;
   const lit: LitRow | null = shownPlace.kind === "host" ? hostRowOf(shown.pathname) : shownPlace.kind === "overview" ? "overview" : section;
-  const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? { vigils: 0, rituals: 0, findings: 0 });
+  const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? NO_TABS);
   // Remember the scope you are in, for the host pages and the error pages. A path with no scope (a 404) says nothing.
   const remembered = host || (place.kind === "unknown" && place.scope === null) ? undefined : place.scope;
   useEffect(() => {

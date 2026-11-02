@@ -2,6 +2,120 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.0] - 2026-11-02
+
+### Added
+
+- The `/darius-flare` skill (`skills/flare.md`, the 12th procedure skill). It says how to choose between a flare, a finding, a vigil and a ritual, and holds the recipes: a ritual that lights a flare, a vigil that closes or lights a flare, and a script or CI job. It also covers delivery and what a run never does.
+- The `darius` skill names both recipes with the real commands (`vigil add xyz --in 7d --flare high --stdin < body.md`), the delivery options, and the rule that a run reports a flare through its result block and never answers, accepts or clears one.
+- `docs/backlog.md` lists what the flare design cut from the first version.
+
+### Changed
+
+- `darius skill install` writes 13 files, `skill status` lists 13. The skill text was tightened to make room. It no longer lists `hook-stop` and `hook-drift` (a hook runs them, a session does not), and the summaries of `due`, `init`, `marker check`, `milestone archive`, `ritual` and `spec check` are shorter.
+- README and `docs/marker.md` name `flare_deliver` for a ritual, and `--in`, `--flare` for a vigil with `vigil` in `kinds`. The marker table no longer says that email sends nothing.
+
+## [0.112.0] - 2026-11-02
+
+### Added
+
+- The Flares place in the web app. `/flares`, `/w/<workspace>/flares` and `/w/<workspace>/flares/<key>` list and show flares. The place is in the sidebar, the drawer and the phone tab bar, and its count shows only when a flare is lit. The list shows lit flares first, with a link to the rest.
+- Answer and Accept risk on the flare page and on the Overview card. Accept risk on a flare of a vigil says before the tap that it also closes the vigil. A follow-up that the server refuses keeps the flare lit and shows the server's sentence.
+- Lit flares come first in "Needs you" on the Overview and count in the status strip.
+- The flare page shows the state of each alert channel. `FlareDetail` has `blocks` and `delivery`, and `WebContext` has `emailSetUp()`.
+- The Activity place has five kinds: `flare-lit`, `flare-answered`, `flare-accepted`, `flare-cleared` and `flare-reopened`.
+- A flagged item on a run page is marked and links to its flare.
+- Settings, Notifications shows "Email: set up" or "Email: not set up on this host". It shows no address and no token.
+
+### Changed
+
+- The phone tab bar has six tabs, and the Places tree has eight places per scope.
+
+## [0.111.0] - 2026-11-02
+
+### Added
+
+- `GET /api/flares?project=&status=` and `GET /api/flare?project=&key=` read flares as JSON, for any viewer that passes the access check. Flare text is untrusted, and it leaves as JSON data only.
+- `POST /api/flare/answer` and `POST /api/flare/accept` settle a flare from the page. They have the guards of `POST /api/finding/close`.
+- `POST /api/flare/light` lets a CI job or a script on the tailnet light a flare. It is the one write with no same-Origin rule: no `Origin` passes, `Origin: null` or another site does not. The loopback viewer is refused. `deliver` is `push`, `email`, `push,email` or `none`. A `source` of `ritual:` or `vigil:` and a `vigil:` key are refused.
+- `darius flare answer --follow-up --on <host>` runs the verb on the ritual's host over ssh. `POST /api/flare/answer` with `followUp` uses it, and answers 409 with a sentence when the follow-up cannot start. A refused follow-up writes no `flare.answered`.
+- The status JSON has `flares: { lit }` per project. No field changed. `WebContext` has `flares()` and `flare()`.
+
+### Fixed
+
+- A forwarded verb (`--on`) sends a flag value that starts with `-` as `--flag=value`, and puts a positional that starts with `-` after `--`. Before, `--note -h` printed the help on the other host, exited 0 and did nothing.
+
+## [0.110.0] - 2026-11-01
+
+### Added
+
+- A vigil can light a flare. `darius vigil add <slug> --in 7d --flare high [--flare-deliver push,email|none]`, and `vigil set <slug> --flare high | --no-flare`. A sweep that reads `failed` lights the flare `vigil:<slug>` with the vigil title, your severity, and a target that names the failure kind and the failing step. The vigil stays armed, and a daily repeat is a report with no notice. A dry run, a classify run, and the outcomes `skipped`, `pending`, `finding` and `awaiting-manual` light nothing.
+- A close as `held` clears the flare, by the sweep or by `vigil close --verdict held`. It writes `flare.cleared` only when that flare exists. `vigil close --verdict failed` leaves the flare open.
+- `flare accept` on a flare of a vigil also closes the vigil as `failed`, after it writes the accept line. A vigil that is gone or already closed is fine. If the close fails, the accept stays on record, stderr says so and the exit code is 1. `flare answer` leaves the vigil armed.
+- `--in <N>d|w|m` on `vigil add` and `vigil set` is a due date counted from today. darius stores the date. It does not combine with `--due`.
+- A sweep that lit a flare sends the notices of its own project before it exits, after it gives its lease back. A failed send never fails the sweep.
+- `vigil show` prints the flare setting. `vigil list --json` keeps every field.
+
+### Changed
+
+- `--flare` is refused on a vigil with no date and no `--gate-command`, because its checks never fail, and on a slug whose flare key would pass 120 characters.
+- The legacy route refuses `--flare`, `--flare-deliver` and `--in` with "unknown option", exit 2, and drops none of them.
+- **Update every host before a vigil uses `flare`.** An older host refuses a vigil item that holds the new `flare` and `flare_deliver` keys. To go back, run `vigil set <slug> --no-flare` on each vigil first.
+
+## [0.109.0] - 2026-11-01
+
+### Added
+
+- Flare notices can go out by email. `darius email set --stdin` reads JSON settings (`url`, `token`, `from`, `to`, and optional `web_url` and `since`), and writes `<config>/email.json` with mode 0600 from the first byte. `since` becomes now when absent, so setup does not email old flares. A notice that failed as "not set up on host" before `since` is history too, and does not go out as a retry.
+- The request is `POST <url>` with a bearer token, an `Idempotency-Key` that is the SHA-256 of the notice key, and the JSON `{from, to, subject, text}`. Any 2xx is success. A redirect is a failure and is not followed. A request stops after 15 seconds.
+- The subject is `flare: <title>` or `N flares in <ritual>`. The body holds the severity, the project, the target, and a link when `web_url` is set. It never holds a flare body or a detail.
+- `darius email status` says set up or not set up, with the host of the url and the recipient count. `darius email test` sends one message and writes no ledger line. `emailStatus()` in `src/core/email.ts` gives the same facts to the web app.
+
+### Security
+
+- The token and the addresses stay in `email.json`. The ledger holds a recipient count, and an error holds the host and the status, never the provider's answer. The text of a failed fetch loses the token, every address and the path of the url first.
+- `email.json` is refused when its group or others have any access. A bad file counts as not set up, with a reason that quotes no value, so it does not stop the flush of other alerts. `url` must be https, or http on loopback or the tailnet, with no user, password, query or fragment.
+- A run cannot send mail or change the channel. `email set` and `email test` refuse while `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and the gate denies those lines in every mode. `email status` passes.
+
+## [0.108.0] - 2026-11-01
+
+### Added
+
+- Flare notices. A ledger line that opens or raises flares sends one notice per channel, not one per flare, so a run result with a hundred items gives one push. The key is `line:<line id>:<channel>`. The notice names one flare, or says "N flares in <ritual>" and lists three. It is short plain text, with no flare body and no detail. Only the host that wrote the line sends it. A repeat report at the same severity sends nothing; a severity rise or a relight after gone sends once.
+- The marker ritual key `flare_deliver = ["push", "email"]` chooses the channels for the flares a run of that ritual lights. `[]` means the app only. Absent means push, and leaves the definition hash unchanged. A `flare.lit` line uses its own `deliver`. Update every host to 0.108.0 before a marker uses the key, because an older host refuses it.
+- `darius flare light` sends its own project's notices before it exits. A notice that could not go out is reported on stderr, and the exit code stays 0.
+
+### Changed
+
+- Alerts send in one pass per channel, each with its own readiness check. A retried notice keeps the channel of its failed line. Existing alerts keep their keys, and a host without push keys still sends nothing and records nothing for them.
+- A flare notice on a channel this host has not set up writes `alert.failed` with the reason "not set up on host", so it does not vanish without a trace. That counts toward the three tries. Email is not set up anywhere yet, so every email notice gets that trace until the email spec.
+
+## [0.107.0] - 2026-11-01
+
+### Added
+
+- `darius flare light|list|show|answer|accept|clear|reopen`. A script or a person lights a flare by key, with a title, a severity, and an optional target, body, source and delivery list. `list` shows lit flares by default. `answer --follow-up` starts a follow-up of the run that reported the flare, and writes the answer only when that run started. This release sends no flare alerts yet.
+- The run prompt documents `"flare": true` and lists the open flares of the ritual, so a run reuses the key. It says that a flare replaces a question about the same matter. `darius run start` prints the same list, and an approved flare item in a follow-up says to keep the flag.
+
+### Security
+
+- A run cannot write a flare by command. `darius flare` refuses its write verbs while `DARIUS_RUN` or `DARIUS_RUN_POLICY` is set, and the gate denies those lines in every mode, whatever `may` or a grant says. `flare list` and `flare show` pass.
+
+### Changed
+
+- `darius help` and the skill's verb table use shorter summaries for `finding`, `run`, `ritual` and `marker`, to keep the skill under its size limit.
+
+## [0.106.0] - 2026-11-01
+
+### Added
+
+- The flare index, `src/core/flare-index.ts`. It derives one flare per key from the ledger and the result blobs: lit, answered, accepted or gone. It reads the lines `flare.lit`, `flare.answered`, `flare.accepted`, `flare.cleared` and `flare.reopened`. A flare goes gone on a clear, on a fixed report, or after two clean full runs of the ritual that reported it. This release has no CLI verb, alert or web page for flares yet.
+- A result item may carry `"flare": true`. It needs a `key` and the state `needs-decision`, or `fixed` to clear the flare. `darius run complete` refuses any other state.
+
+### Changed
+
+- An item flagged `flare: true` is no finding. It leaves the findings index.
+
 ## [0.105.2] - 2026-10-30
 
 ### Changed

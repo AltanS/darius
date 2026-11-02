@@ -185,7 +185,7 @@ export default function Run({ loaderData }: Route.ComponentProps): React.ReactNo
                         {child.result.items.length === 0 ? null : (
                           <div>
                             <p className="fu-label">What it reported</p>
-                            <Items items={child.result.items} />
+                            <Items items={child.result.items} project={project} />
                           </div>
                         )}
                       </>

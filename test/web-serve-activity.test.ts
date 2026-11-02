@@ -1,8 +1,8 @@
 /**
  * The Activity place over a real store (0.94.0): the real WebContext reads
  * seeded projects, and the committed app build renders `/activity` and
- * `/w/<ws>/activity`. Places must list Activity as the seventh place and the
- * phone tab bar must keep its five tabs. The page must lead each entry with
+ * `/w/<ws>/activity`. Places must list Activity as the eighth place and the
+ * phone tab bar must keep its six tabs. The page must lead each entry with
  * its kind word and title, link a run in its own workspace, show a pending
  * start once and on top, validate the query, cap the all-workspaces page at
  * 500 entries, and widen the window through "Show older".
@@ -101,16 +101,16 @@ test("Places lists Activity after Runs for the scope you are in, and lights it o
   const html = await page(`/w/${ALPHA}/activity`);
   const nav = places(html);
   const labels = [...nav.matchAll(/class="places-row places-leaf( lit)?"[^>]*>[\s\S]*?<span class="places-name">([^<]+)<\/span>/gu)].map((match) => `${match[2]}${match[1] === undefined ? "" : "*"}`);
-  assert.deepEqual(labels.slice(0, 7), ["Overview", "Vigils", "Rituals", "Findings", "Milestones", "Runs", "Activity*"]);
+  assert.deepEqual(labels.slice(0, 8), ["Overview", "Vigils", "Rituals", "Findings", "Flares", "Milestones", "Runs", "Activity*"]);
   assert.ok(nav.includes(`href="/w/${ALPHA}/activity"`));
   const all = places(await page("/activity"));
   assert.ok(all.includes('href="/activity"'), "all workspaces has the row too");
   assert.ok(places(await page(`/w/${ALPHA}`)).includes(`href="/w/${ALPHA}/activity"`), "an overview lists it, not lit");
 });
 
-test("the phone tab bar keeps its five tabs, and Activity lights none of them", async () => {
+test("the phone tab bar keeps its six tabs, and Activity lights none of them", async () => {
   const bar = tabs(await page(`/w/${ALPHA}/activity`));
-  assert.equal(count(bar, /<a /gu), 5);
+  assert.equal(count(bar, /<a /gu), 6);
   assert.equal(bar.includes("/activity"), false);
   assert.equal(bar.includes("tab on"), false, "no tab is lit");
 });

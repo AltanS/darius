@@ -56,7 +56,7 @@ function run(id: string, item: string, startedAt: string, extra: Partial<RunRow>
 }
 
 function project(name: string, rituals: RitualRow[], runs: RunRow[] = [], vigils: VigilRow[] = []): ProjectStatus {
-  return { name, icon: null, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, error: null };
+  return { name, icon: null, checkout: null, maxMode: null, lastSync: null, rituals, runs, vigils, milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, flares: { lit: 0 }, error: null };
 }
 
 function status(projects: ProjectStatus[]): HostStatus {

@@ -2,7 +2,7 @@
 
 Static text of the Claude Code procedure skills that darius installs.
 
-- `<name>.md` is the procedure skill `darius-<name>` (11 files: work, work-plan, work-verify, commit, sync, archive, wrap-up, enrich, dream, worklog, structural-review).
+- `<name>.md` is the procedure skill `darius-<name>` (12 files: work, work-plan, work-verify, commit, sync, archive, wrap-up, enrich, dream, worklog, structural-review, flare). `flare` is not a tracker skill: it holds the flare recipes and how to choose between a flare, a finding, a vigil and a ritual (0.113.0).
 
 `darius skill install` copies each file to `~/.claude/skills/darius-<name>/SKILL.md` and adds a stamp as the last line. `darius setup` refreshes every stamped file, so `darius update` keeps every host current. The `darius` skill itself is generated from the command registry, not kept here. There is no darius agent since 0.71.0; install and setup remove a stamped `~/.claude/agents/darius.md`.
 

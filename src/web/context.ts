@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { ActivityOptions, FindingRow, HostStatus, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
+import { emailStatus } from "../core/email.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { configDir, stateDir } from "../core/paths.ts";
@@ -17,6 +18,7 @@ import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { activityOf, pendingActivity } from "./activity.ts";
 import { collectBackups } from "./backups.ts";
+import { collectFlareRows, flareDetail } from "./flares.ts";
 import { pendingStarts, vigilCheckOf } from "./pending.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
@@ -170,6 +172,9 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),
     backups: () => collectBackups(),
     findings: () => Promise.resolve(collectFindingRows()),
+    flares: () => Promise.resolve(collectFlareRows()),
+    flare: (project, key) => flareDetail(project, key),
+    emailSetUp: () => emailStatus().isSetUp,
     activity: (project, options) => collectActivity(project, options),
     pending: (project) => collectPending(project),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),

@@ -1,5 +1,5 @@
 /**
- * The skill set: the generated skill and 11 static procedure skills. The
+ * The skill set: the generated skill and 12 static procedure skills. The
  * darius agent was retired in 0.71.0: install and setup remove a stamped
  * agents/darius.md and leave any other. Install, uninstall, status and the
  * setup refresh, each in a throwaway CLAUDE_CONFIG_DIR.
@@ -71,7 +71,7 @@ interface Entry {
   version: string | null;
 }
 
-test("the repo holds the static text: 11 skills and no agent, with no em dash and no plugin name left", () => {
+test("the repo holds the static text: 12 skills and no agent, with no em dash and no plugin name left", () => {
   const dir = skillSourceDir();
   for (const name of PROCEDURE_SKILLS) {
     const text = readFileSync(join(dir, `${name}.md`), "utf8");
@@ -92,12 +92,32 @@ test("the repo holds the static text: 11 skills and no agent, with no em dash an
   assert.match(readFileSync(join(dir, "work.md"), "utf8"), /canonical schema: `darius delegation`/u);
 });
 
-test("install writes 12 stamped files and no agent; a second install writes none", () => {
+test("the flare skill holds both recipes, the delivery options and what a run never does", () => {
+  const text = readFileSync(join(skillSourceDir(), "flare.md"), "utf8");
+  assert.match(text, /^---\nname: darius-flare\n/u);
+  for (const part of [
+    'cadence = "1w"',
+    "flare_deliver",
+    '"flare": true',
+    "needs-decision",
+    "darius vigil add xyz --in 7d --flare high --stdin < body.md",
+    "--flare-deliver",
+    "darius flare light",
+    "POST /api/flare/light",
+    "darius email set",
+    "`kinds` in `.darius.toml` must list `vigil`",
+    "A run never runs `flare light`",
+  ]) {
+    assert.ok(text.includes(part), part);
+  }
+});
+
+test("install writes 13 stamped files and no agent; a second install writes none", () => {
   const { claude, env } = sandbox();
   const first = darius(env, ["skill", "install", "--json"]);
   assert.equal(first.code, 0, first.stderr);
   const files = JSON.parse(first.stdout).files;
-  assert.equal(files.length, 12);
+  assert.equal(files.length, 13);
   assert.ok(files.every((entry: { result: string }) => entry.result === "written"));
   for (const path of allPaths(claude)) {
     assert.ok(existsSync(path), path);
@@ -144,7 +164,7 @@ test("install leaves an agents/darius.md that is not darius-owned alone, exit 0"
   assert.equal(readFileSync(agent, "utf8"), "my own agent\n");
 });
 
-test("uninstall removes the 12 files and their dirs, also an old stamped agent, keeps agents/, and leaves an unstamped file", () => {
+test("uninstall removes the 13 files and their dirs, also an old stamped agent, keeps agents/, and leaves an unstamped file", () => {
   const { claude, env } = sandbox();
   darius(env, ["skill", "install"]);
   const oldAgent = writeOldAgent(claude);
@@ -162,24 +182,24 @@ test("uninstall removes the 12 files and their dirs, also an old stamped agent, 
   darius(clean.env, ["skill", "install"]);
   const removed = darius(clean.env, ["skill", "uninstall", "--json"]);
   assert.equal(removed.code, 0, removed.stderr);
-  assert.equal(JSON.parse(removed.stdout).files.filter((entry: { result: string }) => entry.result === "removed").length, 12);
+  assert.equal(JSON.parse(removed.stdout).files.filter((entry: { result: string }) => entry.result === "removed").length, 13);
   assert.deepEqual(readdirSync(join(clean.claude, "skills")), []);
 });
 
-test("status lists 12 files, one line each, all ok after install; --json is an array", () => {
+test("status lists 13 files, one line each, all ok after install; --json is an array", () => {
   const { env } = sandbox();
   darius(env, ["skill", "install"]);
   for (const runtime of ["node", "bun"]) {
     const plain = darius(env, ["skill", "status"], runtime);
     assert.equal(plain.code, 0, plain.stderr);
     const lines = plain.stdout.trim().split("\n");
-    assert.equal(lines.length, 12 + 3 + 1, "12 files, 3 hooks, the fix line");
-    assert.ok(lines.slice(0, 12).every((line) => line.startsWith("ok ")), plain.stdout);
-    assert.match(lines[12] ?? "", /^missing +hook SessionStart +.*settings\.json$/u);
+    assert.equal(lines.length, 13 + 3 + 1, "13 files, 3 hooks, the fix line");
+    assert.ok(lines.slice(0, 13).every((line) => line.startsWith("ok ")), plain.stdout);
+    assert.match(lines[13] ?? "", /^missing +hook SessionStart +.*settings\.json$/u);
     const entries: Entry[] = JSON.parse(darius(env, ["skill", "status", "--json"], runtime).stdout);
     assert.ok(Array.isArray(entries));
     assert.deepEqual(entries.map((entry) => entry.name), [...SKILL_NAMES, "hook SessionStart", "hook Stop", "hook PostToolUse"]);
-    assert.ok(entries.slice(0, 12).every((entry) => entry.state === "ok" && entry.version === VERSION));
+    assert.ok(entries.slice(0, 13).every((entry) => entry.state === "ok" && entry.version === VERSION));
   }
 });
 

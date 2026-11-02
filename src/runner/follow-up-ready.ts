@@ -22,6 +22,7 @@
 
 import { spawn } from "node:child_process";
 
+import { FOLLOW_UP_NOT_STARTED } from "../core/flare-index.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
 import type { JsonValue, Ritual } from "../core/model.ts";
 import { SSH_FAILED } from "../core/ssh.ts";
@@ -102,12 +103,16 @@ function lastJson(output: string): { readonly [key: string]: JsonValue } | null 
   return null;
 }
 
-/** The last plain line of a CLI's output, with the `darius: ` and `! ` prefixes taken off. */
+/**
+ * The last plain line of a CLI's output, with the `darius: ` and `! ` prefixes
+ * taken off. The closing line of `flare answer --follow-up` says only that no
+ * run started, so the reason on the line before it wins.
+ */
 export function lastSentence(output: string): string {
   const line = output
     .split("\n")
     .map((candidate) => candidate.trim())
-    .findLast((candidate) => candidate !== "" && !candidate.startsWith("{"));
+    .findLast((candidate) => candidate !== "" && !candidate.startsWith("{") && !candidate.startsWith(FOLLOW_UP_NOT_STARTED));
   return (line ?? "").replace(/^darius run (?:follow-up|now|resume): /u, "").replace(/^darius: /u, "").replace(/^! /u, "");
 }
 

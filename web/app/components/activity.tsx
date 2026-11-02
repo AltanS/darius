@@ -83,11 +83,18 @@ interface EntryProps {
   sentence: (text: string) => string;
 }
 
+/** Where the title of a lead goes: the vigil, the ritual or the flare it names; null when it names none. */
+function leadTarget(entry: ActivityEntry, word: string, project: string): string | null {
+  if (word === "flare") return entry.links.flare === undefined ? null : href({ to: "flare", ws: project, key: entry.links.flare });
+  if (word === "vigil") return entry.links.vigil === undefined ? null : href({ to: "vigil", ws: project, slug: entry.links.vigil });
+  if (word === "ritual") return entry.links.ritual === undefined ? null : href({ to: "ritual", ws: project, slug: entry.links.ritual });
+  return null;
+}
+
 /** The lead of an entry: "ritual Fact check" with the title as a link to the item, and the workspace when the page spans several. */
 function Lead({ entry, project, workspace }: { entry: ActivityEntry; project: string; workspace: boolean }): React.ReactNode {
   const { word, title } = leadOf(entry);
-  const slug = word === "vigil" ? entry.links.vigil : word === "ritual" ? entry.links.ritual : undefined;
-  const target = slug === undefined ? null : href(word === "vigil" ? { to: "vigil", ws: project, slug } : { to: "ritual", ws: project, slug });
+  const target = leadTarget(entry, word, project);
   return (
     <>
       <span className="text-faint">{word}</span> {target === null ? <span>{title}</span> : <Link to={target}>{title}</Link>}

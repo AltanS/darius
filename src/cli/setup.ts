@@ -593,7 +593,7 @@ export function defaultDeps(): SetupDeps {
 
 /**
  * Rewrites every file of the skill set under `<claude>` (the generated skill,
- * the 11 procedure skills) that carries a darius stamp and differs
+ * the 12 procedure skills) that carries a darius stamp and differs
  * from this version's text, so `darius update` (which runs setup) keeps every
  * host current. When the generated skill is installed at user level and
  * stamped, it also installs a file of the set that is missing (a new procedure

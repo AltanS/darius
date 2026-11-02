@@ -13,7 +13,9 @@
 
 import { register, type Command } from "./registry.ts";
 import { dueCommand } from "./due.ts";
+import { emailCommand } from "./email.ts";
 import { findingCommand } from "./finding.ts";
+import { flareCommand } from "./flare.ts";
 import { harnessCommand } from "./harness.ts";
 import { importCommand } from "./import.ts";
 import { initCommand } from "./init.ts";
@@ -44,7 +46,9 @@ import { workCommand } from "./work.ts";
 
 const COMMANDS: readonly Command[] = [
   dueCommand,
+  emailCommand,
   findingCommand,
+  flareCommand,
   harnessCommand,
   importCommand,
   initCommand,

@@ -7,9 +7,9 @@
 
 import type { ActivityKind } from "../../../src/web/api.ts";
 
-export type Section = "vigils" | "rituals" | "findings" | "milestones" | "runs" | "activity";
+export type Section = "vigils" | "rituals" | "findings" | "flares" | "milestones" | "runs" | "activity";
 
-const SECTIONS: readonly Section[] = ["vigils", "rituals", "findings", "milestones", "runs", "activity"];
+const SECTIONS: readonly Section[] = ["vigils", "rituals", "findings", "flares", "milestones", "runs", "activity"];
 
 // --- the filters of the Runs list (0.93.0) ----------------------------------------------------
 
@@ -87,6 +87,11 @@ export const ACTIVITY_KINDS = [
   "finding-closed",
   "finding-reopened",
   "finding-reset",
+  "flare-lit",
+  "flare-answered",
+  "flare-accepted",
+  "flare-cleared",
+  "flare-reopened",
   "ritual-lifecycle",
   "ritual-rescheduled",
   "start-requested",
@@ -133,6 +138,7 @@ export type Target =
   | { to: "run"; ws: string; run: string }
   | { to: "milestone"; ws: string; ref: string }
   | { to: "vigil"; ws: string; slug: string }
+  | { to: "flare"; ws: string; key: string }
   | { to: "host"; page: HostPage; hash?: string };
 
 function enc(text: string): string {
@@ -169,6 +175,8 @@ export function href(target: Target): string {
       return `/w/${enc(target.ws)}/milestones/${enc(target.ref)}`;
     case "vigil":
       return `/w/${enc(target.ws)}/vigils/${enc(target.slug)}`;
+    case "flare":
+      return `/w/${enc(target.ws)}/flares/${enc(target.key)}`;
     case "host":
       return `/${target.page}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
   }
@@ -212,7 +220,7 @@ function placeOfWorkspace(scope: string, rest: readonly string[]): Place {
   if (first === undefined) return { scope, kind: "overview", section: null };
   if (!isSection(first)) return { scope, kind: "unknown", section: null };
   if (second === undefined) return { scope, kind: "section", section: first };
-  const hasDetail = first === "rituals" || first === "runs" || first === "milestones" || first === "vigils";
+  const hasDetail = first === "rituals" || first === "runs" || first === "milestones" || first === "vigils" || first === "flares";
   return { scope, kind: hasDetail && rest.length === 2 ? "detail" : "unknown", section: hasDetail ? first : null };
 }
 
@@ -234,6 +242,7 @@ const SECTION_LABELS = {
   vigils: "Vigils",
   rituals: "Rituals",
   findings: "Findings",
+  flares: "Flares",
   milestones: "Milestones",
   runs: "Runs",
   activity: "Activity",

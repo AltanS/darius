@@ -5,9 +5,12 @@
  * as text only, never as markdown, HTML or a link.
  */
 
+import { Link } from "react-router";
+
 import type { ResultAction, ResultItem, ResultMetric, ResultProposal, ResultQuestion, RunResult, RunResultSummary, RunRow } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { decideCommand } from "../lib/format.ts";
+import { href } from "../lib/paths.ts";
 import { actionTag, groupItems, itemStateTag, itemsText, metricTag, resultTone, resultWord, severityTone, summaryTags, type TagSpec } from "../lib/result.ts";
 import { decisionText } from "../lib/view.ts";
 import { AskForm } from "./ask-form.tsx";
@@ -145,9 +148,11 @@ export function ProposalView({ proposal }: ProposalViewProps): React.ReactNode {
 
 interface ItemRowProps {
   item: ResultItem;
+  /** The workspace of the run: a flagged item links to its flare there. */
+  project: string | undefined;
 }
 
-function ItemRow({ item }: ItemRowProps): React.ReactNode {
+function ItemRow({ item, project }: ItemRowProps): React.ReactNode {
   return (
     <li className={item.state === "fixed" ? "ritem ritem-done" : "ritem"}>
       <span className="ritem-sev">
@@ -157,6 +162,17 @@ function ItemRow({ item }: ItemRowProps): React.ReactNode {
         <p className="ritem-title">{item.title}</p>
         {item.target === undefined ? null : <p className="ritem-sub">{item.target}</p>}
         {item.key === undefined ? null : <p className="ritem-key">{`key ${item.key}`}</p>}
+        {item.flare !== true ? null : (
+          <p className="ritem-flare">
+            <Chip color="late">flare</Chip>
+            {item.key === undefined || project === undefined ? null : (
+              <>
+                {" "}
+                <Link to={href({ to: "flare", ws: project, key: item.key })}>Open the flare</Link>
+              </>
+            )}
+          </p>
+        )}
         {item.detail === undefined ? null : (
           <Fold summary="Detail">
             <p className="ritem-detail">{item.detail}</p>
@@ -177,10 +193,12 @@ function ItemRow({ item }: ItemRowProps): React.ReactNode {
 
 interface ItemsProps {
   items: readonly ResultItem[];
+  /** The workspace of the run, so a flagged item can link to its flare. */
+  project?: string;
 }
 
 /** The items by group, the worst first in each; the items without a group last. */
-export function Items({ items }: ItemsProps): React.ReactNode {
+export function Items({ items, project }: ItemsProps): React.ReactNode {
   const groups = groupItems(items);
   const isNamed = groups.some((group) => group.name !== null);
   return (
@@ -190,7 +208,7 @@ export function Items({ items }: ItemsProps): React.ReactNode {
           {isNamed ? <h3 className="rgroup-h">{group.name ?? "Other items"}</h3> : null}
           <ul className="rows">
             {group.items.map((item, index) => (
-              <ItemRow key={`${index}`} item={item} />
+              <ItemRow key={`${index}`} item={item} project={project} />
             ))}
           </ul>
         </div>
@@ -266,7 +284,7 @@ export function ResultPanel({ project, row, result, canWrite, nextRun, canRunNow
 
       {result.items.length === 0 ? null : (
         <Section title="What it found" aside={<span className="text-muted">{itemsText(result.items)}</span>}>
-          <Items items={result.items} />
+          <Items items={result.items} project={project} />
         </Section>
       )}
 

@@ -164,7 +164,9 @@ const WRONG_HOST_SKIPS: ReadonlySet<string> = new Set(["other-host", "no-workdir
  * positionals, then every flag in the order given, `--on` left out and
  * `--project` set to the project resolved here (the other host has no
  * cwd to find it from). `set` replaces or adds flags. A positional that
- * looks like a flag goes after `--`.
+ * starts with `-` goes after `--`. A flag value that starts with `-` goes
+ * as `--flag=value`: the CLI looks for `-h` and `--help` before it parses
+ * the line, so `--note -h` would print the help and do nothing (0.111.0).
  */
 export function verbArgv(args: ParsedArgs, project: string, set: Readonly<Record<string, string>> = {}): string[] {
   const values: Record<string, readonly string[] | true> = {};
@@ -174,8 +176,8 @@ export function verbArgv(args: ParsedArgs, project: string, set: Readonly<Record
   }
   values.project = [project];
   for (const [name, value] of Object.entries(set)) values[name] = [value];
-  const flags = Object.entries(values).flatMap(([name, value]) => (value === true ? [`--${name}`] : value.flatMap((one) => [`--${name}`, one])));
-  const isFlagLike = args.positional.some((word) => word.startsWith("--"));
+  const flags = Object.entries(values).flatMap(([name, value]) => (value === true ? [`--${name}`] : value.flatMap((one) => (one.startsWith("-") ? [`--${name}=${one}`] : [`--${name}`, one]))));
+  const isFlagLike = args.positional.some((word) => word.startsWith("-"));
   return isFlagLike ? ["run", ...flags, "--", ...args.positional] : ["run", ...args.positional, ...flags];
 }
 
@@ -195,19 +197,20 @@ function forwardedWho(): string {
  * streamed here, its exit code passed through. The host applies every gate
  * itself. Undefined when there is no `--on`, or it names this host: then the
  * verb runs here. Refused inside a run: ssh would drop DARIUS_RUN, and the
- * other host would not know it is a run's call.
+ * other host would not know it is a run's call. `head` is the command word,
+ * `run` unless a verb of another command forwards itself.
  */
-export function forwardOn(args: ParsedArgs, project: string, verb: string): number | undefined {
+export function forwardOn(args: ParsedArgs, project: string, verb: string, head = "run"): number | undefined {
   const on = stringFlag(args, "on");
   if (on === undefined) return undefined;
   if (isSet("DARIUS_RUN") || isSet("DARIUS_RUN_POLICY")) {
-    const reason = `run ${verb} --on is for a person; a run darius started does not reach other hosts`;
+    const reason = `${head} ${verb} --on is for a person; a run darius started does not reach other hosts`;
     if (args.json) console.log(JSON.stringify({ ok: false, error: reason }));
     else console.log(`! ${reason}`);
     return EXIT_FAILED;
   }
   if (on === hostId()) return undefined;
-  return sshDarius(sshProgram(), on, verbArgv(args, project, { who: stringFlag(args, "who") ?? forwardedWho() }));
+  return sshDarius(sshProgram(), on, [head, ...verbArgv(args, project, { who: stringFlag(args, "who") ?? forwardedWho() }).slice(1)]);
 }
 
 /**
@@ -341,6 +344,12 @@ export async function runResume(args: ParsedArgs): Promise<number> {
   return byHandExitCode(report);
 }
 
+/** What a caller of runFollowUp may add. */
+export interface FollowUpHooks {
+  onStarted?: (run: string) => void;
+  print?: (line: string) => void;
+}
+
 /** `--approve N` values: whole numbers from 1. */
 function approveFlags(args: ParsedArgs): number[] {
   return (args.repeated.approve ?? []).map((raw) => {
@@ -366,8 +375,12 @@ function approveFlags(args: ParsedArgs): number[] {
  * `needs-decision` item with that key; the run carries out exactly those.
  * Right after the run starts, stderr gets one line, `darius run follow-up:
  * started run <id> on <host>`: the web page waits for it (src/web/action-api.ts).
+ *
+ * `hooks` serve a verb that starts a follow-up for its own reason (`flare
+ * answer --follow-up`, 0.107.0): `onStarted` runs right after that line,
+ * before the run works, and `print` takes the report instead of stdout.
  */
-export async function runFollowUp(args: ParsedArgs): Promise<number> {
+export async function runFollowUp(args: ParsedArgs, hooks: FollowUpHooks = {}): Promise<number> {
   // A run must never grant itself lines: the operator starts a follow-up, not a session darius started.
   const inRun = process.env.DARIUS_RUN ?? process.env.DARIUS_RUN_POLICY;
   if (inRun !== undefined && inRun !== "") return refuseResume(args, args.positional[1] ?? "", "run follow-up is for a person; a run darius started cannot start one");
@@ -404,6 +417,7 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
     followUp,
     onStarted: (run) => {
       console.error(`${STARTED_PREFIX}${run} on ${hostId()}`);
+      hooks.onStarted?.(run);
     },
   };
   if (isDryRun && !args.json) {
@@ -412,7 +426,9 @@ export async function runFollowUp(args: ParsedArgs): Promise<number> {
     if (plan.items.length > 0) console.log(`approved item(s): ${plan.items.join(", ")}`);
   }
   const { report, cfg } = await runDue(options);
-  await deliverReport(report, { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" });
+  const target: Parameters<typeof deliverReport>[1] = { webhook: cfg?.notify.webhook ?? "", isJson: args.json, scope: "all" };
+  if (hooks.print !== undefined) target.print = hooks.print;
+  await deliverReport(report, target);
   await alertBatch(report, "run follow-up");
   for (const failure of report.errors) console.error(`darius run follow-up: ${failure.project}: ${failure.error}`);
   const entry = report.projects[0]?.rituals[0];

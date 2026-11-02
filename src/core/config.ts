@@ -165,7 +165,7 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/;
 
 /** Loopback, or inside the tailnet range 100.64.0.0/10 (docs/concept.md, "Security"). */
-function isLoopbackOrTailnet(host: string): boolean {
+export function isLoopbackOrTailnet(host: string): boolean {
   if (LOOPBACK_HOSTS.has(host)) return true;
   const match = IPV4.exec(host);
   if (match === null) return false;

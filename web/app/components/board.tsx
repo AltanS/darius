@@ -11,6 +11,7 @@ import { AckButton } from "./ack.tsx";
 import { KindWord } from "./chip.tsx";
 import { CheckNow } from "./check-now.tsx";
 import { Command } from "./command.tsx";
+import { FlareActions, Flame, SeverityTag } from "./flares.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Markdown } from "./markdown.tsx";
 import { heldKey } from "../lib/ask.ts";
@@ -217,19 +218,25 @@ interface CardViewProps {
  */
 export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
   const edge = card.edge === null ? "card-plain" : `card-accent edge-${card.edge}`;
-  const hasBody = card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null || (card.check !== null && canWrite && card.check.blocked === null);
+  const hasBody = card.flare !== null || card.questions.length > 0 || card.ask !== null || card.report !== null || card.error !== null || card.kind === "held" || card.ack !== null || (card.check !== null && canWrite && card.check.blocked === null);
   return (
     <article id={card.id} className={`card hcard ${edge}`}>
       <div className="hc-head">
         <div className="hc-main">
-          <h3 className={card.item === null ? "card-title" : "card-title has-kind-flex"}>
+          <h3 className={card.item === null && card.flare === null ? "card-title" : "card-title has-kind-flex"}>
             {card.item === null ? null : <KindIcon kind={card.item} titled />}
+            {card.flare === null ? null : <Flame />}
             <Link to={card.href}>{card.title}</Link>
           </h3>
           <p className="card-meta rw-line">
             {card.item === null ? null : (
               <span className="rw-seg rw-chips">
                 <KindWord kind={card.item} manual={card.manual} />
+              </span>
+            )}
+            {card.flare === null ? null : (
+              <span className="rw-seg rw-chips">
+                <SeverityTag row={card.flare} />
               </span>
             )}
             <span className="rw-seg rw-meta">{card.meta.join(", ")}</span>
@@ -243,6 +250,7 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
       </div>
       {hasBody ? (
         <div className="hc-body">
+          {card.flare === null ? null : <FlareActions row={card.flare} canWrite={canWrite} />}
           {card.kind === "held" && card.questions.length === 0 ? <p className="empty">The run is held without a question. Resume or close it from the command line.</p> : null}
           {card.questions.length === 0 ? null : canWrite && card.held !== null ? (
             <HeldForm key={heldKey(card.held.row)} project={card.held.project} row={card.held.row} />

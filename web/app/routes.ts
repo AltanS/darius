@@ -12,6 +12,9 @@ export default [
   route("w/:ws/rituals", "routes/rituals.tsx", { id: "rituals-workspace" }),
   route("findings", "routes/findings.tsx", { id: "findings-all" }),
   route("w/:ws/findings", "routes/findings.tsx", { id: "findings-workspace" }),
+  // Flares (0.112.0): the list for all workspaces and for one, and the detail of one flare (project and key).
+  route("flares", "routes/flares.tsx", { id: "flares-all" }),
+  route("w/:ws/flares", "routes/flares.tsx", { id: "flares-workspace" }),
   route("milestones", "routes/milestones.tsx", { id: "milestones-all" }),
   route("w/:ws/milestones", "routes/milestones.tsx", { id: "milestones-workspace" }),
   // The seventh place (0.94.0): what happened, for all workspaces and for one. The query holds kind, by and days.
@@ -21,6 +24,7 @@ export default [
   route("w/:ws/runs", "routes/runs.tsx", { id: "runs-workspace" }),
   route("w/:ws/rituals/:slug", "routes/ritual.tsx"),
   route("w/:ws/vigils/:slug", "routes/vigil.tsx"),
+  route("w/:ws/flares/:key", "routes/flare.tsx"),
   route("w/:ws/runs/:run", "routes/run.tsx"),
   route("w/:ws/milestones/:milestone", "routes/milestone.tsx"),
   // Settings is a layout with tabs: General, Notifications, Backups, About.

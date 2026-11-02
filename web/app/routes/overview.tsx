@@ -28,14 +28,17 @@ const RECENT_PHONE = 3;
  * One loader for two addresses: `/all` (all workspaces) and `/w/:ws` (one
  * workspace). `/` redirects to one of them (routes/index.tsx).
  */
-export function loader({ context, request, params }: Route.LoaderArgs) {
+export async function loader({ context, request, params }: Route.LoaderArgs) {
   const status = statusOf(context);
   const { scope, projects } = scopeOfRequest(status, request, params.ws);
   const read = (project: string, run: string) => context.run(project, run);
   const only = scope.workspace === null ? undefined : projects[0];
   // The ledger events and the starts of the last day: they are the receipts of Done lately.
   const since = new Date(Date.parse(status.generatedAt) - DAY).toISOString();
-  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace), canWrite: context.canWrite };
+  // The lit flares are cards in Needs you (0.112.0). The status holds their count, so a scope with none reads no ledger for them.
+  const hasLitFlares = projects.some((project) => project.flares.lit > 0);
+  const flares = hasLitFlares ? await context.flares() : [];
+  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace), canWrite: context.canWrite, flares };
   return {
     workspace: scope.workspace,
     home: homeView(status, read, scope, feed),

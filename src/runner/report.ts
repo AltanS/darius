@@ -265,7 +265,10 @@ async function postWebhook(webhook: string, text: string): Promise<void> {
  * with `--json` stdout carries exactly one JSON object). Sets `report.notify`
  * and prints the JSON object last, so the JSON records where the text went.
  */
-export async function deliverReport(report: BatchReport, target: { webhook: string; isJson: boolean; scope: ReportScope }): Promise<void> {
+export async function deliverReport(report: BatchReport, target: { webhook: string; isJson: boolean; scope: ReportScope; print?: (line: string) => void }): Promise<void> {
+  const print = target.print ?? ((line: string): void => {
+    console.log(line);
+  });
   const lines = formatReport(report, target.scope);
   if (lines.length === 0) report.notify = "none";
   else if (target.webhook !== "" && !report.dryRun) {
@@ -280,9 +283,9 @@ export async function deliverReport(report: BatchReport, target: { webhook: stri
   } else report.notify = "stdout";
 
   if (target.isJson) {
-    console.log(JSON.stringify(report));
+    print(JSON.stringify(report));
     return;
   }
-  if (report.notify === "stdout") for (const line of lines) console.log(line);
-  if (report.notify === "none") console.log("· run-due: nothing due");
+  if (report.notify === "stdout") for (const line of lines) print(line);
+  if (report.notify === "none") print("· run-due: nothing due");
 }

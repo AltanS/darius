@@ -91,6 +91,8 @@ interface Built {
   text: string;
   tone: ActivityTone;
   detail?: string[];
+  /** What a flare entry is called: the title its report gave, else its key. */
+  subject?: string;
 }
 
 /** `built` with its detail lines, or as it is when there are none. */
@@ -231,6 +233,73 @@ function rescheduledEntry(line: LedgerLine): Built {
   return { kind: "ritual-rescheduled", text: `Ritual rescheduled by ${line.who}${due === null ? "" : ` to ${shown(due)}`}`, tone: "idle" };
 }
 
+// --- flares (0.112.0) ----------------------------------------------------------------------
+
+/** Least to most severe; an unknown word counts as the least. */
+const SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"];
+
+function severityRank(value: JsonValue | undefined): number {
+  return Math.max(0, SEVERITY_ORDER.indexOf(text(value) ?? ""));
+}
+
+/**
+ * What the walk knows of one flare key. A report of a lit flare is not news;
+ * a report of a closed flare is news only at a higher severity; a `gone` or an
+ * unknown key takes any report. A flare that a run reported has no
+ * `flare.lit` line, so its first line here is the operator's.
+ */
+interface FlareTrack {
+  status: "lit" | "closed" | "gone";
+  rank: number;
+  title: string;
+}
+
+function litEntry(line: LedgerLine, key: string, known: FlareTrack | undefined): Built | null {
+  const rank = severityRank(line.severity);
+  const title = text(line.title) ?? known?.title ?? key;
+  const severity = text(line.severity) ?? "info";
+  const target = text(line.target);
+  const source = text(line.source);
+  const detail = [...(target === null ? [] : [`Target: ${shown(target)}`]), ...(source === null ? [] : [`Source: ${shown(source)}`])];
+  if (known === undefined || known.status === "gone") return detailed({ kind: "flare-lit", text: `Flare lit by ${line.who}: ${shown(title)}, ${severity}`, tone: "wait", subject: title }, detail);
+  if (rank <= known.rank) return null;
+  const again = known.status === "closed" ? "lit again" : "raised";
+  return detailed({ kind: "flare-lit", text: `Flare ${again} at ${severity} by ${line.who}`, tone: "wait", subject: title }, detail);
+}
+
+/** The entry of a `flare.*` ledger line, and the new state of its key; null when the line is not news or not valid. */
+function flareEntry(line: LedgerLine, tracks: Map<string, FlareTrack>): Built | null {
+  const key = text(line.key);
+  if (key === null) return null;
+  const known = tracks.get(key);
+  const title = text(line.title) ?? known?.title ?? key;
+  const note = text(line.note);
+  const tail = note === null ? "" : `: ${shown(note)}`;
+  const rank = severityRank(line.severity);
+  if (line.type === "flare.lit") {
+    const built = litEntry(line, key, known);
+    // A report that is not news changes nothing: a closed flare stays closed, a lit one keeps its severity.
+    if (built !== null) tracks.set(key, { status: "lit", rank, title });
+    return built;
+  }
+  if (line.type === "flare.answered") {
+    tracks.set(key, { status: "closed", rank, title });
+    return { kind: "flare-answered", text: `Flare answered by ${line.who}${tail}`, tone: "ok", subject: title };
+  }
+  if (line.type === "flare.accepted") {
+    tracks.set(key, { status: "closed", rank, title });
+    return { kind: "flare-accepted", text: `Flare accepted by ${line.who}${tail}`, tone: "idle", subject: title };
+  }
+  if (line.type === "flare.cleared") {
+    tracks.set(key, { status: "gone", rank: 0, title });
+    return { kind: "flare-cleared", text: `Flare cleared by ${line.who}${tail}`, tone: "ok", subject: title };
+  }
+  tracks.set(key, { status: "lit", rank: known?.rank ?? 0, title });
+  return { kind: "flare-reopened", text: `Flare reopened by ${line.who}${tail}`, tone: "wait", subject: title };
+}
+
+const FLARE_LINES: ReadonlySet<string> = new Set(["flare.lit", "flare.answered", "flare.accepted", "flare.cleared", "flare.reopened"]);
+
 // --- the list -----------------------------------------------------------------------------
 
 function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems: ReadonlyMap<string, string>): ActivityEntry | null {
@@ -244,6 +313,12 @@ function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems:
     if (built.detail !== undefined) made.detail = built.detail;
     return made;
   };
+  if (built.kind.startsWith("flare-")) {
+    const key = text(line.key);
+    if (key === null) return null;
+    links.flare = key;
+    return entry({ type: "flare", id: key, title: built.subject ?? key });
+  }
   if (built.kind.startsWith("finding-")) {
     const key = text(line.key);
     if (built.kind === "finding-reset") return entry(subject === null ? { type: "finding", id: "", title: "All findings" } : { type: "ritual", id: subject.slug, title: title("ritual", subject.slug) });
@@ -322,6 +397,7 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
   }
   const entries: ActivityEntry[] = [];
   const evidence = new Map<string, LedgerLine[]>();
+  const flares = new Map<string, FlareTrack>();
   for (const line of lines) {
     if (line.project !== project) continue;
     if (line.type === "evidence" && line.item !== undefined) {
@@ -330,7 +406,7 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
     }
     const folded = line.type === "vigil.swept" && line.item !== undefined ? (evidence.get(line.item) ?? []) : [];
     if (line.type === "vigil.swept" && line.item !== undefined) evidence.delete(line.item);
-    const built = build(line, folded);
+    const built = FLARE_LINES.has(line.type) ? flareEntry(line, flares) : build(line, folded);
     if (built === null) continue;
     const entry = entryOf(line, built, input, runItems);
     if (entry !== null && matches(line, entry, input)) entries.push(entry);

@@ -14,7 +14,7 @@ import { readFileSync, statSync } from "node:fs";
 import { errorMessage } from "../runtime.ts";
 
 /** The group and other permission bits. A credentials file must have none of them set. */
-const GROUP_OTHER_BITS = 0o077;
+export const GROUP_OTHER_BITS = 0o077;
 const SECTION_HEADER = /^\[([A-Za-z0-9_-]+)\]$/;
 const KEY_VALUE = /^([A-Za-z0-9_]+)\s*=\s*(.*)$/;
 

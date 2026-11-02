@@ -11,7 +11,7 @@
  */
 
 import type { JsonValue } from "../../src/core/model.ts";
-import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, FlareCounts, FlareDelivery, FlareDetail, FlareRow, FlareStep, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 
@@ -202,6 +202,101 @@ function demoFindings(now: number): FindingRow[] {
   ];
 }
 
+// --- flares (0.112.0) --------------------------------------------------------------------
+
+const LONG_FLARE_KEY = "dependency-audit:lodash-template-injection:packages/storefront-checkout/node_modules/lodash/template.js:advisory-demo-2026-0042";
+
+const LONG_FLARE_TITLE =
+  "A dependency of the checkout bundle has a known template injection flaw, and the fixed release changes the way the cart totals are rendered for orders with gift cards and several shipping addresses";
+
+/** One flare of the demo; every field a real row has, with times relative to `now`. */
+function flare(now: number, row: Pick<FlareRow, "project" | "key" | "title" | "severity" | "status" | "source"> & Partial<FlareRow>, firstAgo: number, lastAgo: number): FlareRow {
+  const step = (kind: FlareStep["kind"], at: number, extra: Partial<FlareStep> = {}): FlareStep => ({ at: ago(now, at), kind, severity: row.severity, line: `01DEMOLINE${String(at).padStart(16, "0")}`, ...extra });
+  return {
+    firstSeen: { at: ago(now, firstAgo), line: "01DEMOLINEFIRST" },
+    lastSeen: { at: ago(now, lastAgo), line: "01DEMOLINELAST" },
+    reports: 1,
+    stillReported: false,
+    history: [step("lit", firstAgo)],
+    ...row,
+  };
+}
+
+function demoFlares(now: number): FlareRow[] {
+  const shop = "demo-shop";
+  const closedAt = 6 * 60 * MINUTE;
+  return [
+    flare(now, { project: shop, key: LONG_FLARE_KEY, title: LONG_FLARE_TITLE, severity: "critical", status: "lit", source: "ci:nightly", target: "packages/storefront-checkout/package.json", reports: 9, deliver: ["push", "email"], bodySha: "demo" }, 9 * DAY, 3 * 60 * MINUTE),
+    flare(now, { project: shop, key: "checkout-tls-cert-expires", title: "Checkout TLS certificate expires in 6 days", severity: "high", status: "lit", source: "ritual:site-report", ritual: "site-report", run: "01DEMOLASTsitereport000", target: "shop.example.com", reports: 3, bodySha: "demo" }, 2 * DAY, 5 * 60 * MINUTE),
+    flare(now, { project: shop, key: "vigil:cache-flip", title: "Cache flip is stable", severity: "medium", status: "lit", source: "vigil:cache-flip", target: "check broken, step 1", reports: 4, deliver: ["push"] }, 4 * DAY, 5 * 60 * MINUTE),
+    flare(now, {
+      project: shop,
+      key: "image-weight-budget",
+      title: "Product images are 40 percent over the weight budget",
+      severity: "medium",
+      status: "answered",
+      source: "ritual:link-check",
+      ritual: "link-check",
+      run: "01DEMOLASTlinkcheck0000",
+      reports: 5,
+      stillReported: true,
+      answered: { at: ago(now, 2 * DAY), who: "web:demo", note: "Resize on upload from the next release.", severity: "medium", followUpRun: "01DEMOFOLLOWUP00000000" },
+      history: [
+        { at: ago(now, 6 * DAY), kind: "lit", severity: "medium", line: "01DEMOL1", run: "01DEMOLASTlinkcheck0000" },
+        { at: ago(now, 2 * DAY), kind: "answered", severity: "medium", line: "01DEMOL2", who: "web:demo", note: "Resize on upload from the next release." },
+        { at: ago(now, 5 * 60 * MINUTE), kind: "report", severity: "medium", line: "01DEMOL3", run: "01DEMOLASTlinkcheck0000" },
+      ],
+    }, 6 * DAY, 5 * 60 * MINUTE),
+    flare(now, {
+      project: shop,
+      key: "legacy-tls-1-0-endpoint",
+      title: "The old webhook endpoint still accepts TLS 1.0",
+      severity: "low",
+      status: "accepted",
+      source: "script",
+      target: "hooks-old.example.com",
+      reports: 2,
+      accepted: { at: ago(now, 3 * DAY), who: "web:demo", severity: "low", note: "The partner retires it on 1 December." },
+      history: [
+        { at: ago(now, 12 * DAY), kind: "lit", severity: "low", line: "01DEMOA1" },
+        { at: ago(now, 3 * DAY), kind: "accepted", severity: "low", line: "01DEMOA2", who: "web:demo", note: "The partner retires it on 1 December." },
+      ],
+    }, 12 * DAY, closedAt),
+    flare(now, {
+      project: shop,
+      key: "robots-txt-blocks-sitemap",
+      title: "robots.txt blocks the sitemap",
+      severity: "high",
+      status: "gone",
+      source: "ritual:site-report",
+      ritual: "site-report",
+      run: "01DEMOLASTsitereport000",
+      reports: 2,
+      history: [
+        { at: ago(now, 10 * DAY), kind: "lit", severity: "high", line: "01DEMOG1", run: "01DEMOLASTsitereport000" },
+        { at: ago(now, 1 * DAY), kind: "gone", severity: "high", line: "01DEMOG2" },
+      ],
+    }, 10 * DAY, 2 * DAY),
+    flare(now, { project: "atlas-docs", key: "install-guide-404", title: "The install guide returns 404", severity: "low", status: "lit", source: "ritual:link-audit", ritual: "link-audit", run: "01DEMOLASTlinkaudit0000", target: "/guides/install", reports: 1 }, 3 * 60 * MINUTE, 3 * 60 * MINUTE),
+  ];
+}
+
+const DEMO_FLARE_BODY = "The advisory affects the template helper in the cart summary.\n\n- The fixed release is 4.17.22.\n- The upgrade changes how totals are rounded, so the price tests must run first.\n\nSee `packages/storefront-checkout/package.json`.";
+
+/** The detail of a demo flare: its body when it has one, and the delivery of its newest notice. */
+function demoFlareDetail(now: number, name: string, key: string): FlareDetail | null {
+  const row = demoFlares(now).find((one) => one.project === name && one.key === key);
+  if (row === undefined) return null;
+  const body = row.bodySha === undefined ? null : DEMO_FLARE_BODY;
+  const at = ago(now, 3 * 60 * MINUTE);
+  const delivery: FlareDetail["delivery"] = (row.deliver ?? ["push"]).map((channel): FlareDelivery => (channel === "email" ? { channel: "email", state: "failed", host: "demo", at, tries: 1, reason: "not set up on host" } : { channel: "push", state: "sent", host: "demo", at, tries: 0 }));
+  return { row, body, blocks: body === null ? null : parseMarkdown(body), delivery };
+}
+
+function litFlares(now: number, name: string): FlareCounts {
+  return { lit: demoFlares(now).filter((row) => row.project === name && row.status === "lit").length };
+}
+
 function findingCounts(rows: readonly FindingRow[]): FindingCounts {
   const needsYou = rows.filter((row) => row.status === "needs-you").length;
   return { needsYou, open: needsYou + rows.filter((row) => row.status === "open").length };
@@ -261,6 +356,7 @@ function project(now: number): ProjectStatus {
     milestones: milestones(),
     milestonesArchived: 41,
     findings: findingCounts(demoFindings(now).filter((row) => row.project === "demo-shop")),
+    flares: litFlares(now, "demo-shop"),
   };
 }
 
@@ -288,6 +384,7 @@ function atlas(now: number): ProjectStatus {
     milestones: [],
     milestonesArchived: 0,
     findings: findingCounts(demoFindings(now).filter((row) => row.project === "atlas-docs")),
+    flares: litFlares(now, "atlas-docs"),
   };
 }
 
@@ -307,6 +404,7 @@ function fieldNotes(now: number): ProjectStatus {
     milestones: [],
     milestonesArchived: 0,
     findings: { needsYou: 0, open: 0 },
+    flares: { lit: 0 },
   };
 }
 
@@ -570,7 +668,7 @@ function isText(value: JsonValue | undefined): value is string {
 }
 
 /** The paths the demo answers instead of the real writers. */
-export const DEMO_WRITE_PATHS: ReadonlySet<string> = new Set(["/api/vigil/check", "/api/run/ack", "/api/run/ack-earlier", "/api/run/answer", "/api/run/follow-up", "/api/finding/close", "/api/finding/reopen"]);
+export const DEMO_WRITE_PATHS: ReadonlySet<string> = new Set(["/api/vigil/check", "/api/run/ack", "/api/run/ack-earlier", "/api/run/answer", "/api/run/follow-up", "/api/finding/close", "/api/finding/reopen", "/api/flare/answer", "/api/flare/accept"]);
 
 /** One demo answer: the HTTP status and the JSON body. */
 export interface DemoReply {
@@ -580,6 +678,16 @@ export interface DemoReply {
 
 function pendingReply(status: number, start: PendingStart): DemoReply {
   return { status, body: { ok: true, pending: true, host: start.host, id: start.id, at: start.at, message: pendingMessage(start.host) } };
+}
+
+/** The sentence the demo gives for a follow-up it refuses: a flare of atlas-docs has no ritual host that is ready. */
+export const DEMO_FOLLOW_UP_REFUSAL = "the follow-up did not start: demo has no ready host for the ritual of this flare";
+
+/** A flare follow-up: atlas-docs refuses it, so the refusal line can be seen; any other project starts it (pending, then started after 45 s). */
+function flareFollowUp(projectName: string, key: string, starts: DemoStarts): DemoReply {
+  if (projectName === "atlas-docs") return { status: 409, body: { ok: false, error: DEMO_FOLLOW_UP_REFUSAL } };
+  const row = demoFlares(Date.now()).find((one) => one.project === projectName && one.key === key);
+  return pendingReply(202, starts.ask("follow-up", projectName, row?.ritual ?? "site-report", row?.run));
 }
 
 /**
@@ -596,6 +704,7 @@ export function demoWrite(path: string, bodyText: string, starts: DemoStarts): D
   const body = isRecord(parsed) ? parsed : {};
   const projectName = isText(body.project) ? body.project : "demo-shop";
   const runId = isText(body.run) ? body.run : "";
+  if (path === "/api/flare/answer" && body.followUp === true) return flareFollowUp(projectName, isText(body.key) ? body.key : "", starts);
   if (path === "/api/vigil/check") return pendingReply(202, starts.ask("vigil-check", projectName, isText(body.slug) ? body.slug : "demo-vigil"));
   if (path === "/api/run/follow-up") return pendingReply(202, starts.ask("follow-up", projectName, ritualOfRun(projectName, runId), runId));
   if (path === "/api/run/answer") return pendingReply(200, starts.ask("resume", projectName, ritualOfRun(projectName, runId), runId));
@@ -618,6 +727,9 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     system: () => demoSystem(Date.now()),
     backups: () => demoBackups(Date.now()),
     findings: () => Promise.resolve(demoFindings(Date.now())),
+    flares: () => Promise.resolve(demoFlares(Date.now())),
+    flare: (name, key) => demoFlareDetail(Date.now(), name, key),
+    emailSetUp: () => false,
     activity: () => [],
     pending: (name) => starts.list(name),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),

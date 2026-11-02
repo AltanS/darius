@@ -31,6 +31,8 @@ its whole tracker tree in the darius store, and `darius onboard` moves a repo th
   first real batch". You close it with a verdict.
 - **Held question**: a run stops when it reaches something the ritual's `hold` list names. It asks
   you. You answer in the terminal UI, and the run goes on.
+- **Flare**: a problem that needs you, such as a vulnerable dependency. A run or a script lights it by
+  key. It stays open until you answer it, accept it or it goes away.
 - **Policy**: the limits of a ritual. It sets the mode (`off`, `report` or `act`), the commands the
   run may use (`may`), and the patterns that stop it (`hold`).
 - **Store**: darius's own state. It lives outside your repo, in `~/.local/share/darius`.
@@ -102,7 +104,7 @@ The `/darius-*` skills and the `darius` command do the work that the old `tracke
 ~/.claude/
 ├── skills/
 │   ├── darius/SKILL.md             # teaches a session the darius commands
-│   └── darius-work/SKILL.md        # one of 11 procedure skills
+│   └── darius-work/SKILL.md        # one of 12 procedure skills
 ```
 
 ### A normal day
@@ -160,7 +162,7 @@ store between hosts (steps 2 and 3 of [Install](#install)).
 - [Quick start](#quick-start-one-host-no-bucket)
 - [Install](#install), [Update](#update), [NixOS and Nix](#nixos-and-nix)
 - [Link a repo](#link-a-repo), [Move a repo's tracker into the store](#move-a-repos-tracker-into-the-store)
-- [Milestones, specs and tasks](#milestones-specs-and-tasks), [Vigils](#vigils), [Runs](#runs), [Worktrees](#worktrees), [Exit codes](#exit-codes)
+- [Milestones, specs and tasks](#milestones-specs-and-tasks), [Vigils](#vigils), [Runs](#runs), [Flares](#flares), [Worktrees](#worktrees), [Exit codes](#exit-codes)
 - [Commands](#commands)
 - [Develop](#develop)
 - More: [Backups](docs/backups.md), [Marker reference](docs/marker.md), [Design](docs/concept.md)
@@ -515,7 +517,8 @@ darius vigil set-body cache-soak --stdin < body.md
 darius vigil close cache-soak --verdict held
 ```
 
-`--due` waits for a date. `--until` waits for an event that you name. The body has a
+`--due` waits for a date. `--in 7d` (or `2w`, `1m`) is a due date counted from today. darius stores the
+date, not the phrase. `--due` and `--in` exclude each other. `--until` waits for an event that you name. The body has a
 `## Verification Checklist` with items that carry a `Command:`. `set-body --stdin` replaces the body
 and keeps the header.
 
@@ -529,12 +532,139 @@ The daily sweep runs the Commands of every vigil that is due. What it reports:
 - `awaiting-manual`: the checks passed but a manual item is still open.
 - `skipped`: nothing ran. The vigil is heavy, has no Command, or is not due.
 
+### A vigil that lights a flare
+
+"Check this in 7 days. If it holds, close it. If it fails, tell me."
+
+```bash
+darius vigil add xyz --in 7d --flare high --stdin < body.md
+darius vigil add xyz --in 7d --flare high --flare-deliver push,email --stdin < body.md
+darius vigil set xyz --flare medium        # change it; --flare-deliver none means the app only
+darius vigil set xyz --no-flare            # remove both keys
+```
+
+- A sweep that reads `failed` lights the flare `vigil:<slug>` with the vigil title, your severity, and
+  a target that names the kind of failure and the failing step. The vigil stays armed, so the next
+  daily sweep checks again. A repeat at the same severity is one more report and sends no notice.
+- A sweep that closes the vigil as `held` clears the flare. So does `vigil close --verdict held`.
+  `vigil close --verdict failed` leaves the flare open.
+- `flare accept` on that flare also closes the vigil as `failed`: nothing is left to wait for. If the
+  close fails, the accept stays on record and darius says so on stderr. `flare answer` leaves the
+  vigil armed. It keeps watching, and a passing check closes it and clears the flare.
+- A sweep that reports `skipped`, `pending`, `finding` or `awaiting-manual`, a dry run, and a classify
+  run light nothing. The sweep sends the notice of a flare it lit before it exits, for its own project
+  only. A failed send never fails the sweep.
+- `--flare` needs a date (`--due` or `--in`) or a `--gate-command`. A vigil with only `--until` never
+  reads as failed, so darius refuses the flag and says why.
+- The check must be a Command. A check that needs judgment stays a ritual.
+- Two edges. `flare clear` on a vigil that is still armed lights the flare again at the next sweep.
+  `flare reopen` after an accept leaves a flare that only a person can end, because the vigil is closed.
+- **Update every host before a vigil uses `flare`.** An older host refuses a vigil item that holds an
+  unknown key. Only vigils that the store owns take these flags; the legacy route refuses them.
+
 ## Runs
 
 `darius run start <ritual>` and `darius run-due --unattended` start a headless `claude -p` session,
 so `claude` must be on `PATH`. Before the first unattended run on a host, prove that the harness
 blocks what the policy says it blocks with `darius harness check` (exit 0 passed, 1 failed, 3
 inconclusive).
+
+## Flares
+
+A flare is a problem that needs you. The ritual does the check, and the flare is only the result.
+A flare has no schedule and does no work. It is kept by project and key, so a problem that is reported
+again stays one flare.
+
+A script or a CI job lights one with the CLI:
+
+```bash
+darius flare light dep/cve-2026-0001 --title "Vulnerable dependency" --severity high \
+  --target web/package.json --source ci:nightly --deliver push,email
+darius flare list                 # the lit flares; --all or --status answered|accepted|gone for more
+darius flare show dep/cve-2026-0001
+darius flare answer dep/cve-2026-0001 --note "Update it this week"
+darius flare accept dep/cve-2026-0001 --note "Not reachable from outside"
+darius flare clear dep/cve-2026-0001     # the problem is gone
+darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
+```
+
+- `light` on a lit key at the same or a lower severity exits `0` and says "already lit, seen again".
+  A higher severity raises the flare, and a report after it is gone lights it again. `--stdin` stores
+  a body. The key is one line of at most 120 characters. A longer key is refused, not cut.
+- A ritual that lights flares can set `flare_deliver = ["push", "email"]` in `.darius.toml`: `[]` means the
+  app only, and no key means `push`. A run cannot choose its channel. `darius email set` must have run on a host
+  that sends email.
+- A run lights a flare only through its result: an item with `"flare": true`, a `key` and the state
+  `needs-decision`. The state `fixed` clears it. A run cannot run the write verbs: the CLI refuses
+  them inside a run, and the gate denies them. It can run `flare list` and `flare show`.
+- An answer or an accept closes the flare at the severity it has. A later report at the same or a lower
+  severity leaves it closed. A higher severity lights it again.
+- A flare from a run goes away after two complete runs of that ritual that do not report it. A flare
+  from a script waits for `flare clear`. `flare clear` also ends a flare from a deleted ritual.
+- A vigil can light a flare when its check fails; see [A vigil that lights a flare](#a-vigil-that-lights-a-flare).
+  Accepting such a flare closes the vigil.
+- `answer --follow-up` starts a follow-up of the run that made the newest report, and carries out that
+  item's proposal. It writes the answer only when the run started. It waits for the run, and it exits
+  with the run's code. A flare from outside has no run, so it refuses that with exit `1`. On another
+  host's ritual it prints the ssh command; `--on <host>` runs the verb there.
+
+### Flares over HTTP
+
+`darius serve` has the same actions for the app and for a caller on your tailnet:
+
+```bash
+curl -s "http://host-a:4747/api/flares?project=acme&status=lit"
+curl -s "http://host-a:4747/api/flare?project=acme&key=dep/cve-2026-0001"
+curl -s http://host-a:4747/api/flare/light -H 'content-type: application/json' -d '{
+  "project": "acme", "key": "dep/cve-2026-0001", "title": "Vulnerable dependency",
+  "severity": "high", "target": "web/package.json", "source": "ci:nightly", "deliver": "push,email"
+}'
+```
+
+- Both reads answer JSON for any viewer that passes the access check. A flare's text is untrusted.
+- `POST /api/flare/light` needs a tailnet identity. A browser page of another site cannot call it. It also
+  takes `body`, which goes to the CLI on stdin. `deliver` is `push`, `email`, `push,email` or `none`. The whole
+  request is at most 4096 bytes. A local script uses the CLI: the loopback caller is refused.
+- `POST /api/flare/answer` `{project, key, note, followUp?}` and `POST /api/flare/accept` `{project, key, note?}`
+  come from the page only: they need its `Origin`. With `followUp` a follow-up that cannot start is a `409`
+  with a sentence, and the flare stays as it was.
+
+### Flares by email
+
+A host can email its flare notices through an HTTP mail API. There is no SMTP. Write the settings to a
+file that only you can read (run `umask 077` first):
+
+```json
+{
+  "url": "https://mail.example.com/v1/send",
+  "token": "your-token-here",
+  "from": "darius@example.com",
+  "to": ["you@example.com"],
+  "web_url": "https://darius.example.com"
+}
+```
+
+Then feed the file to darius on stdin, and delete it:
+
+```bash
+darius email set --stdin < email-settings.json && rm email-settings.json
+darius email status               # set up or not, the host of the url, the recipient count
+darius email test                 # sends one message
+```
+
+- Each host has its own `<config>/email.json`. darius writes it with mode 0600, and refuses a file that
+  its group or others can read. It is never synced and never in a snapshot.
+- `url` must be https, or http on loopback or the tailnet. It may not hold a user, a password or a
+  query. `web_url` is optional, and adds a link to each message.
+- darius sends `POST <url>` with `Authorization: Bearer <token>`, an `Idempotency-Key`, and the JSON
+  `{from, to, subject, text}`. Any 2xx is success. A request stops after 15 seconds, and darius tries one
+  notice at most three times.
+- A message holds the title, severity, project, target and link. It never holds a flare body or a detail.
+- Flares from before `set` send no mail. Add `since` to the JSON to choose another start.
+- The token and the addresses stay in that file: not in the store, the ledger, a log or an error.
+- A run cannot use `email set` or `email test`. It can use `email status`.
+
+To use the channel, name it: `flare light --deliver email`, or `flare_deliver = ["email"]` on a ritual.
 
 ## Cadence and the first due date
 
@@ -572,6 +702,8 @@ the full reference.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius run ack <run> [--answer N=TEXT ...] [--note TEXT]`: answer a run's questions, one `--answer` per question, or dismiss a run with no answer. The answers reach the next run of the ritual and stay until a run that read them completes.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
+- `darius flare light|list|show|answer|accept|clear|reopen`: problems that need you, kept by key. See [Flares](#flares).
+- `darius email status|set|test`: the email channel of flare notices. See [Flares by email](#flares-by-email).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.

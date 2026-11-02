@@ -81,7 +81,7 @@ Root keys:
 | `kinds` | Optional, needs `v = 3`. The kinds the darius store owns in this project. Exactly one of `["ritual"]` (the default), `["ritual", "vigil"]` or `["ritual", "vigil", "milestone"]`. |
 | `icon` | Optional, needs `v = 3` (0.70.0). The workspace icon in the web app: one emoji, or a relative path to a `.svg`, `.png` or `.webp` file in the repo. |
 
-`kinds` says which kinds the store owns in this project. `ritual` is always owned. `vigil` means the store owns this project's vigils, so `darius vigil` verbs act on the store and not on `.tracker/vigils/`. `milestone` means the store owns the whole tracker tree: milestones, specs, worklogs and the archive. Each list adds one kind to the one before, so no other list is valid, and a wrong list is a marker error.
+`kinds` says which kinds the store owns in this project. `ritual` is always owned. `vigil` means the store owns this project's vigils, so `darius vigil` verbs act on the store and not on `.tracker/vigils/`. Only then do the vigil flags `--in 7d` (a due date counted from today), `--flare <severity>`, `--flare-deliver` and `--no-flare` work; without `vigil` they exit 2 with "unknown option". `milestone` means the store owns the whole tracker tree: milestones, specs, worklogs and the archive. Each list adds one kind to the one before, so no other list is valid, and a wrong list is a marker error.
 
 An older darius refuses the unknown key `kinds`. Update every host before you commit the first marker with `kinds`. With `milestone`, `.tracker` in a checkout is a link to the store's working copy and `/.tracker` is in `.gitignore`. `darius onboard` adds the `kinds` line to a legacy repo; `darius init` writes it in a fresh one.
 
@@ -128,6 +128,7 @@ host to 0.70.0 or later before you commit the first marker with `icon`.
 | `follow_up_may` | no | Rules only a follow-up run of this ritual may use, on top of `may` (0.69.0). Same rules as `may`. A follow-up gets them in its run files; a scheduled run never does. `hold` still wins over them. Use it for the writes an approved proposal needs. |
 | `follow_up_may_extra` | no | Rules to add to the `follow_up_may` of the named policy, or of the ritual's own. |
 | `follow_up` | no | `attended` (default) or `headless` (0.69.0). How a follow-up of this ritual runs: in a herdr tab, or headless without herdr, from the CLI and from the web page. |
+| `flare_deliver` | no | The channels for the flares a run of this ritual lights (0.108.0): a list of `push` and `email`. `[]` means the app only. Absent means `["push"]`. A run cannot choose its own channel, so the marker does. `email` sends only on a host where `darius email set` has run. |
 
 `[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes`, `on_hold` and `follow_up_may`, with the same rules.
 A policy's `on_hold` applies to every ritual that names the policy.
@@ -165,9 +166,10 @@ one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked
 
 Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`, and 0.57.0
 or later before it uses `args` or a `"""` string, 0.66.0 or later before it uses `on_hold`, and
-0.69.0 or later before it uses `follow_up_may`, `follow_up_may_extra` or `follow_up`:
+0.69.0 or later before it uses `follow_up_may`, `follow_up_may_extra` or `follow_up`, and 0.108.0
+or later before it uses `flare_deliver`:
 an older host refuses an unknown ritual key, and it cannot read a mirrored item that has `args`,
-`on_hold`, `follow_up_may`, `follow_up` or a note with a newline.
+`on_hold`, `follow_up_may`, `follow_up`, `flare_deliver` or a note with a newline.
 
 ## Factor shared rules
 
