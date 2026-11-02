@@ -14,35 +14,45 @@
  *   re-binds of /run/current-system, /run/wrappers, /run/opengl-driver,
  *     /run/booted-system when present (a symlink stays a symlink)
  *   --tmpfs /var/tmp                        terminal and browser sockets live there
+ *   --dir /var/tmp/cache, /var/tmp/npm      XDG_CACHE_HOME and npm's cache, per run
  *   --perms 0700 --tmpfs $XDG_RUNTIME_DIR   no session bus, no host sockets
  *   --ro-bind <box dir> /run/darius         proxy and broker sockets, ssh wrapper
  *   --ro-bind <store>, --ro-bind <config>   read-only even under /tmp or /run
- *   --bind <each writable extra>            caches, then ritual `writable`
+ *   --bind <each writable extra>            host `[box] writable`, then ritual `writable`
  *   --tmpfs <each hidden home folder>       HIDDEN_HOME_DIRS: socket nests
  *   --bind <agent socket>                   only when the run may use ssh
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
- *   --ro-bind <work>/.git/config, .git/hooks, .claude
+ *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
  *   --ro-bind <run dir>, --bind gate.jsonl, --bind scratch/
- *   --ro-bind ~/.claude, --bind each adapter `boxWritable`, the per-run copies
+ *   --ro-bind ~/.claude, then the adapter's `boxWritable` (--bind, or
+ *     --ro-bind over a writable one), a --tmpfs on each `boxScratch`, the per-run copies
  *   --tmpfs <masked dir>, --ro-bind /dev/null <masked file>
  *   --ro-bind /dev/null <each socket the home scan found>, but the bound agent
  *   --unshare-net --unshare-pid --die-with-parent [--new-session]
  *   --clearenv --setenv ... -- <command>
  *
  * The writable extras come before the work dir, so an extra that holds the
- * work dir cannot undo report mode or the read-only `.git/config`. The masks
+ * work dir cannot undo report mode or the read-only `.git`. The masks
  * come last, so no bind can uncover a secret.
+ *
+ * `.git` is one read-only mount on its own path (a folder, or the file of a
+ * linked worktree), so a run can neither write it nor rename or remove it: a
+ * mount point cannot be moved. A run in the box cannot commit; that is the
+ * choice Codex's workspace-write sandbox makes too.
  *
  * Refused, with an error that names the path: a writable extra inside or
  * holding the store, the darius config or app dir, `~/.claude`, `~/.ssh`,
  * `~/.config/systemd`, `~/.config/autostart`, a shell rc file, the other
- * files a later unboxed session runs (`~/.local/bin`, git config), `/`,
- * `/proc`, `/sys`, `/dev`, `/run` or `/tmp`; a work dir that holds any of
- * those. Each is checked as written and with its symlinks resolved.
+ * files a later unboxed session runs (`~/.local/bin`, git config, every PATH
+ * entry of the runner), `/`, `/proc`, `/sys`, `/dev`, `/run` or `/tmp`;
+ * `~/.cache` itself; a work dir that holds any of those. Each is checked as
+ * written and with its symlinks resolved. A `.git`, `.claude` or
+ * `.darius.toml` in the work dir that is a link is refused: a link in a
+ * writable folder can be swapped, and bwrap mounts on its target.
  */
 
 import { isIP } from "node:net";
-import { basename, join, normalize } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
 
 import type { SecretPaths } from "../harness/gate.ts";
 import type { MaskedPaths } from "./sandbox.ts";
@@ -70,8 +80,20 @@ export const BOX_PROXY_SOCKET = `${BOX_MOUNT}/proxy.sock`;
 /** The broker socket inside the box (src/core/box-broker.ts listens on `<box dir>/broker.sock`). */
 export const BOX_BROKER_SOCKET = `${BOX_MOUNT}/broker.sock`;
 
-/** Host `[box] writable` when the key is absent: these cache dirs, where they exist. */
-export const DEFAULT_BOX_WRITABLE: readonly string[] = ["~/.cache", "~/.bun/install/cache", "~/.local/share/pnpm", "~/.npm", "~/go/pkg", "~/.cargo/registry"];
+/**
+ * Host `[box] writable` when the key is absent: nothing (0.122.0). Shared
+ * caches hold code and files that later unboxed runs and shells load (pnpm's
+ * global bins on PATH, fish completions in `~/.cache`, `~/.npm/_npx`, cargo and
+ * go sources). Inside the box `XDG_CACHE_HOME` and npm's cache are per run
+ * under the /var/tmp tmpfs. An operator who wants a shared cache names it in
+ * host config and owns that risk.
+ */
+export const DEFAULT_BOX_WRITABLE: readonly string[] = [];
+
+/** XDG_CACHE_HOME inside the box: on the /var/tmp tmpfs, so gone after the run. */
+export const BOX_CACHE_HOME = "/var/tmp/cache";
+/** npm's cache inside the box (`npm_config_cache`), on the same tmpfs. */
+export const BOX_NPM_CACHE = "/var/tmp/npm";
 
 /** The NixOS paths under /run that programs need; re-bound after the /run tmpfs when present. */
 export const RUN_REBINDS: readonly string[] = ["/run/current-system", "/run/wrappers", "/run/opengl-driver", "/run/booted-system"];
@@ -106,7 +128,7 @@ const HOME_PROTECTED: readonly string[] = [
 ];
 
 /** The env names the box sets itself, besides `LC_*`, `DARIUS_*` and the proxy variables. */
-const FIXED_ENV: ReadonlySet<string> = new Set(["HOME", "USER", "LOGNAME", "PATH", "TERM", "LANG", "TZ", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK"]);
+const FIXED_ENV: ReadonlySet<string> = new Set(["HOME", "USER", "LOGNAME", "PATH", "TERM", "LANG", "TZ", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK", "XDG_CACHE_HOME", "npm_config_cache", "NPM_CONFIG_CACHE"]);
 const PROXY_ENV: ReadonlySet<string> = new Set(["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY"]);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
@@ -138,13 +160,15 @@ export function expandTilde(path: string, home: string): string {
   return path.startsWith("~/") ? join(home, path.slice(2)) : path;
 }
 
-/** The dirs a writable path is checked against: the real store, config and app dirs, and the runtime dir. */
+/** The dirs a writable path is checked against: the real store, config and app dirs, the runtime dir, the runner's PATH. */
 export interface ProtectedDirs {
   home: string;
   store: string;
   config: string;
   app: string;
   runtimeDir?: string;
+  /** The runner's PATH entries. The plan passes them; a load check without them skips that rule. */
+  pathEntries?: readonly string[];
 }
 
 /** Every path a writable path may not be in or hold, besides `/` and the system dirs. */
@@ -159,6 +183,8 @@ interface Guard {
   guarded: readonly string[];
   hidden: readonly string[];
   home: string;
+  /** PATH entries, absolute: a later unboxed shell runs what is in them. */
+  pathEntries: readonly string[];
 }
 
 /** The system roots the box puts a tmpfs on, where a test home may live. */
@@ -177,6 +203,7 @@ export function hiddenHomeDirs(home: string): string[] {
 function protectedProblem(absolute: string, guard: Guard): string | undefined {
   const { guarded, hidden } = guard;
   if (absolute === "/") return "it is the root";
+  if (absolute === join(guard.home, ".cache")) return "it is the cache folder, which holds files shells and tools load later; name a folder in it";
   // A home under /tmp or /var/tmp (a throwaway one) is bound back read-only, so a path in it is a home path.
   const isInHome = isWithin(absolute, guard.home) && absolute !== guard.home;
   for (const root of SYSTEM_ROOTS) {
@@ -186,6 +213,10 @@ function protectedProblem(absolute: string, guard: Guard): string | undefined {
   for (const path of guarded) {
     if (isWithin(absolute, path)) return `it is in ${path}`;
     if (isWithin(path, absolute)) return `it holds ${path}`;
+  }
+  for (const path of guard.pathEntries) {
+    if (isWithin(absolute, path)) return `it is in ${path}, a PATH entry`;
+    if (isWithin(path, absolute)) return `it holds ${path}, a PATH entry`;
   }
   const inHidden = hidden.find((dir) => isWithin(absolute, dir));
   return inHidden === undefined ? undefined : `it is in ${inHidden}, which the box hides`;
@@ -201,7 +232,12 @@ export function writableProblem(path: string, dirs: ProtectedDirs): string | und
   if (path !== "~" && !path.startsWith("~/") && !path.startsWith("/")) return "it must start with ~/ or /";
   if (path.split("/").includes("..")) return "it must not contain ..";
   const home = normalize(dirs.home);
-  return protectedProblem(normalize(expandTilde(path, home)), { guarded: protectedPaths(dirs), hidden: hiddenHomeDirs(home), home });
+  return protectedProblem(normalize(expandTilde(path, home)), { guarded: protectedPaths(dirs), hidden: hiddenHomeDirs(home), home, pathEntries: absoluteEntries(dirs.pathEntries ?? []) });
+}
+
+/** The absolute entries of a PATH list, normalized. A relative entry is left out: the box drops it too. */
+function absoluteEntries(entries: readonly string[]): string[] {
+  return [...new Set(entries.filter((entry) => entry.startsWith("/")).map((entry) => normalize(entry)))];
 }
 
 /** A port as written in a `host:port` pair: 1 to 65535, decimal, no leading zero. */
@@ -325,15 +361,31 @@ export interface RitualBoxKeys {
   tools?: readonly string[];
 }
 
-/** The host's `[box]` table. `writable` undefined means the default cache list. */
+/** The host's `[box]` table. `writable` undefined means the default, an empty list. */
 export interface HostBoxSettings {
   writable?: readonly string[];
   sshAgent: boolean;
 }
 
+/**
+ * One path of the harness login or session state, bound over the read-only
+ * `~/.claude` at its own path. A missing path is left out, unless
+ * `isMadeWhenMissing`: then the launcher makes the folder, empty, before the
+ * launch. `isReadOnly`: a read-only bind over a writable path listed before it
+ * (Claude Code's memory folder in the projects folder); it must not be a link.
+ */
+export interface BoxHarnessPath {
+  path: string;
+  isReadOnly?: boolean;
+  isMadeWhenMissing?: boolean;
+}
+
 /** What the plan needs of the harness adapter (src/harness/contract.ts). */
 export interface BoxHarness {
-  boxWritable(home: string): string[];
+  /** Persistent paths, in bind order. `workDir` is the work dir's real path, as the harness sees it. */
+  boxWritable(home: string, workDir: string): BoxHarnessPath[];
+  /** Per-run folders: an empty tmpfs over the real one, which the launcher makes when it is missing. */
+  boxScratch(home: string): string[];
   boxCopies(home: string): string[];
   boxEnv: readonly string[];
 }
@@ -421,22 +473,44 @@ function guardedPaths(facts: BoxFacts): string[] {
   return [...new Set([...listed, ...real])];
 }
 
+/**
+ * The runner's PATH entries as written and with links resolved, plus
+ * `~/.local/bin`, which the box adds. A later unboxed shell runs what is in
+ * them, so no writable path may be in one or hold one.
+ */
+function pathGuards(facts: BoxFacts): string[] {
+  const listed = absoluteEntries([...(facts.env.PATH ?? "").split(":"), join(facts.home, ".local", "bin")]);
+  const real = listed.flatMap((path) => {
+    const entry = facts.entry(path);
+    return entry === undefined ? [] : [normalize(entry.real)];
+  });
+  return [...new Set([...listed, ...real])];
+}
+
+/** The rules a resolved writable path is held to. */
+function resolvedGuard(facts: BoxFacts, guarded: readonly string[]): Guard {
+  return { guarded, hidden: hiddenSpellings(facts), home: homeReal(facts), pathEntries: pathGuards(facts) };
+}
+
 /** The writable extras as real paths, refused with the source named. Missing paths are left out. */
 function writableExtras(input: BoxPlanInput, guarded: readonly string[]): string[] {
+  const { facts } = input;
   const host = input.host.writable;
   const sources: [string, readonly string[]][] = [
     [host === undefined ? "the default [box] writable" : "[box] writable", host ?? DEFAULT_BOX_WRITABLE],
     ["the ritual's writable", input.ritual.writable ?? []],
   ];
+  const dirs: ProtectedDirs = { home: facts.home, store: facts.store, config: facts.config, app: facts.app, runtimeDir: facts.runtimeDir, pathEntries: (facts.env.PATH ?? "").split(":") };
+  const guard = resolvedGuard(facts, guarded);
   const binds: string[] = [];
   for (const [source, paths] of sources) {
     for (const path of paths) {
-      const asWritten = writableProblem(path, { home: input.facts.home, store: input.facts.store, config: input.facts.config, app: input.facts.app, runtimeDir: input.facts.runtimeDir });
+      const asWritten = writableProblem(path, dirs);
       if (asWritten !== undefined) throw new BoxError(`${source} "${path}" is refused: ${asWritten}`);
-      const { entry } = resolvePath(path, input.facts);
+      const { entry } = resolvePath(path, facts);
       if (entry === undefined) continue;
       const real = normalize(entry.real);
-      const resolved = protectedProblem(real, { guarded, hidden: hiddenSpellings(input.facts), home: homeReal(input.facts) });
+      const resolved = protectedProblem(real, guard);
       if (resolved !== undefined) throw new BoxError(`${source} "${path}" is refused: it resolves to ${real}, and ${resolved}`);
       if (!binds.includes(real)) binds.push(real);
     }
@@ -490,25 +564,90 @@ function runDirArgs(input: BoxPlanInput, creates: BoxCreate[]): string[] {
   return args;
 }
 
-/** `~/.claude` read-only, the adapter's writable paths in it, and the per-run copies. */
-function harnessArgs(input: BoxPlanInput, boxDir: string, copies: BoxCopy[]): HarnessBinds {
+/** What the harness binds work from: `~/.claude` as a real folder, the rules, the plan's creates. */
+interface HarnessContext {
+  facts: BoxFacts;
+  claudeReal: string;
+  guard: Guard;
+  creates: BoxCreate[];
+}
+
+/**
+ * The real path of a harness path, or undefined when it is missing and is not
+ * to be made. A missing folder to be made gets a create for it and for each
+ * missing parent, top down, below the nearest folder that exists.
+ */
+function harnessReal(path: string, isMade: boolean, context: HarnessContext): string | undefined {
+  const { facts } = context;
+  const absolute = normalize(path);
+  const entry = facts.entry(absolute);
+  if (entry !== undefined) {
+    if (isMade && entry.kind !== "dir") throw new BoxError(`the harness path ${path} must be a folder`);
+    return normalize(entry.real);
+  }
+  if (!isMade) return undefined;
+  const missing: string[] = [];
+  let at = absolute;
+  let found = facts.entry(dirname(at));
+  missing.unshift(basename(at));
+  // Bounded by the path's depth: dirname("/") is "/".
+  while (found === undefined && dirname(at) !== at) {
+    at = dirname(at);
+    missing.unshift(basename(at));
+    found = facts.entry(dirname(at));
+  }
+  if (found?.kind !== "dir") throw new BoxError(`the harness path ${path} cannot be made: no folder holds it`);
+  let real = normalize(found.real);
+  for (const name of missing) {
+    real = join(real, name);
+    if (!context.creates.some((create) => create.path === real)) context.creates.push({ path: real, kind: "dir", mode: 0o700 });
+  }
+  return real;
+}
+
+/** Why a harness path that resolves to `real` is refused, or undefined. A link out of `~/.claude` is held to the rules of any writable path. */
+function harnessProblem(real: string, context: HarnessContext): string | undefined {
+  const isInside = isWithin(real, context.claudeReal) && real !== context.claudeReal;
+  return isInside ? undefined : protectedProblem(real, context.guard);
+}
+
+/**
+ * `~/.claude` read-only; the adapter's persistent paths over it (writable, or
+ * read-only over a writable one); an empty tmpfs on each per-run folder; the
+ * per-run copies. Without a `~/.claude` folder only the copies are bound.
+ */
+function harnessArgs(input: BoxPlanInput, work: string, boxDir: string, plan: { copies: BoxCopy[]; creates: BoxCreate[] }): HarnessBinds {
   const { facts } = input;
+  const { copies } = plan;
   const args: string[] = [];
-  const claude = facts.entry(join(facts.home, ".claude"));
-  const claudeReal = claude === undefined ? undefined : normalize(claude.real);
-  if (claude?.kind === "dir" && claudeReal !== undefined) args.push("--ro-bind", claudeReal, claudeReal);
   const writable: string[] = [];
-  const dirs: ProtectedDirs = { home: facts.home, store: facts.store, config: facts.config, app: facts.app, runtimeDir: facts.runtimeDir };
-  for (const path of input.harness.boxWritable(facts.home)) {
-    const entry = facts.entry(normalize(path));
-    if (entry === undefined) continue;
-    const real = normalize(entry.real);
-    // A link out of ~/.claude is held to the rules of any writable path.
-    const isInside = claudeReal !== undefined && isWithin(real, claudeReal) && real !== claudeReal;
-    const problem = isInside ? undefined : protectedProblem(real, { guarded: protectedPaths(dirs), hidden: hiddenSpellings(facts), home: homeReal(facts) });
-    if (problem !== undefined) throw new BoxError(`the harness path ${path} is refused: it resolves to ${real}, and ${problem}`);
-    args.push("--bind", real, real);
-    writable.push(real);
+  const claude = facts.entry(join(facts.home, ".claude"));
+  if (claude?.kind === "dir") {
+    const dirs: ProtectedDirs = { home: facts.home, store: facts.store, config: facts.config, app: facts.app, runtimeDir: facts.runtimeDir };
+    const context: HarnessContext = { facts, claudeReal: normalize(claude.real), guard: resolvedGuard(facts, protectedPaths(dirs)), creates: plan.creates };
+    args.push("--ro-bind", context.claudeReal, context.claudeReal);
+    for (const item of input.harness.boxWritable(facts.home, work)) {
+      const isMade = item.isMadeWhenMissing === true;
+      const real = harnessReal(item.path, isMade, context);
+      if (real === undefined) continue;
+      const problem = harnessProblem(real, context);
+      if (problem !== undefined) throw new BoxError(`the harness path ${item.path} is refused: it resolves to ${real}, and ${problem}`);
+      if (item.isReadOnly !== true) {
+        args.push("--bind", real, real);
+        writable.push(real);
+        continue;
+      }
+      // A link in a writable folder can be swapped after the mount, and bwrap mounts on its target.
+      if (facts.entry(normalize(item.path))?.link !== undefined) throw new BoxError(`the harness path ${item.path} is a link; the box keeps it read-only only as a plain folder or file`);
+      args.push("--ro-bind", real, real);
+    }
+    for (const path of input.harness.boxScratch(facts.home)) {
+      const real = harnessReal(path, true, context) ?? normalize(path);
+      const problem = harnessProblem(real, context);
+      if (problem !== undefined) throw new BoxError(`the harness path ${path} is refused: it resolves to ${real}, and ${problem}`);
+      args.push("--tmpfs", real);
+      writable.push(real);
+    }
   }
   input.harness.boxCopies(facts.home).forEach((path, index) => {
     const entry = facts.entry(normalize(path));
@@ -645,6 +784,9 @@ function boxEnv(input: BoxPlanInput, agent: string | undefined): BoxEnv {
   env.NO_PROXY = "";
   env.no_proxy = "";
   env.NODE_USE_ENV_PROXY = "1";
+  // Caches per run, on the /var/tmp tmpfs: a shared cache holds code that later unboxed runs load.
+  env.XDG_CACHE_HOME = BOX_CACHE_HOME;
+  env.npm_config_cache = BOX_NPM_CACHE;
   for (const [source, names] of [["the harness", input.harness.boxEnv], ["env_pass", input.envPass]] as const) {
     for (const name of names) {
       const problem = envPassProblem(name);
@@ -666,11 +808,33 @@ function runRebinds(facts: BoxFacts): string[] {
   });
 }
 
-/** The read-only binds over the work dir's git config, git hooks and Claude project settings. */
-function workGuards(work: string, facts: BoxFacts): string[] {
-  return [".git/config", ".git/hooks", ".claude"].flatMap((name) => {
-    const entry = facts.entry(join(work, name));
-    return entry === undefined ? [] : ["--ro-bind", normalize(entry.real), normalize(entry.real)];
+/** The work dir entries a later unboxed session trusts: git's own folder, Claude's project settings, the darius marker. */
+const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
+
+/**
+ * The read-only binds over the work dir's `.git` (a folder, or the file of a
+ * linked worktree), `.claude` and `.darius.toml`, each on its own path. A
+ * mount point cannot be renamed or removed, so a run cannot move `.git` away
+ * with its config, nor write `commondir`, nor raise its own `net`, `reach`,
+ * `writable`, `ssh_agent` or `tools` for the next run. A link is refused:
+ * bwrap would mount on its target, and the run could swap the link.
+ *
+ * A missing `.claude` gets an empty read-only folder from the box dir, so the
+ * run cannot make `.claude/settings.json`. bwrap makes the mount point, so an
+ * empty `.claude` folder stays in the checkout after the run; that is
+ * accepted. A read-only work dir needs none: the run can make nothing there.
+ */
+function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creates: BoxCreate[] }): string[] {
+  return WORK_GUARDS.flatMap((name) => {
+    const path = join(work.real, name);
+    const entry = facts.entry(path);
+    if (entry === undefined) {
+      if (name !== ".claude" || work.isReadOnly) return [];
+      empty.creates.push({ path: empty.dir, kind: "dir", mode: 0o500 });
+      return ["--ro-bind", empty.dir, path];
+    }
+    if (entry.link !== undefined || normalize(entry.real) !== path) throw new BoxError(`${path} is a link; the box keeps it read-only only as a plain folder or file, so this run does not start`);
+    return ["--ro-bind", path, path];
   });
 }
 
@@ -701,7 +865,7 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
   const agentFound = agentSocket(input);
   const agent = agentFound?.wanted === true ? agentFound.real : undefined;
 
-  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run", ...runRebinds(facts), "--tmpfs", "/var/tmp"];
+  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run", ...runRebinds(facts), "--tmpfs", "/var/tmp", "--dir", BOX_CACHE_HOME, "--dir", BOX_NPM_CACHE];
   // A home under a tmpfs root (a throwaway test home) stays visible, read-only, as on a real host.
   const home = homeReal(facts);
   if (TMP_ROOTS.some((root) => isWithin(home, root))) args.push("--ro-bind", home, home);
@@ -716,9 +880,10 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
   for (const dir of hidden) args.push("--tmpfs", dir);
   if (agent !== undefined) args.push("--bind", agent, agent);
   const work = workDir(input, guarded, hiddenSpellings(facts));
-  args.push(work.isReadOnly ? "--ro-bind" : "--bind", work.real, work.real, ...workGuards(work.real, facts));
+  const emptyDir = join(boxDir, "empty");
+  args.push(work.isReadOnly ? "--ro-bind" : "--bind", work.real, work.real, ...workGuards(work, facts, { dir: emptyDir, creates }));
   args.push(...runDirArgs(input, creates));
-  const harness = harnessArgs(input, boxDir, copies);
+  const harness = harnessArgs(input, work.real, boxDir, { copies, creates });
   args.push(...harness.args);
   // An agent socket that is not bound is masked: a socket on a read-only mount still connects.
   const unboundAgent = agentFound !== undefined && agent === undefined ? agentFound.real : undefined;

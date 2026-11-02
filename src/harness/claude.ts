@@ -27,7 +27,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { HostPort } from "../core/box.ts";
+import { BoxError, type BoxHarnessPath, type HostPort } from "../core/box.ts";
 import type { JsonValue, Policy } from "../core/model.ts";
 import type { DenyOutput, HarnessAdapter, HarnessLaunch, PlanInput, ResolvedProfile, ResultFacts, ToolCall, ToolClass } from "./contract.ts";
 import { allowsSubagents, type GateScope } from "./gate.ts";
@@ -56,10 +56,19 @@ const DISALLOWED_REPORT: readonly string[] = ["WebFetch", "WebSearch"];
  */
 const DISALLOWED_SKIP: readonly string[] = ["Agent"];
 export const DEFAULT_MAX_TURNS = 20;
-/** What a run in the box may write under `~/.claude` (Fable signoff 2026-11-02, item 3). */
-const BOX_WRITABLE: readonly string[] = [
-  ".credentials.json", "projects", "todos", "tasks", "shell-snapshots", "statsig", "debug", "session-env", "file-history", "history.jsonl",
-];
+/**
+ * What a run in the box may write under `~/.claude` and keep (0.122.0): the
+ * login (token refresh) and the prompt history. The projects folder of the
+ * run's own work dir comes on top, see `boxWritable`.
+ */
+const BOX_WRITABLE: readonly string[] = [".credentials.json", "history.jsonl"];
+/**
+ * Per run and empty in the box (0.122.0): the operator's own sessions read
+ * these later, unboxed. Every Bash call sources a file in `shell-snapshots`.
+ */
+const BOX_SCRATCH: readonly string[] = ["shell-snapshots", "session-env", "todos", "tasks", "debug", "statsig", "file-history"];
+/** Claude Code cuts a longer projects folder name and adds a hash of its own; the box does not guess that hash. */
+const MAX_PROJECT_DIR_NAME = 200;
 /** The API and login hosts Claude Code reaches, in every `net` mode. */
 const BOX_HOSTS: readonly HostPort[] = ["api.anthropic.com", "console.anthropic.com", "platform.claude.com", "claude.ai", "statsig.anthropic.com"].map((host) => ({ host, port: 443 }));
 export const CLAUDE_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
@@ -209,10 +218,24 @@ function claudeHome(): string {
 }
 
 /**
+ * The name of a work dir's folder under `~/.claude/projects`: every
+ * character but a letter or a digit becomes `-`, so `/srv/my.repo` is
+ * `-srv-my-repo`. The box binds only that folder writable (0.122.0). A name
+ * over 200 characters is a BoxError: Claude Code then cuts it and adds a hash
+ * the box cannot know, and the run must not start without its session folder.
+ */
+export function claudeProjectDirName(workDir: string): string {
+  const name = workDir.replaceAll(/[^a-zA-Z0-9]/gu, "-");
+  if (name.length > MAX_PROJECT_DIR_NAME) throw new BoxError(`the work dir ${workDir} is too long for the box: Claude Code names its session folder with a hash past ${String(MAX_PROJECT_DIR_NAME)} characters`);
+  return name;
+}
+
+/**
  * Claude Code keeps a session as `<home>/projects/<dir>/<id>.jsonl`, where
- * `<dir>` is the working dir in its own encoding. darius looks for the file
- * in every `<dir>` instead of copying that encoding. The file exists only on
- * the host that ran the session, so a resume on another host starts fresh.
+ * `<dir>` is the working dir in its own encoding (`claudeProjectDirName`).
+ * darius looks for the file in every `<dir>`, so a session from before the
+ * box, or under a longer name, is found too. The file exists only on the host
+ * that ran the session, so a resume on another host starts fresh.
  */
 function hasSession(sessionId: string): boolean {
   if (!SESSION_ID.test(sessionId)) return false;
@@ -359,8 +382,18 @@ export const claudeHarness: HarnessAdapter = {
 
   // The box (0.117.0): the login and session state Claude Code writes. Settings, hooks,
   // plugins, skills, agents and CLAUDE.md stay read-only; `harness check` in the box proves the list.
-  boxWritable(home: string): string[] {
-    return BOX_WRITABLE.map((name) => join(home, ".claude", name));
+  // Since 0.122.0 only this work dir's projects folder persists, for `run resume`. Its memory folder
+  // stays read-only: the operator's next session in this work dir loads it.
+  boxWritable(home: string, workDir: string): BoxHarnessPath[] {
+    const project = join(home, ".claude", "projects", claudeProjectDirName(workDir));
+    return [
+      ...BOX_WRITABLE.map((name) => ({ path: join(home, ".claude", name) })),
+      { path: project, isMadeWhenMissing: true },
+      { path: join(project, "memory"), isReadOnly: true, isMadeWhenMissing: true },
+    ];
+  },
+  boxScratch(home: string): string[] {
+    return BOX_SCRATCH.map((name) => join(home, ".claude", name));
   },
   boxCopies(home: string): string[] {
     return [join(home, ".claude.json")];

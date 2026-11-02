@@ -127,10 +127,10 @@ test("[run] sandbox = \"box\": the launch builds the box; doctor warns when bwra
   }
 });
 
-test("[box]: writable defaults to the cache list, ssh_agent to false; a bad key, type or protected path is refused", () => {
+test("[box]: writable is absent by default (the plan's empty list), ssh_agent false; a bad key, type, protected path or ~/.cache is refused", () => {
   isolatedConfig('host = "a"\n', () => assert.deepEqual(loadConfig().box, { sshAgent: false }));
-  isolatedConfig('host = "a"\n\n[box]\nwritable = ["~/.cache", "/srv/cache", "~/.cache"]\nssh_agent = true\n', () => {
-    assert.deepEqual(loadConfig().box, { writable: ["~/.cache", "/srv/cache"], sshAgent: true });
+  isolatedConfig('host = "a"\n\n[box]\nwritable = ["~/.cache/pnpm", "/srv/cache", "~/.cache/pnpm"]\nssh_agent = true\n', () => {
+    assert.deepEqual(loadConfig().box, { writable: ["~/.cache/pnpm", "/srv/cache"], sshAgent: true });
   });
   isolatedConfig('host = "a"\n\n[box]\nwritable = []\n', () => assert.deepEqual(loadConfig().box, { writable: [], sshAgent: false }, "an empty list means no extras"));
   const refused: [string, RegExp][] = [
@@ -141,6 +141,7 @@ test("[box]: writable defaults to the cache list, ssh_agent to false; a bad key,
     ['[box]\nwritable = ["~/.config"]\n', /\[box\] writable "~\/\.config" is refused: it holds/u],
     ['[box]\nwritable = ["~/.config/systemd"]\n', /is refused/u],
     ['[box]\nwritable = ["/"]\n', /is refused: it is the root/u],
+    ['[box]\nwritable = ["~/.cache"]\n', /\[box\] writable "~\/\.cache" is refused: it is the cache folder/u],
     [`[box]\nwritable = ["${STATE}/acme"]\n`, /is refused: it is in/u],
   ];
   for (const [table, why] of refused) {

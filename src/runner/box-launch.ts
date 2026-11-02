@@ -34,7 +34,7 @@ import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys } f
 import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles } from "../core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
-import { hostAddresses, startBoxProxy, type BoxPolicy, type BoxProxy } from "../core/box-proxy.ts";
+import { hostAddresses, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { configDir } from "../core/paths.ts";
 import { appendRunLog, noteSandbox, probeBwrap, resolveSandbox, sandboxPrefix, type Sandbox } from "../core/sandbox.ts";
@@ -156,15 +156,20 @@ export function webPorts(dir: string = configDir()): HostPort[] {
   return [...[...ports].map((port) => ({ host: "", port })), ...hosts];
 }
 
-/** The proxy policy of one run: the ritual's `net` and `reach`, the harness hosts, this host's addresses, the web ports. */
-export async function boxPolicy(ritual: RitualBoxKeys, harness: HarnessAdapter): Promise<BoxPolicy> {
+/**
+ * The proxy policy of one run: the ritual's `net` and `reach`, the harness
+ * hosts, this host's addresses, the web ports. Each `DARIUS_WEB_URL` host is
+ * resolved here, and its addresses are refused on that port too (0.122.0).
+ * `resolve` is for tests; the default asks the system resolver.
+ */
+export async function boxPolicy(ritual: RitualBoxKeys, harness: Pick<HarnessAdapter, "boxHosts">, resolve?: Resolver): Promise<BoxPolicy> {
   const tailnet = await tailnetAddress();
   return {
     net: ritual.net ?? "public",
     reach: (ritual.reach ?? []).map((entry) => parseHostPort(entry)),
     harnessHosts: [...harness.boxHosts],
     ownAddresses: hostAddresses(tailnet === null ? [] : [tailnet]),
-    webPorts: webPorts(),
+    webPorts: await withWebAddresses(webPorts(), resolve),
   };
 }
 

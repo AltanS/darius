@@ -12,8 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { scanSockets } from "../src/core/box-host.ts";
-import { BoxError, boxPlan, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan } from "../src/core/box.ts";
-import { claudeHarness } from "../src/harness/claude.ts";
+import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan } from "../src/core/box.ts";
+import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 
 const HOME = "/home/op";
 const STORE = `${HOME}/.local/share/darius`;
@@ -22,6 +22,11 @@ const RUNTIME = "/run/user/1000";
 const WORK = "/srv/repo";
 const RUN_DIR = `${STORE}/acme/runs/r1`;
 const AGENT = `${RUNTIME}/gcr/ssh`;
+/** Claude Code's projects folder of WORK, and its memory folder. */
+const PROJECT = `${HOME}/.claude/projects/-srv-repo`;
+const MEMORY = `${PROJECT}/memory`;
+/** Claude Code's per-run folders, which the box covers with an empty tmpfs. */
+const SCRATCH = ["shell-snapshots", "session-env", "todos", "tasks", "debug", "statsig", "file-history"].map((name) => `${HOME}/.claude/${name}`);
 
 /** A fake filesystem: path to entry. A missing path has no entry. */
 type Tree = Map<string, BoxEntry>;
@@ -138,11 +143,11 @@ test("the base layout comes first, in order: root, dev, proc, tmp, run, the NixO
   const { argv, boxDir } = boxPlan(input());
   assert.equal(argv[0], "/usr/bin/bwrap");
   assert.equal(boxDir, `${RUNTIME}/darius-box/r1`);
-  assert.deepEqual(flags(argv).slice(0, 26), [
+  assert.deepEqual(flags(argv).slice(0, 30), [
     "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run",
     "--symlink", "/nix/store/abc-system", "/run/current-system",
     "--ro-bind", "/run/wrappers", "/run/wrappers",
-    "--tmpfs", "/var/tmp",
+    "--tmpfs", "/var/tmp", "--dir", "/var/tmp/cache", "--dir", "/var/tmp/npm",
     "--perms", "0700", "--tmpfs", RUNTIME,
     "--ro-bind", boxDir, "/run/darius",
   ]);
@@ -165,27 +170,52 @@ test("the command follows -- unchanged", () => {
 
 // --- work dir and run dir --------------------------------------------------------------
 
-test("the work dir is bound writable, read-only in report mode, with .git/config, .git/hooks and .claude read-only over it", () => {
+test("the work dir is bound writable, read-only in report mode, with .git, .claude and .darius.toml read-only on themselves", () => {
   const tree = baseTree();
   tree.set(`${WORK}/.claude`, dir(`${WORK}/.claude`));
+  tree.set(`${WORK}/.darius.toml`, file(`${WORK}/.darius.toml`));
   const act = boxPlan(input({ tree })).argv;
   assert.ok(has(act, "--bind", WORK, WORK));
-  for (const guard of [`${WORK}/.git/config`, `${WORK}/.git/hooks`, `${WORK}/.claude`]) {
+  for (const guard of [`${WORK}/.git`, `${WORK}/.claude`, `${WORK}/.darius.toml`]) {
     assert.ok(at(act, "--ro-bind", guard, guard) > at(act, "--bind", WORK, WORK), `${guard} comes after the work dir`);
   }
+  // .git is one mount point: no separate binds inside it, so nothing in it is writable and it cannot be renamed.
+  assert.equal(has(act, "--ro-bind", `${WORK}/.git/config`), false);
+  assert.equal(has(act, "--ro-bind", `${WORK}/.git/hooks`), false);
+  assert.equal(act.some((arg) => arg.startsWith(`${WORK}/.git/`)), false, "nothing under .git is bound on its own");
   const report = boxPlan(input({ tree, isReport: true })).argv;
   assert.ok(has(report, "--ro-bind", WORK, WORK));
   assert.equal(has(report, "--bind", WORK, WORK), false);
+  assert.ok(has(report, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`));
 });
 
-test("a guard that is missing is left out; one that links elsewhere is bound at its real path", () => {
+test("a linked worktree's .git file is bound read-only on itself", () => {
   const tree = baseTree();
-  tree.delete(`${WORK}/.git/hooks`);
-  tree.set(`${WORK}/.claude`, { real: "/srv/shared/claude", kind: "dir", link: "/srv/shared/claude" });
+  for (const path of [...tree.keys()].filter((key) => key.startsWith(`${WORK}/.git`))) tree.delete(path);
+  tree.set(`${WORK}/.git`, file(`${WORK}/.git`));
   const { argv } = boxPlan(input({ tree }));
-  assert.equal(has(argv, "--ro-bind", `${WORK}/.git/hooks`), false);
-  assert.ok(has(argv, "--ro-bind", "/srv/shared/claude", "/srv/shared/claude"));
+  assert.ok(at(argv, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`) > at(argv, "--bind", WORK, WORK));
 });
+
+test("a missing .claude gets an empty read-only folder from the box dir; in report mode it gets none", () => {
+  const plan = boxPlan(input());
+  const empty = `${plan.boxDir}/empty`;
+  assert.ok(at(plan.argv, "--ro-bind", empty, `${WORK}/.claude`) > at(plan.argv, "--bind", WORK, WORK));
+  assert.ok(plan.creates.some((create) => create.path === empty && create.kind === "dir" && create.mode === 0o500), "the launcher makes the empty folder");
+  assert.equal(has(plan.argv, "--ro-bind", `${WORK}/.darius.toml`), false, "a missing marker is left out");
+  const report = boxPlan(input({ isReport: true }));
+  assert.equal(has(report.argv, "--ro-bind", `${report.boxDir}/empty`), false, "a read-only work dir needs no mount point");
+  assert.equal(report.creates.some((create) => create.path.endsWith("/empty")), false);
+});
+
+test("a .git, .claude or .darius.toml that is a link is refused: the run could swap the link", () => {
+  for (const name of [".git", ".claude", ".darius.toml"]) {
+    const tree = baseTree();
+    tree.set(`${WORK}/${name}`, { real: `/srv/shared/${name}`, kind: name === ".darius.toml" ? "file" : "dir", link: `/srv/shared/${name}` });
+    assert.throws(() => boxPlan(input({ tree })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith(`${WORK}/${name} is a link`), name);
+  }
+});
+
 
 test("the run dir is read-only; only gate.jsonl and scratch/ are writable, and the plan says to make them", () => {
   const plan = boxPlan(input());
@@ -194,8 +224,8 @@ test("the run dir is read-only; only gate.jsonl and scratch/ are writable, and t
   assert.ok(at(plan.argv, "--bind", `${RUN_DIR}/gate.jsonl`, `${RUN_DIR}/gate.jsonl`) > ro);
   assert.ok(at(plan.argv, "--bind", `${RUN_DIR}/scratch`, `${RUN_DIR}/scratch`) > ro);
   assert.equal(has(plan.argv, "--bind", `${RUN_DIR}/policy.json`), false);
-  assert.deepEqual(plan.creates, [
-    { path: plan.boxDir, kind: "dir", mode: 0o700 },
+  assert.deepEqual(plan.creates[0], { path: plan.boxDir, kind: "dir", mode: 0o700 }, "the box dir first");
+  assert.deepEqual(plan.creates.filter((create) => create.path.startsWith(RUN_DIR)), [
     { path: `${RUN_DIR}/gate.jsonl`, kind: "file", mode: 0o600 },
     { path: `${RUN_DIR}/scratch`, kind: "dir", mode: 0o700 },
   ]);
@@ -247,43 +277,122 @@ test("the store and the config dir are bound read-only, so a tmpfs cannot leave 
 
 // --- the harness ------------------------------------------------------------------------
 
-test("~/.claude is read-only; only the adapter's writable paths that exist are bound; ~/.claude.json is a per-run copy", () => {
-  const plan = boxPlan(input());
+test("~/.claude is read-only; the login, the history and this work dir's projects folder persist; ~/.claude.json is a per-run copy", () => {
+  const tree = baseTree();
+  tree.set(`${HOME}/.claude/history.jsonl`, file(`${HOME}/.claude/history.jsonl`));
+  const plan = boxPlan(input({ tree }));
   const { argv } = plan;
   const ro = at(argv, "--ro-bind", `${HOME}/.claude`, `${HOME}/.claude`);
   assert.ok(ro !== -1);
-  for (const path of [`${HOME}/.claude/.credentials.json`, `${HOME}/.claude/projects`, `${HOME}/.claude/todos`]) assert.ok(at(argv, "--bind", path, path) > ro, path);
-  assert.equal(has(argv, "--bind", `${HOME}/.claude/tasks`), false, "a missing path is not bound");
+  for (const path of [`${HOME}/.claude/.credentials.json`, `${HOME}/.claude/history.jsonl`, PROJECT]) assert.ok(at(argv, "--bind", path, path) > ro, path);
+  assert.equal(has(argv, "--bind", `${HOME}/.claude/projects`, `${HOME}/.claude/projects`), false, "other work dirs' sessions and memory stay read-only");
   assert.equal(has(argv, "--bind", `${HOME}/.claude/settings.json`), false);
   assert.equal(has(argv, "--bind", `${HOME}/.claude`, `${HOME}/.claude`), false);
   const copy = `${plan.boxDir}/copies/0-.claude.json`;
   assert.deepEqual(plan.copies, [{ from: `${HOME}/.claude.json`, to: copy }]);
   assert.ok(has(argv, "--bind", copy, `${HOME}/.claude.json`));
+  assert.equal(has(boxPlan(input()).argv, "--bind", `${HOME}/.claude/history.jsonl`), false, "a missing file is not bound");
+});
+
+test("the projects folder of this work dir is made when missing, with its memory folder read-only over it", () => {
+  const plan = boxPlan(input());
+  assert.ok(at(plan.argv, "--ro-bind", MEMORY, MEMORY) > at(plan.argv, "--bind", PROJECT, PROJECT), "memory comes after the writable projects folder");
+  assert.deepEqual(plan.creates.filter((create) => create.path.startsWith(`${HOME}/.claude/projects`)), [
+    { path: PROJECT, kind: "dir", mode: 0o700 },
+    { path: MEMORY, kind: "dir", mode: 0o700 },
+  ]);
+  // No projects folder at all: it is made first, then the work dir's, then memory.
+  const bare = baseTree();
+  bare.delete(`${HOME}/.claude/projects`);
+  const fresh = boxPlan(input({ tree: bare }));
+  assert.deepEqual(fresh.creates.filter((create) => create.path.startsWith(`${HOME}/.claude/projects`)).map((create) => create.path), [`${HOME}/.claude/projects`, PROJECT, MEMORY]);
+  // Both there: nothing to make, the same binds.
+  const ready = baseTree();
+  ready.set(PROJECT, dir(PROJECT));
+  ready.set(MEMORY, dir(MEMORY));
+  const kept = boxPlan(input({ tree: ready }));
+  assert.equal(kept.creates.some((create) => create.path.startsWith(PROJECT)), false);
+  assert.ok(has(kept.argv, "--ro-bind", MEMORY, MEMORY));
+  // A memory folder that is a link could be swapped in the writable projects folder.
+  const linked = baseTree();
+  linked.set(PROJECT, dir(PROJECT));
+  linked.set(MEMORY, { real: "/srv/memory", kind: "dir", link: "/srv/memory" });
+  assert.throws(() => boxPlan(input({ tree: linked })), /the harness path .*memory is a link/u);
+});
+
+test("Claude Code's per-run folders are an empty tmpfs over the real ones, made when missing, never bound", () => {
+  const plan = boxPlan(input());
+  const ro = at(plan.argv, "--ro-bind", `${HOME}/.claude`, `${HOME}/.claude`);
+  for (const path of SCRATCH) {
+    assert.ok(at(plan.argv, "--tmpfs", path) > ro, path);
+    assert.equal(has(plan.argv, "--bind", path, path), false, path);
+  }
+  const made = plan.creates.filter((create) => SCRATCH.includes(create.path)).map((create) => create.path);
+  assert.deepEqual(made, SCRATCH.filter((path) => !path.endsWith("/todos")), "todos is there already; the others are made");
+});
+
+test("claudeProjectDirName: every character but a letter or digit is a dash; a name over 200 characters is refused", () => {
+  assert.equal(claudeProjectDirName("/srv/repo"), "-srv-repo");
+  assert.equal(claudeProjectDirName("/home/op/my.repo/.claude/worktrees/a_b"), "-home-op-my-repo--claude-worktrees-a-b");
+  assert.throws(() => claudeProjectDirName(`/srv/${"a".repeat(200)}`), BoxError);
 });
 
 test("a harness path that links out of ~/.claude is held to the writable rules", () => {
   const tree = baseTree();
   tree.set(`${HOME}/.claude/projects`, { real: `${HOME}/.ssh`, kind: "dir", link: `${HOME}/.ssh` });
-  assert.throws(() => boxPlan(input({ tree })), /the harness path .*projects is refused: it resolves to \/home\/op\/\.ssh/u);
+  assert.throws(() => boxPlan(input({ tree })), /the harness path .*projects\/-srv-repo is refused: it resolves to \/home\/op\/\.ssh\/-srv-repo/u);
   const fine = baseTree();
   fine.set(`${HOME}/.claude/projects`, { real: "/srv/claude-projects", kind: "dir", link: "/srv/claude-projects" });
-  assert.ok(has(boxPlan(input({ tree: fine })).argv, "--bind", "/srv/claude-projects", "/srv/claude-projects"));
+  const plan = boxPlan(input({ tree: fine }));
+  assert.ok(has(plan.argv, "--bind", "/srv/claude-projects/-srv-repo", "/srv/claude-projects/-srv-repo"));
+  assert.ok(plan.creates.some((create) => create.path === "/srv/claude-projects/-srv-repo"));
+  const scratch = baseTree();
+  scratch.set(`${HOME}/.claude/todos`, { real: "/tmp/todos", kind: "dir", link: "/tmp/todos" });
+  assert.throws(() => boxPlan(input({ tree: scratch })), /the harness path .*todos is refused: it resolves to \/tmp\/todos, and it is in \/tmp/u);
 });
 
 // --- writable extras -----------------------------------------------------------------------
 
-test("the default caches are bound only where they exist; [box] writable replaces them; the ritual's writable adds", () => {
+test("the default [box] writable is empty: no shared cache is bound; [box] writable names some; the ritual's writable adds", () => {
+  assert.deepEqual(DEFAULT_BOX_WRITABLE, []);
   const plain = boxPlan(input()).argv;
-  assert.ok(has(plain, "--bind", `${HOME}/.cache`, `${HOME}/.cache`));
-  assert.ok(has(plain, "--bind", `${HOME}/.npm`, `${HOME}/.npm`));
-  assert.equal(has(plain, "--bind", `${HOME}/go/pkg`), false);
+  assert.equal(has(plain, "--bind", `${HOME}/.cache`), false);
+  assert.equal(has(plain, "--bind", `${HOME}/.npm`), false);
   const tree = baseTree();
   tree.set(`${HOME}/build`, dir(`${HOME}/build`));
   tree.set("/srv/out", dir("/srv/out"));
-  const custom = boxPlan(input({ tree, host: { writable: ["~/build"], sshAgent: false }, ritual: { writable: ["/srv/out", "~/missing"] } })).argv;
+  tree.set(`${HOME}/.cache/pnpm`, dir(`${HOME}/.cache/pnpm`));
+  const custom = boxPlan(input({ tree, host: { writable: ["~/build", "~/.cache/pnpm"], sshAgent: false }, ritual: { writable: ["/srv/out", "~/missing"] } })).argv;
   assert.ok(has(custom, "--bind", `${HOME}/build`, `${HOME}/build`));
+  assert.ok(has(custom, "--bind", `${HOME}/.cache/pnpm`, `${HOME}/.cache/pnpm`), "a folder in ~/.cache, named by the operator");
   assert.ok(has(custom, "--bind", "/srv/out", "/srv/out"));
-  assert.equal(has(custom, "--bind", `${HOME}/.cache`), false);
+  assert.equal(has(custom, "--bind", `${HOME}/missing`), false);
+});
+
+test("~/.cache itself and every path in, or holding, a PATH entry of the runner is refused, as written and through a link", () => {
+  const tree = baseTree();
+  tree.set(`${HOME}/bin-link`, { real: "/opt/tools/bin", kind: "dir", link: "/opt/tools/bin" });
+  tree.set("/opt/tools", dir("/opt/tools"));
+  tree.set(`${HOME}/pnpm-link`, { real: `${HOME}/.local/share/pnpm/store`, kind: "dir", link: ".local/share/pnpm/store" });
+  const env = { ...RUNNER_ENV, PATH: `/usr/bin:${HOME}/.local/share/pnpm:${HOME}/.bun/bin:${HOME}/bin-link:relative` };
+  const refused: [string, RegExp][] = [
+    ["~/.cache", /it is the cache folder/u],
+    ["~/.local/share/pnpm", /is in \/home\/op\/\.local\/share\/pnpm, a PATH entry/u],
+    ["~/.local/share/pnpm/global", /is in \/home\/op\/\.local\/share\/pnpm, a PATH entry/u],
+    ["~/.bun", /holds \/home\/op\/\.bun\/bin, a PATH entry/u],
+    ["/usr", /holds \/usr\/bin, a PATH entry/u],
+    ["/opt/tools", /holds \/opt\/tools\/bin, a PATH entry/u],
+    ["~/pnpm-link", /resolves to .*\.local\/share\/pnpm\/store, and it is in .*pnpm, a PATH entry/u],
+  ];
+  for (const [path, why] of refused) {
+    assert.throws(() => boxPlan(input({ tree, env, ritual: { writable: [path] } })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith(`the ritual's writable "${path}" is refused`) && why.test(cause.message), path);
+    assert.throws(() => boxPlan(input({ tree, env, host: { writable: [path], sshAgent: false } })), (cause: Error) => cause.message.startsWith(`[box] writable "${path}" is refused`) && why.test(cause.message), path);
+  }
+  const dirs = { home: HOME, store: STORE, config: CONFIG, app: "/opt/darius" };
+  assert.match(writableProblem("~/.cache", dirs) ?? "", /it is the cache folder/u, "~/.cache is refused at load too");
+  assert.equal(writableProblem("~/.cache/pnpm", dirs), undefined);
+  assert.match(writableProblem("~/.local/share/pnpm", { ...dirs, pathEntries: [`${HOME}/.local/share/pnpm`, "relative/bin"] }) ?? "", /a PATH entry/u);
+  assert.equal(writableProblem("~/.local/share/pnpm", dirs), undefined, "a load check without PATH entries skips that rule; the plan has them");
 });
 
 test("writable extras come before the work dir, so an extra that holds it cannot undo report mode", () => {
@@ -291,7 +400,7 @@ test("writable extras come before the work dir, so an extra that holds it cannot
   tree.set("/srv", dir("/srv"));
   const { argv } = boxPlan(input({ tree, ritual: { writable: ["/srv"] }, isReport: true }));
   assert.ok(at(argv, "--bind", "/srv", "/srv") < at(argv, "--ro-bind", WORK, WORK));
-  assert.ok(at(argv, "--bind", "/srv", "/srv") < at(argv, "--ro-bind", `${WORK}/.git/config`, `${WORK}/.git/config`));
+  assert.ok(at(argv, "--bind", "/srv", "/srv") < at(argv, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`));
 });
 
 test("every protected writable path is refused, as written and through a link, with its source named", () => {
@@ -430,6 +539,8 @@ test("the env is a fixed list: nothing else of the runner's env reaches the box"
     NO_PROXY: "",
     no_proxy: "",
     NODE_USE_ENV_PROXY: "1",
+    XDG_CACHE_HOME: "/var/tmp/cache",
+    npm_config_cache: "/var/tmp/npm",
     ANTHROPIC_API_KEY: "sk-ant-your-key-here",
   });
   for (const name of ["GH_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX", "ACME_TOKEN"]) {
@@ -450,7 +561,7 @@ test("env_pass passes named variables when set; a name the box sets itself is re
   const plan = boxPlan(input({ envPass: ["ACME_TOKEN", "NOT_SET"] }));
   assert.equal(plan.env.ACME_TOKEN, "acme-placeholder");
   assert.equal("NOT_SET" in plan.env, false);
-  for (const name of ["PATH", "HOME", "SSH_AUTH_SOCK", "DARIUS_RUN", "DARIUS_STATE_DIR", "HTTPS_PROXY", "https_proxy", "NODE_USE_ENV_PROXY", "LC_ALL", "XDG_RUNTIME_DIR"]) {
+  for (const name of ["PATH", "HOME", "SSH_AUTH_SOCK", "DARIUS_RUN", "DARIUS_STATE_DIR", "HTTPS_PROXY", "https_proxy", "NODE_USE_ENV_PROXY", "LC_ALL", "XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "npm_config_cache", "NPM_CONFIG_CACHE"]) {
     assert.throws(() => boxPlan(input({ envPass: [name] })), /env_pass names .* is set by the box itself/u, name);
     assert.match(envPassProblem(name) ?? "", /set by the box itself/u, name);
   }
@@ -486,11 +597,12 @@ test("parseHostPort: names, dotted IPv4 and bracketed IPv6, lower-cased; everyth
 test("the hidden home folders that exist are a tmpfs, after the writable extras and before the work dir; /var/tmp is a tmpfs", () => {
   const tree = baseTree();
   for (const name of [".config/herdr", ".local/state", ".cache/com.bitwarden.desktop", ".local/share/containers"]) tree.set(`${HOME}/${name}`, dir(`${HOME}/${name}`));
-  const { argv } = boxPlan(input({ tree }));
+  tree.set("/srv/out", dir("/srv/out"));
+  const { argv } = boxPlan(input({ tree, host: { writable: ["/srv/out"], sshAgent: false } }));
   for (const name of [".config/herdr", ".local/state", ".cache/com.bitwarden.desktop", ".local/share/containers"]) {
     const index = at(argv, "--tmpfs", `${HOME}/${name}`);
     assert.ok(index !== -1, name);
-    assert.ok(index > at(argv, "--bind", `${HOME}/.cache`, `${HOME}/.cache`), `${name} comes after the cache bind`);
+    assert.ok(index > at(argv, "--bind", "/srv/out", "/srv/out"), `${name} comes after the writable binds`);
     assert.ok(index < at(argv, "--bind", WORK, WORK), `${name} comes before the work dir`);
   }
   assert.equal(has(argv, "--tmpfs", `${HOME}/.mozilla`), false, "a missing folder is left out");
@@ -508,7 +620,7 @@ test("a writable path or a work dir in a hidden folder is refused; one that hold
   assert.throws(() => boxPlan(input({ tree, ritual: { writable: ["~/state-link"] } })), /resolves to .*\.local\/state\/app, and it is in .*\.local\/state, which the box hides/u);
   assert.throws(() => boxPlan(input({ tree, workDir: `${HOME}/.local/state/app` })), /the work dir .* is refused: it is in .*\.local\/state, which the box hides/u);
   assert.match(writableProblem("~/.local/state/x", { home: HOME, store: STORE, config: CONFIG, app: "/opt/darius" }) ?? "", /which the box hides/u);
-  assert.ok(has(boxPlan(input({ tree })).argv, "--bind", `${HOME}/.cache`, `${HOME}/.cache`), "~/.cache holds a hidden folder and stays writable");
+  assert.throws(() => boxPlan(input({ tree, host: { writable: ["~/.cache"], sshAgent: false } })), /it is the cache folder/u, "~/.cache, which holds a hidden folder, is refused itself");
 });
 
 test("every scanned socket is masked behind /dev/null, last; the bound agent is the one exception", () => {

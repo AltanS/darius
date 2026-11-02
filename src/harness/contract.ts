@@ -6,7 +6,7 @@
  * An adapter only translates between darius and one harness.
  */
 
-import type { HostPort } from "../core/box.ts";
+import type { BoxHarnessPath, HostPort } from "../core/box.ts";
 import type { JsonValue, Ritual } from "../core/model.ts";
 import type { GateScope } from "./gate.ts";
 
@@ -142,11 +142,21 @@ export interface HarnessAdapter {
   checkModel: string;
   /**
    * The box (src/core/box.ts, 0.117.0). `boxWritable`: the paths of the
-   * harness login and session state a run in the box may write; everything
-   * else of the harness config stays read-only, because it runs in the
-   * operator's next session, outside the box.
+   * harness login and session state that persist after a run in the box, in
+   * bind order: writable, or read-only over a writable one listed before it,
+   * and made outside when missing if the entry says so. Everything else of the
+   * harness config stays read-only, because it runs in the operator's next
+   * session, outside the box. `workDir` is the work dir's real path (0.122.0):
+   * a harness that keeps state per work dir names only that one.
    */
-  boxWritable(home: string): string[];
+  boxWritable(home: string, workDir: string): BoxHarnessPath[];
+  /**
+   * Per-run folders (0.122.0): each is an empty tmpfs over the real one, so
+   * the run can write there and nothing reaches the operator's sessions. For
+   * folders the harness loads from later, unboxed, such as Claude Code's shell
+   * snapshots, which every Bash call sources.
+   */
+  boxScratch(home: string): string[];
   /** Files the box gets as a per-run copy, bound at their own path: the run may write them, the original stays. */
   boxCopies(home: string): string[];
   /** The hosts the harness must reach in every `net` mode: its API and login endpoints. */

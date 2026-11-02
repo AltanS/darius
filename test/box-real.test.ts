@@ -30,7 +30,7 @@ import { ulid } from "../src/core/ulid.ts";
 import { dariusBin } from "../src/runner/launch.ts";
 import type { RitualEntry } from "../src/runner/report.ts";
 import { runDue } from "../src/runner/run-due.ts";
-import { claudeHarness } from "../src/harness/claude.ts";
+import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 import { VERSION } from "../src/version.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
@@ -74,9 +74,13 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const paths = JSON.parse(process.argv[2]);
-const outcome = (run) => { try { run(); return "ok"; } catch (error) { return error.code ?? String(error); } };
+// Some runtimes leave the code empty on rmSync and name the errno in the message only.
+const errno = (error) => error.code || (/Read-only file system/.test(error.message) ? "EROFS" : /resource busy/.test(error.message) ? "EBUSY" : String(error));
+const outcome = (run) => { try { run(); return "ok"; } catch (error) { return errno(error); } };
 const write = (path) => outcome(() => fs.writeFileSync(path, "box\\n", { flag: "a" }));
 const read = (path) => outcome(() => fs.readFileSync(path));
+const rename = (path) => outcome(() => fs.renameSync(path, path + "-moved"));
+const remove = (path) => outcome(() => fs.rmSync(path, { recursive: true, force: false }));
 const connect = (path) => new Promise((done) => {
   const socket = net.connect(path);
   const timer = setTimeout(() => { socket.destroy(); done("timeout"); }, 3000);
@@ -84,9 +88,11 @@ const connect = (path) => new Promise((done) => {
   socket.on("error", (error) => { clearTimeout(timer); done(error.code); });
 });
 (async () => {
-  const result = { writes: {}, reads: {}, connects: {}, homeConnects: {} };
+  const result = { writes: {}, reads: {}, renames: {}, removes: {}, connects: {}, homeConnects: {} };
   for (const [name, path] of Object.entries(paths.writes)) result.writes[name] = write(path);
   for (const [name, path] of Object.entries(paths.reads)) result.reads[name] = read(path);
+  for (const [name, path] of Object.entries(paths.renames)) result.renames[name] = rename(path);
+  for (const [name, path] of Object.entries(paths.removes)) result.removes[name] = remove(path);
   for (const [name, path] of Object.entries(paths.connects)) result.connects[name] = await connect(path);
   for (const [name, path] of Object.entries(paths.homeConnects)) result.homeConnects[name] = await connect(path);
   result.run = fs.readdirSync("/run").sort();
@@ -101,6 +107,8 @@ const connect = (path) => new Promise((done) => {
 interface Outcome {
   writes: Record<string, string>;
   reads: Record<string, string>;
+  renames: Record<string, string>;
+  removes: Record<string, string>;
   connects: Record<string, string>;
   homeConnects: Record<string, string>;
   run: string[];
@@ -119,9 +127,13 @@ function buildTree(): void {
   put(join(WORK, "README.md"), "work\n");
   put(join(WORK, ".git", "config"), "[core]\n");
   mkdirSync(join(WORK, ".git", "hooks"), { recursive: true });
+  // The marker a run must not raise its own limits in. No <work>/.claude: the box must keep the run from making one.
+  put(join(WORK, ".darius.toml"), 'v = 3\nproject = "acme"\n');
   put(join(HOME, ".claude", "settings.json"), "{}\n");
   put(join(HOME, ".claude", ".credentials.json"), '{"login":"claude-login-placeholder"}\n');
   mkdirSync(join(HOME, ".claude", "projects"), { recursive: true });
+  // The operator's own shell snapshot: the box shows an empty folder there, and keeps the run's writes in it.
+  put(join(HOME, ".claude", "shell-snapshots", "snapshot-operator.sh"), "# the operator's snapshot\n");
   put(join(HOME, ".claude.json"), '{"original":true}\n');
   mkdirSync(join(HOME, ".cache"), { recursive: true });
   put(join(HOME, ".aws", "credentials"), "[default]\naws_secret_access_key = aws-secret-placeholder\n");
@@ -178,7 +190,7 @@ function listen(path: string): Promise<Server> {
   });
 }
 
-test("real bwrap: the box refuses store, run policy, harness settings, git config and host socket access, and allows the work dir, gate.jsonl, scratch and caches", { skip: SKIP }, async (t) => {
+test("real bwrap: the box refuses store, run policy, harness settings, .git, the marker and host socket access, and allows the work dir, gate.jsonl, scratch, the per-run cache and this work dir's session folder", { skip: SKIP }, async (t) => {
   t.after(() => rmSync(BASE, { recursive: true, force: true }));
   buildTree();
   pointEnvAtTree();
@@ -220,8 +232,25 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
       gate: join(RUN_DIR, "gate.jsonl"),
       scratch: join(RUN_DIR, "scratch", "note.txt"),
       cache: join(HOME, ".cache", "pkg"),
-      claudeProjects: join(HOME, ".claude", "projects", "session.jsonl"),
+      runCache: "/var/tmp/cache/pkg",
+      gitCommondir: join(WORK, ".git", "commondir"),
+      workClaudeSettings: join(WORK, ".claude", "settings.json"),
+      marker: join(WORK, ".darius.toml"),
+      claudeOtherProject: join(HOME, ".claude", "projects", "session.jsonl"),
+      claudeProject: join(HOME, ".claude", "projects", claudeProjectDirName(WORK), "session.jsonl"),
+      claudeMemory: join(HOME, ".claude", "projects", claudeProjectDirName(WORK), "memory", "MEMORY.md"),
+      shellSnapshot: join(HOME, ".claude", "shell-snapshots", "snapshot-run.sh"),
+      todo: join(HOME, ".claude", "todos", "todo.json"),
       claudeJson: join(HOME, ".claude.json"),
+    },
+    renames: {
+      git: join(WORK, ".git"),
+      marker: join(WORK, ".darius.toml"),
+      workClaude: join(WORK, ".claude"),
+    },
+    removes: {
+      git: join(WORK, ".git"),
+      marker: join(WORK, ".darius.toml"),
     },
     reads: {
       alerts: join(CONFIG, "alerts.json"),
@@ -231,6 +260,7 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
       configToml: join(CONFIG, "config.toml"),
       sshKey: join(HOME, ".ssh", "id_test"),
       claudeLogin: join(HOME, ".claude", ".credentials.json"),
+      operatorSnapshot: join(HOME, ".claude", "shell-snapshots", "snapshot-operator.sh"),
     },
     connects: hasRealDocker ? { docker: REAL_DOCKER, hidden: HIDDEN_SOCKET } : { docker: REAL_DOCKER, fakeDocker: FAKE_SOCKET, hidden: HIDDEN_SOCKET },
     homeConnects: { home: HOME_SOCKET },
@@ -255,12 +285,18 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
   // SAFETY: the fake harness above prints exactly this shape.
   const outcome = JSON.parse(ran.stdout) as Outcome;
 
-  for (const name of ["store", "ledger", "policy", "runSettings", "claudeSettings", "gitConfig", "gitHook", "config", "bashrc", "systemdUnit"]) {
+  for (const name of ["store", "ledger", "policy", "runSettings", "claudeSettings", "gitConfig", "gitHook", "gitCommondir", "workClaudeSettings", "marker", "config", "bashrc", "systemdUnit", "cache", "claudeOtherProject", "claudeMemory"]) {
     assert.equal(outcome.writes[name], "EROFS", `${name} write is refused`);
   }
-  for (const name of ["work", "gate", "scratch", "cache", "claudeProjects", "claudeJson"]) {
+  for (const name of ["work", "gate", "scratch", "runCache", "claudeProject", "shellSnapshot", "todo", "claudeJson"]) {
     assert.equal(outcome.writes[name], "ok", `${name} write works`);
   }
+  // A mount point cannot be renamed or removed, so .git, the marker and .claude stay where the next unboxed session looks.
+  for (const [name, result] of Object.entries(outcome.renames)) assert.ok(["EBUSY", "EROFS"].includes(result), `rename of ${name} fails: ${result}`);
+  for (const [name, result] of Object.entries(outcome.removes)) assert.ok(["EBUSY", "EROFS"].includes(result), `remove of ${name} fails: ${result}`);
+  assert.equal(outcome.reads.operatorSnapshot, "ENOENT", "the run sees an empty shell-snapshots folder");
+  assert.equal(outcome.env.XDG_CACHE_HOME, "/var/tmp/cache");
+  assert.equal(outcome.env.npm_config_cache, "/var/tmp/npm");
   for (const name of ["alerts", "aws", "gh", "npmrc"]) assert.equal(outcome.reads[name], "EACCES", `${name} is masked`);
   for (const name of ["configToml", "sshKey", "claudeLogin"]) assert.equal(outcome.reads[name], "ok", `${name} stays readable`);
   for (const [name, result] of Object.entries(outcome.connects)) assert.equal(result, "ENOENT", `${name} cannot be reached`);
@@ -282,7 +318,17 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
   assert.equal(readFileSync(join(WORK, "out.txt"), "utf8"), "box\n");
   assert.equal(readFileSync(join(RUN_DIR, "gate.jsonl"), "utf8"), "box\n");
   assert.equal(readFileSync(join(RUN_DIR, "scratch", "note.txt"), "utf8"), "box\n");
-  assert.equal(readFileSync(join(HOME, ".cache", "pkg"), "utf8"), "box\n");
+  assert.equal(existsSync(join(HOME, ".cache", "pkg")), false, "no shared cache by default");
+  assert.equal(readFileSync(join(WORK, ".git", "config"), "utf8"), "[core]\n");
+  assert.equal(existsSync(join(WORK, ".git", "commondir")), false);
+  assert.equal(existsSync(join(WORK, ".git-moved")), false);
+  assert.equal(readFileSync(join(WORK, ".darius.toml"), "utf8"), 'v = 3\nproject = "acme"\n');
+  assert.deepEqual(readdirSync(join(WORK, ".claude")), [], "an empty .claude mount point stays in the checkout, nothing in it");
+  assert.deepEqual(readdirSync(join(HOME, ".claude", "shell-snapshots")), ["snapshot-operator.sh"], "the run's snapshot never reaches the real folder");
+  assert.equal(readFileSync(join(HOME, ".claude", "shell-snapshots", "snapshot-operator.sh"), "utf8"), "# the operator's snapshot\n");
+  assert.deepEqual(readdirSync(join(HOME, ".claude", "todos")), [], "todos is per run too");
+  assert.equal(readFileSync(join(HOME, ".claude", "projects", claudeProjectDirName(WORK), "session.jsonl"), "utf8"), "box\n", "the session persists for run resume");
+  assert.deepEqual(readdirSync(join(HOME, ".claude", "projects", claudeProjectDirName(WORK), "memory")), [], "the memory folder was made, and stays empty");
   assert.equal(readFileSync(join(HOME, ".claude.json"), "utf8"), '{"original":true}\n', "the real ~/.claude.json is untouched");
   assert.equal(readFileSync(plan.copies[0]?.to ?? "", "utf8"), '{"original":true}\nbox\n', "the run wrote its copy");
 

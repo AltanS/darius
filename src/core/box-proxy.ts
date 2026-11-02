@@ -15,7 +15,17 @@
  * any non-public address. Private ranges (10/8, 172.16/12, 192.168/16,
  * 100.64/10, fc00::/7) need a `reach` entry, and so does port 22 to any host:
  * the operator's ssh agent is in the box. Address parsing is strict: IPv4 is
- * dotted decimal only, and IPv4-mapped IPv6 is judged as its IPv4.
+ * dotted decimal only. IPv4-mapped IPv6 and NAT64 (`64:ff9b::/96`) are judged
+ * as their IPv4, also against this host's addresses and the web hosts. The
+ * local-use NAT64 prefix `64:ff9b:1::/48` can reach anything behind its
+ * translator, so it is private: refused unless a `reach` entry names it.
+ *
+ * This host's addresses are read again for each decision and merged with the
+ * policy's list, so an address that appears during a run is refused too. A
+ * plain HTTP request gets one upstream connection: the proxy sends
+ * `Connection: close`, forwards exactly the body its `Content-Length` names,
+ * and passes nothing more of the client's bytes, so a second request cannot
+ * ride on a checked connection. A chunked request body is refused.
  *
  * Design: the private workspace note "box design", section "Network".
  */
@@ -47,7 +57,8 @@ export interface BoxPolicy {
   /**
    * The darius web ports. An entry with host `""` is port only: that port on any
    * non-public address. An entry with a host also refuses that host (by name, or
-   * by address for an address literal) on that port, public or not.
+   * by address for an address literal) on that port, public or not. The launch
+   * adds each web host's addresses as entries of their own (`withWebAddresses`).
    */
   webPorts: HostPort[];
 }
@@ -97,6 +108,8 @@ export interface BoxProxyOptions {
   resolve?: Resolver;
   /** Tests inject one for the end to end proof; the default is `decide`. */
   decide?: Decide;
+  /** This host's addresses now, read for each decision. Tests inject one; the default reads the interfaces. */
+  ownAddresses?: () => string[];
   idleMs?: number;
   maxTunnels?: number;
 }
@@ -161,17 +174,32 @@ function parseIPv6(input: string): number[] | null {
   return [...left, ...zeros, ...right, ...tail].flatMap((group) => [group >> 8, group & 0xff]);
 }
 
-/** An address as bytes: 4 for IPv4, 16 for IPv6. IPv4-mapped IPv6 comes back as its IPv4. */
+/** An address as bytes: 4 for IPv4, 16 for IPv6. IPv4-mapped and NAT64 IPv6 come back as their IPv4. */
 function addressBytes(text: string): number[] | null {
   const v4 = parseIPv4(text);
   if (v4 !== null) return v4;
   const v6 = parseIPv6(text);
   if (v6 === null) return null;
-  return isMapped(v6) ? v6.slice(12) : v6;
+  return unwrapIPv4(v6);
 }
 
 function isMapped(bytes: readonly number[]): boolean {
   return bytes.slice(0, 10).every((byte) => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+}
+
+/** `64:ff9b::/96`, the well-known NAT64 prefix: the last four bytes are the IPv4 it reaches. */
+function isNat64(bytes: readonly number[]): boolean {
+  return bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes.slice(4, 12).every((byte) => byte === 0);
+}
+
+/** `64:ff9b:1::/48`, the local-use NAT64 prefix (RFC 8215): what it reaches is up to the local translator. */
+function isLocalNat64(bytes: readonly number[]): boolean {
+  return bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes[4] === 0x00 && bytes[5] === 0x01;
+}
+
+/** IPv6 bytes, or the IPv4 they carry for a mapped or NAT64 address. */
+function unwrapIPv4(bytes: number[]): number[] {
+  return isMapped(bytes) || isNat64(bytes) ? bytes.slice(12) : bytes;
 }
 
 function classifyIPv4(bytes: readonly number[]): AddressClass {
@@ -196,7 +224,8 @@ function classifyIPv6(bytes: readonly number[]): AddressClass {
   // ::a.b.c.d, the old IPv4-compatible form. Nothing routes it.
   if (first12Zero) return "reserved";
   // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) reach an embedded IPv4: judge that.
-  if (a === 0x00 && b === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes.slice(4, 12).every((byte) => byte === 0)) return classifyIPv4(bytes.slice(12));
+  if (isNat64(bytes)) return classifyIPv4(bytes.slice(12));
+  if (isLocalNat64(bytes)) return "private";
   if (a === 0x20 && b === 0x02) return classifyIPv4(bytes.slice(2, 6));
   if (a === 0xfe && (b & 0xc0) === 0x80) return "link-local";
   if (a === 0xfe && (b & 0xc0) === 0xc0) return "private";
@@ -228,7 +257,7 @@ export function judgeHost(input: string): Host {
   const raw = input.toLowerCase();
   if (raw.includes(":")) {
     const bytes = parseIPv6(raw);
-    return bytes === null ? { kind: "bad", rule: "bad-host", reason: `not an IPv6 address: ${input}` } : { kind: "address", name: raw, bytes: isMapped(bytes) ? bytes.slice(12) : bytes };
+    return bytes === null ? { kind: "bad", rule: "bad-host", reason: `not an IPv6 address: ${input}` } : { kind: "address", name: raw, bytes: unwrapIPv4(bytes) };
   }
   const v4 = parseIPv4(raw);
   if (v4 !== null) return { kind: "address", name: raw, bytes: v4 };
@@ -350,6 +379,42 @@ export function hostAddresses(extra: readonly string[] = []): string[] {
   return [...new Set([...found, ...extra])];
 }
 
+/** The start list plus the addresses this host has now. A read that fails, or an address the proxy cannot parse, adds nothing. */
+function currentOwnAddresses(start: readonly string[], read: () => string[]): string[] {
+  let now: string[] = [];
+  try {
+    now = read().filter((address) => addressBytes(address) !== null);
+  } catch {
+    // The start list still holds.
+  }
+  return [...new Set([...start, ...now])];
+}
+
+/**
+ * The web ports plus, for each entry that names a host, one entry per address
+ * that name resolves to now, on the same port. So the web page is refused by
+ * address too, also when the run asks for it under another name. A name that
+ * does not resolve keeps its name entry only.
+ */
+export async function withWebAddresses(entries: readonly HostPort[], resolve: Resolver = systemResolve): Promise<HostPort[]> {
+  const added: HostPort[] = [];
+  for (const entry of entries) {
+    const host = judgeHost(entry.host);
+    if (host.kind !== "name") continue;
+    const addresses = await resolve(host.name).catch((): string[] => []);
+    for (const address of addresses) {
+      if (judgeHost(address).kind === "address") added.push({ host: address.toLowerCase(), port: entry.port });
+    }
+  }
+  const seen = new Set<string>();
+  return [...entries, ...added].filter((entry) => {
+    const key = `${entry.host}|${String(entry.port)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Throws on a policy the proxy cannot judge by, so a typo never widens it. */
 export function checkPolicy(policy: BoxPolicy): void {
   if (!["public", "listed", "none"].includes(policy.net)) throw new Error(`net must be public, listed or none: ${policy.net}`);
@@ -371,16 +436,27 @@ export function checkPolicy(policy: BoxPolicy): void {
 
 export type ProxyRequest =
   | { kind: "connect"; host: string; port: number; rest: Buffer }
-  | { kind: "http"; host: string; port: number; method: string; version: string; path: string; authority: string; headers: [string, string][]; rest: Buffer };
+  | { kind: "http"; host: string; port: number; method: string; version: string; path: string; authority: string; headers: [string, string][]; bodyLength: number; rest: Buffer };
 
 export type RequestError = { kind: "error"; status: 400 | 431; reason: string };
 
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "TRACE"]);
 const TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]+$/iu;
-const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "proxy-authorization", "proxy-authenticate", "upgrade", "host"]);
+const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "proxy-authorization", "proxy-authenticate", "upgrade", "host", "te", "trailer"]);
+const CONTENT_LENGTH = /^\d{1,15}$/u;
 
 function bad(reason: string): RequestError {
   return { kind: "error", status: 400, reason };
+}
+
+/** The body length of a plain HTTP request: its one `Content-Length`, else 0. A chunked or unclear length is refused. */
+function bodyLength(headers: readonly [string, string][]): { kind: "length"; bytes: number } | RequestError {
+  if (headers.some(([name]) => name.toLowerCase() === "transfer-encoding")) return bad("a chunked request body is not taken: send Content-Length");
+  const values = [...new Set(headers.filter(([name]) => name.toLowerCase() === "content-length").map(([, value]) => value))];
+  if (values.length === 0) return { kind: "length", bytes: 0 };
+  const [value = ""] = values;
+  if (values.length > 1 || !CONTENT_LENGTH.test(value)) return bad("the request has more than one Content-Length, or one that is not a number");
+  return { kind: "length", bytes: Number(value) };
 }
 
 /** The end of the header block, or -1 while it is not complete. Only CRLF line ends count. */
@@ -420,11 +496,13 @@ export function parseRequest(head: string, rest: Buffer): ProxyRequest | Request
   const authority = absolute[1] ?? "";
   if (authority.includes("@")) return bad("a user name in the URL is not taken");
   const withPort = /:\d+$/u.test(authority) ? authority : `${authority}:80`;
+  const length = bodyLength(headers);
+  if (length.kind === "error") return length;
   try {
     const { host, port } = parseHostPort(withPort);
     const raw = absolute[2] ?? "/";
     const path = raw.startsWith("?") ? `/${raw}` : raw;
-    return { kind: "http", host, port, method, version, path, authority, headers, rest };
+    return { kind: "http", host, port, method, version, path, authority, headers, bodyLength: length.bytes, rest };
   } catch (cause) {
     return bad(errorMessage(cause));
   }
@@ -501,6 +579,30 @@ function connectFirst(addresses: readonly string[], port: number): Promise<Socke
   });
 }
 
+/**
+ * Sends upstream exactly the body that the request's Content-Length names, and
+ * nothing after it: one request per upstream connection. The upstream got
+ * `Connection: close`, so it closes after its response, and the client
+ * connection closes with it. A byte the client sends after the body is a next
+ * request: the proxy then closes both connections, and the client starts a
+ * new one, which is checked again.
+ */
+function forwardBody(client: Socket, upstream: Socket, request: Extract<ProxyRequest, { kind: "http" }>): void {
+  let left = request.bodyLength;
+  const send = (chunk: Buffer): void => {
+    const part = chunk.subarray(0, left);
+    left -= part.length;
+    if (part.length > 0) upstream.write(part);
+    if (chunk.length > part.length) {
+      upstream.destroy();
+      client.destroy();
+    }
+  };
+  send(request.rest);
+  client.on("data", send);
+  client.resume();
+}
+
 interface Logged {
   host: string;
   port: number;
@@ -517,6 +619,7 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
   checkPolicy(policy);
   const resolve = options.resolve ?? systemResolve;
   const judge = options.decide ?? decide;
+  const readOwn = options.ownAddresses ?? (() => hostAddresses());
   const idleMs = options.idleMs ?? IDLE_MS;
   const maxTunnels = options.maxTunnels ?? MAX_TUNNELS;
   const open = new Set<Socket>();
@@ -545,7 +648,7 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
     let addresses: string[] = [];
     if (host.kind === "address") addresses = [host.name];
     if (host.kind === "name") addresses = await resolve(host.name).catch(() => []);
-    const decision = judge({ host: request.host, port: request.port, addresses }, policy);
+    const decision = judge({ host: request.host, port: request.port, addresses }, { ...policy, ownAddresses: currentOwnAddresses(policy.ownAddresses, readOwn) });
     const logged = { host: request.host, port: request.port, addresses, decision };
     if (!decision.allow) {
       refuseRequest(client, 403, logged);
@@ -566,11 +669,15 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
     track(upstream);
     upstream.once("close", () => client.destroy());
     client.once("close", () => upstream.destroy());
-    if (request.kind === "connect") client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    if (request.kind === "http") upstream.write(originRequest(request));
+    upstream.pipe(client);
+    if (request.kind === "http") {
+      upstream.write(originRequest(request));
+      forwardBody(client, upstream, request);
+      return;
+    }
+    client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (request.rest.length > 0) upstream.write(request.rest);
     client.pipe(upstream);
-    upstream.pipe(client);
     client.resume();
   };
 

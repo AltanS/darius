@@ -2,6 +2,23 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.122.0] - 2026-11-03
+
+### Changed
+
+- The default `[box] writable` is empty. Shared caches held code and files that later unboxed runs and shells load. Inside the box `XDG_CACHE_HOME` is `/var/tmp/cache` and `npm_config_cache` is `/var/tmp/npm`, per run. Name a shared cache in host config to keep one, and own that risk.
+- A writable path that is a PATH entry of the runner, is in one or holds one is refused at launch, and `~/.cache` itself is refused at load. A host config with `writable = ["~/.cache"]` must name a folder in it.
+- The adapter contract: `boxWritable(home, workDir)` returns paths that may be read-only or made when missing, and `boxScratch(home)` lists per-run folders. For Claude Code only `.credentials.json`, `history.jsonl` and the work dir's own `projects/<folder>` persist, made before the launch when missing. Its `memory` folder is read-only.
+
+### Fixed
+
+- A run in the box could write `.git/commondir`, or rename `.git` away with its read-only config and hooks, so a later unboxed `git status` ran a forged config. `<work>/.git` is now one read-only mount on its own path, a folder or a linked worktree's file. It cannot be renamed or removed. Runs in the box cannot commit.
+- A run in the box could create `<work>/.claude/settings.json` when `.claude` was missing. A missing `.claude` now gets an empty read-only folder, and an empty `.claude` folder stays in the checkout. `<work>/.darius.toml` is read-only too, so a run cannot raise its own box keys. A link in any of the three is refused.
+- `~/.claude/shell-snapshots`, which the operator's own sessions source before every Bash call, was writable. It is now an empty tmpfs per run, with `session-env`, `todos`, `tasks`, `debug`, `statsig` and `file-history`.
+- The proxy refused a `DARIUS_WEB_URL` host by name only. It now resolves the host when it builds the policy and refuses those addresses on that port.
+- Plain HTTP through the proxy is one request per upstream connection. It sends `Connection: close`, forwards exactly the `Content-Length` body, refuses a chunked body, and closes both sides when the client sends more.
+- The proxy reads this host's addresses again for each decision, so an address that appears during a run is refused. NAT64 `64:ff9b::/96` is judged by its IPv4 for every rule; `64:ff9b:1::/48` needs a `reach` entry.
+
 ## [0.121.0] - 2026-11-03
 
 ### Added

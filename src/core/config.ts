@@ -79,10 +79,11 @@ export interface Config {
   run: { sandbox: RunSandbox };
   /**
    * `[box]` (0.117.0): what a run in the box may write besides its work dir,
-   * and whether it gets the ssh agent. `writable` undefined means the default
-   * cache list (`DEFAULT_BOX_WRITABLE` in src/core/box.ts). Each path is checked
-   * at load: a path in or holding the store, the config dir, `~/.claude`,
-   * `~/.ssh` or another protected path is an error.
+   * and whether it gets the ssh agent. `writable` undefined means the default,
+   * an empty list since 0.122.0 (`DEFAULT_BOX_WRITABLE` in src/core/box.ts). Each
+   * path is checked at load: a path in or holding the store, the config dir,
+   * `~/.claude`, `~/.ssh` or another protected path, or `~/.cache` itself, is an
+   * error. The plan also refuses a path in or holding a PATH entry of the runner.
    */
   box: { writable?: readonly string[]; sshAgent: boolean };
   /**

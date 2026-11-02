@@ -10,15 +10,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer } from "node:net";
 import type { AddressInfo, Server, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decide, hostAddresses, judgeHost, parseHostPort, parseRequest, startBoxProxy } from "../src/core/box-proxy.ts";
+import { decide, hostAddresses, judgeHost, parseHostPort, parseRequest, startBoxProxy, withWebAddresses } from "../src/core/box-proxy.ts";
 import type { BoxPolicy, Decide, Decision, HostPort, Resolver } from "../src/core/box-proxy.ts";
+import { boxPolicy } from "../src/runner/box-launch.ts";
 
 const DIR = mkdtempSync(join(tmpdir(), "darius-box-proxy-"));
 let sockets = 0;
@@ -306,7 +307,10 @@ test("parseRequest takes CONNECT and absolute-form plain HTTP only", () => {
     assert.equal(plain.host, "plain.example");
     assert.equal(plain.port, 80);
     assert.equal(plain.path, "/a?b=1");
+    assert.equal(plain.bodyLength, 0);
   }
+  const post = parseRequest("POST http://plain.example/ HTTP/1.1\r\nContent-Length: 3\r\ncontent-length: 3", empty);
+  assert.equal(post.kind === "http" && post.bodyLength, 3, "the same length twice is one length");
   for (const head of [
     "GARBAGE",
     "CONNECT api.example HTTP/1.1",
@@ -319,6 +323,9 @@ test("parseRequest takes CONNECT and absolute-form plain HTTP only", () => {
     "BREW http://api.example/ HTTP/1.1",
     "CONNECT api.example:443 HTTP/1.1\r\nno colon here",
     "CONNECT api.example:443 HTTP/1.1\r\n folded: header",
+    "POST http://api.example/ HTTP/1.1\r\nTransfer-Encoding: chunked",
+    "POST http://api.example/ HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4",
+    "POST http://api.example/ HTTP/1.1\r\nContent-Length: -1",
   ]) {
     const parsed = parseRequest(head, empty);
     assert.equal(parsed.kind, "error", head);
@@ -551,4 +558,135 @@ test("startBoxProxy refuses a policy it cannot judge by", async () => {
   await assert.rejects(startBoxProxy({ ...base, policy: policy({ ownAddresses: ["not-an-ip"] }) }));
   await assert.rejects(startBoxProxy({ ...base, policy: policy({ reach: [{ host: "2130706433", port: 22 }] }) }));
   await assert.rejects(startBoxProxy({ ...base, policy: policy({ reach: [{ host: "git.example", port: 0 }] }) }));
+});
+
+// ---------------------------------------------------------------------------
+// 0.122.0: web hosts by address, one request per connection, new own addresses, NAT64
+
+test("NAT64 64:ff9b::/96 is judged by its IPv4: loopback, this host, private, a web host and a reach entry all match", () => {
+  // 64:ff9b::c633:6407 carries 198.51.100.7; 64:ff9b::a00:1 carries 10.0.0.1.
+  assertRefused(judge("64:ff9b::7f00:1", 443, [], policy()), "loopback");
+  assertRefused(judge("64:ff9b::c633:6407", 443, [], policy({ ownAddresses: ["198.51.100.7"] })), "this-host");
+  assertRefused(judge("nat64.example", 443, ["64:ff9b::c633:6407"], policy({ ownAddresses: ["198.51.100.7"] })), "this-host");
+  assertRefused(judge("64:ff9b::a00:1", 443, [], policy()), "private");
+  assertAllowed(judge("64:ff9b::a00:1", 443, [], policy({ reach: [hp("10.0.0.1:443")] })), "reach");
+  assertRefused(judge("64:ff9b::c633:6407", 8443, [], policy({ webPorts: [hp("198.51.100.7:8443")] })), "web-port");
+  assertAllowed(judge("64:ff9b::c633:6407", 443, [], policy()), "public");
+});
+
+test("the local-use NAT64 prefix 64:ff9b:1::/48 is refused unless a reach entry names it", () => {
+  assertRefused(judge("64:ff9b:1::5", 443, [], policy()), "private");
+  assertRefused(judge("nat.example", 443, ["64:ff9b:1::5"], policy()), "private");
+  assertAllowed(judge("64:ff9b:1::5", 443, [], policy({ reach: [hp("[64:ff9b:1::5]:443")] })), "reach");
+  assertAllowed(judge("nat.example", 443, ["64:ff9b:1::5"], policy({ reach: [hp("nat.example:443")] })), "reach");
+});
+
+test("withWebAddresses adds each web host's addresses on its port; the web page is then refused by address under any name", async () => {
+  const entries = [{ host: "", port: 4747 }, hp("darius.example:8443"), hp("gone.example:9443")];
+  const added = await withWebAddresses(entries, fakeResolver({ "darius.example": ["198.51.100.7", "2001:DB8::7", "fe80::1%eth0", "198.51.100.7"] }));
+  assert.deepEqual(added, [...entries, { host: "198.51.100.7", port: 8443 }, { host: "2001:db8::7", port: 8443 }], "a scoped address is left out, a repeat once");
+  const rules = policy({ webPorts: added });
+  assertRefused(judge("other-name.example", 8443, ["198.51.100.7"], rules), "web-port");
+  assertRefused(judge("2001:db8::7", 8443, [], rules), "web-port");
+  assertRefused(judge("::ffff:198.51.100.7", 8443, [], rules), "web-port");
+  assertAllowed(judge("other-name.example", 443, ["198.51.100.7"], rules), "public");
+  // Before 0.122.0 only the name was refused: the same address under another name passed.
+  assertAllowed(judge("other-name.example", 8443, ["198.51.100.7"], policy({ webPorts: entries })), "public");
+});
+
+test("boxPolicy resolves the DARIUS_WEB_URL host of web.env and refuses its addresses on that port", async () => {
+  const dir = mkdtempSync(join(DIR, "config-"));
+  writeFileSync(join(dir, "web.env"), "DARIUS_WEB_URL=https://darius.example:8443\n");
+  const before = process.env.DARIUS_CONFIG_DIR;
+  process.env.DARIUS_CONFIG_DIR = dir;
+  try {
+    const asked: string[] = [];
+    const rules = await boxPolicy({}, { boxHosts: [] }, (name) => {
+      asked.push(name);
+      return Promise.resolve(name === "darius.example" ? ["198.51.100.7"] : []);
+    });
+    assert.deepEqual(asked, ["darius.example"]);
+    assert.ok(rules.webPorts.some((entry) => entry.host === "198.51.100.7" && entry.port === 8443), JSON.stringify(rules.webPorts));
+    assertRefused(decide({ host: "alias.example", port: 8443, addresses: ["198.51.100.7"] }, rules), "web-port");
+  } finally {
+    if (before === undefined) delete process.env.DARIUS_CONFIG_DIR;
+    else process.env.DARIUS_CONFIG_DIR = before;
+  }
+});
+
+test("end to end: an address this host gets during a run is refused from the next decision on", async () => {
+  let own: string[] = [];
+  const seen: Decision[] = [];
+  // The real rule decides; the wrapper then refuses, so no test ever connects to a public address.
+  const record: Decide = (target, rules) => {
+    const decision = decide(target, rules);
+    seen.push(decision);
+    return decision.allow ? { allow: false, rule: "not-listed", reason: "test: no connect" } : decision;
+  };
+  const path = socketPath();
+  const proxy = await startBoxProxy({ socketPath: path, policy: policy({ ownAddresses: ["198.51.100.1"] }), log: () => {}, resolve: fakeResolver({ "new.example": ["2001:db8::99"] }), decide: record, ownAddresses: () => own });
+  try {
+    await exchange(path, "CONNECT new.example:443 HTTP/1.1\r\n\r\n");
+    own = ["2001:db8::99", "not-an-address"];
+    await exchange(path, "CONNECT new.example:443 HTTP/1.1\r\n\r\n");
+    await exchange(path, "CONNECT 198.51.100.1:443 HTTP/1.1\r\n\r\n");
+    assert.equal(seen[0]?.allow, true, "before the address appears it is a public address");
+    assertRefused(seen[1] ?? refuseNothing(), "this-host");
+    assertRefused(seen[2] ?? refuseNothing(), "this-host");
+  } finally {
+    await proxy.close();
+  }
+});
+
+function refuseNothing(): Decision {
+  return { allow: true, rule: "public", addresses: [] };
+}
+
+test("end to end: plain HTTP is one request per upstream connection: Connection: close, the body by Content-Length, nothing after it", async () => {
+  // A raw server that ignores Connection: close and keeps the connection open, so only the proxy can end it.
+  const received: string[] = [];
+  let closes = 0;
+  const raw = createServer((socket) => {
+    let got = "";
+    socket.on("data", (chunk) => {
+      got += chunk.toString("latin1");
+      if (got.includes("\r\n\r\n") && got.endsWith("abc")) socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+    });
+    socket.on("close", () => {
+      received.push(got);
+      closes += 1;
+    });
+  });
+  const port = await listen(raw);
+  const path = socketPath();
+  const proxy = await startBoxProxy({ socketPath: path, policy: policy(), log: () => {}, resolve: fakeResolver({ "upstream.test": ["127.0.0.1"] }), decide: allowOnly(port) });
+  try {
+    const client = connect(path);
+    let answer = "";
+    const isAnswered = new Promise<void>((resolve) => {
+      client.on("data", (chunk) => {
+        answer += chunk.toString("latin1");
+        if (answer.endsWith("ok")) resolve();
+      });
+    });
+    client.write(`POST http://upstream.test:${port}/one HTTP/1.1\r\nHost: upstream.test:${port}\r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\nab`);
+    client.write("c");
+    await isAnswered;
+    assert.match(answer, /^HTTP\/1\.1 200 OK/u);
+    // A second request on the same client connection: the proxy closes both sides, nothing reaches the server.
+    client.write(`GET http://other.test:${port}/two HTTP/1.1\r\nHost: other.test\r\n\r\n`);
+    await closed(client);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(closes, 1);
+    const [only = ""] = received;
+    assert.match(only, /^POST \/one HTTP\/1\.1\r\n/u);
+    assert.match(only, /\r\nConnection: close\r\n\r\nabc$/u, "Connection: close goes upstream, then exactly the body");
+    assert.doesNotMatch(only, /keep-alive|\/two|other\.test/u);
+    // A chunked body is refused before any connection.
+    assert.match(await exchange(path, `POST http://upstream.test:${port}/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`), /^HTTP\/1\.1 400 .*chunked/su);
+    assert.equal(closes, 1);
+  } finally {
+    await proxy.close();
+    raw.close();
+  }
 });
