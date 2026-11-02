@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.116.0] - 2026-11-02
+
+### Added
+
+- The box proxy (`src/core/box-proxy.ts`), the network boundary of the coming box sandbox. It is not used yet.
+
 ## [0.115.0] - 2026-11-02
 
 ### Changed
