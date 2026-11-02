@@ -2,6 +2,16 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.119.0] - 2026-11-02
+
+### Added
+
+- `darius box enter --relay-port N [--proxy PATH] -- <command>`: inside the box only. It refuses to run without the box marker `/run/darius/box.json`. It starts a relay on `127.0.0.1:N` to the proxy socket, runs the command, passes SIGTERM, SIGINT and SIGHUP on, and exits with its code, or 128 plus the signal number.
+- `darius box connect <host> <port>`: the ssh ProxyCommand in the box. It opens a tunnel through the proxy on stdin and stdout. A refusal prints the proxy's one line on stderr and exits 1.
+- `src/core/box-files.ts` writes the box dir before a launch: the marker, `bin/ssh`, `bin/scp` and `bin/sftp` wrappers that run the real program with `-F /run/darius/ssh_config`, and that config, mode 0600. It starts with `Host *` and `ProxyCommand <darius> box connect %h %p`, with `ControlPath none`, then the user's `~/.ssh/config` without `Include`, `ProxyCommand`, `ProxyJump` and `Match exec` blocks. git finds the wrapper on PATH.
+- The darius path and the real ssh programs are resolved outside. A darius path the box cannot see is refused; an ssh program the box cannot see gets no wrapper.
+- `darius box` reads no marker, link, store or config before it runs. No run launches in the box yet.
+
 ## [0.118.0] - 2026-11-02
 
 ### Added

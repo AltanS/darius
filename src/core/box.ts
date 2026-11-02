@@ -74,7 +74,7 @@ export const BOX_BROKER_SOCKET = `${BOX_MOUNT}/broker.sock`;
 export const DEFAULT_BOX_WRITABLE: readonly string[] = ["~/.cache", "~/.bun/install/cache", "~/.local/share/pnpm", "~/.npm", "~/go/pkg", "~/.cargo/registry"];
 
 /** The NixOS paths under /run that programs need; re-bound after the /run tmpfs when present. */
-const RUN_REBINDS: readonly string[] = ["/run/current-system", "/run/wrappers", "/run/opengl-driver", "/run/booted-system"];
+export const RUN_REBINDS: readonly string[] = ["/run/current-system", "/run/wrappers", "/run/opengl-driver", "/run/booted-system"];
 
 /** System dirs a writable path may not be in, or hold. */
 const SYSTEM_ROOTS: readonly string[] = ["/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp"];

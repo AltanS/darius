@@ -12,6 +12,7 @@
  */
 
 import { register, type Command } from "./registry.ts";
+import { boxCommand } from "./box.ts";
 import { dueCommand } from "./due.ts";
 import { emailCommand } from "./email.ts";
 import { findingCommand } from "./finding.ts";
@@ -45,6 +46,7 @@ import { vigilCommand } from "./vigil.ts";
 import { workCommand } from "./work.ts";
 
 const COMMANDS: readonly Command[] = [
+  boxCommand,
   dueCommand,
   emailCommand,
   findingCommand,

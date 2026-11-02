@@ -153,6 +153,8 @@ async function dispatch(argv: string[]): Promise<number> {
   }
 
   const name = resolveCommandName(first);
+  // `box` runs inside the box: it reads no marker, link or store, and writes nothing.
+  if (name === "box") return runBoxed(argv);
   const ask = helpAsk(argv.slice(1));
   if (ask.kind === "ambiguous") {
     console.error(`darius: -h after --${ask.flag} is ambiguous. For help, put -h first. For a value, write --${ask.flag}=-h.`);
@@ -207,6 +209,31 @@ async function dispatch(argv: string[]): Promise<number> {
 
   try {
     return await command.run(args);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      console.error(error.message.startsWith("usage: ") ? error.message : `darius: ${error.message}`);
+      return 2;
+    }
+    console.error(`darius: ${errorMessage(error)}`);
+    return 1;
+  }
+}
+
+/** `darius box ...`: help or the command itself, with nothing read before it. */
+async function runBoxed(argv: string[]): Promise<number> {
+  const command = getCommand("box");
+  if (command === undefined) throw new Error("darius: the box command is not registered");
+  const ask = helpAsk(argv.slice(1));
+  if (ask.kind === "ambiguous") {
+    console.error(`darius: -h after --${ask.flag} is ambiguous. For help, put -h first. For a value, write --${ask.flag}=-h.`);
+    return 2;
+  }
+  if (ask.kind === "help") {
+    console.log(commandHelp(command));
+    return 0;
+  }
+  try {
+    return await command.run(parseArgs(argv.slice(1), command.flags));
   } catch (error) {
     if (error instanceof UsageError) {
       console.error(error.message.startsWith("usage: ") ? error.message : `darius: ${error.message}`);

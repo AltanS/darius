@@ -14,12 +14,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import { boxPlan, type BoxPlan } from "../src/core/box.ts";
+import { boxEnterPlanFields, boxFiles, hostBoxFiles, writeBoxFiles } from "../src/core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../src/core/box-host.ts";
+import { decide, startBoxProxy, type Decide } from "../src/core/box-proxy.ts";
+import { dariusBin } from "../src/runner/launch.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
@@ -147,10 +151,10 @@ interface Ran {
 }
 
 /** Runs the plan's argv without a shell, from the work dir. Async: the stand-in socket must stay served meanwhile. */
-function runInBox(plan: BoxPlan): Promise<Ran> {
+function runInBox(plan: BoxPlan, cwd: string = WORK, timeout = 30_000): Promise<Ran> {
   const [bin = "", ...args] = plan.argv;
   return new Promise((done) => {
-    const child = spawn(bin, args, { cwd: WORK, env: { PATH: process.env.PATH ?? "" }, timeout: 30_000 });
+    const child = spawn(bin, args, { cwd, env: { PATH: process.env.PATH ?? "" }, timeout });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
@@ -276,4 +280,261 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
 
   removeBox(plan);
   assert.equal(existsSync(plan.boxDir), false);
+});
+
+// --- inside the box: the relay, box connect, ssh and git (spec 03) ------------------
+
+/** A throwaway tree for the tests below. Made only when they run; each test removes its own. */
+interface Tree {
+  base: string;
+  home: string;
+  store: string;
+  config: string;
+  runtime: string;
+  work: string;
+  runDir: string;
+}
+
+/** The tree, with this process's env pointed at it, as `pointEnvAtTree` does for the first test. */
+function makeTree(): Tree {
+  const base = realpathSync(mkdtempSync(join(writableDir("/var/tmp") ? "/var/tmp" : tmpdir(), "darius-box-inside-")));
+  const home = join(base, "home");
+  const store = join(home, ".local", "share", "darius");
+  const tree: Tree = { base, home, store, config: join(home, ".config", "darius"), runtime: join(base, "runtime"), work: join(base, "work"), runDir: join(store, "acme", "runs", "r2") };
+  put(join(tree.config, "config.toml"), 'host = "box-test"\n');
+  put(join(tree.runDir, "policy.json"), '{"v":1}\n');
+  put(join(tree.work, "README.md"), "work\n");
+  put(join(home, ".claude", "settings.json"), "{}\n");
+  // The fake user's ssh config. What the box keeps of it keeps ssh off every real key, agent and known_hosts file.
+  put(
+    join(home, ".ssh", "config"),
+    [
+      "Include ~/.ssh/config.d/*",
+      "Host *",
+      "  ProxyJump bastion.example.com",
+      "  IdentityFile /dev/null",
+      "  IdentitiesOnly yes",
+      "  IdentityAgent none",
+      "  UserKnownHostsFile /dev/null",
+      "  GlobalKnownHostsFile /dev/null",
+      "  StrictHostKeyChecking no",
+      "  BatchMode yes",
+      "",
+    ].join("\n"),
+  );
+  mkdirSync(tree.runtime, { recursive: true, mode: 0o700 });
+  mkdirSync(join(base, "app"), { recursive: true });
+  process.env.HOME = home;
+  process.env.DARIUS_STATE_DIR = store;
+  process.env.DARIUS_CONFIG_DIR = tree.config;
+  process.env.DARIUS_APP_DIR = join(base, "app");
+  process.env.XDG_RUNTIME_DIR = tree.runtime;
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.SSH_AUTH_SOCK;
+  return tree;
+}
+
+/** The darius CLI as the box runs it, resolved outside. */
+function boxedDarius(tree: Tree): string {
+  return hostBoxFiles({ run: "r2", dariusBin: dariusBin(), home: tree.home, runtimeDir: tree.runtime, env: {} }).darius;
+}
+
+/** The plan for `darius box enter -- <harness argv>` in `tree`, with the box dir and its files made. */
+function boxedPlan(tree: Tree, harnessArgv: readonly string[]): BoxPlan {
+  const facts = hostBoxFacts({ workDir: tree.work });
+  const files = hostBoxFiles({ run: "r2", dariusBin: dariusBin(), home: facts.home, runtimeDir: facts.runtimeDir, env: facts.env });
+  const plan = boxPlan({
+    bwrap: REAL_BWRAP ?? "",
+    ...boxEnterPlanFields(files.darius, harnessArgv),
+    run: { id: "r2", dir: tree.runDir, policy: join(tree.runDir, "policy.json"), project: "acme" },
+    workDir: tree.work,
+    isReport: false,
+    hasTty: false,
+    ritual: {},
+    host: { sshAgent: false },
+    harness: claudeHarness,
+    envPass: [],
+    facts,
+  });
+  prepareBox(plan);
+  writeBoxFiles(plan.boxDir, boxFiles(files));
+  return plan;
+}
+
+function listenLocal(server: Server): Promise<number> {
+  // SAFETY: a TCP server that listens has an AddressInfo address.
+  return new Promise((done) => server.listen({ host: "127.0.0.1", port: 0 }, () => done((server.address() as AddressInfo).port)));
+}
+
+/** The fake harness for the network proof: one JSON object of outcomes on stdout. */
+const NET_HARNESS = `
+const fs = require("node:fs");
+const net = require("node:net");
+const { spawn } = require("node:child_process");
+const args = JSON.parse(process.argv[2]);
+const relay = new URL(process.env.HTTP_PROXY);
+const exchange = (port, host, text) => new Promise((done) => {
+  const socket = net.connect(port, host);
+  let got = "";
+  const timer = setTimeout(() => { socket.destroy(); done("timeout"); }, 10000);
+  socket.on("connect", () => socket.write(text));
+  socket.on("data", (chunk) => { got += chunk; });
+  socket.on("close", () => { clearTimeout(timer); done(got); });
+  socket.on("error", (error) => { clearTimeout(timer); done(error.code); });
+});
+const get = (port) => exchange(Number(relay.port), relay.hostname, "GET http://127.0.0.1:" + port + "/hello HTTP/1.1\\r\\nHost: 127.0.0.1:" + port + "\\r\\n\\r\\n");
+const run = (program, argv, input) => new Promise((done) => {
+  const child = spawn(program, argv, { stdio: ["pipe", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    if (input !== undefined && stdout === input) child.stdin.end();
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.on("error", (error) => { clearTimeout(timer); done({ code: error.code, stdout, stderr }); });
+  child.on("close", (code) => { clearTimeout(timer); done({ code, stdout, stderr }); });
+  if (input === undefined) child.stdin.end(); else child.stdin.write(input);
+});
+(async () => {
+  const result = {};
+  result.allowed = await get(args.http);
+  result.refused = await get(args.closed);
+  result.direct = await exchange(args.http, "127.0.0.1", "GET /hello HTTP/1.1\\r\\n\\r\\n");
+  result.connect = await run(args.darius, ["box", "connect", "127.0.0.1", String(args.echo)], "ping through the box\\n");
+  result.connectRefused = await run(args.darius, ["box", "connect", "10.0.0.1", "22"]);
+  result.sshConfig = fs.readFileSync("/run/darius/ssh_config", "utf8");
+  result.boxMount = fs.readdirSync("/run/darius").sort();
+  if (args.ssh) {
+    result.sshG = await run("ssh", ["-G", "-p", String(args.banner), "127.0.0.1"]);
+    result.ssh = await run("ssh", ["-p", String(args.banner), "127.0.0.1", "true"]);
+  }
+  if (args.ssh && args.git) result.git = await run("git", ["ls-remote", "ssh://git@127.0.0.1:" + args.banner + "/repo.git"]);
+  process.stdout.write(JSON.stringify(result));
+})();
+`;
+
+interface Child {
+  code: number | string | null;
+  stdout: string;
+  stderr: string;
+}
+
+interface NetOutcome {
+  allowed: string;
+  refused: string;
+  direct: string;
+  connect: Child;
+  connectRefused: Child;
+  sshConfig: string;
+  boxMount: string[];
+  sshG?: Child;
+  ssh?: Child;
+  git?: Child;
+}
+
+function onPath(name: string): boolean {
+  return (process.env.PATH ?? "").split(delimiter).some((dir) => dir.startsWith("/") && existsSync(join(dir, name)));
+}
+
+test("real bwrap: in box enter, HTTP reaches an allowed local server only through the relay, a refused target gets the proxy's line, box connect tunnels bytes, and ssh and git use the wrapper", { skip: SKIP }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  const hasSsh = onPath("ssh");
+  const hasGit = onPath("git");
+
+  const http = createHttpServer((_request, response) => response.end("hello from the test server\n"));
+  const echo = createServer((socket) => socket.pipe(socket));
+  // Stands in for an sshd: it keeps the first line the client sends, then hangs up. No key exchange, no auth.
+  const banners: string[] = [];
+  const banner = createServer((socket) => {
+    socket.once("data", (chunk: Buffer) => {
+      banners.push(chunk.toString("latin1").split("\r\n")[0] ?? "");
+      socket.destroy();
+    });
+  });
+  const closed = createServer();
+  const httpPort = await listenLocal(http);
+  const echoPort = await listenLocal(echo);
+  const bannerPort = await listenLocal(banner);
+  const closedPort = await listenLocal(closed);
+  await new Promise((done) => closed.close(done));
+  t.after(() => {
+    http.close();
+    echo.close();
+    banner.close();
+  });
+
+  const harness = join(tree.home, "net-harness.cjs");
+  writeFileSync(harness, NET_HARNESS);
+  const darius = boxedDarius(tree);
+  const harnessArgs = { http: httpPort, closed: closedPort, echo: echoPort, banner: bannerPort, darius, ssh: hasSsh, git: hasGit };
+  const plan = boxedPlan(tree, [process.execPath, harness, JSON.stringify(harnessArgs)]);
+
+  // The real rule always refuses loopback. This decision allows exactly the three test servers and asks the real rule for the rest.
+  const allowed = new Set([httpPort, echoPort, bannerPort]);
+  const allowLocal: Decide = (target, rules) => (target.host === "127.0.0.1" && allowed.has(target.port) ? { allow: true, rule: "reach", addresses: ["127.0.0.1"] } : decide(target, rules));
+  const netLines: string[] = [];
+  const proxy = await startBoxProxy({ socketPath: join(plan.boxDir, "proxy.sock"), policy: { net: "public", reach: [], harnessHosts: [], ownAddresses: [], webPorts: [] }, log: (line) => netLines.push(line), decide: allowLocal });
+  t.after(() => proxy.close());
+
+  const ran = await runInBox(plan, tree.work, 60_000);
+  assert.equal(ran.code, 0, ran.stderr);
+  // SAFETY: NET_HARNESS prints exactly this shape.
+  const outcome = JSON.parse(ran.stdout) as NetOutcome;
+
+  assert.match(outcome.allowed, /^HTTP\/1\.1 200 /u);
+  assert.match(outcome.allowed, /hello from the test server/u);
+  assert.match(outcome.refused, /^HTTP\/1\.1 403 /u);
+  assert.match(outcome.refused, new RegExp(`darius box: refused 127\\.0\\.0\\.1:${String(closedPort)} \\(loopback\\)`, "u"));
+  assert.equal(outcome.direct, "ECONNREFUSED", "no direct way to the test server: the box has its own loopback");
+
+  assert.equal(outcome.connect.code, 0, outcome.connect.stderr);
+  assert.equal(outcome.connect.stdout, "ping through the box\n");
+  assert.equal(outcome.connectRefused.code, 1);
+  assert.equal(outcome.connectRefused.stdout, "");
+  assert.match(outcome.connectRefused.stderr, /^darius box: refused 10\.0\.0\.1:22 \(private\)/u);
+
+  assert.ok(["box.json", "proxy.sock", "ssh_config", "bin"].every((name) => outcome.boxMount.includes(name)), outcome.boxMount.join(" "));
+  assert.ok(outcome.sshConfig.includes(`\nHost *\n  ProxyCommand ${darius} box connect %h %p\n`), outcome.sshConfig);
+  assert.ok(outcome.sshConfig.includes("# darius box dropped: Include ~/.ssh/config.d/*"));
+  assert.ok(outcome.sshConfig.includes("# darius box dropped: ProxyJump bastion.example.com"));
+
+  if (hasSsh) {
+    assert.equal(outcome.sshG?.code, 0, outcome.sshG?.stderr);
+    assert.match(outcome.sshG?.stdout ?? "", /^proxycommand .*box connect/mu, "the wrapper hands ssh the box config");
+    assert.match(outcome.sshG?.stdout ?? "", /^identitiesonly yes$/mu, "the user's config is in it");
+    assert.doesNotMatch(outcome.sshG?.stdout ?? "", /^proxyjump /mu);
+    assert.equal(outcome.ssh?.code, 255, "the stand-in hangs up after the banner");
+  }
+  if (hasSsh && hasGit) assert.notEqual(outcome.git?.code, 0);
+  const sshBanners = banners.filter((line) => line.startsWith("SSH-2.0-"));
+  const expected = (hasSsh ? 1 : 0) + (hasSsh && hasGit ? 1 : 0);
+  assert.equal(sshBanners.length, expected, `ssh and git reach the stand-in through box connect: ${JSON.stringify(banners)}`);
+
+  // SAFETY: the proxy logs one JSON object per decision with these fields.
+  const decisions = netLines.map((line) => JSON.parse(line) as { port: number; decision: string; rule: string });
+  assert.ok(decisions.some((line) => line.port === httpPort && line.decision === "allow"));
+  assert.ok(decisions.some((line) => line.port === closedPort && line.decision === "refuse" && line.rule === "loopback"));
+  assert.ok(decisions.some((line) => line.port === 22 && line.rule === "private"));
+
+  removeBox(plan);
+});
+
+test("real bwrap: box enter passes the exit code and a signal death out of the box", { skip: SKIP }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  const cases: [string[], number][] = [
+    [["sh", "-c", "exit 7"], 7],
+    [["sh", "-c", "kill -TERM $$"], 143],
+    [["sh", "-c", "kill -HUP $$"], 129],
+  ];
+  for (const [argv, code] of cases) {
+    const plan = boxedPlan(tree, argv);
+    const ran = await runInBox(plan, tree.work, 60_000);
+    assert.equal(ran.code, code, `${argv.join(" ")}: ${ran.stderr}`);
+    removeBox(plan);
+  }
 });
