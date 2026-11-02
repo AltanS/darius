@@ -10,6 +10,11 @@
  * A masked file cannot be opened at all: `--ro-bind` mounts it without device
  * access, so a read of the bound /dev/null gets EACCES, not an empty file.
  *
+ * THE MASK IS OFF BY DEFAULT since 0.114.1. It breaks ssh: an unprivileged user
+ * namespace maps only this user, so a root-owned file reads as owned by nobody,
+ * and ssh refuses a config it reaches that way ("Bad owner or permissions").
+ * Turn it on only on a host whose runs use no ssh.
+ *
  * The mask is not a boundary. `systemd-run --user`, or ssh to the same host,
  * starts a process outside it. A file the operator replaces by rename during
  * a run, or a new file, is not masked for that run. A sandbox failure never
@@ -118,6 +123,13 @@ export function maskedPaths(cfg: Config | null): MaskedPaths {
   return { files: [...files], dirs: [...dirs] };
 }
 
+/** `DARIUS_RUN_SANDBOX` (`mask` or `off`) overrides `[run] sandbox` for one process, as the suite does. Any other value is ignored. */
+function sandboxChoice(cfg: Config | null | undefined): string {
+  const env = process.env.DARIUS_RUN_SANDBOX?.trim();
+  if (env === "mask" || env === "off") return env;
+  return cfg?.run.sandbox ?? "off";
+}
+
 /**
  * How to launch a run on this host now. Never throws for a sandbox failure: a
  * bwrap that is missing or fails its probe, with or without the masks, gives
@@ -125,7 +137,8 @@ export function maskedPaths(cfg: Config | null): MaskedPaths {
  */
 export function resolveSandbox(): Sandbox {
   const cfg = loadConfigIfPresent();
-  if (cfg?.run.sandbox === "off") return { state: "off" };
+  // Opt-in: inside the namespace root-owned files read as another owner, and ssh then refuses its own config (0.114.1).
+  if (sandboxChoice(cfg) !== "mask") return { state: "off" };
   const probe = probeBwrap();
   if ("problem" in probe) return { state: "unmasked", problem: probe.problem };
   const { files, dirs } = maskedPaths(cfg);

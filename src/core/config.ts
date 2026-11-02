@@ -70,8 +70,8 @@ export interface Config {
   setup: { units: readonly SetupUnit[] };
   /**
    * `[run] sandbox`: how this host launches an unattended run (0.114.0).
-   * `mask` (default): in bubblewrap, with darius secret files hidden from the
-   * run's process tree (src/core/sandbox.ts). `off`: without bubblewrap. Inside
+   * `mask` (opt-in since 0.114.1): in bubblewrap, with darius secret files hidden from the
+   * run's process tree (src/core/sandbox.ts). `off` (default): without bubblewrap. Inside
    * the mask, no_new_privs is on, so sudo and rootless podman fail.
    */
   run: { sandbox: RunSandbox };
@@ -172,7 +172,7 @@ function setupUnits(table: Record<string, TomlValue>, file: string): readonly Se
 }
 
 function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox {
-  const name = optionalString(table, "sandbox", "mask", "run", file);
+  const name = optionalString(table, "sandbox", "off", "run", file);
   const known = RUN_SANDBOXES.find((value) => value === name);
   if (known === undefined) throw new Error(`${file}: [run] sandbox must be "mask" or "off", found "${name}"`);
   return known;

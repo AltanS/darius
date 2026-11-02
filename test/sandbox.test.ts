@@ -28,6 +28,8 @@ mkdirSync(CONFIG, { recursive: true });
 mkdirSync(STATE, { recursive: true });
 process.env.DARIUS_CONFIG_DIR = CONFIG;
 process.env.DARIUS_STATE_DIR = STATE;
+// The mask is opt-in since 0.114.1. These tests are about the mask, so this process turns it on.
+process.env.DARIUS_RUN_SANDBOX = "mask";
 delete process.env.DARIUS_RUN;
 delete process.env.DARIUS_RUN_POLICY;
 
@@ -86,8 +88,13 @@ function isolatedConfig(text: string, run: () => void): void {
   }
 }
 
-test("[run] sandbox: mask by default, off with one line, an unknown value refused", () => {
-  isolatedConfig('host = "a"\n', () => assert.equal(loadConfig().run.sandbox, "mask"));
+test("[run] sandbox: off by default, mask with one line, an unknown value refused", () => {
+  delete process.env.DARIUS_RUN_SANDBOX;
+  try {
+  isolatedConfig('host = "a"\n', () => {
+    assert.equal(loadConfig().run.sandbox, "off");
+    assert.deepEqual(resolveSandbox(), { state: "off" }, "the default never looks for bwrap");
+  });
   isolatedConfig('host = "a"\n\n[run]\nsandbox = "mask"\n', () => assert.equal(loadConfig().run.sandbox, "mask"));
   isolatedConfig('host = "a"\n\n[run]\nsandbox = "off"\n', () => {
     assert.equal(loadConfig().run.sandbox, "off");
@@ -98,6 +105,22 @@ test("[run] sandbox: mask by default, off with one line, an unknown value refuse
     assert.throws(() => loadConfig(), /\[run\] sandbox must be "mask" or "off", found "maybe"/u);
     assert.throws(() => resolveSandbox(), /sandbox must be/u, "a bad value does not run unmasked in silence");
     assert.match(sandboxWarning() ?? "", /^WARN: cannot read the sandbox setting/u);
+  });
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "mask";
+  }
+});
+
+test("DARIUS_RUN_SANDBOX overrides [run] sandbox for one process; another value is ignored", () => {
+  isolatedConfig('host = "a"\n\n[run]\nsandbox = "mask"\n', () => {
+    process.env.DARIUS_RUN_SANDBOX = "off";
+    try {
+      assert.deepEqual(resolveSandbox(), { state: "off" });
+      process.env.DARIUS_RUN_SANDBOX = "maybe";
+      assert.notEqual(resolveSandbox().state, "off", "an unknown value falls back to the file");
+    } finally {
+      process.env.DARIUS_RUN_SANDBOX = "mask";
+    }
   });
 });
 

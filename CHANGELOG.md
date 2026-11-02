@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.114.1] - 2026-11-02
+
+### Fixed
+
+- The mask is off by default: `[run] sandbox = "mask"` turns it on. In 0.114.0 it was on by default and broke ssh in a run. In the namespace a root-owned file reads as owned by nobody, and ssh refuses `~/.ssh/config` or a file it includes with "Bad owner or permissions". The gate's secret and web rules stay on.
+
 ## [0.114.0] - 2026-11-02
 
 ### Added

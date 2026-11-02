@@ -3153,9 +3153,12 @@ async function withFakeBwrap<T>(fn: () => Promise<T>): Promise<T> {
   const previous = process.env.DARIUS_BWRAP;
   process.env.DARIUS_BWRAP = FAKE_BWRAP;
   writeFileSync(FAKE_BWRAP_LOG, "");
+  // The mask is opt-in since 0.114.1: this process turns it on for the test.
+  process.env.DARIUS_RUN_SANDBOX = "mask";
   try {
     return await fn();
   } finally {
+    delete process.env.DARIUS_RUN_SANDBOX;
     if (previous === undefined) delete process.env.DARIUS_BWRAP;
     else process.env.DARIUS_BWRAP = previous;
   }
@@ -3220,6 +3223,7 @@ test("no bwrap: the run starts unmasked, completes, and its log says so; the rep
   process.env.FAKE_CLAUDE_MODE = "complete";
   const previous = process.env.DARIUS_BWRAP;
   process.env.DARIUS_BWRAP = join(SANDBOX, "no-bwrap");
+  process.env.DARIUS_RUN_SANDBOX = "mask";
   try {
     const { code, report } = await runDueJson(project);
     assert.equal(code, 0, JSON.stringify(report));
@@ -3228,6 +3232,7 @@ test("no bwrap: the run starts unmasked, completes, and its log says so; the rep
     const log = readFileSync(join(openProject(project).root, "runs", entry?.run ?? "", "run.log"), "utf8");
     assert.match(log, /sandbox: this run starts UNMASKED, it can read darius secret files\. bwrap is not on PATH/u);
   } finally {
+    delete process.env.DARIUS_RUN_SANDBOX;
     if (previous === undefined) delete process.env.DARIUS_BWRAP;
     else process.env.DARIUS_BWRAP = previous;
   }

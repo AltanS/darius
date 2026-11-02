@@ -258,7 +258,7 @@ it off on a host:
 
 ```toml
 [run]
-sandbox = "off"   # "mask" is the default
+sandbox = "mask"   # "off" is the default; the mask breaks ssh in a run
 ```
 
 Inside the mask no_new_privs is on, so `sudo` and rootless podman fail. `darius sync` fails there too,
