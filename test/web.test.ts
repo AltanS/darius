@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { connect } from "node:net";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -328,13 +329,31 @@ test("serve refuses every-interface binds and bad ports", () => {
   assert.equal(webPort(undefined), 4747);
 });
 
+/** Waits until a just started server takes connections. A fixed wait is too short on a busy machine. */
+async function untilListening(port: number): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const open = await new Promise<boolean>((resolve) => {
+      const socket = connect({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => resolve(false));
+    });
+    if (open) return;
+    if (Date.now() > deadline) throw new Error(`nothing listens on port ${port}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 test("serve listens on 127.0.0.1 and stops on SIGTERM", async () => {
   const log = console.log;
   console.log = () => undefined;
   try {
     // auto: loopback now; the fake-less tailscale has no address, so no tailnet bind.
     const serving = serveCommand.run(parseArgs(["--port", "47991"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(47_991);
     const status = await new Promise<number>((resolve, reject) => {
       const req = request({ host: "127.0.0.1", port: 47_991, path: "/healthz" }, (res) => {
         res.resume();
@@ -369,7 +388,7 @@ test("serve dispatches POST /api/run/follow-up to the action API; every other wr
   console.log = () => undefined;
   try {
     const serving = serveCommand.run(parseArgs(["--port", "47992", "--bind", "127.0.0.1"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(47_992);
     const body = JSON.stringify({ project: "demo", run: "01JX", approve: [1] });
     const loopback = await call(47_992, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
@@ -691,7 +710,7 @@ test("serve dispatches POST /api/run/ack to the action API; the loopback viewer 
   console.log = () => undefined;
   try {
     const serving = serveCommand.run(parseArgs(["--port", "47995", "--bind", "127.0.0.1"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(47_995);
     const body = JSON.stringify({ project: "demo", run: "01JX" });
     const loopback = await call(47_995, { method: "POST", path: "/api/run/ack", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
@@ -711,7 +730,7 @@ test("serve dispatches POST /api/finding/close to the finding API; the loopback 
   console.log = () => undefined;
   try {
     const serving = serveCommand.run(parseArgs(["--port", "47993", "--bind", "127.0.0.1"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(47_993);
     const body = JSON.stringify({ project: "web-findings", ritual: "check", key: "link-12" });
     const loopback = await call(47_993, { method: "POST", path: "/api/finding/close", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
@@ -804,7 +823,7 @@ test("serve refuses a wrong Host with 421 on GET and POST; tailnet name, IP, loc
   process.env.DARIUS_WEB_URL = "https://darius.example.com";
   try {
     const serving = serveCommand.run(parseArgs(["--port", "47996", "--bind", "127.0.0.1"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(47_996);
     const body = JSON.stringify({ project: "demo", run: "01JX" });
     const post = { method: "POST", path: "/api/run/ack", body };
     for (const host of ["evil.example", "evil.example:47996", "laptop.evil.example"]) {
