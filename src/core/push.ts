@@ -26,6 +26,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
+import { isMaskedFile } from "./credentials.ts";
 import { appendLine, readLedger } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { configDir } from "./paths.ts";
@@ -116,13 +117,14 @@ function isText(value: JsonValue | undefined): value is string {
 }
 
 /**
- * The keys of this host; null without the file. A broken file is an error that
+ * The keys of this host; null without the file, and null inside a run's
+ * sandbox, where the mask hides the file. A broken file is an error that
  * never quotes it. The message names the file by its base name, because it can
  * end up in a synced ledger line and a full path holds a user name.
  */
 export function readPushKeys(): PushKeys | null {
   const file = pushKeysFile();
-  if (!existsSync(file)) return null;
+  if (!existsSync(file) || isMaskedFile(file)) return null;
   let raw: JsonValue;
   try {
     raw = JSON.parse(readFileSync(file, "utf8"));

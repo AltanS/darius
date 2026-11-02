@@ -23,7 +23,7 @@
  * the ritual still runs, without subagents, and the report warns.
  *
  * Each check appends `harness.checked{harness, version, outcome, subagents,
- * cost_usd?, detail?}` to the `_global` ledger; the line carries the host. A
+ * sandbox, cost_usd?, detail?}` to the `_global` ledger; the line carries the host. A
  * harness version is ready on a host when its latest check there passed. run-due,
  * `run now` and `run resume` run a missing check themselves, and do not try
  * again the same day after one that did not pass: `darius harness check`
@@ -38,6 +38,7 @@ import { join } from "node:path";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import type { Project } from "../core/store.ts";
+import { noteSandbox, resolveSandbox, sandboxPrefix } from "../core/sandbox.ts";
 import { localToday } from "../core/sweep.ts";
 import { ulid } from "../core/ulid.ts";
 import type { HarnessAdapter, ResolvedProfile } from "../harness/contract.ts";
@@ -178,6 +179,7 @@ export async function runHarnessCheck(input: {
   const marker = join(cwd, "marker");
   const subMarker = join(cwd, "marker-subagent");
   const check: HarnessCheck = { harness: harness.id, version, outcome: "inconclusive", subagents: "inconclusive", run };
+  const sandbox = resolveSandbox();
   try {
     const profile: ResolvedProfile = {
       harness: harness.id,
@@ -190,9 +192,12 @@ export async function runHarnessCheck(input: {
     const gate = gateCommand(files, harness);
     const launch = harness.prepare({ ritual, run, files, profile, scope: "full", gate, message: checkMessage(marker, subMarker) });
     const env = buildEnv({ project: global.name, run, files, harness });
-    const broken = preflightGate(gate, harness, env);
+    // The same launch as a run, so the proof covers the mask (0.114.0).
+    noteSandbox(files.dir, sandbox);
+    const prefix = sandboxPrefix(sandbox);
+    const broken = preflightGate(gate, harness, env, prefix);
     if (broken === undefined) {
-      const result = await launchHeadless({ bin, argv: launch.headless, cwd, env, timeoutMs: input.timeoutMs ?? CHECK_TIMEOUT_MS });
+      const result = await launchHeadless({ bin, argv: launch.headless, cwd, env, timeoutMs: input.timeoutMs ?? CHECK_TIMEOUT_MS, sandbox: prefix });
       const facts = harness.parseResult(result.stdout);
       if (facts.costUsd !== undefined) check.costUsd = facts.costUsd;
       const denied = deniedShell(files.dir);
@@ -230,6 +235,7 @@ export async function runHarnessCheck(input: {
     outcome: check.outcome,
     subagents: check.subagents,
     run,
+    sandbox: sandbox.state,
   };
   if (check.costUsd !== undefined) line.cost_usd = check.costUsd;
   if (check.detail !== undefined) line.detail = check.detail;

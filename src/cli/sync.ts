@@ -37,6 +37,7 @@ import { loadCredentials } from "../core/credentials.ts";
 import { resolveProject } from "../core/paths.ts";
 import { createS3 } from "../core/s3.ts";
 import type { S3 } from "../core/s3.ts";
+import { isInsideMask } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, listProjects, openProject, type Project } from "../core/store.ts";
 import { flushAlerts } from "../core/alerts.ts";
 import { syncProject } from "../core/sync.ts";
@@ -212,6 +213,7 @@ function exitCode(run: SyncRun): number {
  * stdout, and it never changes the exit code.
  */
 async function alertAfterSync(): Promise<void> {
+  if (isInsideMask()) return;
   try {
     for (const failure of (await flushAlerts())?.failed ?? []) console.error(`darius sync: alert: ${failure}`);
   } catch (cause) {

@@ -2,6 +2,26 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.114.0] - 2026-11-02
+
+### Added
+
+- The mask: the launcher starts an unattended run through bubblewrap, so its whole process tree cannot open darius secret files. Headless, herdr, `run resume` and the gate check launch the same way, and the gate preflight runs inside it.
+- `[run] sandbox = "mask" | "off"` in `config.toml`, default `mask`. An unknown value is refused.
+- Without bwrap, or when a probe fails, a run starts unmasked and writes one line to `<run>/run.log`. `darius doctor` warns with the fix.
+- The gate: a Read, Grep, Glob or NotebookRead inside a secret path is denied first, in both scopes, with `~`, `$HOME` and `..` resolved, the path counted as written and with symlinks resolved. Every file in `~/.ssh` but the public ones is a secret path. A Grep or Glob above a secret path is told to search a narrower folder.
+- The gate: `namesSecretPath` and `callsWebWrite` deny a shell line that names a secret path or a write path of the web API, in every mode. Both are heuristics for a confused run. `ssh -i KEY`, `scp -i KEY` and `-o IdentityFile=KEY` pass, because the client only uses the key.
+- `docs/concept.md`: "The mask" and "What the gate does not stop". `docs/backlog.md`: a separate Unix user for runs, S3 bucket versioning, a Tailscale ACL.
+
+### Changed
+
+- The hook's matcher in scope shell is `Bash|Read|Grep|Glob|NotebookRead|LS`, so the secret path check can fire. Every other verdict stays. The gate check always runs in scope `full`, and does not depend on this text.
+- `harness.checked` records `sandbox`.
+- Inside the mask, `push status` and `email status` say the mask hides the file, `darius sync` names it, and no verb flushes alerts, so a notice keeps its tries.
+
+### Fixed
+
+- `docs/concept.md` no longer says the gate stops a run that calls `POST /api/flare/light` by the tailnet address. It stops a confused run. Nothing stops a hostile one.
 ## [0.113.5] - 2026-11-02
 
 ### Fixed

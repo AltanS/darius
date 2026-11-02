@@ -23,6 +23,9 @@ after(() => rmSync(SANDBOX, { recursive: true, force: true }));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
 delete process.env.DARIUS_PROJECT;
+// The sandbox warning is per host, and has its test in test/sandbox.test.ts.
+mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
+writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), 'host = "tracker-root"\n\n[run]\nsandbox = "off"\n');
 
 const { doctorNotes, removeOwnTreeLink, resolveTrackerRoot, resolveTreeArg, specKey, treeLinkState, treeRelative } = await import("../src/core/tracker-root.ts");
 

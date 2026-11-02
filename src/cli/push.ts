@@ -25,7 +25,9 @@ import { existsSync } from "node:fs";
 
 import { flushAlerts } from "../core/alerts.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
+import { isMaskedFile } from "../core/credentials.ts";
 import { projectDir } from "../core/paths.ts";
+import { isInsideMask } from "../core/sandbox.ts";
 import { activeDevices, broadcast, makePushKeys, pushKeysFile, readPushKeys, unsubscribe, writePushKeys, type Device } from "../core/push.ts";
 import { GLOBAL_PROJECT, openProject, type Project } from "../core/store.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -76,6 +78,10 @@ function status(args: ParsedArgs): number {
     console.log(JSON.stringify({ host: hostId(), public: found?.public ?? null, subject: found?.subject ?? null, since: found?.since ?? null, devices: count }));
     return 0;
   }
+  if (isMaskedFile(pushKeysFile())) {
+    console.log(`· the sandbox mask hides the push keys from this run on ${hostId()}; ${String(count)} device(s). The runner sends after the run.`);
+    return 0;
+  }
   if (found === null) {
     console.log(`· no push keys on ${hostId()}: darius push keys --subject <mailto:...> on one host, then copy ${pushKeysFile()} to the others`);
     return 0;
@@ -122,6 +128,11 @@ async function test(): Promise<number> {
 
 async function flush(args: ParsedArgs): Promise<number> {
   const isDryRun = args.flags["dry-run"] === true;
+  if (isInsideMask()) {
+    if (args.json) console.log(JSON.stringify({ ok: true, sending: false }));
+    else console.log("· this run sends nothing: the sandbox mask hides the channels, and the runner sends after the run");
+    return 0;
+  }
   const delivery = await flushAlerts({ isDryRun });
   if (delivery === null) {
     if (args.json) console.log(JSON.stringify({ ok: true, sending: false }));

@@ -27,6 +27,7 @@ import { flushAlerts, sendAlerts } from "../core/alerts.ts";
 import { defaultWho, hostId, readLedger } from "../core/ledger.ts";
 import type { Document, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject, stateDir } from "../core/paths.ts";
+import { isInsideMask } from "../core/sandbox.ts";
 import { sshDarius, sshDariusLine, sshProgram } from "../core/ssh.ts";
 import { openProject, type Project } from "../core/store.ts";
 import { ritualHost } from "../core/workdir.ts";
@@ -126,7 +127,7 @@ function noteDigest(report: BatchReport, scope: ReportScope): void {
  * or sync tries it again.
  */
 async function alertBatch(report: BatchReport, command: string): Promise<void> {
-  if (report.dryRun) return;
+  if (report.dryRun || isInsideMask()) return;
   const failures: string[] = [];
   try {
     for (const entry of report.projects) {

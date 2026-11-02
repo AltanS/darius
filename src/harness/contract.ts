@@ -36,8 +36,10 @@ export interface ToolCall {
   agentId?: string;
   /** A subagent call's `isolation` (Claude Code: worktree, remote): where the subagent would run. */
   isolation?: string;
-  /** The file a write tool targets, as the harness gave it. */
+  /** The file a read or write tool targets, or the folder a search starts in, as the harness gave it. */
   path?: string;
+  /** Set when `path` is the root of a search that walks the tree below it (Claude Code: Grep, Glob). */
+  isSearch?: boolean;
   /** The session's working dir at the call, as the harness gave it (0.47.1): a grant holds only in the run's dir. */
   cwd?: string;
 }

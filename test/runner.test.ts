@@ -188,6 +188,15 @@ case "$1 \${2:-}" in
     fi
     printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$status" ;;
   "tab close") printf '{"result":{"type":"ok"}}\n' ;;
+  "pane run") printf '{"result":{"type":"ok"}}\n' ;;
+  "pane wait-output")
+    if [ -e "$dir/mask-lost" ]; then
+      printf '{"error":{"code":"timeout","message":"no match"}}\n' >&2; exit 1
+    fi
+    printf '{"result":{"type":"ok"}}\n' ;;
+  "pane process-info")
+    names="$(cat "$dir/foreground" 2>/dev/null || echo bwrap)"
+    printf '{"result":{"process_info":{"foreground_processes":[{"name":"%s","pid":1}]}}}\n' "$names" ;;
   *) printf '{"error":{"code":"unknown","message":"fake herdr: %s"}}\n' "$*" >&2; exit 1 ;;
 esac
 `,
@@ -3123,4 +3132,139 @@ test("the gate: may Bash(darius run proposal *) on the left of a pipe passes int
     assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny", command);
   }
   assert.equal(linesOf(project, "run.held").length, 0);
+});
+
+// --- the mask (0.114.0): every path that spawns a harness goes through it ---------------
+
+const FAKE_BWRAP_LOG = join(SANDBOX, "bwrap-calls");
+const FAKE_BWRAP = join(BIN, "fake-bwrap");
+writeFileSync(
+  FAKE_BWRAP,
+  `#!${BASH}
+printf '%s\\n' "$*" >> "${FAKE_BWRAP_LOG}"
+while [ $# -gt 0 ] && [ "$1" != -- ] && [ "$1" != true ]; do shift; done
+[ "\${1:-}" = -- ] && shift
+exec "$@"
+`,
+);
+chmodSync(FAKE_BWRAP, 0o755);
+
+async function withFakeBwrap<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.DARIUS_BWRAP;
+  process.env.DARIUS_BWRAP = FAKE_BWRAP;
+  writeFileSync(FAKE_BWRAP_LOG, "");
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.DARIUS_BWRAP;
+    else process.env.DARIUS_BWRAP = previous;
+  }
+}
+
+function bwrapCalls(): string[] {
+  return readFileSync(FAKE_BWRAP_LOG, "utf8").trim().split("\n");
+}
+
+/** What the fake bwrap saw run: the words after `--`. */
+function launched(): string[] {
+  return bwrapCalls().flatMap((line) => (line.includes(" -- ") ? [line.slice(line.indexOf(" -- ") + 4)] : []));
+}
+
+test("the mask: a headless run, its preflight and the harness itself start through bwrap, and the run completes", async () => {
+  const project = "rd-mask-headless";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, report } = await withFakeBwrap(() => runDueJson(project));
+  assert.equal(code, 0, JSON.stringify(report));
+  const run = ritualsOf(report)[0]?.run ?? "";
+  assert.equal(ritualsOf(report)[0]?.end, "complete");
+  assert.ok(bwrapCalls().includes("--dev-bind / / true"), "the probe");
+  const lines = launched();
+  assert.ok(lines.some((line) => line.includes("policy-check") && line.endsWith("--preflight")), lines.join("\n"));
+  assert.ok(lines.some((line) => line.startsWith(`${FAKE_CLAUDE} -p `)), lines.join("\n"));
+  assert.equal(existsSync(join(openProject(project).root, "runs", run, "run.log")), false, "a masked run has nothing to say");
+});
+
+test("the mask: a resume launches through bwrap too", async () => {
+  const project = "rd-mask-resume";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "hold";
+  const first = await runDueJson(project);
+  const run = ritualsOf(first.report)[0]?.run ?? "";
+  const answered = await runCli(runCommand, ["answer", run, "1", "yes", "--project", project]);
+  assert.equal(answered.code, 0, answered.stdout + answered.stderr);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const resumed = await withFakeBwrap(() => runCli(runCommand, ["resume", run, "--project", project, "--json"]));
+  assert.equal(resumed.code, 0, resumed.stdout + resumed.stderr);
+  assert.ok(launched().some((line) => line.startsWith(`${FAKE_CLAUDE} -p `)), bwrapCalls().join("\n"));
+});
+
+test("the mask: the gate check per harness version launches the same way and records it", async () => {
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  process.env.FAKE_CLAUDE_VERSION = "2.1.950";
+  try {
+    const result = await withFakeBwrap(() => runCli(harnessCommand, ["check", "claude", "--json"]));
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.ok(launched().some((line) => line.startsWith(`${FAKE_CLAUDE} -p `) && line.includes("--dangerously-skip-permissions")), bwrapCalls().join("\n"));
+    const check = readLedger(openProject("_global")).findLast((line) => line.type === "harness.checked" && line.version === "2.1.950");
+    assert.equal(check?.outcome, "passed");
+    assert.equal(check?.sandbox, "mask");
+  } finally {
+    delete process.env.FAKE_CLAUDE_VERSION;
+  }
+});
+
+test("no bwrap: the run starts unmasked, completes, and its log says so; the report does not change", async () => {
+  const project = "rd-mask-missing";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const previous = process.env.DARIUS_BWRAP;
+  process.env.DARIUS_BWRAP = join(SANDBOX, "no-bwrap");
+  try {
+    const { code, report } = await runDueJson(project);
+    assert.equal(code, 0, JSON.stringify(report));
+    const entry = ritualsOf(report)[0];
+    assert.equal(entry?.end, "complete");
+    const log = readFileSync(join(openProject(project).root, "runs", entry?.run ?? "", "run.log"), "utf8");
+    assert.match(log, /sandbox: this run starts UNMASKED, it can read darius secret files\. bwrap is not on PATH/u);
+  } finally {
+    if (previous === undefined) delete process.env.DARIUS_BWRAP;
+    else process.env.DARIUS_BWRAP = previous;
+  }
+});
+
+test("the mask in a herdr tab: the alias goes in before the agent starts, a marker confirms it, and the run completes", async () => {
+  await addProfile("rd-mask-watch", ["--surface", "herdr"]);
+  const project = "rd-mask-herdr";
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-mask-watch" } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, report } = await withFakeBwrap(() => withFakeHerdr({}, () => runDueJson(project)));
+  assert.equal(code, 0, JSON.stringify(report));
+  const entry = ritualsOf(report)[0];
+  assert.equal(entry?.surface, "herdr");
+  assert.equal(entry?.end, "complete");
+  const calls = herdrCalls();
+  const alias = calls.findIndex((line) => line.startsWith("pane run ") && line.includes("alias claude='"));
+  const marker = calls.findIndex((line) => line.startsWith("pane wait-output ") && line.includes("--match darius-mask-ready"));
+  const start = calls.findIndex((line) => line.startsWith("agent start"));
+  assert.ok(alias !== -1 && alias < marker && marker < start, calls.join("\n"));
+  assert.ok((calls[alias] ?? "").includes("fake-bwrap"), calls[alias]);
+  assert.ok(calls.some((line) => line.startsWith("pane process-info --pane ")), "darius asks whether bwrap is in the foreground");
+  assert.equal(existsSync(join(openProject(project).root, "runs", entry?.run ?? "", "run.log")), false);
+});
+
+test("the mask in a herdr tab: bwrap not in the foreground leaves a line in the log, and the run goes on", async () => {
+  await addProfile("rd-mask-fg", ["--surface", "herdr"]);
+  const project = "rd-mask-fg";
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-mask-fg" } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  writeFileSync(join(FAKE_HERDR_DIR, "foreground"), "claude");
+  try {
+    const { code, report } = await withFakeBwrap(() => withFakeHerdr({}, () => runDueJson(project)));
+    assert.equal(code, 0, JSON.stringify(report));
+    const log = readFileSync(join(openProject(project).root, "runs", ritualsOf(report)[0]?.run ?? "", "run.log"), "utf8");
+    assert.match(log, /UNMASKED.*herdr shows no bwrap in the tab's foreground/u);
+  } finally {
+    rmSync(join(FAKE_HERDR_DIR, "foreground"), { force: true });
+  }
 });

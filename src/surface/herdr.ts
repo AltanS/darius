@@ -30,6 +30,18 @@
  * agent's name while its pane is open, so each launch of a run gets its own
  * name: `d-<run>` first, then `d-<run>-r2`, `-r3`. `herdr.json` keeps every
  * tab of the run, so closeFinishedTabs closes them all.
+ *
+ * A masked launch (src/core/sandbox.ts) cannot put bwrap on `agent start`:
+ * herdr runs the kind's own executable by typing its name at the pane's shell.
+ * Probed on herdr 0.9.5: a shell behind `exec bwrap` is not "an available
+ * shell", because its pid is not the pane's, and a PATH shim fails, because the
+ * tab's login shell owns PATH. An alias in the tab's shell works. herdr then
+ * types `claude ...`, the foreground is [bwrap, claude], the agent is detected,
+ * and `tab close` ends both. So darius types the alias with an echo of a marker
+ * and waits for the marker: a shell's rc file can eat text typed before its
+ * first prompt. After the start it asks herdr whether bwrap is in the
+ * foreground. A mask that did not take leaves a line in the run's log, and the
+ * run goes on, as a sandbox failure never stops a ritual.
  */
 
 import { spawn } from "node:child_process";
@@ -37,6 +49,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JsonValue } from "../core/model.ts";
+import { appendRunLog } from "../core/sandbox.ts";
 import { errorMessage } from "../runtime.ts";
 import type { ChildEnv, LaunchResult } from "./headless.ts";
 
@@ -170,6 +183,8 @@ export interface HerdrPlan {
   timeoutMs: number;
   pollMs: number;
   graceMs: number;
+  /** The argv of the sandbox to run the harness in (src/core/sandbox.ts), when it is masked. */
+  sandbox?: readonly string[] | undefined;
   /** The run's phase in the ledger. */
   phase(): "running" | "held" | "closed";
   /** Holds the run with one question. */
@@ -283,6 +298,50 @@ function ended(started: number, fields: { timedOut?: boolean; note: string; spaw
   return result;
 }
 
+/** How long one wait for the marker lasts before the line is typed again. */
+const MASK_WAIT_MS = 2_000;
+/** What the tab's shell prints once it ran the alias line. Typed split by quotes, so the echoed line itself does not match. */
+const MASK_MARK = "darius-mask-ready";
+const MASK_MARK_TYPED = "darius-mask''-ready";
+const NO_MASK = "sandbox: this run starts UNMASKED, it can read darius secret files";
+
+function shellQuote(word: string): string {
+  return `'${word.replaceAll("'", String.raw`'\''`)}'`;
+}
+
+/** The line for the tab's shell: `alias claude='bwrap ... -- claude'`, then the marker. A leading blank keeps it out of most shell histories. */
+export function maskLine(kind: string, sandbox: readonly string[]): string {
+  const wrapped = [...sandbox, kind].map((word) => shellQuote(word)).join(" ");
+  return ` alias ${kind}=${shellQuote(wrapped)}; echo ${MASK_MARK_TYPED}`;
+}
+
+/** Types the alias into the tab's shell until the marker comes back. False when it never did. */
+async function maskTab(plan: HerdrPlan, sandbox: readonly string[], pane: string): Promise<boolean> {
+  const deadline = Date.now() + SHELL_READY_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    const typed = await runHerdr(plan.target, ["pane", "run", pane, maskLine(plan.kind, sandbox)]);
+    if (typed.code !== 0) return false;
+    const started = Date.now();
+    const seen = await runHerdr(plan.target, ["pane", "wait-output", pane, "--match", MASK_MARK, "--timeout", String(MASK_WAIT_MS)]);
+    if (seen.code === 0) return true;
+    // An older herdr can fail the wait at once: the line must not be typed again and again.
+    const rest = MASK_WAIT_MS - (Date.now() - started);
+    if (rest > 0) await new Promise((done) => setTimeout(done, rest));
+  }
+  return false;
+}
+
+/** True when herdr sees bwrap in the pane's foreground. Undefined when it cannot say. */
+async function bwrapInForeground(plan: HerdrPlan, pane: string): Promise<boolean | undefined> {
+  const output = await runHerdr(plan.target, ["pane", "process-info", "--pane", pane]);
+  const parsed = output.code === 0 ? parseJson(output.stdout) : undefined;
+  const result = isRecord(parsed) ? parsed.result : undefined;
+  const info = isRecord(result) ? result.process_info : undefined;
+  const processes = isRecord(info) ? info.foreground_processes : undefined;
+  if (!Array.isArray(processes)) return undefined;
+  return processes.some((process) => isRecord(process) && process.name === "bwrap");
+}
+
 /**
  * `agent start` in the tab's root pane. Probed on herdr 0.9.0 with Claude
  * Code 2.1.283:
@@ -342,7 +401,11 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
     const opened = await openTab(plan, workspace);
     tab = opened.tab;
     writeFileSync(join(plan.runDir, TAB_FILE), `${JSON.stringify({ tabs: [...earlier, tab], agent: name })}\n`);
-    if ((await startAgent(plan, name, opened.pane)) === "blocked") {
+    const isMasked = plan.sandbox !== undefined && (await maskTab(plan, plan.sandbox, opened.pane));
+    if (plan.sandbox !== undefined && !isMasked) appendRunLog(plan.runDir, `${NO_MASK}: the tab's shell did not take the alias`);
+    const start = await startAgent(plan, name, opened.pane);
+    if (isMasked && (await bwrapInForeground(plan, opened.pane)) === false) appendRunLog(plan.runDir, `${NO_MASK}: herdr shows no bwrap in the tab's foreground`);
+    if (start === "blocked") {
       const ready = await waitUntilReady(plan, name, started);
       if (!ready.ready) {
         if (ready.end.timedOut) await runHerdr(plan.target, ["tab", "close", tab]);

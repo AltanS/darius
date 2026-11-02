@@ -109,14 +109,14 @@ function after(argv: string[], flag: string): string[] {
 
 const GATED: ResolvedProfile = { harness: "claude", permissions: "gated", surface: "headless", args: [] };
 
-test("gated: the allowlist in dontAsk mode, no effort, the Bash matcher, gate scope shell", () => {
+test("gated: the allowlist in dontAsk mode, no effort, the matcher on Bash and the read tools, gate scope shell", () => {
   const { argv, settings } = plan(GATED);
   assert.deepEqual(after(argv, "--permission-mode"), ["dontAsk"]);
   assert.deepEqual(after(argv, "--permission-prompts"), ["none"]);
   assert.deepEqual(after(argv, "--allowedTools"), ["Bash(date)", "Read", "Grep", "Glob"]);
   assert.equal(argv.includes("--effort"), false);
   assert.equal(argv.includes("--dangerously-skip-permissions"), false);
-  assert.equal(settings.hooks.PreToolUse[0]?.matcher, "Bash");
+  assert.equal(settings.hooks.PreToolUse[0]?.matcher, "Bash|Read|Grep|Glob|NotebookRead|LS");
   assert.equal(claudeHarness.gateScope(GATED), "shell");
 });
 

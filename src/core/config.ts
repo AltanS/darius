@@ -69,6 +69,13 @@ export interface Config {
    */
   setup: { units: readonly SetupUnit[] };
   /**
+   * `[run] sandbox`: how this host launches an unattended run (0.114.0).
+   * `mask` (default): in bubblewrap, with darius secret files hidden from the
+   * run's process tree (src/core/sandbox.ts). `off`: without bubblewrap. Inside
+   * the mask, no_new_privs is on, so sudo and rootless podman fail.
+   */
+  run: { sandbox: RunSandbox };
+  /**
    * `[snapshot]`: the raw table of the local snapshots and their S3 copy
    * (src/core/snapshot-settings.ts validates it and merges it with the
    * environment and the dashboard's file). Absent without the table.
@@ -87,6 +94,11 @@ export type SetupUnit = (typeof SETUP_UNITS)[number];
 function isSetupUnit(name: string): name is SetupUnit {
   return SETUP_UNITS.some((unit) => unit === name);
 }
+
+/** The values `[run] sandbox` takes. */
+export const RUN_SANDBOXES = ["mask", "off"] as const;
+
+export type RunSandbox = (typeof RUN_SANDBOXES)[number];
 
 // --- typed field access -------------------------------------------------------
 
@@ -157,6 +169,13 @@ function setupUnits(table: Record<string, TomlValue>, file: string): readonly Se
     if (!units.includes(name)) units.push(name);
   }
   return SETUP_UNITS.filter((unit) => units.includes(unit));
+}
+
+function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox {
+  const name = optionalString(table, "sandbox", "mask", "run", file);
+  const known = RUN_SANDBOXES.find((value) => value === name);
+  if (known === undefined) throw new Error(`${file}: [run] sandbox must be "mask" or "off", found "${name}"`);
+  return known;
 }
 
 // --- allow_http rule ----------------------------------------------------------
@@ -253,9 +272,11 @@ export function loadConfig(): Config {
 
   const units = setupUnits(document.sections.setup ?? {}, file);
 
+  const sandbox = runSandbox(document.sections.run ?? {}, file);
+
   const snapshot = document.sections.snapshot;
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, snapshot };
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox }, snapshot };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */
