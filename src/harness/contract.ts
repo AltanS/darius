@@ -6,6 +6,7 @@
  * An adapter only translates between darius and one harness.
  */
 
+import type { HostPort } from "../core/box.ts";
 import type { JsonValue, Ritual } from "../core/model.ts";
 import type { GateScope } from "./gate.ts";
 
@@ -65,6 +66,8 @@ export interface ResolvedProfile {
   surface: "headless" | "herdr";
   maxTurns?: number;
   args: string[];
+  /** The profile's `env_pass` (0.117.0): variables a run in the box gets. Absent when none. */
+  envPass?: string[];
 }
 
 export interface PlanInput {
@@ -137,4 +140,17 @@ export interface HarnessAdapter {
   parseVersion(stdout: string): string | undefined;
   /** The cheapest model, for the gate check per harness version. */
   checkModel: string;
+  /**
+   * The box (src/core/box.ts, 0.117.0). `boxWritable`: the paths of the
+   * harness login and session state a run in the box may write; everything
+   * else of the harness config stays read-only, because it runs in the
+   * operator's next session, outside the box.
+   */
+  boxWritable(home: string): string[];
+  /** Files the box gets as a per-run copy, bound at their own path: the run may write them, the original stays. */
+  boxCopies(home: string): string[];
+  /** The hosts the harness must reach in every `net` mode: its API and login endpoints. */
+  boxHosts: readonly HostPort[];
+  /** Variables of the runner's environment the harness needs inside the box. */
+  boxEnv: readonly string[];
 }

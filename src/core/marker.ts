@@ -88,6 +88,16 @@
  * Absent means the default, push, and is stored as no key, so the hash of a
  * ritual without it does not change. A host older than 0.108.0 refuses the key.
  *
+ * The box keys (0.117.0) say what a run of the ritual may do in the box
+ * (`[run] sandbox = "box"`, src/core/box.ts): `net = "public" | "listed" |
+ * "none"`, `reach = ["host:port", ...]`, `writable = ["~/path", ...]`,
+ * `ssh_agent = true` and `tools = ["gh"]`. A profile's `env_pass = ["NAME"]`
+ * passes those variables into the box. An unknown value, a `writable` path
+ * in or holding a protected path, or an `env_pass` name the box sets itself
+ * is an error with its line. Absent keys are stored as no key, so the hash
+ * of a ritual without them does not change. A host older than 0.117.0
+ * refuses the keys.
+ *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
  * policy's notes, a blank line, then the ritual's. `mode`, `may` and `hold`
@@ -110,8 +120,10 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { BOX_NETS, BOX_TOOLS, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxNet, type BoxTool, type ProtectedDirs } from "./box.ts";
 import type { OwnedKind } from "./kinds.ts";
 import type { Policy, ProfileFields } from "./model.ts";
 import { parseToml, type TomlDocument, type TomlValue } from "./toml.ts";
@@ -174,6 +186,16 @@ export interface RepoRitual {
    * model cannot raise its own.
    */
   candleDeliver?: string[];
+  /** `net` (0.117.0): what a run in the box may reach. Absent: "public". */
+  net?: BoxNet;
+  /** `reach` (0.117.0): `host:port` pairs a run in the box may reach, lower case, deduped. */
+  reach?: string[];
+  /** `writable` (0.117.0): paths a run in the box may write, as written (`~/...` or absolute). */
+  writable?: string[];
+  /** `ssh_agent = true` (0.117.0): the run in the box gets the ssh agent. */
+  sshAgent?: true;
+  /** `tools` (0.117.0): logins the box shows; `gh` unmasks `~/.config/gh/hosts.yml`. */
+  tools?: BoxTool[];
   /** The `[policies.*]` name, for display. */
   policyName?: string;
   /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
@@ -241,12 +263,13 @@ const ICON_EXAMPLES = 'for example icon = "🎯" or icon = "assets/logo.svg"';
 /** The only valid `kinds` lists, in this order: each one adds a kind to the one before. */
 const VALID_KINDS: readonly (readonly OwnedKind[])[] = [["ritual"], ["ritual", "vigil"], ["ritual", "vigil", "milestone"]];
 const ABSENT_KINDS: readonly OwnedKind[] = ["ritual"];
-const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args"]);
+const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args", "env_pass"]);
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
   "follow_up_may", "follow_up_may_extra", "follow_up", "candle_deliver",
+  "net", "reach", "writable", "ssh_agent", "tools",
 ]);
 /** The channels a candle notice can use. `src/core/alerts.ts` sends on them; `candle light --deliver` takes the same words. */
 const CANDLE_CHANNELS: readonly string[] = ["push", "email"];
@@ -325,6 +348,17 @@ function decodeProfile(table: Readonly<Record<string, TomlValue>>, at: { file: s
   if (args !== undefined) {
     if (!Array.isArray(args)) throw fail("args", 'a list of strings: args = ["--flag"]');
     fields.args = [...args];
+  }
+  const envPass: unknown = table.env_pass;
+  if (envPass !== undefined) {
+    if (!Array.isArray(envPass)) throw fail("env_pass", 'a list of variable names: env_pass = ["ACME_TOKEN"]');
+    const names: string[] = [];
+    for (const name of envPass) {
+      const problem = isText(name) ? envPassProblem(name) : `${JSON.stringify(name)} is not a name`;
+      if (problem !== undefined) throw fail("env_pass", `a list of variable names the box may pass in, but ${problem}`);
+      if (isText(name) && !names.includes(name)) names.push(name);
+    }
+    if (names.length > 0) fields.env_pass = names;
   }
   return fields;
 }
@@ -473,6 +507,93 @@ function decodeCandleDeliver(table: Table, at: { section: string; source: Source
     if (!channels.includes(entry)) channels.push(entry);
   }
   return channels;
+}
+
+/** An env value, where an empty string counts as unset, as in src/core/paths.ts. */
+function envOr(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value === undefined || value === "" ? fallback : value;
+}
+
+/**
+ * The dirs a ritual's `writable` is checked against at load. src/core/paths.ts
+ * owns these locations, but it imports this file; the same env overrides and
+ * defaults are read here. `protectedPaths` adds the home defaults in any case.
+ */
+function markerProtectedDirs(): ProtectedDirs {
+  const home = homedir();
+  const dirs: ProtectedDirs = {
+    home,
+    store: envOr("DARIUS_STATE_DIR", join(home, ".local", "share", "darius")),
+    config: envOr("DARIUS_CONFIG_DIR", join(home, ".config", "darius")),
+    app: envOr("DARIUS_APP_DIR", join(home, ".local", "opt", "darius")),
+  };
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  if (runtimeDir?.startsWith("/") === true) dirs.runtimeDir = runtimeDir;
+  return dirs;
+}
+
+/** A list key of a ritual or profile table: each entry a string, deduped, first place kept. undefined when absent. */
+function textList(table: Table, key: string, fail: (expected: string) => Error, expected: string): string[] | undefined {
+  const value: unknown = table[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw fail(expected);
+  const list: string[] = [];
+  for (const entry of value) {
+    if (!isText(entry)) throw fail(expected);
+    if (!list.includes(entry)) list.push(entry);
+  }
+  return list;
+}
+
+/** The box keys of a ritual table (0.117.0), each checked; absent keys stay absent. */
+function decodeBoxKeys(table: Table, at: { section: string; source: Source }): Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools"> {
+  const failFor = (key: string) => (expected: string): Error => new Error(`${where(at.source.file, at.source.lines[`${at.section}.${key}`])}: ${key} must be ${expected}`);
+  const keys: Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools"> = {};
+  const { net, ssh_agent: sshAgent } = table;
+  if (net !== undefined) {
+    const known = BOX_NETS.find((value) => value === net);
+    if (known === undefined) throw failFor("net")(`"public", "listed" or "none", got ${JSON.stringify(net)}`);
+    keys.net = known;
+  }
+  const reach = textList(table, "reach", failFor("reach"), 'a list of "host:port" pairs: reach = ["git.example.com:22"]');
+  if (reach !== undefined) {
+    const pairs: string[] = [];
+    for (const entry of reach) {
+      let text: string;
+      try {
+        text = hostPortText(parseHostPort(entry));
+      } catch (cause) {
+        throw failFor("reach")(`a list of "host:port" pairs, but ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      if (!pairs.includes(text)) pairs.push(text);
+    }
+    if (pairs.length > 0) keys.reach = pairs;
+  }
+  const writable = textList(table, "writable", failFor("writable"), 'a list of paths: writable = ["~/.cache/acme"]');
+  if (writable !== undefined) {
+    const dirs = markerProtectedDirs();
+    for (const path of writable) {
+      const problem = writableProblem(path, dirs);
+      if (problem !== undefined) throw failFor("writable")(`a list of paths the box may write, but "${path}" is refused: ${problem}`);
+    }
+    if (writable.length > 0) keys.writable = writable;
+  }
+  if (sshAgent !== undefined) {
+    if (sshAgent !== true) throw failFor("ssh_agent")("true; leave the key out for no agent");
+    keys.sshAgent = true;
+  }
+  const tools = textList(table, "tools", failFor("tools"), `a list of ${BOX_TOOLS.join(", ")}`);
+  if (tools !== undefined) {
+    const known: BoxTool[] = [];
+    for (const tool of tools) {
+      const found = BOX_TOOLS.find((name) => name === tool);
+      if (found === undefined) throw failFor("tools")(`a list of ${BOX_TOOLS.join(", ")}, got "${tool}"`);
+      known.push(found);
+    }
+    if (known.length > 0) keys.tools = known;
+  }
+  return keys;
 }
 
 function decodeTimeout(table: Table, at: { section: string; source: Source }): number | undefined {
@@ -628,6 +749,7 @@ function decodeRitual(
     throw new Error(`${where(source.file, source.lines[`${section}.follow_up`])}: follow_up must be "headless" or "attended"`);
   }
   const candleDeliver = decodeCandleDeliver(table, at);
+  const box = decodeBoxKeys(table, at);
   const { policy, policyName, policyExtra, ownNotes } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
   if (cadence !== undefined) ritual.cadence = cadence;
@@ -641,6 +763,7 @@ function decodeRitual(
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
   if (followUp === "headless") ritual.followUp = followUp;
   if (candleDeliver !== undefined) ritual.candleDeliver = candleDeliver;
+  Object.assign(ritual, box);
   if (policyName !== undefined) ritual.policyName = policyName;
   if (policyExtra !== undefined) ritual.policyExtra = policyExtra;
   if (ownNotes !== undefined) ritual.ownNotes = ownNotes;

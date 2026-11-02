@@ -27,6 +27,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { HostPort } from "../core/box.ts";
 import type { JsonValue, Policy } from "../core/model.ts";
 import type { DenyOutput, HarnessAdapter, HarnessLaunch, PlanInput, ResolvedProfile, ResultFacts, ToolCall, ToolClass } from "./contract.ts";
 import { allowsSubagents, type GateScope } from "./gate.ts";
@@ -55,6 +56,12 @@ const DISALLOWED_REPORT: readonly string[] = ["WebFetch", "WebSearch"];
  */
 const DISALLOWED_SKIP: readonly string[] = ["Agent"];
 export const DEFAULT_MAX_TURNS = 20;
+/** What a run in the box may write under `~/.claude` (Fable signoff 2026-11-02, item 3). */
+const BOX_WRITABLE: readonly string[] = [
+  ".credentials.json", "projects", "todos", "tasks", "shell-snapshots", "statsig", "debug", "session-env", "file-history", "history.jsonl",
+];
+/** The API and login hosts Claude Code reaches, in every `net` mode. */
+const BOX_HOSTS: readonly HostPort[] = ["api.anthropic.com", "console.anthropic.com", "platform.claude.com", "claude.ai", "statsig.anthropic.com"].map((host) => ({ host, port: 443 }));
 export const CLAUDE_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 
 /**
@@ -349,4 +356,16 @@ export const claudeHarness: HarnessAdapter = {
     return /^\s*(\d+\.\d+\.\d+\S*)/u.exec(stdout)?.[1];
   },
   checkModel: "haiku",
+
+  // The box (0.117.0): the login and session state Claude Code writes. Settings, hooks,
+  // plugins, skills, agents and CLAUDE.md stay read-only; `harness check` in the box proves the list.
+  boxWritable(home: string): string[] {
+    return BOX_WRITABLE.map((name) => join(home, ".claude", name));
+  },
+  boxCopies(home: string): string[] {
+    return [join(home, ".claude.json")];
+  },
+  boxHosts: BOX_HOSTS,
+  // The harness login, when the operator gives it by environment: the run is the harness.
+  boxEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
 };

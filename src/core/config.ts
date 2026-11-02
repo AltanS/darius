@@ -16,7 +16,8 @@ import { hostname, homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
-import { configDir } from "./paths.ts";
+import { writableProblem, type ProtectedDirs } from "./box.ts";
+import { appDir, configDir, stateDir } from "./paths.ts";
 import { parseToml, type TomlValue } from "./toml.ts";
 
 /**
@@ -72,9 +73,18 @@ export interface Config {
    * `[run] sandbox`: how this host launches an unattended run (0.114.0).
    * `mask` (opt-in since 0.114.1): in bubblewrap, with darius secret files hidden from the
    * run's process tree (src/core/sandbox.ts). `off` (default): without bubblewrap. Inside
-   * the mask, no_new_privs is on, so sudo and rootless podman fail.
+   * the mask, no_new_privs is on, so sudo and rootless podman fail. `box` (0.117.0): the run's
+   * own sandbox (src/core/box.ts). This version reads it, but launches nothing in the box yet.
    */
   run: { sandbox: RunSandbox };
+  /**
+   * `[box]` (0.117.0): what a run in the box may write besides its work dir,
+   * and whether it gets the ssh agent. `writable` undefined means the default
+   * cache list (`DEFAULT_BOX_WRITABLE` in src/core/box.ts). Each path is checked
+   * at load: a path in or holding the store, the config dir, `~/.claude`,
+   * `~/.ssh` or another protected path is an error.
+   */
+  box: { writable?: readonly string[]; sshAgent: boolean };
   /**
    * `[snapshot]`: the raw table of the local snapshots and their S3 copy
    * (src/core/snapshot-settings.ts validates it and merges it with the
@@ -96,7 +106,7 @@ function isSetupUnit(name: string): name is SetupUnit {
 }
 
 /** The values `[run] sandbox` takes. */
-export const RUN_SANDBOXES = ["mask", "off"] as const;
+export const RUN_SANDBOXES = ["mask", "off", "box"] as const;
 
 export type RunSandbox = (typeof RUN_SANDBOXES)[number];
 
@@ -174,8 +184,35 @@ function setupUnits(table: Record<string, TomlValue>, file: string): readonly Se
 function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox {
   const name = optionalString(table, "sandbox", "off", "run", file);
   const known = RUN_SANDBOXES.find((value) => value === name);
-  if (known === undefined) throw new Error(`${file}: [run] sandbox must be "mask" or "off", found "${name}"`);
+  if (known === undefined) throw new Error(`${file}: [run] sandbox must be "off", "mask" or "box", found "${name}"`);
   return known;
+}
+
+const BOX_KEYS: ReadonlySet<string> = new Set(["writable", "ssh_agent"]);
+
+/** The dirs a `writable` path is checked against on this host. */
+export function hostProtectedDirs(): ProtectedDirs {
+  const dirs: ProtectedDirs = { home: homedir(), store: stateDir(), config: configDir(), app: appDir() };
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  if (runtimeDir?.startsWith("/") === true) dirs.runtimeDir = runtimeDir;
+  return dirs;
+}
+
+/** The `[box]` table. An unknown key, a bad type or a refused `writable` path is an error that names it. */
+function boxSettings(table: Record<string, TomlValue>, file: string): Config["box"] {
+  for (const key of Object.keys(table)) {
+    if (!BOX_KEYS.has(key)) throw new Error(`${file}: [box] has an unknown key "${key}" (known: ${[...BOX_KEYS].join(", ")})`);
+  }
+  const sshAgent = optionalBoolean(table, "ssh_agent", false, "box", file);
+  const value = table.writable;
+  if (value === undefined) return { sshAgent };
+  if (!Array.isArray(value)) throw new Error(`${file}: [box] writable must be a list of paths: writable = ["~/.cache"]`);
+  const dirs = hostProtectedDirs();
+  for (const path of value) {
+    const problem = writableProblem(path, dirs);
+    if (problem !== undefined) throw new Error(`${file}: [box] writable "${path}" is refused: ${problem}`);
+  }
+  return { writable: [...new Set(value)], sshAgent };
 }
 
 // --- allow_http rule ----------------------------------------------------------
@@ -273,10 +310,11 @@ export function loadConfig(): Config {
   const units = setupUnits(document.sections.setup ?? {}, file);
 
   const sandbox = runSandbox(document.sections.run ?? {}, file);
+  const box = boxSettings(document.sections.box ?? {}, file);
 
   const snapshot = document.sections.snapshot;
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox }, snapshot };
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox }, box, snapshot };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

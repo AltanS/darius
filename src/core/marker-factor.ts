@@ -266,7 +266,7 @@ export const renderFactored: FactorRender = (text, marker, groups) => {
 };
 
 /** A value the proof compares, as the parser gives it. */
-type Field = string | number | readonly string[] | undefined;
+type Field = string | number | boolean | readonly string[] | undefined;
 
 function fieldText(value: Field): string {
   return value === undefined ? "unset" : JSON.stringify(value);

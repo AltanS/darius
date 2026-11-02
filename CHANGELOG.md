@@ -14,6 +14,17 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 ### Added
 
 - The box proxy (`src/core/box-proxy.ts`), the network boundary of the coming box sandbox. It is not used yet.
+## [0.117.0] - 2026-11-02
+
+### Added
+
+- The box layout: `src/core/box.ts` builds the bwrap argv and the cleared environment for one run in the box from host facts. No run launches in the box yet.
+- `[run] sandbox = "box"` is read. Until the launch ships, a run on such a host starts without any sandbox, and `run.log` and `darius doctor` say so. `off` and `mask` work as before.
+- Host table `[box]`: `writable` (default: the cache dirs that exist) and `ssh_agent`. An unknown key, a bad type or a protected path is refused at load.
+- Ritual keys `net`, `reach`, `writable`, `ssh_agent = true` and `tools = ["gh"]`, and the profile key `env_pass`. An unknown value, a protected `writable` path or a name the box sets itself is refused at load with its line.
+- Adapter fields `boxWritable`, `boxCopies`, `boxHosts` and `boxEnv`, filled for Claude Code.
+- `src/core/box-host.ts` reads the facts on a host and makes the box dir, `gate.jsonl`, `scratch/` and the per-run copies.
+- The box hides host sockets in the home folder. `/var/tmp` and folders such as `~/.local/state`, `~/.var` and the browser folders are a tmpfs. A scan of the home folder (30 s cap) masks every other socket it finds, except the bound ssh agent. A socket on a read-only mount still connects, so read-only is not enough.
 
 ## [0.115.0] - 2026-11-02
 

@@ -914,3 +914,83 @@ test("icon does not change a ritual's definition hash", () => {
   assert.ok(plain !== undefined && withIcon !== undefined);
   assert.equal(definitionHash(withIcon), definitionHash(plain));
 });
+
+// --- box keys (0.117.0) ----------------------------------------------------------------
+
+test("box keys: net, reach, writable, ssh_agent and tools read back; reach is lower-cased and deduped; absent keys stay absent", () => {
+  const ritual = firstRitual(`${RITUAL}mode = "report"\nnet = "listed"\nreach = ["Git.Example.com:22", "git.example.com:22", "[2001:DB8::1]:443"]\nwritable = ["~/.cache/acme", "/srv/acme-out"]\nssh_agent = true\ntools = ["gh"]\n`);
+  assert.equal(ritual.net, "listed");
+  assert.deepEqual(ritual.reach, ["git.example.com:22", "[2001:db8::1]:443"]);
+  assert.deepEqual(ritual.writable, ["~/.cache/acme", "/srv/acme-out"]);
+  assert.equal(ritual.sshAgent, true);
+  assert.deepEqual(ritual.tools, ["gh"]);
+  const plain = firstRitual(`${RITUAL}mode = "report"\nreach = []\nwritable = []\ntools = []\n`);
+  for (const key of ["net", "reach", "writable", "sshAgent", "tools"] as const) assert.equal(plain[key], undefined, key);
+  for (const net of ["public", "none"]) assert.equal(firstRitual(`${RITUAL}mode = "report"\nnet = "${net}"\n`).net, net);
+});
+
+test("box keys: an unknown value is refused at load with its line", () => {
+  const refused: [string, RegExp][] = [
+    ['net = "open"', /:\d+: net must be "public", "listed" or "none", got "open"/u],
+    ["net = true", /:\d+: net must be/u],
+    ['reach = "git.example.com:22"', /:\d+: reach must be a list of "host:port" pairs/u],
+    ['reach = ["git.example.com"]', /:\d+: reach must be a list .*"git\.example\.com" is not host:port/u],
+    ['reach = ["git.example.com:99999"]', /port must be a number from 1 to 65535/u],
+    ['reach = ["127.0.0.1:22"]', /never reaches loopback/u],
+    ['reach = ["localhost:4747"]', /never reaches loopback/u],
+    ['reach = ["0x7f000001:22"]', /four decimal numbers/u],
+    ['writable = "~/.cache"', /:\d+: writable must be a list of paths/u],
+    ['writable = ["~/.ssh"]', /:\d+: writable must be a list of paths the box may write, but "~\/\.ssh" is refused: it is in .*\.ssh/u],
+    ['writable = ["~/.claude/projects"]', /"~\/\.claude\/projects" is refused/u],
+    ['writable = ["~/.config/systemd/user"]', /is refused: it is in .*\.config\/systemd/u],
+    ['writable = ["~/.config/autostart"]', /is refused/u],
+    ['writable = ["~/.bashrc"]', /is refused/u],
+    ['writable = ["~"]', /is refused: it holds/u],
+    ['writable = ["/"]', /is refused: it is the root/u],
+    ['writable = ["/run/user/1000"]', /is refused: it is in \/run/u],
+    ['writable = ["cache"]', /must start with ~\/ or \//u],
+    ['writable = ["~/x/../.ssh"]', /must not contain \.\./u],
+    ["ssh_agent = false", /:\d+: ssh_agent must be true; leave the key out for no agent/u],
+    ['ssh_agent = "yes"', /ssh_agent must be true/u],
+    ['tools = ["aws"]', /:\d+: tools must be a list of gh, got "aws"/u],
+    ['tools = "gh"', /tools must be a list of gh/u],
+  ];
+  for (const [line, why] of refused) assert.throws(() => firstRitual(`${RITUAL}mode = "report"\n${line}\n`), why, line);
+});
+
+test("box keys: the store and the config dir are refused wherever DARIUS_STATE_DIR and DARIUS_CONFIG_DIR point", () => {
+  const store = process.env.DARIUS_STATE_DIR ?? "";
+  const config = process.env.DARIUS_CONFIG_DIR ?? "";
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nwritable = ["${store}/acme"]\n`), /is refused: it is in/u);
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nwritable = ["${config}"]\n`), /is refused: it is in/u);
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nwritable = ["${SANDBOX}"]\n`), /is refused: it (?:holds|is in \/(?:var\/)?tmp)/u);
+});
+
+test("box keys: the hash of a ritual without them is unchanged, and each one changes it", () => {
+  const text = 'v = 3\nproject = "acme"\nmax_mode = "act"\ntz = "Europe/Berlin"\n[policies.p]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'x\']\n[rituals.daily]\ntitle = "Daily"\ncadence = "1d"\nskill = "daily"\npolicy = "p"\nmay_extra = ["Read"]\n[rituals.own]\ntitle = "Own"\nskill = "own"\nmode = "report"\nmay = ["Grep"]\nhold = [\'y\']\non_hold = "deny"\n';
+  // The golden hashes of 0.68.0: this release adds no key to a ritual without the box keys.
+  const golden = ["e2266101cb605a9f4e3d22fdcc306342e134b74f17b7cf9260abeeb91c9763a7", "b4669ae2b1675a679c4137d2433c1af8ae848db81fb57fc82605d0ffd441e34c"];
+  assert.deepEqual(readMarker(checkout(text))?.rituals.map((ritual) => definitionHash(ritual)), golden);
+  const plain = definitionHash(firstRitual(`${RITUAL}mode = "report"\n`));
+  for (const line of ['net = "none"', 'reach = ["git.example.com:22"]', 'writable = ["~/.cache/acme"]', "ssh_agent = true", 'tools = ["gh"]']) {
+    assert.notEqual(definitionHash(firstRitual(`${RITUAL}mode = "report"\n${line}\n`)), plain, line);
+  }
+});
+
+test("env_pass: a profile key, a list of variable names; a name the box sets itself is refused", () => {
+  const marker = readMarker(checkout('v = 2\nproject = "acme"\n[profiles.boxed]\nenv_pass = ["ACME_TOKEN", "ACME_TOKEN", "NPM_CONFIG_REGISTRY"]\n'));
+  assert.deepEqual(marker?.profiles.boxed?.env_pass, ["ACME_TOKEN", "NPM_CONFIG_REGISTRY"]);
+  assert.equal(readMarker(checkout('v = 2\nproject = "acme"\n[profiles.plain]\nenv_pass = []\n'))?.profiles.plain?.env_pass, undefined);
+  const refused: [string, RegExp][] = [
+    ['"ACME_TOKEN"', /:\d+: env_pass must be a list of variable names/u],
+    ['["PATH"]', /env_pass must be a list of variable names the box may pass in, but "PATH" is set by the box itself/u],
+    ['["DARIUS_STATE_DIR"]', /"DARIUS_STATE_DIR" is set by the box itself/u],
+    ['["https_proxy"]', /is set by the box itself/u],
+    ['["SSH_AUTH_SOCK"]', /is set by the box itself/u],
+    ['["LC_ALL"]', /is set by the box itself/u],
+    ['["A-B"]', /"A-B" is not an environment variable name/u],
+  ];
+  for (const [value, why] of refused) {
+    assert.throws(() => readMarker(checkout(`v = 2\nproject = "acme"\n[profiles.x]\nenv_pass = ${value}\n`)), why, value);
+  }
+});

@@ -131,6 +131,12 @@ export interface ProfileFields {
   surface?: "headless" | "herdr";
   max_turns?: number;
   args?: string[];
+  /**
+   * `env_pass` (0.117.0): variables of the runner's environment a run in the
+   * box gets. Only a `[profiles.<name>]` table in `.darius.toml` sets it, so
+   * what reaches the box is in a reviewed commit.
+   */
+  env_pass?: string[];
 }
 
 export type Item = Ritual | Vigil | Profile;

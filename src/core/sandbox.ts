@@ -50,6 +50,7 @@ const KEYS_DIR = "keys";
 /** Where a run's launcher writes what the report does not need. */
 const RUN_LOG = "run.log";
 const FIX = 'Install bubblewrap and allow unprivileged user namespaces, or set [run] sandbox = "off" in config.toml.';
+const BOX_NOT_WIRED = '[run] sandbox = "box" is set, but this darius does not launch runs in the box yet. Runs start without any sandbox. Set [run] sandbox = "off" or "mask" until a darius that launches in the box.';
 
 function isExecutable(path: string): boolean {
   try {
@@ -137,8 +138,11 @@ function sandboxChoice(cfg: Config | null | undefined): string {
  */
 export function resolveSandbox(): Sandbox {
   const cfg = loadConfigIfPresent();
+  const choice = sandboxChoice(cfg);
+  // The box plan exists (src/core/box.ts), but no launch uses it yet: say so in run.log and doctor instead of staying silent.
+  if (choice === "box") return { state: "unmasked", problem: BOX_NOT_WIRED };
   // Opt-in: inside the namespace root-owned files read as another owner, and ssh then refuses its own config (0.114.1).
-  if (sandboxChoice(cfg) !== "mask") return { state: "off" };
+  if (choice !== "mask") return { state: "off" };
   const probe = probeBwrap();
   if ("problem" in probe) return { state: "unmasked", problem: probe.problem };
   const { files, dirs } = maskedPaths(cfg);

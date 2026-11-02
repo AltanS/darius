@@ -102,13 +102,53 @@ test("[run] sandbox: off by default, mask with one line, an unknown value refuse
     assert.equal(sandboxWarning(), undefined);
   });
   isolatedConfig('host = "a"\n\n[run]\nsandbox = "maybe"\n', () => {
-    assert.throws(() => loadConfig(), /\[run\] sandbox must be "mask" or "off", found "maybe"/u);
+    assert.throws(() => loadConfig(), /\[run\] sandbox must be "off", "mask" or "box", found "maybe"/u);
     assert.throws(() => resolveSandbox(), /sandbox must be/u, "a bad value does not run unmasked in silence");
     assert.match(sandboxWarning() ?? "", /^WARN: cannot read the sandbox setting/u);
   });
   } finally {
     process.env.DARIUS_RUN_SANDBOX = "mask";
   }
+});
+
+test("[run] sandbox = \"box\": read, but no launch uses it yet, so runs say they start without a sandbox", () => {
+  delete process.env.DARIUS_RUN_SANDBOX;
+  try {
+    isolatedConfig('host = "a"\n\n[run]\nsandbox = "box"\n', () => {
+      assert.equal(loadConfig().run.sandbox, "box");
+      const sandbox = resolveSandbox();
+      assert.equal(sandbox.state, "unmasked");
+      assert.match(sandbox.state === "unmasked" ? sandbox.problem : "", /does not launch runs in the box yet/u);
+      assert.match(sandboxWarning() ?? "", /^WARN: .*sandbox = "box" is set/u);
+    });
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "mask";
+  }
+});
+
+test("[box]: writable defaults to the cache list, ssh_agent to false; a bad key, type or protected path is refused", () => {
+  isolatedConfig('host = "a"\n', () => assert.deepEqual(loadConfig().box, { sshAgent: false }));
+  isolatedConfig('host = "a"\n\n[box]\nwritable = ["~/.cache", "/srv/cache", "~/.cache"]\nssh_agent = true\n', () => {
+    assert.deepEqual(loadConfig().box, { writable: ["~/.cache", "/srv/cache"], sshAgent: true });
+  });
+  isolatedConfig('host = "a"\n\n[box]\nwritable = []\n', () => assert.deepEqual(loadConfig().box, { writable: [], sshAgent: false }, "an empty list means no extras"));
+  const refused: [string, RegExp][] = [
+    ['[box]\nwritables = ["~/.cache"]\n', /\[box\] has an unknown key "writables"/u],
+    ['[box]\nwritable = "~/.cache"\n', /\[box\] writable must be a list of paths/u],
+    ['[box]\nssh_agent = "yes"\n', /\[box\] "ssh_agent" must be true or false/u],
+    ['[box]\nwritable = ["~/.ssh"]\n', /\[box\] writable "~\/\.ssh" is refused: it is in/u],
+    ['[box]\nwritable = ["~/.config"]\n', /\[box\] writable "~\/\.config" is refused: it holds/u],
+    ['[box]\nwritable = ["~/.config/systemd"]\n', /is refused/u],
+    ['[box]\nwritable = ["/"]\n', /is refused: it is the root/u],
+    [`[box]\nwritable = ["${STATE}/acme"]\n`, /is refused: it is in/u],
+  ];
+  for (const [table, why] of refused) {
+    isolatedConfig(`host = "a"\n\n${table}`, () => assert.throws(() => loadConfig(), why, table));
+  }
+  isolatedConfig('host = "a"\n\n[box]\nwritable = ["~/.ssh"]\n', () => {
+    const file = join(process.env.DARIUS_CONFIG_DIR ?? "", "config.toml");
+    assert.throws(() => loadConfig(), (cause: Error) => cause.message.startsWith(`${file}: [box] writable`), "the error names the file");
+  });
 });
 
 test("DARIUS_RUN_SANDBOX overrides [run] sandbox for one process; another value is ignored", () => {

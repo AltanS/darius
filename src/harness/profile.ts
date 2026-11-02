@@ -122,5 +122,6 @@ export function resolveProfile(sources: ProfileSources): Resolution {
   if (fields.model !== undefined) profile.model = fields.model;
   if (fields.effort !== undefined) profile.effort = fields.effort;
   if (fields.max_turns !== undefined) profile.maxTurns = fields.max_turns;
+  if (fields.env_pass !== undefined && fields.env_pass.length > 0) profile.envPass = [...fields.env_pass];
   return { profile, harness };
 }
