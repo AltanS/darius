@@ -632,6 +632,11 @@ function boxEnv(input: BoxPlanInput, agent: string | undefined): BoxEnv {
   env.DARIUS_RUN = input.run.id;
   env.DARIUS_RUN_POLICY = input.run.policy;
   env.DARIUS_PROJECT = input.run.project;
+  // The gate and the broker client inside read the same store and config as the runner, also off the default paths.
+  env.DARIUS_STATE_DIR = facts.store;
+  env.DARIUS_CONFIG_DIR = facts.config;
+  const runtime = facts.env.DARIUS_RUNTIME;
+  if (runtime !== undefined) env.DARIUS_RUNTIME = runtime;
   // curl reads only the lower-case http_proxy; the upper case is the other tools' spelling.
   for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]) {
     env[name] = proxy;

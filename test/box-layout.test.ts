@@ -62,7 +62,7 @@ const RUNNER_ENV: BoxEnv = {
   DBUS_SESSION_BUS_ADDRESS: `unix:path=${RUNTIME}/bus`,
   DARIUS_BWRAP: "/usr/bin/bwrap",
   DARIUS_RUN_SANDBOX: "box",
-  DARIUS_STATE_DIR: STORE,
+  DARIUS_STATE_DIR: "/elsewhere/darius",
   SSH_AUTH_SOCK: AGENT,
   ANTHROPIC_API_KEY: "sk-ant-your-key-here",
   ACME_TOKEN: "acme-placeholder",
@@ -419,6 +419,8 @@ test("the env is a fixed list: nothing else of the runner's env reaches the box"
     DARIUS_RUN: "r1",
     DARIUS_RUN_POLICY: `${RUN_DIR}/policy.json`,
     DARIUS_PROJECT: "acme",
+    DARIUS_STATE_DIR: STORE,
+    DARIUS_CONFIG_DIR: CONFIG,
     HTTPS_PROXY: proxy,
     https_proxy: proxy,
     HTTP_PROXY: proxy,
@@ -430,7 +432,7 @@ test("the env is a fixed list: nothing else of the runner's env reaches the box"
     NODE_USE_ENV_PROXY: "1",
     ANTHROPIC_API_KEY: "sk-ant-your-key-here",
   });
-  for (const name of ["GH_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX", "DARIUS_STATE_DIR", "ACME_TOKEN"]) {
+  for (const name of ["GH_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX", "ACME_TOKEN"]) {
     assert.equal(plan.env[name], undefined, name);
     assert.equal(plan.argv.includes(name), false, `${name} is not in the argv`);
   }

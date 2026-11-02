@@ -17,6 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 
 import { parseArgs } from "../src/cli/args.ts";
@@ -30,7 +31,7 @@ import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
-import { webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
+import { clearStaleBox, webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
 
@@ -636,4 +637,25 @@ test("webPorts: 4747 and 4748, DARIUS_WEB_URL of web.env and next.env by host an
     { host: "darius.example.com", port: 443 },
     { host: "host.example.net", port: 4749 },
   ]);
+});
+
+test("a stale box dir from a dead runner is removed; a live one stays", async () => {
+  const stale = join(SANDBOX, "stale-box");
+  mkdirSync(stale, { recursive: true });
+  writeFileSync(join(stale, "box.json"), "{}\n");
+  writeFileSync(join(stale, "proxy.sock"), "");
+  await clearStaleBox(stale);
+  assert.equal(existsSync(stale), false);
+
+  const live = join(SANDBOX, "live-box");
+  mkdirSync(live, { recursive: true });
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(join(live, "broker.sock"), resolve));
+  try {
+    await clearStaleBox(live);
+    assert.equal(existsSync(join(live, "broker.sock")), true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  await clearStaleBox(join(SANDBOX, "no-such-box"));
 });

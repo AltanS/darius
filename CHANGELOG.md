@@ -15,6 +15,9 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - Report mode shows the work dir read-only. The gate check keeps its work dir writable: the gate, not the mount, must stop its marker.
 - No verb flushes alerts inside a box, as in the mask. `darius doctor` warns when `box` is set and bwrap fails its probe.
 - `darius box enter` passes SIGINT on only when its stdin is not a terminal. In a herdr tab the kernel already sends Ctrl-C to the harness, which would get it twice.
+- The box gets the runner's store and config dirs as `DARIUS_STATE_DIR` and `DARIUS_CONFIG_DIR`, so the gate and the broker client inside read the same store on a host with a store off the default path.
+- A box dir left by a runner that died is removed before the next launch of that run, when neither its proxy nor its broker answers. A box dir in use stays.
+- The web app shows a `box-broken` skip as a failure.
 
 ## [0.119.0] - 2026-11-02
 

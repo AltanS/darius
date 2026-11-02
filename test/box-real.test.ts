@@ -268,9 +268,10 @@ test("real bwrap: the box refuses store, run policy, harness settings, git confi
   assert.deepEqual(outcome.run, ["darius"], "/run holds only the box dir; no docker, tailscale or dbus socket");
   assert.deepEqual(outcome.runtime, [], "the runtime dir is empty: no session bus");
   assert.deepEqual(outcome.interfaces, ["lo"], "no network but loopback");
-  for (const name of ["GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX", "DARIUS_STATE_DIR", "DARIUS_CONFIG_DIR"]) {
+  for (const name of ["GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX"]) {
     assert.equal(outcome.env[name], undefined, `${name} does not reach the box`);
   }
+  assert.equal(outcome.env.DARIUS_STATE_DIR, STORE, "the box reads the runner's store");
   assert.equal(outcome.env.HTTPS_PROXY, "http://127.0.0.1:18080");
   assert.equal(outcome.env.DARIUS_RUN, "r1");
   assert.match(outcome.env.PATH ?? "", /^\/run\/darius\/bin:/u);

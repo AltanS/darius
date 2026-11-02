@@ -12,7 +12,7 @@ export interface Badge {
   label: string;
 }
 
-const BAD_OUTCOMES: ReadonlySet<string> = new Set(["failed", "refused", "error", "gate-broken", "harness-unchecked", "profile-invalid", "subagents-unproven", "tool-missing"]);
+const BAD_OUTCOMES: ReadonlySet<string> = new Set(["failed", "refused", "error", "box-broken", "gate-broken", "harness-unchecked", "profile-invalid", "subagents-unproven", "tool-missing"]);
 
 export function outcomeTone(outcome: string | null): Tone {
   if (outcome === null) return "idle";

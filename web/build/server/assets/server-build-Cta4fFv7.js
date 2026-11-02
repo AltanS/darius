@@ -11215,6 +11215,7 @@ var BAD_OUTCOMES = /* @__PURE__ */ new Set([
 	"failed",
 	"refused",
 	"error",
+	"box-broken",
 	"gate-broken",
 	"harness-unchecked",
 	"profile-invalid",

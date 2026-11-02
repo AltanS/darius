@@ -25,7 +25,8 @@
  * ritual as `box-broken` with the reason. The reason is in the run's run.log.
  */
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { createConnection } from "node:net";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -48,6 +49,7 @@ export const WEB_LANE_PORTS: readonly number[] = [4747, 4748];
 /** The files in the config dir that name the web lanes' address. */
 const WEB_ENV_FILES: readonly string[] = ["web.env", "next.env"];
 const LAYOUT_PROBE_TIMEOUT_MS = 10_000;
+const STALE_PROBE_TIMEOUT_MS = 1_000;
 
 /** What one launch needs of its sandbox. */
 export interface SandboxRequest {
@@ -230,6 +232,7 @@ async function openBox(request: SandboxRequest): Promise<OpenBox> {
     removeBox(plan);
   };
   try {
+    await clearStaleBox(plan.boxDir);
     prepareBox(plan);
     writeBoxFiles(plan.boxDir, boxFiles(filesInput));
     probeLayout(plan.argv, enter.length);
@@ -248,6 +251,33 @@ async function openBox(request: SandboxRequest): Promise<OpenBox> {
   }
   for (const warning of plan.warnings) appendRunLog(request.run.dir, warning);
   return { prefix: plan.argv, close };
+}
+
+/** True when something listens on the Unix socket at `path`. */
+function isListening(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection(path);
+    const done = (isUp: boolean): void => {
+      socket.destroy();
+      resolve(isUp);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(STALE_PROBE_TIMEOUT_MS, () => done(false));
+  });
+}
+
+/**
+ * Removes the box dir of a runner that died before its cleanup, so a resume
+ * of that run can build its box again. A box dir whose proxy or broker still
+ * answers belongs to a live launch: it stays, and prepareBox refuses.
+ */
+export async function clearStaleBox(boxDir: string): Promise<void> {
+  if (!existsSync(boxDir)) return;
+  for (const socket of ["proxy.sock", "broker.sock"]) {
+    if (await isListening(join(boxDir, socket))) return;
+  }
+  rmSync(boxDir, { recursive: true, force: true });
 }
 
 /** The `box-broken` reason as one line for the report: the error's message. */
