@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.4] - 2026-11-02
+
+### Fixed
+
+- The Activity place shows a flare that a run reports. Before, only `flare.*` ledger lines made flare rows, so a flare lit by a ritual's result had no row. Each opening of a `run.completed` line (from `flareOpenings`) now gives a `flare-lit` row: "Flare lit by <ritual>: <title>, <severity>", or "raised" or "lit again", with the same tone and flare link as an operator's row and a link to the run. A re-report of a lit flare gives no row. The text is masked like the other rows, and a missing or malformed result gives no row. The openings are read only when the window holds a completed run.
+
 ## [0.113.3] - 2026-11-02
 
 ### Fixed
