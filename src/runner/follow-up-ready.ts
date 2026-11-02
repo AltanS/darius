@@ -22,7 +22,7 @@
 
 import { spawn } from "node:child_process";
 
-import { FOLLOW_UP_NOT_STARTED } from "../core/flare-index.ts";
+import { FOLLOW_UP_NOT_STARTED } from "../core/candle-index.ts";
 import { hostId, readLedger } from "../core/ledger.ts";
 import type { JsonValue, Ritual } from "../core/model.ts";
 import { SSH_FAILED } from "../core/ssh.ts";
@@ -105,7 +105,7 @@ function lastJson(output: string): { readonly [key: string]: JsonValue } | null 
 
 /**
  * The last plain line of a CLI's output, with the `darius: ` and `! ` prefixes
- * taken off. The closing line of `flare answer --follow-up` says only that no
+ * taken off. The closing line of `candle answer --follow-up` says only that no
  * run started, so the reason on the line before it wins.
  */
 export function lastSentence(output: string): string {

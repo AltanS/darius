@@ -79,10 +79,10 @@ export interface Ritual extends ItemHeader {
    */
   follow_up?: "headless";
   /**
-   * `flare_deliver` in the marker (0.108.0): the channels for the flares a run
+   * `candle_deliver` in the marker (0.108.0): the channels for the candles a run
    * of this ritual lights (`push`, `email`). `[]` is the app only. Absent: push.
    */
-  flare_deliver?: string[];
+  candle_deliver?: string[];
   /** `definitionHash` of the mirrored definition. */
   def_hash?: string;
   /** The short commit of the checkout that reconcile read; absent outside git. */
@@ -104,13 +104,13 @@ export interface Vigil extends ItemHeader {
   heavy: boolean;
   agent?: string;
   /**
-   * The severity of the flare a failing sweep lights (0.110.0, docs/concept.md,
-   * "Flares"). Absent: a failing check lights nothing. A host older than
+   * The severity of the candle a failing sweep lights (0.110.0, docs/concept.md,
+   * "Candles"). Absent: a failing check lights nothing. A host older than
    * 0.110.0 refuses a vigil that carries this key.
    */
-  flare?: Severity;
-  /** The channels for that flare (`push`, `email`). `[]` is the app only. Absent: push. */
-  flare_deliver?: string[];
+  candle?: Severity;
+  /** The channels for that candle (`push`, `email`). `[]` is the app only. Absent: push. */
+  candle_deliver?: string[];
 }
 
 /**

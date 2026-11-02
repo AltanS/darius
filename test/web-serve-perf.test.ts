@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
+import { untilListening } from "./helpers/listening.ts";
+
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-perf-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
@@ -78,7 +80,7 @@ test("serve: pages come from the status cache for 10 s, any write POST clears it
   stopped = false;
   try {
     const serving = serveCommand.run(parseArgs(["--port", String(PORT), "--bind", "127.0.0.1"]));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await untilListening(PORT);
     openProject("perf-before", { create: true });
     const page = async (): Promise<string> => (await call("GET", PAGE)).body.toString("utf8");
     assert.ok((await page()).includes("perf-before"));

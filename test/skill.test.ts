@@ -87,16 +87,16 @@ test("the skill names may_extra, hold_extra, marker check --resolved and marker 
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });
 
-test("the skill names both flare recipes, the choice and the rule for a run", () => {
+test("the skill names both candle recipes, the choice and the rule for a run", () => {
   const { env } = sandbox();
   const text = darius(env, ["skill"]).stdout;
-  assert.match(text, /vigil add .*--flare/u);
+  assert.match(text, /vigil add .*--candle/u);
   assert.match(text, /`vigil` in `kinds`/u);
-  assert.match(text, /`"flare": true`, a stable `key`, state `needs-decision`/u);
-  assert.match(text, /`flare_deliver`, `--deliver`; `none` is the app only/u);
-  assert.match(text, /A run never lights, answers, accepts or clears by command/u);
+  assert.match(text, /`"candle": true`, a stable `key`, state `needs-decision`/u);
+  assert.match(text, /`candle_deliver`, `--deliver`; `none` is the app only/u);
+  assert.match(text, /A run never lights, answers, accepts or blows out by command/u);
   assert.match(text, /a finding is for the record/u);
-  assert.match(text, /`\/darius-flare`/u);
+  assert.match(text, /`\/darius-candle`/u);
 });
 
 test("the verb table lists the session verbs only, in registry order", () => {

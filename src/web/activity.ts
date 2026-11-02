@@ -16,7 +16,7 @@
  * secret typed into a note is shown masked, as the vigil page does.
  */
 
-import type { FlareOpened, FlareOpening } from "../core/flare-index.ts";
+import type { CandleOpened, CandleOpening } from "../core/candle-index.ts";
 import { maskSecrets } from "../core/mask-secrets.ts";
 import type { JsonValue, LedgerLine } from "../core/model.ts";
 import type { ActivityActor, ActivityEntry, ActivityKind, ActivityOptions, ActivityTone, PendingStart, RunRow } from "./api.ts";
@@ -26,12 +26,12 @@ interface ActivityInput extends ActivityOptions {
   /** The title of a ritual or vigil by its slug; the entry falls back to the slug. */
   titleOf?: (type: "ritual" | "vigil", id: string) => string | undefined;
   /**
-   * What `flareOpenings` (src/core/flare-index.ts) made of this project's ledger. A flare that a
-   * run reported has no `flare.*` line, so its opening is the only sign of it here. Each opening
-   * whose line is not a `flare.lit` line (a `run.completed`) gives one row per flare. The caller
+   * What `candleOpenings` (src/core/candle-index.ts) made of this project's ledger. A candle that a
+   * run reported has no `candle.*` line, so its opening is the only sign of it here. Each opening
+   * whose line is not a `candle.lit` line (a `run.completed`) gives one row per candle. The caller
    * reads the blobs, so this file stays pure. Absent: those rows are left out.
    */
-  openings?: readonly FlareOpening[];
+  openings?: readonly CandleOpening[];
 }
 
 const RUN_ID = /^[0-9A-Z]{26}$/u;
@@ -99,7 +99,7 @@ interface Built {
   text: string;
   tone: ActivityTone;
   detail?: string[];
-  /** What a flare entry is called: the title its report gave, else its key. */
+  /** What a candle entry is called: the title its report gave, else its key. */
   subject?: string;
 }
 
@@ -241,7 +241,7 @@ function rescheduledEntry(line: LedgerLine): Built {
   return { kind: "ritual-rescheduled", text: `Ritual rescheduled by ${line.who}${due === null ? "" : ` to ${shown(due)}`}`, tone: "idle" };
 }
 
-// --- flares (0.112.0) ----------------------------------------------------------------------
+// --- candles (0.112.0) ----------------------------------------------------------------------
 
 /** Least to most severe; an unknown word counts as the least. */
 const SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"];
@@ -251,33 +251,33 @@ function severityRank(value: JsonValue | undefined): number {
 }
 
 /**
- * What the walk knows of one flare key. A report of a lit flare is not news;
- * a report of a closed flare is news only at a higher severity; a `gone` or an
- * unknown key takes any report. A run's report has no `flare.lit` line: the
+ * What the walk knows of one candle key. A report of a lit candle is not news;
+ * a report of a closed candle is news only at a higher severity; an `out` or an
+ * unknown key takes any report. A run's report has no `candle.lit` line: the
  * opening of its `run.completed` line gives the row and sets the track (see
  * `openingEntries`), and the index decides whether it was news.
  */
-interface FlareTrack {
-  status: "lit" | "closed" | "gone";
+interface CandleTrack {
+  status: "lit" | "closed" | "out";
   rank: number;
   title: string;
 }
 
-function litEntry(line: LedgerLine, key: string, known: FlareTrack | undefined): Built | null {
+function litEntry(line: LedgerLine, key: string, known: CandleTrack | undefined): Built | null {
   const rank = severityRank(line.severity);
   const title = text(line.title) ?? known?.title ?? key;
   const severity = text(line.severity) ?? "info";
   const target = text(line.target);
   const source = text(line.source);
   const detail = [...(target === null ? [] : [`Target: ${shown(target)}`]), ...(source === null ? [] : [`Source: ${shown(source)}`])];
-  if (known === undefined || known.status === "gone") return detailed({ kind: "flare-lit", text: `Flare lit by ${line.who}: ${shown(title)}, ${severity}`, tone: "wait", subject: title }, detail);
+  if (known === undefined || known.status === "out") return detailed({ kind: "candle-lit", text: `Candle lit by ${line.who}: ${shown(title)}, ${severity}`, tone: "wait", subject: title }, detail);
   if (rank <= known.rank) return null;
   const again = known.status === "closed" ? "lit again" : "raised";
-  return detailed({ kind: "flare-lit", text: `Flare ${again} at ${severity} by ${line.who}`, tone: "wait", subject: title }, detail);
+  return detailed({ kind: "candle-lit", text: `Candle ${again} at ${severity} by ${line.who}`, tone: "wait", subject: title }, detail);
 }
 
-/** The entry of a `flare.*` ledger line, and the new state of its key; null when the line is not news or not valid. */
-function flareEntry(line: LedgerLine, tracks: Map<string, FlareTrack>): Built | null {
+/** The entry of a `candle.*` ledger line, and the new state of its key; null when the line is not news or not valid. */
+function candleEntry(line: LedgerLine, tracks: Map<string, CandleTrack>): Built | null {
   const key = text(line.key);
   if (key === null) return null;
   const known = tracks.get(key);
@@ -285,55 +285,55 @@ function flareEntry(line: LedgerLine, tracks: Map<string, FlareTrack>): Built | 
   const note = text(line.note);
   const tail = note === null ? "" : `: ${shown(note)}`;
   const rank = severityRank(line.severity);
-  if (line.type === "flare.lit") {
+  if (line.type === "candle.lit") {
     const built = litEntry(line, key, known);
-    // A report that is not news changes nothing: a closed flare stays closed, a lit one keeps its severity.
+    // A report that is not news changes nothing: a closed candle stays closed, a lit one keeps its severity.
     if (built !== null) tracks.set(key, { status: "lit", rank, title });
     return built;
   }
-  if (line.type === "flare.answered") {
+  if (line.type === "candle.answered") {
     tracks.set(key, { status: "closed", rank, title });
-    return { kind: "flare-answered", text: `Flare answered by ${line.who}${tail}`, tone: "ok", subject: title };
+    return { kind: "candle-answered", text: `Candle answered by ${line.who}${tail}`, tone: "ok", subject: title };
   }
-  if (line.type === "flare.accepted") {
+  if (line.type === "candle.accepted") {
     tracks.set(key, { status: "closed", rank, title });
-    return { kind: "flare-accepted", text: `Flare accepted by ${line.who}${tail}`, tone: "idle", subject: title };
+    return { kind: "candle-accepted", text: `Candle accepted by ${line.who}${tail}`, tone: "idle", subject: title };
   }
-  if (line.type === "flare.cleared") {
-    tracks.set(key, { status: "gone", rank: 0, title });
-    return { kind: "flare-cleared", text: `Flare cleared by ${line.who}${tail}`, tone: "ok", subject: title };
+  if (line.type === "candle.blown-out") {
+    tracks.set(key, { status: "out", rank: 0, title });
+    return { kind: "candle-blown-out", text: `Candle blown out by ${line.who}${tail}`, tone: "ok", subject: title };
   }
   tracks.set(key, { status: "lit", rank: known?.rank ?? 0, title });
-  return { kind: "flare-reopened", text: `Flare reopened by ${line.who}${tail}`, tone: "wait", subject: title };
+  return { kind: "candle-relit", text: `Candle relit by ${line.who}${tail}`, tone: "wait", subject: title };
 }
 
 /**
- * The rows of one `run.completed` line that opened or raised flares: one per
- * flare, as an operator's `flare.lit` gives one. The index already decided
- * that each was news (a re-report of a lit flare is no opening), so these rows
+ * The rows of one `run.completed` line that opened or raised candles: one per
+ * candle, as an operator's `candle.lit` gives one. The index already decided
+ * that each was news (a re-report of a lit candle is no opening), so these rows
  * do not ask the track, but they set it, and the rows after them read right.
  * The ritual stands where an operator's name would. Text is untrusted and is
  * masked like the other rows.
  */
-function openingEntries(line: LedgerLine, flares: readonly FlareOpened[], tracks: Map<string, FlareTrack>): Array<{ built: Built; key: string }> {
-  return flares.map((flare) => {
-    const known = tracks.get(flare.key);
-    const who = shown(flare.ritual ?? line.who);
-    const title = shown(flare.title);
-    tracks.set(flare.key, { status: "lit", rank: severityRank(flare.severity), title });
-    const detail = flare.target === undefined ? [] : [`Target: ${shown(flare.target)}`];
-    if (flare.kind === "opened") return { key: flare.key, built: detailed({ kind: "flare-lit", text: `Flare lit by ${who}: ${title}, ${flare.severity}`, tone: "wait", subject: title }, detail) };
+function openingEntries(line: LedgerLine, candles: readonly CandleOpened[], tracks: Map<string, CandleTrack>): Array<{ built: Built; key: string }> {
+  return candles.map((candle) => {
+    const known = tracks.get(candle.key);
+    const who = shown(candle.ritual ?? line.who);
+    const title = shown(candle.title);
+    tracks.set(candle.key, { status: "lit", rank: severityRank(candle.severity), title });
+    const detail = candle.target === undefined ? [] : [`Target: ${shown(candle.target)}`];
+    if (candle.kind === "opened") return { key: candle.key, built: detailed({ kind: "candle-lit", text: `Candle lit by ${who}: ${title}, ${candle.severity}`, tone: "wait", subject: title }, detail) };
     const again = known?.status === "closed" ? "lit again" : "raised";
-    return { key: flare.key, built: detailed({ kind: "flare-lit", text: `Flare ${again} at ${flare.severity} by ${who}`, tone: "wait", subject: title }, detail) };
+    return { key: candle.key, built: detailed({ kind: "candle-lit", text: `Candle ${again} at ${candle.severity} by ${who}`, tone: "wait", subject: title }, detail) };
   });
 }
 
-const FLARE_LINES: ReadonlySet<string> = new Set(["flare.lit", "flare.answered", "flare.accepted", "flare.cleared", "flare.reopened"]);
+const CANDLE_LINES: ReadonlySet<string> = new Set(["candle.lit", "candle.answered", "candle.accepted", "candle.blown-out", "candle.relit"]);
 
 // --- the list -----------------------------------------------------------------------------
 
-/** `flareKey` is the key of a row made from a run's opening: that line has no `key` of its own. */
-function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems: ReadonlyMap<string, string>, flareKey?: string): ActivityEntry | null {
+/** `candleKey` is the key of a row made from a run's opening: that line has no `key` of its own. */
+function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems: ReadonlyMap<string, string>, candleKey?: string): ActivityEntry | null {
   const run = text(line.run);
   const subject = subjectOf(line.item ?? (run === null ? undefined : runItems.get(run)));
   const title = (type: "ritual" | "vigil", slug: string): string => input.titleOf?.(type, slug) ?? slug;
@@ -344,13 +344,13 @@ function entryOf(line: LedgerLine, built: Built, input: ActivityInput, runItems:
     if (built.detail !== undefined) made.detail = built.detail;
     return made;
   };
-  if (built.kind.startsWith("flare-")) {
-    const key = flareKey ?? text(line.key);
+  if (built.kind.startsWith("candle-")) {
+    const key = candleKey ?? text(line.key);
     if (key === null) return null;
-    links.flare = key;
-    const made = entry({ type: "flare", id: key, title: built.subject ?? key });
+    links.candle = key;
+    const made = entry({ type: "candle", id: key, title: built.subject ?? key });
     // A row made from a run's opening also names the run that reported it.
-    if (flareKey !== undefined && run !== null) {
+    if (candleKey !== undefined && run !== null) {
       links.run = run;
       made.run = run;
     }
@@ -434,10 +434,10 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
   }
   const entries: ActivityEntry[] = [];
   const evidence = new Map<string, LedgerLine[]>();
-  const flares = new Map<string, FlareTrack>();
-  const opened = new Map<string, readonly FlareOpened[]>();
+  const candles = new Map<string, CandleTrack>();
+  const opened = new Map<string, readonly CandleOpened[]>();
   for (const opening of input.openings ?? []) {
-    if (opening.line.type !== "flare.lit") opened.set(opening.line.id, opening.flares);
+    if (opening.line.type !== "candle.lit") opened.set(opening.line.id, opening.candles);
   }
   for (const line of lines) {
     if (line.project !== project) continue;
@@ -445,14 +445,14 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
       evidence.set(line.item, [...(evidence.get(line.item) ?? []), line]);
       continue;
     }
-    // The flare rows come before the run's own row, and in reverse, so the newest-first list reads the run, then what it lit, in the order of the result.
-    for (const { built, key } of openingEntries(line, opened.get(line.id) ?? [], flares).toReversed()) {
+    // The candle rows come before the run's own row, and in reverse, so the newest-first list reads the run, then what it lit, in the order of the result.
+    for (const { built, key } of openingEntries(line, opened.get(line.id) ?? [], candles).toReversed()) {
       const row = entryOf(line, built, input, runItems, key);
       if (row !== null && matches(line, row, input)) entries.push(row);
     }
     const folded = line.type === "vigil.swept" && line.item !== undefined ? (evidence.get(line.item) ?? []) : [];
     if (line.type === "vigil.swept" && line.item !== undefined) evidence.delete(line.item);
-    const built = FLARE_LINES.has(line.type) ? flareEntry(line, flares) : build(line, folded);
+    const built = CANDLE_LINES.has(line.type) ? candleEntry(line, candles) : build(line, folded);
     if (built === null) continue;
     const entry = entryOf(line, built, input, runItems);
     if (entry !== null && matches(line, entry, input)) entries.push(entry);

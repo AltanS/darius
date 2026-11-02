@@ -597,33 +597,33 @@ export function startsFollowUp(command: string): boolean {
   return /\brun follow-up\b/u.test(plainShell(command));
 }
 
-/** The verbs that write a flare. A run reports a flare in its result block, and a person settles it. */
-const FLARE_WRITE_VERBS: ReadonlySet<string> = new Set(["light", "answer", "accept", "clear", "reopen"]);
-/** The word `flare`, not `flare-index.ts`. */
-const FLARE_WORD = /\bflare(?=[ ;&|()`<>]|$)/gu;
-/** What ends one command on a plain line. A line break is a blank by then, and the next `flare` word is judged on its own. */
+/** The verbs that write a candle. A run reports a candle in its result block, and a person settles it. */
+const CANDLE_WRITE_VERBS: ReadonlySet<string> = new Set(["light", "answer", "accept", "blow-out", "relight"]);
+/** The word `candle`, not `candle-index.ts`. */
+const CANDLE_WORD = /\bcandle(?=[ ;&|()`<>]|$)/gu;
+/** What ends one command on a plain line. A line break is a blank by then, and the next `candle` word is judged on its own. */
 const SHELL_BREAK = /[;&|()`<>]/u;
-/** A read: a read verb right after `flare`, after only the global flags a read takes. */
-const FLARE_READ = /^(?:--json |--project[= ]\S+ )*(?:list|show|--help|-h)(?: |$)/u;
+/** A read: a read verb right after `candle`, after only the global flags a read takes. */
+const CANDLE_READ = /^(?:--json |--project[= ]\S+ )*(?:list|show|--help|-h)(?: |$)/u;
 /** `darius` and its flags right before the word, under any path, or the CLI entry run by hand. */
 const DARIUS_BEFORE = /\b(?:darius|cli\.ts)(?: --?\S+(?: [^- ]\S*)?)* $/u;
 
 /**
- * True when the line may write a flare (`darius flare light|answer|accept|clear|reopen`),
+ * True when the line may write a candle (`darius candle light|answer|accept|blow-out|relight`),
  * under any prefix, as startsFollowUp reads a line. A read passes only in its
- * plain form. After `darius`, anything else after `flare` is denied too, so a
+ * plain form. After `darius`, anything else after `candle` is denied too, so a
  * verb from a variable, a substitution or xargs cannot pass. After another
- * program a write verb must be named, so `grep flare src` passes. Broad on
+ * program a write verb must be named, so `grep candle src` passes. Broad on
  * purpose: a false match is only a deny. The CLI refuses inside a run as well
  * (DARIUS_RUN), and the gate is the second wall (0.107.0).
  */
-export function writesFlare(command: string): boolean {
+export function writesCandle(command: string): boolean {
   const plain = plainShell(command);
-  for (const match of plain.matchAll(FLARE_WORD)) {
-    const words = (plain.slice(match.index + "flare".length).split(SHELL_BREAK)[0] ?? "").trim();
-    if (FLARE_READ.test(words)) continue;
+  for (const match of plain.matchAll(CANDLE_WORD)) {
+    const words = (plain.slice(match.index + "candle".length).split(SHELL_BREAK)[0] ?? "").trim();
+    if (CANDLE_READ.test(words)) continue;
     if (DARIUS_BEFORE.test(plain.slice(0, match.index))) return true;
-    if (words.split(" ").some((word) => FLARE_WRITE_VERBS.has(word))) return true;
+    if (words.split(" ").some((word) => CANDLE_WRITE_VERBS.has(word))) return true;
   }
   return false;
 }
@@ -635,10 +635,10 @@ const EMAIL_READ = /^(?:--json |--project[= ]\S+ )*(?:status|--help|-h)(?: |$)/u
 
 /**
  * True when the line may send mail or change the channel (`darius email set`,
- * `darius email test`), under any prefix. Built as writesFlare, with one
+ * `darius email test`), under any prefix. Built as writesCandle, with one
  * difference: the word must come right after `darius` or the CLI entry. "email",
  * "set" and "test" are common words, so `git commit -m "fix email test"` must
- * pass. A name hidden in a variable passes the gate, as for writesFlare, and
+ * pass. A name hidden in a variable passes the gate, as for writesCandle, and
  * meets the CLI wall (DARIUS_RUN), which clearsRunMarker keeps up (0.109.0).
  */
 export function writesEmail(command: string): boolean {
@@ -860,9 +860,9 @@ export function namesSecretPath(command: string, secrets: SecretPaths = secretPa
  * snapshot-api.ts. A test holds this list to the `POST` lines of those files.
  */
 const WEB_WRITE_PATHS: readonly string[] = [
-  "/api/flare/light",
-  "/api/flare/answer",
-  "/api/flare/accept",
+  "/api/candle/light",
+  "/api/candle/answer",
+  "/api/candle/accept",
   "/api/run/follow-up",
   "/api/run/ack",
   "/api/run/ack-earlier",
@@ -880,13 +880,13 @@ const WEB_WRITE_PATHS: readonly string[] = [
   "/api/snapshots/delete",
 ];
 
-/** A write path, and not a longer one: `/api/run/follow-up/ready`, `/api/flares` and `/api/flare?key=` read. */
+/** A write path, and not a longer one: `/api/run/follow-up/ready`, `/api/candles` and `/api/candle?key=` read. */
 const WEB_WRITE = new RegExp(String.raw`(?:${escapedAlternatives(WEB_WRITE_PATHS)})(?![\w/-])`, "u");
 
 /**
  * True when the line names a write path of the web API, with quotes and
  * backslashes dropped. Read paths pass. The README documents these endpoints,
- * so a run denied at `darius flare light` may try them next. THIS IS A
+ * so a run denied at `darius candle light` may try them next. THIS IS A
  * HEURISTIC FOR A CONFUSED RUN: a path built from a variable passes, and the
  * web app cannot tell a run from the operator's browser on the same device
  * (docs/concept.md, "What the gate does not stop"). A false match is only a
@@ -1125,7 +1125,7 @@ function hold(reason: string): GateDecision {
  * findings, and the ledger cannot tell the two apart. A granted line
  * (isGranted) passes the hold list, `may` and the report-mode verbs; a run
  * that is held stays held (decide checks that first). A line that starts a
- * follow-up, writes a flare (0.107.0), writes or tests the email channel
+ * follow-up, writes a candle (0.107.0), writes or tests the email channel
  * (0.109.0), names a secret path or a web write path (0.114.0, both only
  * heuristics for a confused run) or clears the run's markers is denied in
  * every run, whatever `may` says (0.47.1).
@@ -1141,7 +1141,7 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (protocol !== undefined) return ALLOW;
   // Before `may`, hold and grants (0.47.1): `Bash(darius *)` must not let a run start a follow-up.
   if (startsFollowUp(command)) return deny(`a run never starts a follow-up; a person does, outside the run: ${clip(command)}`);
-  if (writesFlare(command)) return deny(`a run never lights or settles a flare by command; report it in the result block with "flare": true: ${clip(command)}`);
+  if (writesCandle(command)) return deny(`a run never lights or settles a candle by command; report it in the result block with "candle": true: ${clip(command)}`);
   if (writesEmail(command)) return deny(`a run never sends mail or changes the email channel: ${clip(command)}`);
   if (namesSecretPath(command, secrets)) return deny(`a run does not read secret paths; use a darius verb, or report what is missing in the result block: ${clip(command)}`);
   if (callsWebWrite(command)) return deny(`a run never writes through the web API; report it in the result block: ${clip(command)}`);

@@ -148,7 +148,7 @@ export function ProposalView({ proposal }: ProposalViewProps): React.ReactNode {
 
 interface ItemRowProps {
   item: ResultItem;
-  /** The workspace of the run: a flagged item links to its flare there. */
+  /** The workspace of the run: a flagged item links to its candle there. */
   project: string | undefined;
 }
 
@@ -162,13 +162,13 @@ function ItemRow({ item, project }: ItemRowProps): React.ReactNode {
         <p className="ritem-title">{item.title}</p>
         {item.target === undefined ? null : <p className="ritem-sub">{item.target}</p>}
         {item.key === undefined ? null : <p className="ritem-key">{`key ${item.key}`}</p>}
-        {item.flare !== true ? null : (
-          <p className="ritem-flare">
-            <Chip color="late">flare</Chip>
+        {item.candle !== true ? null : (
+          <p className="ritem-candle">
+            <Chip color="late">candle</Chip>
             {item.key === undefined || project === undefined ? null : (
               <>
                 {" "}
-                <Link to={href({ to: "flare", ws: project, key: item.key })}>Open the flare</Link>
+                <Link to={href({ to: "candle", ws: project, key: item.key })}>Open the candle</Link>
               </>
             )}
           </p>
@@ -193,7 +193,7 @@ function ItemRow({ item, project }: ItemRowProps): React.ReactNode {
 
 interface ItemsProps {
   items: readonly ResultItem[];
-  /** The workspace of the run, so a flagged item can link to its flare. */
+  /** The workspace of the run, so a flagged item can link to its candle. */
   project?: string;
 }
 

@@ -10,7 +10,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { connect } from "node:net";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +27,7 @@ const { SETTINGS_COOKIE: APP_SETTINGS_COOKIE } = await import("../web/app/lib/se
 const { parseMarkdown } = await import("../src/web/markdown.ts");
 const { webContext } = await import("../src/web/context.ts");
 import type { MdSpan, RitualRow } from "../src/web/api.ts";
+import { untilListening } from "./helpers/listening.ts";
 import type { Ritual } from "../src/core/model.ts";
 const { HostCheck, allowedLogins, authorize, authorizeRequest, cachedWhois, hostOf, parseSelfNames, parseWhois, proxyTrust } = await import("../src/web/auth.ts");
 const { appendLine, readLedger } = await import("../src/core/ledger.ts");
@@ -328,24 +328,6 @@ test("serve refuses every-interface binds and bad ports", () => {
   assert.throws(() => webPort("http"), /1 to 65535/u);
   assert.equal(webPort(undefined), 4747);
 });
-
-/** Waits until a just started server takes connections. A fixed wait is too short on a busy machine. */
-async function untilListening(port: number): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  for (;;) {
-    const open = await new Promise<boolean>((resolve) => {
-      const socket = connect({ host: "127.0.0.1", port });
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => resolve(false));
-    });
-    if (open) return;
-    if (Date.now() > deadline) throw new Error(`nothing listens on port ${port}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
 
 test("serve listens on 127.0.0.1 and stops on SIGTERM", async () => {
   const log = console.log;

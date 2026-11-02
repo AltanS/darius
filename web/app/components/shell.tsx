@@ -2,7 +2,7 @@
  * The frame around every page. It has four parts. A phone has a top bar that
  * is also the button of the drawer (the caption and the name of the scope, a
  * chevron, a dot when another scope needs you), and a bar of six tabs at the
- * bottom: Overview, Vigils, Rituals, Findings, Flares, Milestones. A desktop (1024 px
+ * bottom: Overview, Vigils, Rituals, Findings, Candles, Milestones. A desktop (1024 px
  * and wider) has neither: a fixed sidebar takes their place. Both are in the
  * page always; CSS decides which one shows. The third part is Places (the
  * tree, `places.tsx`), the fourth is `<main>`. Over them floats the connection

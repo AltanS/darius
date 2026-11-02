@@ -27,10 +27,10 @@
  * and a proposal that silently went away would hide that the model put it
  * on the wrong item.
  *
- * `flare` (0.106.0) marks an item as a flare: the operator hears about it by
- * key, outside the findings index (src/core/flare-index.ts). It needs a `key`
- * and the state `needs-decision`, or `fixed`, which clears the flare. Any
- * other state is an error, so a flare never hides behind an open item.
+ * `candle` (0.106.0) marks an item as a candle: the operator hears about it by
+ * key, outside the findings index (src/core/candle-index.ts). It needs a `key`
+ * and the state `needs-decision`, or `fixed`, which puts the candle out. Any
+ * other state is an error, so a candle never hides behind an open item.
  *
  * `handoff` (0.26.0) is a note of at most HANDOFF_MAX characters for the
  * next run of the same ritual (src/core/handoff.ts). It is the one text
@@ -79,8 +79,8 @@ export interface ResultItem {
   detail?: string;
   /** The exact change a `needs-decision` item proposes (0.69.0); the operator approves it by `key`. */
   proposal?: ResultProposal;
-  /** True when the item lights a flare (0.106.0); needs a `key`. Absent otherwise, never false. */
-  flare?: true;
+  /** True when the item lights a candle (0.106.0); needs a `key`. Absent otherwise, never false. */
+  candle?: true;
 }
 
 /** The change a `needs-decision` item proposes (0.69.0). Plain text; newlines stay. */
@@ -345,24 +345,24 @@ function item(check: Checker, record: JsonRecord, where: string): ResultItem {
   if (detail !== undefined) out.detail = detail;
   const change = proposal(check, record, where, out.state);
   if (change !== undefined) out.proposal = change;
-  if (flareFlag(check, record, where, out)) out.flare = true;
+  if (candleFlag(check, record, where, out)) out.candle = true;
   return out;
 }
 
 /**
- * An item's `flare` flag (0.106.0). False or absent is no flag. True needs a
+ * An item's `candle` flag (0.106.0). False or absent is no flag. True needs a
  * key, and a state of needs-decision or fixed; the check reports the rest.
  */
-function flareFlag(check: Checker, record: JsonRecord, where: string, entry: ResultItem): boolean {
-  const value = record.flare;
+function candleFlag(check: Checker, record: JsonRecord, where: string, entry: ResultItem): boolean {
+  const value = record.candle;
   if (value === undefined || value === null || value === false) return false;
   if (value !== true) {
-    check.errors.push(`${where}.flare: must be true when set`);
+    check.errors.push(`${where}.candle: must be true when set`);
     return false;
   }
-  if (entry.key === undefined) check.errors.push(`${where}.flare: a flare item needs a key`);
+  if (entry.key === undefined) check.errors.push(`${where}.candle: a candle item needs a key`);
   if (entry.state !== "needs-decision" && entry.state !== "fixed") {
-    check.errors.push(`${where}.flare: a flare item is needs-decision, or fixed to clear the flare; this item is ${entry.state}`);
+    check.errors.push(`${where}.candle: a candle item is needs-decision, or fixed to put the candle out; this item is ${entry.state}`);
   }
   return true;
 }
@@ -538,12 +538,12 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `flare` (optional, only ever true) lights a flare; see below. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `candle` (optional, only ever true) lights a candle; see below. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
   "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",
   "",
-  "`\"flare\": true` on an item lights a flare: a record that alerts the operator and stays open until they decide. Use it for a problem that needs the operator and must not be lost. It needs a `key`, and the state needs-decision, or fixed when the problem is gone, which clears the flare. A flare item is no finding. A flare replaces a question about the same matter: do not ask both. Reuse the key of an open flare listed above, with the flag, in every run while the problem stands. A run lights a flare only this way: it cannot run `darius flare light` or settle a flare, and it does not choose how the alert goes out.",
+  "`\"candle\": true` on an item lights a candle: a record that alerts the operator and stays open until they decide. Use it for a problem that needs the operator and must not be lost. It needs a `key`, and the state needs-decision, or fixed when the problem is fixed, which puts the candle out. A candle item is no finding. A candle replaces a question about the same matter: do not ask both. Reuse the key of an open candle listed above, with the flag, in every run while the problem stands. A run lights a candle only this way: it cannot run `darius candle light` or settle a candle, and it does not choose how the alert goes out.",
   "",
   "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. Put in `questions` only what needs a decision. A fix you made, or an item that needs code, is never a question. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",

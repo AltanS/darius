@@ -819,7 +819,7 @@
   }
 
   .fnd-close-form,
-  .flare-form {
+  .candle-form {
     display: grid;
     gap: 8px;
     max-width: 480px;
@@ -830,34 +830,34 @@
   }
 
   .fnd-close-form .fu-label,
-  .flare-form .fu-label {
+  .candle-form .fu-label {
     margin-bottom: 0;
   }
 
-  /* A flare (0.112.0): the flame is orange like the late tone; the buttons and their form stack in one column. */
+  /* A candle (0.112.0): the candle mark is orange like the late tone; the buttons and their form stack in one column. */
 
-  .flare-ico {
+  .candle-ico {
     flex: none;
     color: var(--color-late);
   }
 
-  .card-title.has-kind-flex > .flare-ico {
+  .card-title.has-kind-flex > .candle-ico {
     margin-top: 0.24em;
   }
 
-  .flare-acts {
+  .candle-acts {
     display: grid;
     gap: 10px;
   }
 
-  .flare-delivery {
+  .candle-delivery {
     display: grid;
     gap: 6px;
     font-size: 14px;
     list-style: none;
   }
 
-  .ritem-flare {
+  .ritem-candle {
     margin-top: 4px;
     font-size: 13px;
   }

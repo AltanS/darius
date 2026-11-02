@@ -120,10 +120,10 @@ function trackerVerbs(): string {
 const TAIL = `
 \`run now\` starts a ritual unattended and refuses mode off; for that, run \`run start\`, work, then \`run complete\`.
 \`run follow-up <run> --approve N|--item KEY\` (a new run of question N's lines, or of item KEY's proposal) and \`finding close|reopen|reset\` are for a person.
-A flare needs the operator to decide or follow up; a finding is for the record. More: \`/darius-flare\`. Delivery: \`flare_deliver\`, \`--deliver\`; \`none\` is the app only.
-- Every 7 days: a ritual (\`cadence = "1w"\`); its skill ends with a result item \`"flare": true\`, a stable \`key\`, state \`needs-decision\`.
-- One check in 7 days: \`vigil add xyz --in 7d --flare high --stdin < body.md\`. A pass closes it, a fail lights the flare. Needs \`vigil\` in \`kinds\`.
-- A script: \`flare light <key> --title T --severity S\`. A run never lights, answers, accepts or clears by command; it reports in the result block. \`flare list|show\` read.
+A candle needs the operator to decide or follow up; a finding is for the record. More: \`/darius-candle\`. Delivery: \`candle_deliver\`, \`--deliver\`; \`none\` is the app only.
+- Every 7 days: a ritual (\`cadence = "1w"\`); its skill ends with a result item \`"candle": true\`, a stable \`key\`, state \`needs-decision\`.
+- One check in 7 days: \`vigil add xyz --in 7d --candle high --stdin < body.md\`. A pass closes it, a fail lights the candle. Needs \`vigil\` in \`kinds\`.
+- A script: \`candle light <key> --title T --severity S\`. A run never lights, answers, accepts or blows out by command; it reports in the result block. \`candle list|show\` read.
 On the wrong host \`run now|resume|follow-up\` refuse and print an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
@@ -184,7 +184,7 @@ export function skillPath(dir: string = claudeDir()): string {
   return join(dir, "skills", "darius", "SKILL.md");
 }
 
-/** The 12 procedure skills: the 11 of the tracker plugin, and flare (0.113.0). Each is `skills/<name>.md` in this repo. */
+/** The 12 procedure skills: the 11 of the tracker plugin, and candle (0.113.0). Each is `skills/<name>.md` in this repo. */
 export const PROCEDURE_SKILLS: readonly string[] = [
   "work",
   "work-plan",
@@ -197,7 +197,7 @@ export const PROCEDURE_SKILLS: readonly string[] = [
   "dream",
   "worklog",
   "structural-review",
-  "flare",
+  "candle",
 ];
 
 /** The static skill text: `skills/` at the root of this checkout or install, found from this module. */
@@ -252,6 +252,23 @@ export function removeRetiredAgent(dir: string = claudeDir()): RetiredAgentResul
   const file = retiredAgentPath(dir);
   if (!existsSync(file)) return "absent";
   return uninstallSkill(file, false) === "removed" ? "removed" : "kept";
+}
+
+/** Procedure skills darius no longer ships, by slug. `flare` became `candle` in 0.115.0. */
+export const RETIRED_SKILLS: readonly string[] = ["flare"];
+
+/**
+ * Removes the stamped `darius-<slug>/SKILL.md` of every retired skill under
+ * `<claude>/skills`, and its dir when that is then empty. A file without a
+ * darius stamp is the operator's and stays. Returns the paths removed.
+ */
+export function removeRetiredSkills(dir: string = claudeDir()): string[] {
+  const removed: string[] = [];
+  for (const slug of RETIRED_SKILLS) {
+    const file = join(dir, "skills", `darius-${slug}`, "SKILL.md");
+    if (uninstallSkill(file) === "removed") removed.push(file);
+  }
+  return removed;
 }
 
 export type InstallResult = "written" | "unchanged" | "refused";
@@ -380,7 +397,10 @@ export function refreshSkillFiles(files: readonly ManagedFile[], plugin: string 
     }
     if (installSkill(file.text, file.path) === "written") written.push(file.path);
   }
+  const claude = rest[0] === undefined ? null : dirname(dirname(dirname(rest[0].path)));
+  const retired = claude === null ? [] : removeRetiredSkills(claude);
   const parts: string[] = [];
+  if (retired.length > 0) parts.push(`removed ${retired.join(", ")} (retired)`);
   if (installed.length > 0) parts.push(`installed ${installed.join(", ")}`);
   if (written.length > 0) parts.push(`refreshed ${written.join(", ")}`);
   if (parts.length === 0) return notes.length === 0 ? first : { ...first, detail: `${first.detail}; ${notes.join("; ")}` };
@@ -486,12 +506,14 @@ function install(args: ParsedArgs): number {
   const refused = results.filter((entry) => entry.result === "refused");
   const generated = results[0];
   const retired = removeRetiredAgent();
+  const retiredSkills = removeRetiredSkills();
   if (args.json) {
-    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired }));
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired, retiredSkills }));
   } else {
     for (const entry of refused) console.error(`darius: ${entry.path} exists and has no darius stamp; move it away first`);
     for (const entry of results) if (entry.result !== "refused") console.log(entry.path);
     if (retired === "removed") console.log(`removed ${retiredAgentPath()} (the darius agent is retired)`);
+    for (const path of retiredSkills) console.log(`removed ${path} (the skill is retired)`);
   }
   return refused.length === 0 ? 0 : 1;
 }
@@ -566,14 +588,16 @@ function uninstall(args: ParsedArgs): number {
   const refused = results.filter((entry) => entry.result === "refused");
   const generated = results[0];
   const retired = removeRetiredAgent();
+  const retiredSkills = removeRetiredSkills();
   if (args.json) {
-    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired }));
+    console.log(JSON.stringify({ ok: refused.length === 0, path: generated?.path, result: generated?.result, files: results, retired, retiredSkills }));
   } else {
     for (const entry of refused) console.error(`darius: ${entry.path} has no darius stamp; left alone`);
     const removed = results.filter((entry) => entry.result === "removed");
     for (const entry of removed) console.log(`removed ${entry.path}`);
     if (retired === "removed") console.log(`removed ${retiredAgentPath()}`);
-    if (removed.length === 0 && retired !== "removed" && refused.length === 0) console.log(`no skill at ${generated?.path ?? skillPath()}`);
+    for (const path of retiredSkills) console.log(`removed ${path}`);
+    if (removed.length === 0 && retired !== "removed" && retiredSkills.length === 0 && refused.length === 0) console.log(`no skill at ${generated?.path ?? skillPath()}`);
   }
   return refused.length === 0 ? 0 : 1;
 }

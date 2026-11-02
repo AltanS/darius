@@ -35,7 +35,7 @@ interface RowProps {
   id?: string;
   /** The kind whose icon the row wears; a ritual when absent. */
   kind?: Kind;
-  /** Another icon instead of the kind's: the flame of a flare. */
+  /** Another icon instead of the kind's: the flame of a candle. */
   icon?: React.ReactNode;
   /** A ritual done by hand: the row icon is the hand, in the manual colour. */
   manual?: boolean;

@@ -58,7 +58,7 @@ import { UsageError, type Document, type JsonValue, type LedgerLine, type Vigil 
 import type { Severity } from "./result.ts";
 import { getBlobText, itemRef, putBlob, type Project } from "./store.ts";
 import { ulid } from "./ulid.ts";
-import { assertFlareCanFire, clearVigilFlare, lightVigilFlare } from "./vigil-flare.ts";
+import { assertCandleCanFire, blowOutVigilCandle, lightVigilCandle } from "./vigil-candle.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,8 +116,8 @@ export interface SweptVigil {
   flagged: boolean;
   /** Set when `outcome` is `failed`: the worst kind among the failing checks. */
   fail_kind?: FailKind;
-  /** Set when this sweep wrote `flare.lit` for the vigil (0.110.0). */
-  flareLit?: boolean;
+  /** Set when this sweep wrote `candle.lit` for the vigil (0.110.0). */
+  candleLit?: boolean;
   reason?: string;
   checks: SweptCheck[];
 }
@@ -557,10 +557,10 @@ export interface VigilInput {
   agent?: string;
   /** The `created` instant, ISO. Default now. `vigil add --opened D` sets it to local noon of D. */
   created?: string;
-  /** The severity of the flare a failing sweep lights (0.110.0). */
-  flare?: Severity;
-  /** The channels of that flare; `[]` is the app only. Needs `flare`. */
-  flare_deliver?: string[];
+  /** The severity of the candle a failing sweep lights (0.110.0). */
+  candle?: Severity;
+  /** The channels of that candle; `[]` is the app only. Needs `candle`. */
+  candle_deliver?: string[];
   who: string;
 }
 
@@ -587,7 +587,7 @@ export function addVigil(project: Project, input: VigilInput): Document<Vigil> {
   if (selfInvoking !== undefined) {
     throw new Error(`refusing vigil '${input.slug}': its Command starts a sweep (${selfInvoking})`);
   }
-  if (input.flare === undefined && input.flare_deliver !== undefined) throw new UsageError("--flare-deliver needs --flare");
+  if (input.candle === undefined && input.candle_deliver !== undefined) throw new UsageError("--candle-deliver needs --candle");
   if (project.readItem("vigil", input.slug) !== null) {
     throw new Error(`vigil '${input.slug}' already exists in ${project.name}`);
   }
@@ -607,9 +607,9 @@ export function addVigil(project: Project, input: VigilInput): Document<Vigil> {
   if (input.due !== undefined) header.due = input.due;
   if (input.until !== undefined) header.until = input.until;
   if (input.gate_command !== undefined) header.gate_command = input.gate_command;
-  if (input.flare !== undefined) header.flare = input.flare;
-  if (input.flare_deliver !== undefined) header.flare_deliver = input.flare_deliver;
-  if (header.flare !== undefined) assertFlareCanFire(header);
+  if (input.candle !== undefined) header.candle = input.candle;
+  if (input.candle_deliver !== undefined) header.candle_deliver = input.candle_deliver;
+  if (header.candle !== undefined) assertCandleCanFire(header);
   const doc: Document<Vigil> = { header, body: input.body };
   project.writeItem(doc, { who: input.who });
   return doc;
@@ -645,24 +645,24 @@ export function closeVigil(project: Project, input: CloseInput): LedgerLine {
       reason: input.reason,
       at: input.at,
     });
-    // A held close ends the problem the flare reported. A failed close leaves it for a person.
-    if (input.verdict === "held") clearVigilFlare(project, { slug: input.slug, who: input.who, note: `vigil '${input.slug}' closed held by ${input.by}` });
+    // A held close ends the problem the candle reported. A failed close leaves it for a person.
+    if (input.verdict === "held") blowOutVigilCandle(project, { slug: input.slug, who: input.who, note: `vigil '${input.slug}' closed held by ${input.by}` });
     return line;
   });
 }
 
 /**
- * Closes a vigil as failed because its flare was accepted: nothing is left to
+ * Closes a vigil as failed because its candle was accepted: nothing is left to
  * wait for. Tolerates a vigil that is gone or already closed, as a second
  * close can race this one. Returns what happened.
  */
-export function closeVigilForFlare(project: Project, input: { slug: string; flareKey: string; who: string }): "closed" | "already-closed" | "no-vigil" {
-  const { slug, flareKey, who } = input;
+export function closeVigilForCandle(project: Project, input: { slug: string; candleKey: string; who: string }): "closed" | "already-closed" | "no-vigil" {
+  const { slug, candleKey, who } = input;
   const isClosed = (): boolean => vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug))).state === "closed";
   if (project.readItem("vigil", slug) === null) return "no-vigil";
   if (isClosed()) return "already-closed";
   try {
-    closeVigil(project, { slug, verdict: "failed", by: "flare", who, reason: `flare '${flareKey}' accepted` });
+    closeVigil(project, { slug, verdict: "failed", by: "candle", who, reason: `candle '${candleKey}' accepted` });
   } catch (cause) {
     if (isClosed()) return "already-closed";
     throw cause;
@@ -931,22 +931,22 @@ async function sweepDue(
   const swept = report(plan, { bucket, gate, outcome, closed: willClose, checks, fail_kind: failKind });
   writeSwept(ctx, plan, swept, gateFields);
   if (willClose) swept.closed = closeHeld(ctx, plan);
-  if (outcome === "failed" && !ctx.opts.dryRun) lightFlare(ctx, plan, swept);
+  if (outcome === "failed" && !ctx.opts.dryRun) lightCandle(ctx, plan, swept);
   return swept;
 }
 
-/** A failed sweep of a vigil that names a flare lights it (0.110.0). A dry run and a classify never get here. */
-function lightFlare(ctx: SweepContext, plan: VigilPlan, swept: SweptVigil): void {
+/** A failed sweep of a vigil that names a candle lights it (0.110.0). A dry run and a classify never get here. */
+function lightCandle(ctx: SweepContext, plan: VigilPlan, swept: SweptVigil): void {
   const { header } = plan.doc;
-  if (header.flare === undefined) return;
+  if (header.candle === undefined) return;
   const bad = swept.checks.filter((check) => check.outcome === "fail" || check.outcome === "timeout");
   const step = bad.find((check) => check.fail_kind === swept.fail_kind) ?? bad[0];
-  lightVigilFlare(ctx.project, {
+  lightVigilCandle(ctx.project, {
     header,
     failure: { failKind: swept.fail_kind ?? "unknown", step: step === undefined ? undefined : { index: step.index, text: step.text } },
     who: ctx.who,
   });
-  swept.flareLit = true;
+  swept.candleLit = true;
 }
 
 /** Appends `vigil.closed` unless another sweep closed the vigil while the checks ran. Returns whether it closed. */
@@ -956,7 +956,7 @@ function closeHeld(ctx: SweepContext, plan: VigilPlan): boolean {
     if (status.state === "closed") return false;
     appendLine(ctx.project, { who: ctx.who, type: "vigil.closed", item: plan.ref, verdict: "held", by: "sweep" });
     const slug = plan.doc.header.slug;
-    clearVigilFlare(ctx.project, { slug, who: ctx.who, note: `the sweep closed vigil '${slug}' held` });
+    blowOutVigilCandle(ctx.project, { slug, who: ctx.who, note: `the sweep closed vigil '${slug}' held` });
     return true;
   });
 }

@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { ritualState } from "../core/due.ts";
 import { collectFindings, findingCounts } from "../core/finding-index.ts";
-import { collectFlares } from "../core/flare-index.ts";
+import { collectCandles } from "../core/candle-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
 import { readLegacyMilestoneDetailAt, type LegacyFile } from "../core/legacy-milestone-detail.ts";
@@ -333,14 +333,14 @@ export function lastSync(name: string): string | null {
 
 function projectStatus(name: string, now: Date): ProjectStatus {
   const checkout = linkedDir(name) ?? null;
-  const status: ProjectStatus = { name, icon: null, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, flares: { lit: 0 }, error: null };
+  const status: ProjectStatus = { name, icon: null, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, candles: { lit: 0 }, error: null };
   try {
     const project = openProject(name);
     const ledger = readLedger(project);
     status.rituals = ritualRows(project, ledger, now, checkout);
     status.runs = runRows(ledger).slice(0, RECENT_RUNS);
     status.findings = findingCounts(collectFindings(project, ledger));
-    status.flares = { lit: collectFlares(project, ledger).filter((flare) => flare.status === "lit").length };
+    status.candles = { lit: collectCandles(project, ledger).filter((candle) => candle.status === "lit").length };
     const stored = vigilRows(project, ledger);
     const trackerDir = trackerDirOf(name, checkout);
     status.vigils = [...stored, ...legacyVigilRows(trackerDir, stored)];

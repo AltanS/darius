@@ -83,9 +83,9 @@ interface EntryProps {
   sentence: (text: string) => string;
 }
 
-/** Where the title of a lead goes: the vigil, the ritual or the flare it names; null when it names none. */
+/** Where the title of a lead goes: the vigil, the ritual or the candle it names; null when it names none. */
 function leadTarget(entry: ActivityEntry, word: string, project: string): string | null {
-  if (word === "flare") return entry.links.flare === undefined ? null : href({ to: "flare", ws: project, key: entry.links.flare });
+  if (word === "candle") return entry.links.candle === undefined ? null : href({ to: "candle", ws: project, key: entry.links.candle });
   if (word === "vigil") return entry.links.vigil === undefined ? null : href({ to: "vigil", ws: project, slug: entry.links.vigil });
   if (word === "ritual") return entry.links.ritual === undefined ? null : href({ to: "ritual", ws: project, slug: entry.links.ritual });
   return null;

@@ -27,10 +27,10 @@ const CASES: { target: Target; place: Place }[] = [
   { target: { to: "section", ws: null, section: "rituals" }, place: { scope: null, kind: "section", section: "rituals" } },
   { target: { to: "section", ws: null, section: "findings", query: { view: "all" } }, place: { scope: null, kind: "section", section: "findings" } },
   { target: { to: "section", ws: null, section: "milestones" }, place: { scope: null, kind: "section", section: "milestones" } },
-  { target: { to: "section", ws: null, section: "flares" }, place: { scope: null, kind: "section", section: "flares" } },
-  { target: { to: "section", ws: "demo", section: "flares", query: { view: "all" } }, place: { scope: "demo", kind: "section", section: "flares" } },
-  { target: { to: "flare", ws: "demo", key: "vigil:cache flip/ok?" }, place: { scope: "demo", kind: "detail", section: "flares" } },
-  { target: { to: "flare", ws: SPACED, key: "plain" }, place: { scope: SPACED, kind: "detail", section: "flares" } },
+  { target: { to: "section", ws: null, section: "candles" }, place: { scope: null, kind: "section", section: "candles" } },
+  { target: { to: "section", ws: "demo", section: "candles", query: { view: "all" } }, place: { scope: "demo", kind: "section", section: "candles" } },
+  { target: { to: "candle", ws: "demo", key: "vigil:cache flip/ok?" }, place: { scope: "demo", kind: "detail", section: "candles" } },
+  { target: { to: "candle", ws: SPACED, key: "plain" }, place: { scope: SPACED, kind: "detail", section: "candles" } },
   { target: { to: "section", ws: null, section: "runs", query: { state: "failed" } }, place: { scope: null, kind: "section", section: "runs" } },
   { target: { to: "section", ws: null, section: "activity" }, place: { scope: null, kind: "section", section: "activity" } },
   { target: { to: "section", ws: "demo", section: "activity", query: { days: "30", by: "web" } }, place: { scope: "demo", kind: "section", section: "activity" } },
@@ -263,16 +263,16 @@ test("no file of the app builds an internal link by hand", () => {
   assert.deepEqual(found, [], "build the link with href() from lib/paths.ts");
 });
 
-test("a flare's address holds the key encoded in one segment, and its page is filed under Flares", () => {
-  assert.equal(paths.href({ to: "flare", ws: "demo", key: "vigil:cache flip/ok?" }), "/w/demo/flares/vigil%3Acache%20flip%2Fok%3F");
-  const place = paths.placeOf("/w/demo/flares/vigil%3Acache%20flip%2Fok%3F");
-  assert.deepEqual(place, { scope: "demo", kind: "detail", section: "flares" });
-  assert.equal(paths.litSection(place), "flares");
+test("a candle's address holds the key encoded in one segment, and its page is filed under Candles", () => {
+  assert.equal(paths.href({ to: "candle", ws: "demo", key: "vigil:cache flip/ok?" }), "/w/demo/candles/vigil%3Acache%20flip%2Fok%3F");
+  const place = paths.placeOf("/w/demo/candles/vigil%3Acache%20flip%2Fok%3F");
+  assert.deepEqual(place, { scope: "demo", kind: "detail", section: "candles" });
+  assert.equal(paths.litSection(place), "candles");
   assert.deepEqual(paths.crumbsOf(place, undefined, "Cache flip"), [
     { label: "demo", href: "/w/demo" },
-    { label: "Flares", href: "/w/demo/flares" },
+    { label: "Candles", href: "/w/demo/candles" },
     { label: "Cache flip", href: null },
   ]);
-  assert.equal(paths.href(paths.switchTarget(place, null)), "/flares", "another scope goes to the list, not to a flare it may not have");
-  assert.equal(paths.placeOf("/flares/some-key").kind, "unknown", "a flare needs its workspace");
+  assert.equal(paths.href(paths.switchTarget(place, null)), "/candles", "another scope goes to the list, not to a candle it may not have");
+  assert.equal(paths.placeOf("/candles/some-key").kind, "unknown", "a candle needs its workspace");
 });

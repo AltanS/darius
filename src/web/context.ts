@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { ActivityOptions, FindingRow, HostStatus, PendingStart, ProjectActivityEntry, VigilDetail, WebContext } from "./api.ts";
 import { emailStatus } from "../core/email.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
-import { flareOpenings, type FlareOpening } from "../core/flare-index.ts";
+import { candleOpenings, type CandleOpening } from "../core/candle-index.ts";
 import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { configDir, stateDir } from "../core/paths.ts";
 import { listProjects, openProject, type Project } from "../core/store.ts";
@@ -19,7 +19,7 @@ import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { activityOf, pendingActivity } from "./activity.ts";
 import { collectBackups } from "./backups.ts";
-import { collectFlareRows, flareDetail } from "./flares.ts";
+import { collectCandleRows, candleDetail } from "./candles.ts";
 import { pendingStarts, vigilCheckOf } from "./pending.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
@@ -80,7 +80,7 @@ export function collectActivity(project: string | null, options: ActivityOptions
         return titles.get(key);
       };
       // Each project gives at most `limit` entries: the merged newest `limit` come from those.
-      const own = withRunFlares(name, store, ledgerOf(name), { ...options, titleOf });
+      const own = withRunCandles(name, store, ledgerOf(name), { ...options, titleOf });
       const waiting = pendingActivity(starts.filter((start) => start.project === name), { ...options, titleOf });
       const merged = [...own, ...waiting].toSorted(newestFirst);
       const cut = options.limit === undefined ? merged : merged.slice(0, Math.max(0, options.limit));
@@ -94,21 +94,21 @@ export function collectActivity(project: string | null, options: ActivityOptions
 }
 
 /**
- * `activityOf`, with the flare rows of the runs in it. Finding what a run opened reads
+ * `activityOf`, with the candle rows of the runs in it. Finding what a run opened reads
  * every result of the project (about 50 ms for 2000 runs under Node, more under Bun), so it
  * runs only when the window holds a row of a completed run: a window without one holds no
- * flare row of a run either.
+ * candle row of a run either.
  */
-function withRunFlares(name: string, store: Project, ledger: readonly LedgerLine[], input: Parameters<typeof activityOf>[2]): ReturnType<typeof activityOf> {
+function withRunCandles(name: string, store: Project, ledger: readonly LedgerLine[], input: Parameters<typeof activityOf>[2]): ReturnType<typeof activityOf> {
   const plain = activityOf(name, ledger, input);
   if (!plain.some((entry) => entry.kind === "run-completed" || entry.kind === "run-failed")) return plain;
   return activityOf(name, ledger, { ...input, openings: runOpenings(store, ledger) });
 }
 
-/** The flares a project's runs opened or raised, once per call. A ledger or a result that does not read gives none, not an error. */
-function runOpenings(store: Project, ledger: readonly LedgerLine[]): FlareOpening[] {
+/** The candles a project's runs opened or raised, once per call. A ledger or a result that does not read gives none, not an error. */
+function runOpenings(store: Project, ledger: readonly LedgerLine[]): CandleOpening[] {
   try {
-    return flareOpenings(store, ledger);
+    return candleOpenings(store, ledger);
   } catch {
     return [];
   }
@@ -194,8 +194,8 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     system: () => collectSystem({ backupDir: resolveSnapshotSettings().settings.dir }),
     backups: () => collectBackups(),
     findings: () => Promise.resolve(collectFindingRows()),
-    flares: () => Promise.resolve(collectFlareRows()),
-    flare: (project, key) => flareDetail(project, key),
+    candles: () => Promise.resolve(collectCandleRows()),
+    candle: (project, key) => candleDetail(project, key),
     emailSetUp: () => emailStatus().isSetUp,
     emailProblem: () => emailStatus().problem,
     activity: (project, options) => collectActivity(project, options),

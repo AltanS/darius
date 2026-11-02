@@ -145,8 +145,8 @@ export interface ResultMetric {
 }
 
 export interface ResultItem {
-  /** True when the item lights a flare (0.112.0): the run page marks it and links to the flare. Absent otherwise. */
-  flare?: true;
+  /** True when the item lights a candle (0.112.0): the run page marks it and links to the candle. Absent otherwise. */
+  candle?: true;
   /** A stable id across runs of the ritual (0.62.0, "Findings"). Plain text. */
   key?: string;
   title: string;
@@ -199,21 +199,21 @@ export interface FindingStep {
   note?: string;
 }
 
-// --- flares (0.111.0) ----------------------------------------------------------------------
+// --- candles (0.111.0) ----------------------------------------------------------------------
 
-export type FlareRowStatus = "lit" | "answered" | "accepted" | "gone";
+export type CandleRowStatus = "lit" | "answered" | "accepted" | "out";
 
-export type FlareStepKind = "lit" | "report" | "raised" | "answered" | "accepted" | "cleared" | "reopened" | "gone";
+export type CandleStepKind = "lit" | "report" | "raised" | "answered" | "accepted" | "blown-out" | "relit" | "out";
 
-export interface FlareSeen {
+export interface CandleSeen {
   at: string;
   line: string;
   run?: string;
 }
 
-export interface FlareStep {
+export interface CandleStep {
   at: string;
-  kind: FlareStepKind;
+  kind: CandleStepKind;
   severity: ResultSeverity;
   line: string;
   run?: string;
@@ -222,26 +222,26 @@ export interface FlareStep {
 }
 
 /**
- * One flare, as `darius flare list --json` gives it, with the project it
- * belongs to. Every text is untrusted plain text: anyone who lights a flare
+ * One candle, as `darius candle list --json` gives it, with the project it
+ * belongs to. Every text is untrusted plain text: anyone who lights a candle
  * writes it. The app draws it as text, never as HTML.
  */
-export interface FlareRow {
+export interface CandleRow {
   project: string;
   key: string;
   title: string;
   severity: ResultSeverity;
   target?: string;
-  status: FlareRowStatus;
+  status: CandleRowStatus;
   /** The ritual and the run of the newest report, when a run made it. */
   ritual?: string;
   run?: string;
   /** Plain text: `ritual:<slug>`, `vigil:<slug>`, or what the source said, such as `ci:nightly`. */
   source: string;
-  firstSeen: FlareSeen;
-  lastSeen: FlareSeen;
+  firstSeen: CandleSeen;
+  lastSeen: CandleSeen;
   reports: number;
-  /** A report came in since the flare was closed, at the same or a lower severity. */
+  /** A report came in since the candle was closed, at the same or a lower severity. */
   stillReported: boolean;
   bodySha?: string;
   /** The channels the report named; an empty list means the app only. Absent for a report from a run. */
@@ -249,12 +249,12 @@ export interface FlareRow {
   /** Each only while it is in force. */
   answered?: { at: string; who: string; note: string; severity: ResultSeverity; followUpRun?: string };
   accepted?: { at: string; who: string; severity: ResultSeverity; note?: string };
-  cleared?: { at: string; who: string; note?: string };
-  history: FlareStep[];
+  blownOut?: { at: string; who: string; note?: string };
+  history: CandleStep[];
 }
 
-/** How one channel took the newest notice of a flare (0.112.0): `sent`, `failed` (it will try again, or has given up), or `waiting` (nothing recorded yet). */
-export interface FlareDelivery {
+/** How one channel took the newest notice of a candle (0.112.0): `sent`, `failed` (it will try again, or has given up), or `waiting` (nothing recorded yet). */
+export interface CandleDelivery {
   channel: "push" | "email";
   state: "sent" | "failed" | "waiting";
   /** The host that sent it or failed; absent while waiting. */
@@ -268,18 +268,18 @@ export interface FlareDelivery {
 }
 
 /**
- * One flare with its body text; `body` is null with no body, or a blob not on this host yet.
+ * One candle with its body text; `body` is null with no body, or a blob not on this host yet.
  * `blocks` is the same body parsed (0.112.0), so the page draws it as the run page draws findings.
- * `delivery` is the state of each channel the newest notice named; empty when the flare is app only.
+ * `delivery` is the state of each channel the newest notice named; empty when the candle is app only.
  */
-export interface FlareDetail {
-  row: FlareRow;
+export interface CandleDetail {
+  row: CandleRow;
   body: string | null;
   blocks: MdBlock[] | null;
-  delivery: FlareDelivery[];
+  delivery: CandleDelivery[];
 }
 
-export interface FlareCounts {
+export interface CandleCounts {
   lit: number;
 }
 
@@ -537,8 +537,8 @@ export interface ProjectStatus {
   milestonesArchived: number;
   /** The findings its rituals report, counted (0.62.0). */
   findings: FindingCounts;
-  /** How many of its flares are lit (0.111.0). */
-  flares: FlareCounts;
+  /** How many of its candles are lit (0.111.0). */
+  candles: CandleCounts;
   /** Set when darius could not read the project; the lists are then empty. */
   error: string | null;
 }
@@ -1043,11 +1043,11 @@ export type ActivityKind =
   | "finding-closed"
   | "finding-reopened"
   | "finding-reset"
-  | "flare-lit"
-  | "flare-answered"
-  | "flare-accepted"
-  | "flare-cleared"
-  | "flare-reopened"
+  | "candle-lit"
+  | "candle-answered"
+  | "candle-accepted"
+  | "candle-blown-out"
+  | "candle-relit"
   | "ritual-lifecycle"
   | "ritual-rescheduled"
   | "start-requested"
@@ -1066,7 +1066,7 @@ export interface ActivityEntry {
   actor: ActivityActor;
   kind: ActivityKind;
   /** What the event is about. A run event is about the run; its ritual or vigil is in `links`. */
-  item: { type: "ritual" | "vigil" | "finding" | "flare" | "run"; id: string; title: string };
+  item: { type: "ritual" | "vigil" | "finding" | "candle" | "run"; id: string; title: string };
   /** The run the event belongs to, when it has one. */
   run?: string;
   /** One line, with the name of who acted ("by web:altan"). Operator text in it is masked. */
@@ -1074,7 +1074,7 @@ export interface ActivityEntry {
   /** More lines: the answers of an ack, the checks of a sweep, the lines a follow-up was granted. */
   detail?: string[];
   /** Slugs and ids the page turns into links. */
-  links: { ritual?: string; run?: string; vigil?: string; finding?: string; flare?: string };
+  links: { ritual?: string; run?: string; vigil?: string; finding?: string; candle?: string };
   tone: ActivityTone;
 }
 
@@ -1218,10 +1218,10 @@ export interface WebContext {
   backups(): BackupsStatus;
   /** The findings of every project of this host (0.62.0), worst first within a project. */
   findings(): Promise<FindingRow[]>;
-  /** The flares of every project of this host (0.111.0), worst first within a project, every status. */
-  flares(): Promise<FlareRow[]>;
-  /** One flare with its body (0.111.0). Null when the project or the key is unknown. */
-  flare(project: string, key: string): FlareDetail | null;
+  /** The candles of every project of this host (0.111.0), worst first within a project, every status. */
+  candles(): Promise<CandleRow[]>;
+  /** One candle with its body (0.111.0). Null when the project or the key is unknown. */
+  candle(project: string, key: string): CandleDetail | null;
   /** Whether the email channel is set up on this host (0.112.0). Says nothing else: no address, no token. */
   emailSetUp(): boolean;
   /** Why the email file cannot be read (0.113.1), or null. A reason such as "email.json is not valid JSON": it never quotes a value. */

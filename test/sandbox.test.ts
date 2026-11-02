@@ -319,7 +319,7 @@ test("real bwrap: the verbs a run calls work in the mask, under both runtimes; n
     const env = { DARIUS_RUNTIME: runtime, DARIUS_PROJECT: project.name, DARIUS_WHO: "claude:test" };
     const run = `01MASK${runtime.toUpperCase()}`;
     appendLine(project, { who: "test", type: "run.started", run, item: "ritual/heartbeat" });
-    assert.equal(inMask(prefix, ["flare", "list", "--json", "--project", project.name], env).code, 0);
+    assert.equal(inMask(prefix, ["candle", "list", "--json", "--project", project.name], env).code, 0);
 
     const push = inMask(prefix, ["push", "status"], env);
     assert.equal(push.code, 0, push.stderr);
@@ -355,7 +355,7 @@ test("real bwrap: sync fails loudly and names the mask; a flush in the mask leav
   seedSecrets();
   writeFileSync(join(CONFIG, "config.toml"), `host = "h1"\n\n[remote]\nendpoint = "https://s3.example.com"\nbucket = "b"\ncredentials = "${join(CONFIG, "credentials")}"\n`);
   const project = openProject("mask-sync", { create: true });
-  appendLine(project, { who: "test", type: "flare.lit", key: "k", title: "T", severity: "high", source: "script" });
+  appendLine(project, { who: "test", type: "candle.lit", key: "k", title: "T", severity: "high", source: "script" });
   const prefix = realPrefix();
   const sync = inMask(prefix, ["sync", "--project", project.name]);
   assert.notEqual(sync.code, 0);

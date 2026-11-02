@@ -101,7 +101,7 @@ test("Places lists Activity after Runs for the scope you are in, and lights it o
   const html = await page(`/w/${ALPHA}/activity`);
   const nav = places(html);
   const labels = [...nav.matchAll(/class="places-row places-leaf( lit)?"[^>]*>[\s\S]*?<span class="places-name">([^<]+)<\/span>/gu)].map((match) => `${match[2]}${match[1] === undefined ? "" : "*"}`);
-  assert.deepEqual(labels.slice(0, 8), ["Overview", "Vigils", "Rituals", "Findings", "Flares", "Milestones", "Runs", "Activity*"]);
+  assert.deepEqual(labels.slice(0, 8), ["Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity*"]);
   assert.ok(nav.includes(`href="/w/${ALPHA}/activity"`));
   const all = places(await page("/activity"));
   assert.ok(all.includes('href="/activity"'), "all workspaces has the row too");

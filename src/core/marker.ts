@@ -83,8 +83,8 @@
  * "headless" runs without herdr, as `--headless` does. "attended" is stored
  * as no key, so the hash of a ritual without it does not change.
  *
- * `flare_deliver = ["push", "email"]` (0.108.0) is a ritual key: the channels
- * for the flares that a run of the ritual lights. `[]` means the app only.
+ * `candle_deliver = ["push", "email"]` (0.108.0) is a ritual key: the channels
+ * for the candles that a run of the ritual lights. `[]` means the app only.
  * Absent means the default, push, and is stored as no key, so the hash of a
  * ritual without it does not change. A host older than 0.108.0 refuses the key.
  *
@@ -168,12 +168,12 @@ export interface RepoRitual {
   /** `follow_up = "headless"` (0.69.0): a follow-up runs without herdr. Absent: attended. */
   followUp?: "headless";
   /**
-   * `flare_deliver` (0.108.0): the channels for the flares a run of this ritual
+   * `candle_deliver` (0.108.0): the channels for the candles a run of this ritual
    * lights, `["push"]`, `["email"]` or both. `[]` means the app only. Absent:
-   * the default, push. It is the one place a run's flare channel is chosen, so a
+   * the default, push. It is the one place a run's candle channel is chosen, so a
    * model cannot raise its own.
    */
-  flareDeliver?: string[];
+  candleDeliver?: string[];
   /** The `[policies.*]` name, for display. */
   policyName?: string;
   /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
@@ -246,10 +246,10 @@ const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
-  "follow_up_may", "follow_up_may_extra", "follow_up", "flare_deliver",
+  "follow_up_may", "follow_up_may_extra", "follow_up", "candle_deliver",
 ]);
-/** The channels a flare notice can use. `src/core/alerts.ts` sends on them; `flare light --deliver` takes the same words. */
-const FLARE_CHANNELS: readonly string[] = ["push", "email"];
+/** The channels a candle notice can use. `src/core/alerts.ts` sends on them; `candle light --deliver` takes the same words. */
+const CANDLE_CHANNELS: readonly string[] = ["push", "email"];
 const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes", "on_hold", "follow_up_may"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 /** A repo ritual's slug. No dots: the TOML subset allows one dot in a header, the table separator. */
@@ -460,16 +460,16 @@ function decodeArgs(table: Table, at: { section: string; source: Source }): stri
   return value;
 }
 
-/** A ritual's `flare_deliver`: a list of `push` and `email`, empty for the app only; undefined when the key is absent. */
-function decodeFlareDeliver(table: Table, at: { section: string; source: Source }): string[] | undefined {
-  const value: unknown = table.flare_deliver;
+/** A ritual's `candle_deliver`: a list of `push` and `email`, empty for the app only; undefined when the key is absent. */
+function decodeCandleDeliver(table: Table, at: { section: string; source: Source }): string[] | undefined {
+  const value: unknown = table.candle_deliver;
   if (value === undefined) return undefined;
-  const line = at.source.lines[`${at.section}.flare_deliver`];
-  const fail = (expected: string): Error => new Error(`${where(at.source.file, line)}: flare_deliver must be ${expected}`);
-  if (!Array.isArray(value)) throw fail('a list: flare_deliver = ["push", "email"], or [] for the app only');
+  const line = at.source.lines[`${at.section}.candle_deliver`];
+  const fail = (expected: string): Error => new Error(`${where(at.source.file, line)}: candle_deliver must be ${expected}`);
+  if (!Array.isArray(value)) throw fail('a list: candle_deliver = ["push", "email"], or [] for the app only');
   const channels: string[] = [];
   for (const entry of value) {
-    if (!isText(entry) || !FLARE_CHANNELS.includes(entry)) throw fail(`a list of ${FLARE_CHANNELS.join(" and ")}, got ${JSON.stringify(entry)}`);
+    if (!isText(entry) || !CANDLE_CHANNELS.includes(entry)) throw fail(`a list of ${CANDLE_CHANNELS.join(" and ")}, got ${JSON.stringify(entry)}`);
     if (!channels.includes(entry)) channels.push(entry);
   }
   return channels;
@@ -627,7 +627,7 @@ function decodeRitual(
   if (followUp !== undefined && followUp !== "headless" && followUp !== "attended") {
     throw new Error(`${where(source.file, source.lines[`${section}.follow_up`])}: follow_up must be "headless" or "attended"`);
   }
-  const flareDeliver = decodeFlareDeliver(table, at);
+  const candleDeliver = decodeCandleDeliver(table, at);
   const { policy, policyName, policyExtra, ownNotes } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
   if (cadence !== undefined) ritual.cadence = cadence;
@@ -640,7 +640,7 @@ function decodeRitual(
   if (model !== undefined) ritual.model = model;
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
   if (followUp === "headless") ritual.followUp = followUp;
-  if (flareDeliver !== undefined) ritual.flareDeliver = flareDeliver;
+  if (candleDeliver !== undefined) ritual.candleDeliver = candleDeliver;
   if (policyName !== undefined) ritual.policyName = policyName;
   if (policyExtra !== undefined) ritual.policyExtra = policyExtra;
   if (ownNotes !== undefined) ritual.ownNotes = ownNotes;

@@ -24,7 +24,7 @@ export default function SettingsNotifications({ loaderData }: Route.ComponentPro
       <SettingsCard title="Alerts" intro="darius alerts you to held runs, questions and failures. Turn alerts on for each device you use.">
         <PushSwitch />
       </SettingsCard>
-      <SettingsCard title="Email" intro="A flare can also send an email. This page only shows whether this host can.">
+      <SettingsCard title="Email" intro="A candle can also send an email. This page only shows whether this host can.">
         <SettingRow label="This host" help="No address is shown.">
           <span className="st-value">{emailLine(loaderData.emailSetUp, loaderData.emailProblem)}</span>
         </SettingRow>

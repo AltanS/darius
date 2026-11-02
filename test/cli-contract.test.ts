@@ -184,7 +184,7 @@ test("usage errors exit 2 across native and legacy verbs; a missing item exits 1
     ["run", "show", "nope"],
     ["profile", "show", "nope"],
     ["finding", "show", "nope"],
-    ["flare", "show", "nope"],
+    ["candle", "show", "nope"],
     ["spec", "check", ".tracker/nope.md"],
     ["tree", "log", ".tracker/nope/never.md"],
     ["show", "nope.md"],

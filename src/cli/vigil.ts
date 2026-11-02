@@ -2,11 +2,11 @@
  * `darius vigil <verb>`: add, set-body, list, show, close, pause, resume and sweep vigils.
  *
  *   vigil add <slug> [--name N | --title N] (--due YYYY-MM-DD | --in Nd|Nw|Nm | --until TEXT)
- *             [--flare SEVERITY [--flare-deliver push,email|none]] [--from REF] [--agent A] [--opened YYYY-MM-DD]
+ *             [--candle SEVERITY [--candle-deliver push,email|none]] [--from REF] [--agent A] [--opened YYYY-MM-DD]
  *             [--stdin | --content TEXT] [--gate-command CMD] [--heavy] [--who W]
  *   vigil set-body <slug> (--stdin | --content TEXT)
  *   vigil set <slug> [--heavy | --no-heavy] [--due YYYY-MM-DD | --in Nd|Nw|Nm] [--until TEXT] [--gate-command CMD]
- *             [--flare SEVERITY] [--flare-deliver push,email|none] [--no-flare]
+ *             [--candle SEVERITY] [--candle-deliver push,email|none] [--no-candle]
  *   vigil list [--all] [--json]
  *   vigil show <slug> [--json]
  *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD] [--reason TEXT]
@@ -26,9 +26,9 @@
  * `vigil show` prints the failing check's output tail with obvious secrets
  * masked (0.86.4, src/core/mask-secrets.ts); `--json` keeps the raw tail.
  * `--in 7d` (or `w`, `m`) is a due date counted from today, stored as the date
- * (0.110.0). `--flare high` makes a failing sweep light the flare `vigil:<slug>`
- * at that severity, and a held close clear it (src/core/vigil-flare.ts). The
- * vigil stays armed after a failure. `--flare` needs a date or a gate command,
+ * (0.110.0). `--candle high` makes a failing sweep light the candle `vigil:<slug>`
+ * at that severity, and a held close blow it out (src/core/vigil-candle.ts). The
+ * vigil stays armed after a failure. `--candle` needs a date or a gate command,
  * because an `until`-only vigil never reads as failed. A host older than 0.110.0
  * refuses a vigil that carries the key, so update every host first. These flags
  * are for vigils the store owns: the legacy route refuses them.
@@ -86,7 +86,7 @@ import { projectWorkdir } from "../core/workdir.ts";
 import { flushAlerts } from "../core/alerts.ts";
 import type { Severity } from "../core/result.ts";
 import { dueFromIn } from "../core/relative-date.ts";
-import { assertFlareCanFire, parseFlareDeliver, parseFlareSeverity } from "../core/vigil-flare.ts";
+import { assertCandleCanFire, parseCandleDeliver, parseCandleSeverity } from "../core/vigil-candle.ts";
 import {
   addVigil,
   assertNotNested,
@@ -205,18 +205,18 @@ function dueFlag(args: ParsedArgs, verb: string): string | undefined {
   return span === undefined ? due : dueFromIn(span, localToday());
 }
 
-interface FlareFlags {
+interface CandleFlags {
   severity?: Severity;
   deliver?: string[];
 }
 
-/** `--flare` and `--flare-deliver`, checked. Absent flags stay undefined. */
-function flareFlags(args: ParsedArgs): FlareFlags {
-  const flags: FlareFlags = {};
-  const severity = textFlag(args, "flare");
-  if (severity !== undefined) flags.severity = parseFlareSeverity(severity);
-  const deliver = textFlag(args, "flare-deliver");
-  if (deliver !== undefined) flags.deliver = parseFlareDeliver(deliver);
+/** `--candle` and `--candle-deliver`, checked. Absent flags stay undefined. */
+function candleFlags(args: ParsedArgs): CandleFlags {
+  const flags: CandleFlags = {};
+  const severity = textFlag(args, "candle");
+  if (severity !== undefined) flags.severity = parseCandleSeverity(severity);
+  const deliver = textFlag(args, "candle-deliver");
+  if (deliver !== undefined) flags.deliver = parseCandleDeliver(deliver);
   return flags;
 }
 
@@ -230,8 +230,8 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   if (due === undefined && until === undefined) {
     throw new UsageError('a vigil needs a gate: provide --due <YYYY-MM-DD> or --in <N>d|w|m, and/or --until "<event>"');
   }
-  const flare = flareFlags(args);
-  if (flare.deliver !== undefined && flare.severity === undefined) throw new UsageError("vigil add: --flare-deliver needs --flare");
+  const candle = candleFlags(args);
+  if (candle.deliver !== undefined && candle.severity === undefined) throw new UsageError("vigil add: --candle-deliver needs --candle");
   const opened = dateFlag(args, "opened");
   const body = suppliedBody(args, "add");
   const project = currentProject(args, { create: true });
@@ -256,8 +256,8 @@ async function runAdd(args: ParsedArgs): Promise<number> {
     from: textFlag(args, "from"),
     agent: textFlag(args, "agent"),
     created: opened === undefined ? undefined : localNoonIso(opened),
-    flare: flare.severity,
-    flare_deliver: flare.deliver,
+    candle: candle.severity,
+    candle_deliver: candle.deliver,
     who,
   });
   refreshProjection(project);
@@ -311,14 +311,14 @@ function runSet(args: ParsedArgs): number {
   const due = dueFlag(args, "set");
   const until = textFlag(args, "until");
   const gateCommand = textFlag(args, "gate-command");
-  const flare = flareFlags(args);
-  const dropsFlare = isFlagSet(args, "no-flare");
-  if (dropsFlare && (flare.severity !== undefined || flare.deliver !== undefined)) {
-    throw new UsageError("vigil set: --no-flare excludes --flare and --flare-deliver");
+  const candle = candleFlags(args);
+  const dropsCandle = isFlagSet(args, "no-candle");
+  if (dropsCandle && (candle.severity !== undefined || candle.deliver !== undefined)) {
+    throw new UsageError("vigil set: --no-candle excludes --candle and --candle-deliver");
   }
-  const changesFlare = dropsFlare || flare.severity !== undefined || flare.deliver !== undefined;
-  if (!wantsHeavy && !wantsLight && due === undefined && until === undefined && gateCommand === undefined && !changesFlare) {
-    throw new UsageError("vigil set needs one of --heavy, --no-heavy, --due, --in, --until, --gate-command, --flare, --flare-deliver, --no-flare");
+  const changesCandle = dropsCandle || candle.severity !== undefined || candle.deliver !== undefined;
+  if (!wantsHeavy && !wantsLight && due === undefined && until === undefined && gateCommand === undefined && !changesCandle) {
+    throw new UsageError("vigil set needs one of --heavy, --no-heavy, --due, --in, --until, --gate-command, --candle, --candle-deliver, --no-candle");
   }
   const project = currentProject(args);
   const who = stringFlag(args, "who") ?? defaultWho();
@@ -349,21 +349,21 @@ function runSet(args: ParsedArgs): number {
       header.gate_command = gateCommand;
       changes.push(`gate_command=${gateCommand}`);
     }
-    if (dropsFlare) {
-      delete header.flare;
-      delete header.flare_deliver;
-      changes.push("no flare");
+    if (dropsCandle) {
+      delete header.candle;
+      delete header.candle_deliver;
+      changes.push("no candle");
     }
-    if (flare.severity !== undefined) {
-      header.flare = flare.severity;
-      changes.push(`flare=${flare.severity}`);
+    if (candle.severity !== undefined) {
+      header.candle = candle.severity;
+      changes.push(`candle=${candle.severity}`);
     }
-    if (flare.deliver !== undefined) {
-      if (header.flare === undefined) throw new UsageError("vigil set: --flare-deliver needs --flare, or a vigil that already has one");
-      header.flare_deliver = flare.deliver;
-      changes.push(`flare_deliver=${flare.deliver.length === 0 ? "none" : flare.deliver.join(",")}`);
+    if (candle.deliver !== undefined) {
+      if (header.candle === undefined) throw new UsageError("vigil set: --candle-deliver needs --candle, or a vigil that already has one");
+      header.candle_deliver = candle.deliver;
+      changes.push(`candle_deliver=${candle.deliver.length === 0 ? "none" : candle.deliver.join(",")}`);
     }
-    if (header.flare !== undefined) assertFlareCanFire(header);
+    if (header.candle !== undefined) assertCandleCanFire(header);
     const next: Document<Vigil> = { header, body: current.body };
     project.writeItem(next, { who });
     return next;
@@ -480,7 +480,7 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.due !== undefined) console.log(`due: ${doc.header.due}`);
   if (doc.header.until !== undefined) console.log(`until: ${doc.header.until}`);
   if (doc.header.gate_command !== undefined) console.log(`gate: ${doc.header.gate_command} (fired: ${status.gateFired ? "yes" : "no"})`);
-  if (doc.header.flare !== undefined) console.log(`flare: ${doc.header.flare}, ${deliverText(doc.header.flare_deliver)}`);
+  if (doc.header.candle !== undefined) console.log(`candle: ${doc.header.candle}, ${deliverText(doc.header.candle_deliver)}`);
   if (status.lastSwept !== undefined) {
     console.log(`\nlatest sweep ${status.lastSwept.at}: ${String(status.lastSwept.outcome ?? "gate " + String(status.lastSwept.gate))}`);
   }
@@ -610,7 +610,7 @@ function vigilLine(vigil: SweptVigil): string {
   if (vigil.bucket === "closed") return `  · ${vigil.slug.padEnd(28)} ${vigil.bucket.padEnd(12)} already closed`;
   const parts: string[] = [vigil.outcome ?? `gate ${vigil.gate}`];
   if (vigil.closed) parts.push("closed");
-  if (vigil.flareLit === true) parts.push("flare lit");
+  if (vigil.candleLit === true) parts.push("candle lit");
   const bad = vigil.checks.find((check) => check.outcome === "fail" || check.outcome === "timeout");
   if (vigil.flagged && bad !== undefined) {
     parts.push(`FLAGGED: #${bad.index} ${bad.text} (${bad.outcome}, exit ${String(bad.exit)})`);
@@ -705,7 +705,7 @@ async function sweepSingle(project: Project, run: SweepOptions, single: NonNulla
 }
 
 /**
- * Sends the notices of the flares this sweep lit, for this project only, and
+ * Sends the notices of the candles this sweep lit, for this project only, and
  * only after the sweep gave its lease back, so a slow send cannot hold a lease
  * past its limit. It never fails the sweep: a notice that did not go out has
  * left an `alert.failed` line, and is tried again at the next flush.
@@ -724,7 +724,7 @@ async function sweepOne(project: Project, plan: SweepPlan): Promise<ProjectSweep
   const swept = await sweepLeased(project, plan);
   if ("skip" in swept) return swept;
   const { result } = swept;
-  const hasLit = result.vigils.some((vigil) => vigil.flareLit === true);
+  const hasLit = result.vigils.some((vigil) => vigil.candleLit === true);
   if (hasLit && !result.dryRun && !result.classifyOnly) await flushSweepAlerts(project);
   return swept;
 }

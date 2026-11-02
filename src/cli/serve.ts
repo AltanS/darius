@@ -25,14 +25,14 @@
  *                            src/web/action-api.ts)
  *   POST /api/finding/close  the findings page's close button (0.62.0,
  *                            src/web/action-api.ts)
- *   GET /api/flares, GET /api/flare
- *                            the flares as JSON, for any viewer that passed
+ *   GET /api/candles, GET /api/candle
+ *                            the candles as JSON, for any viewer that passed
  *                            the access check (0.111.0, src/web/action-api.ts)
- *   POST /api/flare/answer, POST /api/flare/accept
- *                            settle a flare from the page (0.111.0,
+ *   POST /api/candle/answer, POST /api/candle/accept
+ *                            settle a candle from the page (0.111.0,
  *                            src/web/action-api.ts)
- *   POST /api/flare/light    a CI job or a script on the tailnet lights a
- *                            flare: the one write a non-browser calls (0.111.0,
+ *   POST /api/candle/light    a CI job or a script on the tailnet lights a
+ *                            candle: the one write a non-browser calls (0.111.0,
  *                            src/web/action-api.ts)
  *   GET /api/workspace-icon/<project>
  *                            the image icon a project's marker names
@@ -73,7 +73,7 @@ import { gzipSync } from "node:zlib";
 
 import { errorMessage } from "../runtime.ts";
 import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
-import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREFIX, actionApi, findingApi, flareApi, isFlarePath, pendingApi, vigilApi } from "../web/action-api.ts";
+import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREFIX, actionApi, findingApi, candleApi, isCandlePath, pendingApi, vigilApi } from "../web/action-api.ts";
 import type { WebHandler } from "../web/api.ts";
 import { clearStatusCache, useStatusCache, webContext } from "../web/context.ts";
 import { plainPage, renderForbidden, renderWrongHost } from "../web/html.ts";
@@ -440,9 +440,9 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
       sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;
     }
-    if (isFlarePath(url.pathname)) {
+    if (isCandlePath(url.pathname)) {
       const body = await readBody(request);
-      const answer = await flareApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body, query: url.search }, { who: access.who, local: access.local === true });
+      const answer = await candleApi({ method: request.method ?? "GET", path: url.pathname, headers: headersOf(request), body, query: url.search }, { who: access.who, local: access.local === true });
       afterWrite(request.method);
       sendTo(reply(answer.status, "application/json", `${JSON.stringify(answer.body)}\n`, "default-src 'none'"));
       return;

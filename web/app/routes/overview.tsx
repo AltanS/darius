@@ -35,10 +35,10 @@ export async function loader({ context, request, params }: Route.LoaderArgs) {
   const only = scope.workspace === null ? undefined : projects[0];
   // The ledger events and the starts of the last day: they are the receipts of Done lately.
   const since = new Date(Date.parse(status.generatedAt) - DAY).toISOString();
-  // The lit flares are cards in Needs you (0.112.0). The status holds their count, so a scope with none reads no ledger for them.
-  const hasLitFlares = projects.some((project) => project.flares.lit > 0);
-  const flares = hasLitFlares ? await context.flares() : [];
-  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace), canWrite: context.canWrite, flares };
+  // The lit candles are cards in Needs you (0.112.0). The status holds their count, so a scope with none reads no ledger for them.
+  const hasLitCandles = projects.some((project) => project.candles.lit > 0);
+  const candles = hasLitCandles ? await context.candles() : [];
+  const feed = { activity: context.activity(scope.workspace, { since }), pending: context.pending(scope.workspace), canWrite: context.canWrite, candles };
   return {
     workspace: scope.workspace,
     home: homeView(status, read, scope, feed),

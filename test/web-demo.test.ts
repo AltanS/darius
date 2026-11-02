@@ -16,7 +16,7 @@ const MESSAGE = "demo has not confirmed the start yet. It shows in Now when it s
 test("demo: the pause is one second and a start takes 45 seconds", () => {
   assert.equal(DEMO_REPLY_MS, 1000);
   assert.equal(DEMO_START_MS, 45_000);
-  for (const path of ["/api/vigil/check", "/api/run/ack", "/api/run/answer", "/api/run/follow-up", "/api/finding/close", "/api/finding/reopen", "/api/flare/answer", "/api/flare/accept"]) assert.ok(DEMO_WRITE_PATHS.has(path), path);
+  for (const path of ["/api/vigil/check", "/api/run/ack", "/api/run/answer", "/api/run/follow-up", "/api/finding/close", "/api/finding/reopen", "/api/candle/answer", "/api/candle/accept"]) assert.ok(DEMO_WRITE_PATHS.has(path), path);
 });
 
 test("demo: a check answers pending with id, host and time, and the entry turns started after 45 s with no run", () => {
@@ -56,12 +56,12 @@ test("demo: a follow-up, Send and run now and Answer and resume start a run with
   for (const one of started.filter((entry) => entry.kind !== "resume")) assert.match(one.run ?? "", /^[0-9A-Z]{26}$/u);
 });
 
-test("demo: a flare answer and an accept answer ok; a follow-up starts a run, and one in atlas-docs is refused with the server's sentence", () => {
+test("demo: a candle answer and an accept answer ok; a follow-up starts a run, and one in atlas-docs is refused with the server's sentence", () => {
   const starts = createDemoStarts(() => Date.parse("2026-11-02T10:00:00.000Z"));
-  assert.deepEqual(demoWrite("/api/flare/answer", JSON.stringify({ project: "demo-shop", key: "k", note: "done" }), starts), { status: 200, body: { ok: true } });
-  assert.deepEqual(demoWrite("/api/flare/accept", JSON.stringify({ project: "demo-shop", key: "k" }), starts), { status: 200, body: { ok: true } });
-  assert.equal(demoWrite("/api/flare/answer", JSON.stringify({ project: "demo-shop", key: "k", note: "go", followUp: true }), starts).status, 202);
-  assert.deepEqual(demoWrite("/api/flare/answer", JSON.stringify({ project: "atlas-docs", key: "k", note: "go", followUp: true }), starts), { status: 409, body: { ok: false, error: DEMO_FOLLOW_UP_REFUSAL } });
+  assert.deepEqual(demoWrite("/api/candle/answer", JSON.stringify({ project: "demo-shop", key: "k", note: "done" }), starts), { status: 200, body: { ok: true } });
+  assert.deepEqual(demoWrite("/api/candle/accept", JSON.stringify({ project: "demo-shop", key: "k" }), starts), { status: 200, body: { ok: true } });
+  assert.equal(demoWrite("/api/candle/answer", JSON.stringify({ project: "demo-shop", key: "k", note: "go", followUp: true }), starts).status, 202);
+  assert.deepEqual(demoWrite("/api/candle/answer", JSON.stringify({ project: "atlas-docs", key: "k", note: "go", followUp: true }), starts), { status: 409, body: { ok: false, error: DEMO_FOLLOW_UP_REFUSAL } });
   assert.equal(starts.list("atlas-docs").length, 0, "a refused follow-up starts nothing");
 });
 

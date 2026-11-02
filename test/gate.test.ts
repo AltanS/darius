@@ -28,7 +28,7 @@ import {
   splitShell,
   startsFollowUp,
   writesEmail,
-  writesFlare,
+  writesCandle,
   type GateDecision,
   type RunPolicy,
   type SecretPaths,
@@ -753,72 +753,72 @@ test("a run never starts a follow-up, whatever may says, under any prefix", () =
   assert.equal(startsFollowUp("git log --oneline"), false);
 });
 
-// --- flares from inside a run (0.107.0) ---------------------------------------------------
+// --- candles from inside a run (0.107.0) ---------------------------------------------------
 
 /** Every policy a run can have, each with a `may` that would allow the line. */
-function flarePolicies(): RunPolicy[] {
+function candlePolicies(): RunPolicy[] {
   const may = ["Bash(darius *)", "Bash(env *)", "Bash(sudo *)", "Bash(setsid *)", "Bash(bash *)", "Bash(ssh *)", "Bash(date)", "Bash(*)"];
   return [
     policy({ may }),
     policy({ gate: "full", may }),
     policy({ mode: "report", may }),
     policy({ gate: "full", mode: "report", may }),
-    policy({ gate: "full", may, grants: ["darius flare accept k"] }),
+    policy({ gate: "full", may, grants: ["darius candle accept k"] }),
     policy({ may, on_hold: "deny" }),
   ];
 }
 
 /** One write verb in every form a line can hide it. */
-function flareWriteForms(verb: string): string[] {
+function candleWriteForms(verb: string): string[] {
   return [
-    `darius flare ${verb} k --note n`,
-    `env -u DARIUS_RUN darius flare ${verb} k`,
-    `env -uDARIUS_RUN_POLICY darius flare ${verb} k`,
-    `FOO=1 nohup darius flare ${verb} k`,
-    `FOO=1 darius flare ${verb} k`,
-    `sudo -E darius flare ${verb} k`,
-    `setsid darius flare ${verb} k`,
-    `/home/u/.local/bin/darius flare ${verb} k`,
-    `./bin/darius flare ${verb} k`,
-    `bun src/cli.ts flare ${verb} k`,
-    `darius 'flare' '${verb}' k`,
-    `darius "flare" "${verb}" k`,
-    `darius $'flare' $"${verb}" k`,
-    `darius fl\\are ${verb} k`,
-    `darius fl''are ${verb} k`,
-    `darius  flare\t${verb} k`,
-    `darius flare \\\n ${verb} k`,
-    `bash -c "darius flare ${verb} k"`,
-    `ssh host-a darius flare ${verb} k`,
-    `date && darius flare ${verb} k`,
-    `date; darius flare ${verb} k`,
-    `date || darius flare ${verb} k`,
-    `date | darius flare ${verb} k`,
-    `date\ndarius flare ${verb} k`,
-    `(darius flare ${verb} k)`,
-    `echo $(darius flare ${verb} k)`,
-    `echo \`darius flare ${verb} k\``,
-    `darius flare ${verb} k > /tmp/out`,
-    `darius flare ${verb}>/tmp/out`,
-    `darius flare list; darius flare ${verb} k`,
-    `darius flare show k && darius flare ${verb} k`,
-    `darius flare show $(darius flare ${verb} k)`,
-    `darius flare --project p ${verb} k`,
-    `darius flare --project=p ${verb} k`,
-    `darius flare --json ${verb} k`,
-    `darius flare --note "x show" ${verb} k`,
-    `darius --project p flare ${verb} k`,
-    `darius --json flare ${verb} k`,
-    `bun src/cli.ts flare --note "x show" ${verb} k`,
+    `darius candle ${verb} k --note n`,
+    `env -u DARIUS_RUN darius candle ${verb} k`,
+    `env -uDARIUS_RUN_POLICY darius candle ${verb} k`,
+    `FOO=1 nohup darius candle ${verb} k`,
+    `FOO=1 darius candle ${verb} k`,
+    `sudo -E darius candle ${verb} k`,
+    `setsid darius candle ${verb} k`,
+    `/home/u/.local/bin/darius candle ${verb} k`,
+    `./bin/darius candle ${verb} k`,
+    `bun src/cli.ts candle ${verb} k`,
+    `darius 'candle' '${verb}' k`,
+    `darius "candle" "${verb}" k`,
+    `darius $'candle' $"${verb}" k`,
+    `darius cand\\le ${verb} k`,
+    `darius cand''le ${verb} k`,
+    `darius  candle\t${verb} k`,
+    `darius candle \\\n ${verb} k`,
+    `bash -c "darius candle ${verb} k"`,
+    `ssh host-a darius candle ${verb} k`,
+    `date && darius candle ${verb} k`,
+    `date; darius candle ${verb} k`,
+    `date || darius candle ${verb} k`,
+    `date | darius candle ${verb} k`,
+    `date\ndarius candle ${verb} k`,
+    `(darius candle ${verb} k)`,
+    `echo $(darius candle ${verb} k)`,
+    `echo \`darius candle ${verb} k\``,
+    `darius candle ${verb} k > /tmp/out`,
+    `darius candle ${verb}>/tmp/out`,
+    `darius candle list; darius candle ${verb} k`,
+    `darius candle show k && darius candle ${verb} k`,
+    `darius candle show $(darius candle ${verb} k)`,
+    `darius candle --project p ${verb} k`,
+    `darius candle --project=p ${verb} k`,
+    `darius candle --json ${verb} k`,
+    `darius candle --note "x show" ${verb} k`,
+    `darius --project p candle ${verb} k`,
+    `darius --json candle ${verb} k`,
+    `bun src/cli.ts candle --note "x show" ${verb} k`,
   ];
 }
 
-test("a run never lights or settles a flare, whatever may says, under any prefix", () => {
-  const verbs = ["light", "answer", "accept", "clear", "reopen"];
-  for (const scoped of flarePolicies()) {
+test("a run never lights or settles a candle, whatever may says, under any prefix", () => {
+  const verbs = ["light", "answer", "accept", "blow-out", "relight"];
+  for (const scoped of candlePolicies()) {
     for (const verb of verbs) {
-      for (const line of flareWriteForms(verb)) {
-        assert.match(decide(shell(line), scoped) ?? "", /a run never lights or settles a flare by command/u, line);
+      for (const line of candleWriteForms(verb)) {
+        assert.match(decide(shell(line), scoped) ?? "", /a run never lights or settles a candle by command/u, line);
         assert.equal(verdict(shell(line), scoped), "deny", `${line}: a deny, not a hold`);
       }
     }
@@ -888,70 +888,70 @@ test("the gate does not deny email status, nor a line that only says email, set 
     "pnpm vitest run email test",
     'echo "email test passed"',
     "cat src/core/email.ts",
-    "ls test/flare-email.test.ts",
+    "ls test/candle-email.test.ts",
     "git log --author=email set",
   ];
   for (const line of lines) assert.equal(writesEmail(line), false, line);
   for (const line of ["darius email status", "darius email status --json"]) assert.equal(decide(shell(line), policy({ may: ["Bash(*)"] })), undefined, line);
 });
 
-test("a verb the gate cannot read after darius flare is denied: a variable, a substitution, xargs", () => {
+test("a verb the gate cannot read after darius candle is denied: a variable, a substitution, xargs", () => {
   const lines = [
-    "darius flare $VERB k",
-    'darius flare "$VERB" k',
-    "darius flare $(echo accept) k",
-    "darius flare `echo accept` k",
-    "echo accept | xargs darius flare",
-    "printf accept | xargs -I{} darius flare {} k",
-    "darius flare --note show $VERB k",
-    "/home/u/.local/bin/darius flare $VERB k",
-    "darius flare",
+    "darius candle $VERB k",
+    'darius candle "$VERB" k',
+    "darius candle $(echo accept) k",
+    "darius candle `echo accept` k",
+    "echo accept | xargs darius candle",
+    "printf accept | xargs -I{} darius candle {} k",
+    "darius candle --note show $VERB k",
+    "/home/u/.local/bin/darius candle $VERB k",
+    "darius candle",
   ];
-  for (const line of lines) assert.equal(writesFlare(line), true, line);
+  for (const line of lines) assert.equal(writesCandle(line), true, line);
 });
 
-test("the gate does not deny a flare read, nor a line that only names a flare", () => {
+test("the gate does not deny a candle read, nor a line that only names a candle", () => {
   const lines = [
-    "darius flare list",
-    "darius flare list --all --json",
-    "darius flare list --status answered",
-    "darius flare list --status accepted --json",
-    "darius flare show k",
-    "darius flare show k --json",
-    "darius flare show accept",
-    "darius flare show clear-the-cache",
-    "darius flare show dep/accept-risk --project p",
-    "darius flare --json list",
-    "darius flare --project p show k",
-    "darius flare --project=p list",
-    "darius --json flare list",
-    "darius flare --help",
-    "/home/u/.local/bin/darius flare list",
-    "./bin/darius flare show k",
-    "env FOO=1 darius flare list",
-    'bash -c "darius flare list"',
-    "date && darius flare list",
-    "darius flare list | head -5",
-    "darius flare list > /tmp/flares.txt",
-    "grep -rn flare src",
-    "cat src/core/flare-index.ts",
-    "cat docs/flare accept.md",
-    "ls test/flare-cli.test.ts",
-    "git log --grep flare",
+    "darius candle list",
+    "darius candle list --all --json",
+    "darius candle list --status answered",
+    "darius candle list --status accepted --json",
+    "darius candle show k",
+    "darius candle show k --json",
+    "darius candle show accept",
+    "darius candle show clear-the-cache",
+    "darius candle show dep/accept-risk --project p",
+    "darius candle --json list",
+    "darius candle --project p show k",
+    "darius candle --project=p list",
+    "darius --json candle list",
+    "darius candle --help",
+    "/home/u/.local/bin/darius candle list",
+    "./bin/darius candle show k",
+    "env FOO=1 darius candle list",
+    'bash -c "darius candle list"',
+    "date && darius candle list",
+    "darius candle list | head -5",
+    "darius candle list > /tmp/candles.txt",
+    "grep -rn candle src",
+    "cat src/core/candle-index.ts",
+    "cat docs/candle accept.md",
+    "ls test/candle-cli.test.ts",
+    "git log --grep candle",
   ];
-  for (const line of lines) assert.equal(writesFlare(line), false, line);
+  for (const line of lines) assert.equal(writesCandle(line), false, line);
   for (const scoped of [policy({ may: ["Bash(*)"] }), policy({ gate: "full", may: ["Bash(*)"] }), policy({ mode: "report", may: ["Bash(*)"] }), policy({ gate: "full", mode: "report", may: ["Bash(*)"] })]) {
-    for (const line of ["darius flare list", "darius flare list --status answered --json", "darius flare show k", "darius flare show accept --json", "/home/u/.local/bin/darius flare list"]) {
+    for (const line of ["darius candle list", "darius candle list --status answered --json", "darius candle show k", "darius candle show accept --json", "/home/u/.local/bin/darius candle list"]) {
       assert.equal(decide(shell(line), scoped), undefined, line);
     }
   }
 });
 
-test("the protocol may name a flare: the heredoc body and a held question are text the shell never runs", () => {
-  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nNext: darius flare accept k\nEOF`;
+test("the protocol may name a candle: the heredoc body and a held question are text the shell never runs", () => {
+  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nNext: darius candle accept k\nEOF`;
   assert.equal(decide(shell(complete), policy({ gate: "full", may: [] })), undefined);
-  const after = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nx\nEOF\ndarius flare accept k`;
-  assert.match(decide(shell(after), policy({ may: ["Bash(*)"] })) ?? "", /a run never lights or settles a flare/u, "a line after the body runs");
+  const after = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nx\nEOF\ndarius candle accept k`;
+  assert.match(decide(shell(after), policy({ may: ["Bash(*)"] })) ?? "", /a run never lights or settles a candle/u, "a line after the body runs");
 });
 
 test("a run keeps its run markers: unset, env -u, env -i and an assignment are denied", () => {
@@ -1210,7 +1210,7 @@ test("the text check passes bare names, source paths, a repo's own folder, ssh's
     "cat src/core/credentials.ts",
     "grep -rn push.json src",
     "grep -rn credentials src/core",
-    "ls test/flare-email.test.ts",
+    "ls test/candle-email.test.ts",
     "cat push.json",
     "cat credentials",
     "git log -- src/core/email.ts",
@@ -1234,7 +1234,7 @@ test("the text check passes bare names, source paths, a repo's own folder, ssh's
     "darius push status",
     "darius push status --json",
     "darius email status",
-    "darius flare list",
+    "darius candle list",
     "/home/u/.local/bin/darius push status",
   ];
   for (const line of lines) assert.equal(namesSecretPath(line, SECRETS), false, line);
@@ -1252,14 +1252,14 @@ test("known gaps of the text check, pinned so nobody reads it as a boundary", ()
 });
 
 test("the protocol may name a secret path: the heredoc body is text the shell never runs", () => {
-  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nThe file ~/.config/darius/push.json is missing; /api/flare/light is denied.\nEOF`;
+  const complete = `darius run complete ${RUN} --outcome complete --findings-stdin <<'EOF'\nThe file ~/.config/darius/push.json is missing; /api/candle/light is denied.\nEOF`;
   assert.equal(secretShell(complete, policy({ gate: "full", may: [] })).verdict, "allow");
 });
 
 const WEB_WRITES = [
-  "/api/flare/light",
-  "/api/flare/answer",
-  "/api/flare/accept",
+  "/api/candle/light",
+  "/api/candle/answer",
+  "/api/candle/accept",
   "/api/run/follow-up",
   "/api/run/ack",
   "/api/run/ack-earlier",
@@ -1283,8 +1283,8 @@ test("the gate denies a line that names a web write path, in every mode, with th
       assert.equal(callsWebWrite(line), true, line);
     }
   }
-  for (const scoped of [...BOTH_SCOPES, policy({ may: ["Bash(*)"], grants: ["curl http://host/api/flare/light"] })]) {
-    const decision = secretShell("curl http://host/api/flare/light", scoped);
+  for (const scoped of [...BOTH_SCOPES, policy({ may: ["Bash(*)"], grants: ["curl http://host/api/candle/light"] })]) {
+    const decision = secretShell("curl http://host/api/candle/light", scoped);
     assert.equal(decision.verdict, "deny");
     assert.match(decision.verdict === "allow" ? "" : decision.reason, /never writes through the web API; report it in the result block/u);
   }
@@ -1292,20 +1292,20 @@ test("the gate denies a line that names a web write path, in every mode, with th
 
 test("read paths of the web API pass, and so does a source path", () => {
   const lines = [
-    "curl http://host:4747/api/flares",
-    "curl 'http://host:4747/api/flares?project=p&status=lit'",
-    "curl 'http://host:4747/api/flare?project=p&key=k'",
+    "curl http://host:4747/api/candles",
+    "curl 'http://host:4747/api/candles?project=p&status=lit'",
+    "curl 'http://host:4747/api/candle?project=p&key=k'",
     "curl http://host:4747/api/pending?ids=a,b",
     "curl http://host:4747/api/status.json",
     "curl http://host:4747/api/push/key",
     "curl 'http://host:4747/api/run/follow-up/ready?project=p&run=r'",
     "cat src/web/action-api.ts",
     "cat src/web/push-api.ts",
-    "grep -rn flare src/web",
+    "grep -rn candle src/web",
     "ls web/app/routes",
   ];
   for (const line of lines) assert.equal(callsWebWrite(line), false, line);
-  for (const scoped of BOTH_SCOPES) assert.equal(secretShell("curl http://host:4747/api/flares", scoped).verdict, "allow");
+  for (const scoped of BOTH_SCOPES) assert.equal(secretShell("curl http://host:4747/api/candles", scoped).verdict, "allow");
 });
 
 test("the write list follows the source: every POST line of the web API counts as a write", () => {

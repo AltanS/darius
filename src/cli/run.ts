@@ -67,7 +67,7 @@ import { join } from "node:path";
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { ritualState } from "../core/due.ts";
 import { collectFindings, findingPromptLines, findingsSection } from "../core/finding-index.ts";
-import { collectFlares, flarePromptLines, flaresSection } from "../core/flare-index.ts";
+import { collectCandles, candlePromptLines, candlesSection } from "../core/candle-index.ts";
 import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
@@ -138,7 +138,7 @@ function currentPhase(lines: readonly LedgerLine[]): RunPhase | undefined {
 
 // --- start ------------------------------------------------------------------
 
-type StartResult = { started: true; run: string; handoff: Handoff | null; findings: string[]; flares: string[] } | { started: false; openRun: string };
+type StartResult = { started: true; run: string; handoff: Handoff | null; findings: string[]; candles: string[] } | { started: false; openRun: string };
 
 function runStart(args: ParsedArgs): number {
   const slug = requirePositional(args, 1, "<ritual> slug");
@@ -159,7 +159,7 @@ function runStart(args: ParsedArgs): number {
     if (handoff !== null && handoff.answerIds.length > 0) started.answers_read = [...handoff.answerIds];
     appendLine(project, started);
     const findings = findingPromptLines(collectFindings(project, ledger).filter((finding) => finding.ritual === slug));
-    return { started: true, run: runId, handoff, findings, flares: flarePromptLines(collectFlares(project, ledger), slug) };
+    return { started: true, run: runId, handoff, findings, candles: candlePromptLines(collectCandles(project, ledger), slug) };
   });
 
   if (!result.started) {
@@ -174,7 +174,7 @@ function runStart(args: ParsedArgs): number {
   console.log(`✓ started run ${result.run} for ritual '${slug}'`);
   if (result.handoff !== null) console.log(`\n${handoffLines(result.handoff).join("\n")}`);
   if (result.findings.length > 0) console.log(`\n${findingsSection(result.findings).join("\n")}`);
-  if (result.flares.length > 0) console.log(`\n${flaresSection(result.flares).join("\n")}`);
+  if (result.candles.length > 0) console.log(`\n${candlesSection(result.candles).join("\n")}`);
   return 0;
 }
 

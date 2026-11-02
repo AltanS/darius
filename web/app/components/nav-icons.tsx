@@ -1,6 +1,6 @@
 /**
  * The icons of the frame: the brand gem, the marks of Places (the settings gear, the status
- * pulse, the profile, the overview house, the shield of a finding, the flame of a flare, the event list of Activity, the two marks of the scopes,
+ * pulse, the profile, the overview house, the shield of a finding, the candle, the event list of Activity, the two marks of the scopes,
  * the milestone flag), the chevron, check and close marks, and the lock of a setting the environment sets.
  * The eye and the two arrows of the vigil and ritual tabs are in `kind.tsx`.
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
@@ -20,7 +20,7 @@ const PATHS = {
   status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],
   overview: ["M1.8 7.6L8 2.3L14.2 7.6", "M3.6 6.6V13.7H12.4V6.6", "M6.6 13.7V9.6H9.4V13.7"],
   finding: ["M8 1.8L13 3.6V7.8C13 10.9 10.9 13.2 8 14.4C5.1 13.2 3 10.9 3 7.8V3.6Z", "M8 5.3V8.5", "M8 10.8H8.01"],
-  flame: ["M8 1.8C8.3 4.1 11.7 5.7 11.7 9.3A3.7 3.7 0 0 1 4.3 9.3C4.3 7.7 5.1 6.7 5.9 5.9C6 7.1 6.5 7.6 7.1 7.8C7.5 5.7 7.2 3.6 8 1.8Z", "M8 14.1C6.7 14.1 6 13.1 6 12.2C6 11.1 7.1 10.6 8 9.7C8.9 10.6 10 11.1 10 12.2C10 13.1 9.3 14.1 8 14.1Z"],
+  candle: ["M8 1.4C9.2 2.7 9.9 3.6 9.9 4.6A1.9 1.9 0 0 1 6.1 4.6C6.1 3.6 6.8 2.7 8 1.4Z", "M8 6.6V8.2", "M5.2 8.2H10.8V14.6H5.2Z"],
   run: ["M5.2 3.2L12.6 8L5.2 12.8Z"],
   activity: ["M4.2 2.6V13.4", "M4.2 4.6H4.21", "M4.2 8H4.21", "M4.2 11.4H4.21", "M7.4 4.6H13", "M7.4 8H11", "M7.4 11.4H13"],
   profile: ["M8 2.6A2.6 2.6 0 1 0 8 7.8A2.6 2.6 0 1 0 8 2.6Z", "M2.8 14C3.2 11.2 5.2 9.8 8 9.8C10.8 9.8 12.8 11.2 13.2 14"],

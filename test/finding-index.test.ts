@@ -440,19 +440,19 @@ test("the history keeps the newest ten reports and every event from the oldest o
   assert.ok(clipped.every((step) => step.kind === "report"));
 });
 
-// --- flares (0.106.0) -----------------------------------------------------------------
+// --- candles (0.106.0) -----------------------------------------------------------------
 
 test("a flagged item is not a finding, and an unflagged item with the same shape still is", () => {
-  const seed = new Seeder("fi-flare");
+  const seed = new Seeder("fi-candle");
   seed.run("check", [
-    { key: "flagged", state: "needs-decision", severity: "critical", flare: true },
+    { key: "flagged", state: "needs-decision", severity: "critical", candle: true },
     { key: "plain", state: "needs-decision", severity: "critical" },
-    { key: "cleared", title: "Cleared one", flare: true, state: "fixed" },
+    { key: "cleared", title: "Cleared one", candle: true, state: "fixed" },
   ]);
   assert.deepEqual(seed.findings().map((finding) => finding.key), ["plain"]);
   assert.equal(seed.find("check", "plain").status, "needs-you");
   assert.deepEqual(findingCounts(seed.findings()), { needsYou: 1, open: 1 });
-  seed.run("check", [{ key: "flagged", flare: true, state: "needs-decision" }]);
+  seed.run("check", [{ key: "flagged", candle: true, state: "needs-decision" }]);
   assert.equal(seed.find("check", "plain").stale, true, "a run that only has flagged items is still a full run");
   assert.equal(seed.findings().length, 1);
 });

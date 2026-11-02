@@ -238,18 +238,18 @@ function withItem(item: Record<string, JsonValue>): string {
   return JSON.stringify({ v: 1, status: "ok", summary: "s", items: [{ title: "T", severity: "low", ...item }] });
 }
 
-test("the flare flag needs a key and a state of needs-decision or fixed", () => {
-  const flagged = parsed(withItem({ key: "k", state: "needs-decision", flare: true })).items[0];
-  assert.equal(flagged?.flare, true, "the flag is kept");
-  assert.equal(parsed(withItem({ key: "k", state: "fixed", flare: true })).items[0]?.flare, true, "a fixed flagged item clears the flare");
-  assert.equal("flare" in (parsed(withItem({ key: "k", state: "open" })).items[0] ?? {}), false, "no flag, no field");
-  assert.equal("flare" in (parsed(withItem({ key: "k", state: "open", flare: false })).items[0] ?? {}), false, "false is no flag");
-  assert.equal("flare" in (parsed(withItem({ state: "open", flare: null })).items[0] ?? {}), false, "null is no flag");
-  assert.deepEqual(errorsOf(withItem({ state: "needs-decision", flare: true })), ["items[0].flare: a flare item needs a key"]);
-  assert.deepEqual(errorsOf(withItem({ key: "k", state: "open", flare: true })), [
-    "items[0].flare: a flare item is needs-decision, or fixed to clear the flare; this item is open",
+test("the candle flag needs a key and a state of needs-decision or fixed", () => {
+  const flagged = parsed(withItem({ key: "k", state: "needs-decision", candle: true })).items[0];
+  assert.equal(flagged?.candle, true, "the flag is kept");
+  assert.equal(parsed(withItem({ key: "k", state: "fixed", candle: true })).items[0]?.candle, true, "a fixed flagged item puts the candle out");
+  assert.equal("candle" in (parsed(withItem({ key: "k", state: "open" })).items[0] ?? {}), false, "no flag, no field");
+  assert.equal("candle" in (parsed(withItem({ key: "k", state: "open", candle: false })).items[0] ?? {}), false, "false is no flag");
+  assert.equal("candle" in (parsed(withItem({ state: "open", candle: null })).items[0] ?? {}), false, "null is no flag");
+  assert.deepEqual(errorsOf(withItem({ state: "needs-decision", candle: true })), ["items[0].candle: a candle item needs a key"]);
+  assert.deepEqual(errorsOf(withItem({ key: "k", state: "open", candle: true })), [
+    "items[0].candle: a candle item is needs-decision, or fixed to put the candle out; this item is open",
   ]);
-  assert.equal(errorsOf(withItem({ key: "k", state: "needs-code", flare: true })).length, 1);
-  assert.equal(errorsOf(withItem({ state: "open", flare: true })).length, 2, "both problems are listed");
-  assert.deepEqual(errorsOf(withItem({ key: "k", state: "needs-decision", flare: "yes" })), ["items[0].flare: must be true when set"]);
+  assert.equal(errorsOf(withItem({ key: "k", state: "needs-code", candle: true })).length, 1);
+  assert.equal(errorsOf(withItem({ state: "open", candle: true })).length, 2, "both problems are listed");
+  assert.deepEqual(errorsOf(withItem({ key: "k", state: "needs-decision", candle: "yes" })), ["items[0].candle: must be true when set"]);
 });

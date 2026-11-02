@@ -1,5 +1,5 @@
 /**
- * The email channel of flare notices (docs/concept.md, "Flares"). One POST of
+ * The email channel of candle notices (docs/concept.md, "Candles"). One POST of
  * JSON over `fetch` to an HTTP mail API, so no runtime dependency and no SMTP.
  *
  * SETTINGS. Per host, in `<config>/email.json`, read here and nowhere else:
@@ -49,7 +49,7 @@ export interface EmailSettings {
   to: string[];
   /** The address of the web app. With it, a notice carries a link. */
   web_url?: string;
-  /** Lines before this time are history, so setup does not email old flares. */
+  /** Lines before this time are history, so setup does not email old candles. */
   since: string;
 }
 

@@ -377,7 +377,7 @@ function approveFlags(args: ParsedArgs): number[] {
  * Right after the run starts, stderr gets one line, `darius run follow-up:
  * started run <id> on <host>`: the web page waits for it (src/web/action-api.ts).
  *
- * `hooks` serve a verb that starts a follow-up for its own reason (`flare
+ * `hooks` serve a verb that starts a follow-up for its own reason (`candle
  * answer --follow-up`, 0.107.0): `onStarted` runs right after that line,
  * before the run works, and `print` takes the report instead of stdout.
  */

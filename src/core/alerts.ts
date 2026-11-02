@@ -24,21 +24,21 @@
  * after a sync. When the watcher changes, the new one may repeat one notice
  * that day, which is accepted. A host in state `silent` or `off` gets none.
  *
- * FLARES (src/core/flare-index.ts). A ledger line that opens or raises
- * flares gives one notice per channel, not one per flare: a run result may
+ * CANDLES (src/core/candle-index.ts). A ledger line that opens or raises
+ * candles gives one notice per channel, not one per candle: a run result may
  * hold a hundred. The key is `line:<line id>:<channel>`, and the notice names
- * one flare or counts several. Only the host that wrote the line sends, as
- * above. The channels come from the line (`flare.lit` `deliver`) or, for a
- * run, from the ritual's `flare_deliver`, read from the store when the alert
+ * one candle or counts several. Only the host that wrote the line sends, as
+ * above. The channels come from the line (`candle.lit` `deliver`) or, for a
+ * run, from the ritual's `candle_deliver`, read from the store when the alert
  * is built; the default is push. Each channel has its own readiness check
- * (`CHANNELS`), so a channel does not depend on push keys. A flare notice on
+ * (`CHANNELS`), so a channel does not depend on push keys. A candle notice on
  * a channel that is not set up on this host would be lost with no trace, so
  * it writes `alert.failed` with the reason "not set up on host". That line is a
  * trace and not a try: it does not count toward MAX_TRIES, and it is written
  * once per key and reason, not once per flush. A line older than the `since`
  * of its channel is history and sends nothing, and nothing replays it later.
- * A notice that waited for a repair goes out only if a flare of its opening is
- * still lit; if all are answered, accepted or gone, it is dropped with no
+ * A notice that waited for a repair goes out only if a candle of its opening is
+ * still lit; if all are answered, accepted or out, it is dropped with no
  * line. Email (src/core/email.ts) has its own text, with less in it. A bad
  * `email.json` or `push.json` counts as not set up with the reason added, so
  * it cannot stop the flush.
@@ -47,7 +47,7 @@
  * resume`, and after `darius sync` (the sync timer, every 15 minutes), which
  * catches the lines a session writes by hand. A host without push keys sends
  * nothing on push. Lines from before the keys were made, or from before the
- * first device subscribed, are history, not news. `darius flare light` flushes
+ * first device subscribed, are history, not news. `darius candle light` flushes
  * its own project.
  */
 
@@ -57,7 +57,7 @@ import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { emailStatus, readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
-import { collectFlares, FLARE_LIT, flareOpenings, type FlareOpened, type FlareOpening } from "./flare-index.ts";
+import { collectCandles, CANDLE_LIT, candleOpenings, type CandleOpened, type CandleOpening } from "./candle-index.ts";
 import type { JsonValue, LedgerLine, Ritual } from "./model.ts";
 import { projectDir } from "./paths.ts";
 import { activeDevices, broadcast, pushKeysProblem, readPushKeys, type Notice } from "./push.ts";
@@ -74,16 +74,16 @@ export type ChannelName = "push" | "email";
 /** In the order the passes run. */
 export const CHANNELS: readonly ChannelName[] = ["push", "email"];
 
-/** The channels of a flare that names none. */
+/** The channels of a candle that names none. */
 const DEFAULT_DELIVER: readonly ChannelName[] = ["push"];
 
-/** Why a flare notice was not sent on a channel this host has not set up. */
+/** Why a candle notice was not sent on a channel this host has not set up. */
 export const NOT_SET_UP = "not set up on host";
 
 /** One notice to send, with the key that keeps it from going out twice. */
 export interface Alert extends Notice {
   key: string;
-  /** The channel it goes on. Absent means push. Every flare notice names it. */
+  /** The channel it goes on. Absent means push. Every candle notice names it. */
   channel?: ChannelName;
 }
 
@@ -101,12 +101,12 @@ function knownChannels(list: JsonValue | undefined): ChannelName[] | undefined {
   return CHANNELS.filter((channel) => list.includes(channel));
 }
 
-function flareKey(lineId: string, channel: ChannelName): string {
+function candleKey(lineId: string, channel: ChannelName): string {
   return `line:${lineId}:${channel}`;
 }
 
-/** True for the key of a flare notice, `line:<id>:<channel>`. No other alert key has that shape. */
-function isFlareKey(key: string): boolean {
+/** True for the key of a candle notice, `line:<id>:<channel>`. No other alert key has that shape. */
+function isCandleKey(key: string): boolean {
   return /^line:[^:]+:(push|email)$/u.test(key);
 }
 
@@ -250,81 +250,81 @@ export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], si
   return alerts;
 }
 
-// --- flare notices ------------------------------------------------------------------
+// --- candle notices ------------------------------------------------------------------
 
-/** Most flares a notice lists by name; the rest is a count. */
-const FLARE_LIST_MAX = 3;
+/** Most candles a notice lists by name; the rest is a count. */
+const CANDLE_LIST_MAX = 3;
 
-function flarePath(project: string, key?: string): string {
-  const base = `/w/${encodeURIComponent(project)}/flares`;
+function candlePath(project: string, key?: string): string {
+  const base = `/w/${encodeURIComponent(project)}/candles`;
   return key === undefined ? base : `${base}/${encodeURIComponent(key)}`;
 }
 
-function oneFlareNotice(project: string, flare: FlareOpened): Pick<Alert, "title" | "body" | "url"> {
-  const what = flare.kind === "raised" ? `Flare raised to ${flare.severity}` : `Flare lit, ${flare.severity}`;
-  const where = flare.target === undefined ? "needs you." : oneLine(flare.target);
-  return { title: `${what}: ${oneLine(flare.title)}`, body: `${project}: ${where}`, url: flarePath(project, flare.key) };
+function oneCandleNotice(project: string, candle: CandleOpened): Pick<Alert, "title" | "body" | "url"> {
+  const what = candle.kind === "raised" ? `Candle raised to ${candle.severity}` : `Candle lit, ${candle.severity}`;
+  const where = candle.target === undefined ? "needs you." : oneLine(candle.target);
+  return { title: `${what}: ${oneLine(candle.title)}`, body: `${project}: ${where}`, url: candlePath(project, candle.key) };
 }
 
-function manyFlaresNotice(project: string, flares: readonly FlareOpened[]): Pick<Alert, "title" | "body" | "url"> {
-  const named = flares.slice(0, FLARE_LIST_MAX).map((flare, index) => `${String(index + 1)}. ${flare.severity}: ${oneLine(flare.title)}`);
-  const more = flares.length > FLARE_LIST_MAX ? [`and ${String(flares.length - FLARE_LIST_MAX)} more`] : [];
-  const ritual = flares[0]?.ritual ?? project;
-  return { title: `${String(flares.length)} flares in ${ritual}`, body: [`${project}:`, ...named, ...more].join("\n"), url: flarePath(project) };
+function manyCandlesNotice(project: string, candles: readonly CandleOpened[]): Pick<Alert, "title" | "body" | "url"> {
+  const named = candles.slice(0, CANDLE_LIST_MAX).map((candle, index) => `${String(index + 1)}. ${candle.severity}: ${oneLine(candle.title)}`);
+  const more = candles.length > CANDLE_LIST_MAX ? [`and ${String(candles.length - CANDLE_LIST_MAX)} more`] : [];
+  const ritual = candles[0]?.ritual ?? project;
+  return { title: `${String(candles.length)} candles in ${ritual}`, body: [`${project}:`, ...named, ...more].join("\n"), url: candlePath(project) };
 }
 
 /** An email: a third party stores it, so it carries the least. src/core/email.ts adds the link and redacts each line. */
-function oneFlareEmail(project: string, flare: FlareOpened): Pick<Alert, "title" | "body" | "url"> {
-  const severity = flare.kind === "raised" ? `${flare.severity}, raised` : flare.severity;
-  const target = flare.target === undefined ? [] : [`Target: ${oneLine(flare.target)}`];
-  return { title: `flare: ${oneLine(flare.title)}`, body: [`Severity: ${severity}`, `Project: ${project}`, ...target].join("\n"), url: flarePath(project, flare.key) };
+function oneCandleEmail(project: string, candle: CandleOpened): Pick<Alert, "title" | "body" | "url"> {
+  const severity = candle.kind === "raised" ? `${candle.severity}, raised` : candle.severity;
+  const target = candle.target === undefined ? [] : [`Target: ${oneLine(candle.target)}`];
+  return { title: `candle: ${oneLine(candle.title)}`, body: [`Severity: ${severity}`, `Project: ${project}`, ...target].join("\n"), url: candlePath(project, candle.key) };
 }
 
-function manyFlaresEmail(project: string, flares: readonly FlareOpened[]): Pick<Alert, "title" | "body" | "url"> {
-  const named = flares.slice(0, FLARE_LIST_MAX).map((flare, index) => {
-    const target = flare.target === undefined ? "" : `, ${oneLine(flare.target)}`;
-    return `${String(index + 1)}. ${flare.severity}: ${oneLine(flare.title)}${target}`;
+function manyCandlesEmail(project: string, candles: readonly CandleOpened[]): Pick<Alert, "title" | "body" | "url"> {
+  const named = candles.slice(0, CANDLE_LIST_MAX).map((candle, index) => {
+    const target = candle.target === undefined ? "" : `, ${oneLine(candle.target)}`;
+    return `${String(index + 1)}. ${candle.severity}: ${oneLine(candle.title)}${target}`;
   });
-  const more = flares.length > FLARE_LIST_MAX ? [`and ${String(flares.length - FLARE_LIST_MAX)} more`] : [];
-  const ritual = flares[0]?.ritual ?? project;
-  return { title: `${String(flares.length)} flares in ${ritual}`, body: [`Project: ${project}`, ...named, ...more].join("\n"), url: flarePath(project) };
+  const more = candles.length > CANDLE_LIST_MAX ? [`and ${String(candles.length - CANDLE_LIST_MAX)} more`] : [];
+  const ritual = candles[0]?.ritual ?? project;
+  return { title: `${String(candles.length)} candles in ${ritual}`, body: [`Project: ${project}`, ...named, ...more].join("\n"), url: candlePath(project) };
 }
 
 /** How a channel words a notice. */
-interface FlareWording {
-  one: typeof oneFlareNotice;
-  many: typeof manyFlaresNotice;
+interface CandleWording {
+  one: typeof oneCandleNotice;
+  many: typeof manyCandlesNotice;
 }
 
-const FLARE_WORDING = {
-  push: { one: oneFlareNotice, many: manyFlaresNotice },
-  email: { one: oneFlareEmail, many: manyFlaresEmail },
-} satisfies Record<ChannelName, FlareWording>;
+const CANDLE_WORDING = {
+  push: { one: oneCandleNotice, many: manyCandlesNotice },
+  email: { one: oneCandleEmail, many: manyCandlesEmail },
+} satisfies Record<ChannelName, CandleWording>;
 
-/** The notice of one line for one channel: short plain text, with no flare body and no detail. */
-function flareNotice(project: string, opening: FlareOpening, channel: ChannelName): Alert {
-  const key = flareKey(opening.line.id, channel);
-  const [only] = opening.flares;
-  const { one, many } = FLARE_WORDING[channel];
-  const text = opening.flares.length === 1 && only !== undefined ? one(project, only) : many(project, opening.flares);
+/** The notice of one line for one channel: short plain text, with no candle body and no detail. */
+function candleNotice(project: string, opening: CandleOpening, channel: ChannelName): Alert {
+  const key = candleKey(opening.line.id, channel);
+  const [only] = opening.candles;
+  const { one, many } = CANDLE_WORDING[channel];
+  const text = opening.candles.length === 1 && only !== undefined ? one(project, only) : many(project, opening.candles);
   return { key, tag: key, channel, ...text };
 }
 
-/** The channels a line delivers on: the `deliver` of a `flare.lit` line, else the ritual's `flare_deliver`, else push. */
-function flareChannels(project: Project, opening: FlareOpening): readonly ChannelName[] {
+/** The channels a line delivers on: the `deliver` of a `candle.lit` line, else the ritual's `candle_deliver`, else push. */
+function candleChannels(project: Project, opening: CandleOpening): readonly ChannelName[] {
   const { line } = opening;
-  if (line.type === FLARE_LIT) return knownChannels(line.deliver) ?? DEFAULT_DELIVER;
-  const slug = opening.flares[0]?.ritual;
+  if (line.type === CANDLE_LIT) return knownChannels(line.deliver) ?? DEFAULT_DELIVER;
+  const slug = opening.candles[0]?.ritual;
   if (slug === undefined) return DEFAULT_DELIVER;
   try {
-    return knownChannels(project.readItem<Ritual>("ritual", slug)?.header.flare_deliver) ?? DEFAULT_DELIVER;
+    return knownChannels(project.readItem<Ritual>("ritual", slug)?.header.candle_deliver) ?? DEFAULT_DELIVER;
   } catch {
     // One unreadable ritual item must not stop the flush of every other alert. The default still tells the operator.
     return DEFAULT_DELIVER;
   }
 }
 
-export interface FlareAlertOptions {
+export interface CandleAlertOptions {
   /** This host: only the lines it wrote send. */
   host: string;
   /** Per channel, the earliest time that counts. Absent: the channel is not set up here, so every line counts and gets its trace. */
@@ -332,28 +332,28 @@ export interface FlareAlertOptions {
 }
 
 /**
- * The flare notices this host must send from `ledger`: for each line that
- * this host wrote and that opened or raised flares, one notice per channel it
+ * The candle notices this host must send from `ledger`: for each line that
+ * this host wrote and that opened or raised candles, one notice per channel it
  * delivers on. The walk reads the whole ledger, so state from other hosts'
  * lines counts, but another host's line sends nothing here.
  */
-export function flareAlerts(project: Project, ledger: readonly LedgerLine[], options: FlareAlertOptions): Alert[] {
+export function candleAlerts(project: Project, ledger: readonly LedgerLine[], options: CandleAlertOptions): Alert[] {
   if (project.name === GLOBAL_PROJECT) return [];
-  const mine = ledger.some((line) => line.host === options.host && (line.type === FLARE_LIT || line.type === "run.completed"));
+  const mine = ledger.some((line) => line.host === options.host && (line.type === CANDLE_LIT || line.type === "run.completed"));
   if (!mine) return [];
   const alerts: Alert[] = [];
-  for (const opening of flareOpenings(project, ledger)) {
+  for (const opening of candleOpenings(project, ledger)) {
     if (opening.line.host !== options.host) continue;
-    for (const channel of flareChannels(project, opening)) {
+    for (const channel of candleChannels(project, opening)) {
       const since = options.since[channel];
       if (since !== undefined && opening.line.at < since) continue;
-      alerts.push(flareNotice(project.name, opening, channel));
+      alerts.push(candleNotice(project.name, opening, channel));
     }
   }
   return alerts;
 }
 
-/** How one channel took the newest notice of a flare. */
+/** How one channel took the newest notice of a candle. */
 export interface ChannelDelivery {
   channel: ChannelName;
   /** `waiting`: the ledger holds neither `alert.sent` nor `alert.failed` for the notice. */
@@ -383,15 +383,15 @@ function deliveryOf(ledger: readonly LedgerLine[], key: string, channel: Channel
 }
 
 /**
- * Where the newest notice of a flare stands, one entry per channel it names
- * (the web app's flare page). The newest notice is the one of the newest line
- * that opened or raised the flare. A flare that delivers to the app only has
+ * Where the newest notice of a candle stands, one entry per channel it names
+ * (the web app's candle page). The newest notice is the one of the newest line
+ * that opened or raised the candle. A candle that delivers to the app only has
  * no channel, so the list is empty. Reads the ledger and writes nothing.
  */
-export function flareDelivery(project: Project, ledger: readonly LedgerLine[], key: string): ChannelDelivery[] {
-  const opening = flareOpenings(project, ledger).findLast((one) => one.flares.some((flare) => flare.key === key));
+export function candleDelivery(project: Project, ledger: readonly LedgerLine[], key: string): ChannelDelivery[] {
+  const opening = candleOpenings(project, ledger).findLast((one) => one.candles.some((candle) => candle.key === key));
   if (opening === undefined) return [];
-  return flareChannels(project, opening).map((channel) => deliveryOf(ledger, flareKey(opening.line.id, channel), channel));
+  return candleChannels(project, opening).map((channel) => deliveryOf(ledger, candleKey(opening.line.id, channel), channel));
 }
 
 // --- sending ------------------------------------------------------------------------
@@ -460,7 +460,7 @@ interface OpenChannel {
   send(alert: Alert): Promise<Outcome>;
 }
 
-/** A channel as this host has it: open, or closed with the reason a flare notice records. */
+/** A channel as this host has it: open, or closed with the reason a candle notice records. */
 interface Opening {
   channel: OpenChannel | null;
   reason: string;
@@ -520,7 +520,7 @@ function openEmail(): Opening {
 interface Channels {
   push: OpenChannel | null;
   email: OpenChannel | null;
-  /** What a flare notice records on a closed channel. */
+  /** What a candle notice records on a closed channel. */
   closedReason: Readonly<Record<ChannelName, string>>;
 }
 
@@ -547,32 +547,32 @@ function isHistoryOnEmail(retry: Alert, state: SendState, email: OpenChannel | n
   return (state.lastFailed.get(retry.key) ?? "") < email.since;
 }
 
-/** The id of the ledger line a flare key stands for, `line:<id>:<channel>`. */
-function lineIdOfFlareKey(key: string): string | undefined {
+/** The id of the ledger line a candle key stands for, `line:<id>:<channel>`. */
+function lineIdOfCandleKey(key: string): string | undefined {
   return /^line:([^:]+):(?:push|email)$/u.exec(key)?.[1];
 }
 
 /**
- * Tells whether a flare notice is still worth sending: a flare of its opening
- * is lit. A flare that was answered, accepted or cleared since is settled, and
+ * Tells whether a candle notice is still worth sending: a candle of its opening
+ * is lit. A candle that was answered, accepted or blown out since is settled, and
  * the operator needs no word about it. The walk runs on the first question
- * only, so a flush without a flare notice pays nothing. An opening this
+ * only, so a flush without a candle notice pays nothing. An opening this
  * darius cannot find counts as open: it sends, as before.
  */
-function openFlareCheck(project: Project, ledger: readonly LedgerLine[]): (key: string) => boolean {
-  let known: { status: Map<string, string>; openings: Map<string, FlareOpening> } | undefined;
+function openCandleCheck(project: Project, ledger: readonly LedgerLine[]): (key: string) => boolean {
+  let known: { status: Map<string, string>; openings: Map<string, CandleOpening> } | undefined;
   const load = (): NonNullable<typeof known> => {
     known ??= {
-      status: new Map(collectFlares(project, ledger).map((flare) => [flare.key, flare.status])),
-      openings: new Map(flareOpenings(project, ledger).map((opening) => [opening.line.id, opening])),
+      status: new Map(collectCandles(project, ledger).map((candle) => [candle.key, candle.status])),
+      openings: new Map(candleOpenings(project, ledger).map((opening) => [opening.line.id, opening])),
     };
     return known;
   };
   return (key) => {
-    const id = lineIdOfFlareKey(key);
+    const id = lineIdOfCandleKey(key);
     const opening = id === undefined ? undefined : load().openings.get(id);
     if (opening === undefined) return true;
-    return opening.flares.some((flare) => load().status.get(flare.key) === "lit");
+    return opening.candles.some((candle) => load().status.get(candle.key) === "lit");
   };
 }
 
@@ -589,7 +589,7 @@ async function sendOn(channel: OpenChannel, alert: Alert): Promise<Outcome> {
   }
 }
 
-/** The trace of a flare notice on a closed channel: once per key and reason, never a try. */
+/** The trace of a candle notice on a closed channel: once per key and reason, never a try. */
 function trace(project: Project, alert: Alert, reason: string, state: SendState, delivery: Delivery): void {
   if (state.traces.get(alert.key) === reason) return;
   appendLine(project, failedLine(alert, reason));
@@ -601,34 +601,34 @@ function trace(project: Project, alert: Alert, reason: string, state: SendState,
  * Sends each alert not sent yet on its channel to every recipient, and
  * records the outcome in the project ledger. Alerts that failed before go
  * again with their stored notice and channel, even when nothing rebuilds them
- * (a skip). One pass per channel, each with its own readiness check. A flare
+ * (a skip). One pass per channel, each with its own readiness check. A candle
  * notice on a channel this host has not set up writes one `alert.failed` trace
  * with the reason "not set up on host" per key and reason; a trace is not a
- * try. Any other alert on such a channel stays silent. A flare notice whose
- * flares are all settled is not sent and leaves no line. A dry run sends and
+ * try. Any other alert on such a channel stays silent. A candle notice whose
+ * candles are all settled is not sent and leaves no line. A dry run sends and
  * records nothing. Null when this host sends nothing, records nothing and has
- * no flare notice to trace.
+ * no candle notice to trace.
  */
 export async function sendAlerts(project: Project, alerts: readonly Alert[], options: { isDryRun?: boolean } = {}): Promise<Delivery | null> {
   const channels = openChannels();
   const ledger = readLedger(project);
   const state = sendState(ledger);
-  const isOpen = openFlareCheck(project, ledger);
+  const isOpen = openCandleCheck(project, ledger);
   const retries = [...state.retries.values()].filter((retry) => !alerts.some((alert) => alert.key === retry.key) && !isHistoryOnEmail(retry, state, channels.email));
   const queue = [...alerts, ...retries];
-  if (channels.push === null && !queue.some((alert) => isFlareKey(alert.key))) return null;
+  if (channels.push === null && !queue.some((alert) => isCandleKey(alert.key))) return null;
   const delivery = emptyDelivery();
   for (const name of CHANNELS) {
     const channel = channels[name];
     for (const alert of queue) {
       if (channelOf(alert) !== name || state.sent.has(alert.key) || (state.tries.get(alert.key) ?? 0) >= MAX_TRIES) continue;
-      if (isFlareKey(alert.key) && !isOpen(alert.key)) continue;
+      if (isCandleKey(alert.key) && !isOpen(alert.key)) continue;
       if (options.isDryRun === true) {
         if (channel !== null) delivery.pending.push(alert);
         continue;
       }
       if (channel === null) {
-        if (isFlareKey(alert.key)) trace(project, alert, channels.closedReason[name], state, delivery);
+        if (isCandleKey(alert.key)) trace(project, alert, channels.closedReason[name], state, delivery);
         continue;
       }
       const outcome = await sendOn(channel, alert);
@@ -648,7 +648,7 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
 
 /**
  * An alert that waited longer than this for a closed channel is stale news.
- * After a repair, the old lines stay silent, so there is no burst. A flare
+ * After a repair, the old lines stay silent, so there is no burst. A candle
  * notice is not held to this: it is still open until someone settles it.
  */
 const WAITED_MAX_MS = 24 * 3_600_000;
@@ -661,7 +661,7 @@ function newsFloor(since: string, now: number): string {
 
 /**
  * Sends what the ledgers of this host hold and nobody was told yet. Null when
- * this host cannot send on push and has no flare notice to trace. A project
+ * this host cannot send on push and has no candle notice to trace. A project
  * that throws is one entry in `failed`, and the others still go.
  */
 export async function flushAlerts(options: { isDryRun?: boolean; projects?: readonly string[]; now?: number } = {}): Promise<Delivery | null> {
@@ -679,7 +679,7 @@ export async function flushAlerts(options: { isDryRun?: boolean; projects?: read
       const project = openProject(name);
       const ledger = readLedger(project);
       const news = channels.push === null ? [] : ledgerAlerts(project, ledger, newsFloor(channels.push.since, now), host, now);
-      const delivery = await sendAlerts(project, [...news, ...flareAlerts(project, ledger, { host, since })], options);
+      const delivery = await sendAlerts(project, [...news, ...candleAlerts(project, ledger, { host, since })], options);
       if (delivery === null) continue;
       isActive = true;
       total.sent += delivery.sent;
@@ -694,21 +694,21 @@ export async function flushAlerts(options: { isDryRun?: boolean; projects?: read
 }
 
 /**
- * How many lit flares asked for email and have no `alert.sent` on it, across
- * the projects of the local store. `darius email set` says it, because a flare
+ * How many lit candles asked for email and have no `alert.sent` on it, across
+ * the projects of the local store. `darius email set` says it, because a candle
  * from before `since`, or one that never had a closed channel's notice, stays
  * in the app only. Reads the ledgers and writes nothing. A project that does
  * not read counts as none.
  */
-export function unsentEmailFlares(): number {
+export function unsentEmailCandles(): number {
   let count = 0;
   for (const name of listProjects()) {
     try {
       const project = openProject(name);
       const ledger = readLedger(project);
-      for (const flare of collectFlares(project, ledger)) {
-        if (flare.status !== "lit") continue;
-        const email = flareDelivery(project, ledger, flare.key).find((one) => one.channel === "email");
+      for (const candle of collectCandles(project, ledger)) {
+        if (candle.status !== "lit") continue;
+        const email = candleDelivery(project, ledger, candle.key).find((one) => one.channel === "email");
         if (email !== undefined && email.state !== "sent") count += 1;
       }
     } catch {

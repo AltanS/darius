@@ -29,12 +29,12 @@ interface SectionSpec {
 
 const NO_BADGE: SectionSpec["badge"] = () => ({ count: 0, tone: "wait", text: "" });
 
-/** The five sections that are tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late, the badge of Flares those lit. */
+/** The five sections that are tabs, in order. The badge of Vigils counts those due today or late, the badge of Rituals those late, the badge of Candles those lit. */
 export const TAB_SECTIONS: readonly SectionSpec[] = [
   { section: "vigils", label: "Vigils", badge: (tabs) => ({ count: tabs.vigils, tone: "wait", text: "due today or late" }) },
   { section: "rituals", label: "Rituals", badge: (tabs) => ({ count: tabs.rituals, tone: "late", text: "late" }) },
   { section: "findings", label: "Findings", badge: (tabs) => ({ count: tabs.findings, tone: "wait", text: "need you" }) },
-  { section: "flares", label: "Flares", badge: (tabs) => ({ count: tabs.flares, tone: "wait", text: "lit" }) },
+  { section: "candles", label: "Candles", badge: (tabs) => ({ count: tabs.candles, tone: "wait", text: "lit" }) },
   { section: "milestones", label: "Milestones", badge: NO_BADGE },
 ];
 
@@ -53,7 +53,7 @@ interface SectionIconProps {
 export function SectionIcon({ section, size }: SectionIconProps): React.ReactNode {
   if (section === "milestones") return <NavIcon name="milestone" size={size} className="tab-ico" />;
   if (section === "findings") return <NavIcon name="finding" size={size} className="tab-ico" />;
-  if (section === "flares") return <NavIcon name="flame" size={size} className="tab-ico" />;
+  if (section === "candles") return <NavIcon name="candle" size={size} className="tab-ico" />;
   if (section === "runs") return <NavIcon name="run" size={size} className="tab-ico" />;
   if (section === "activity") return <NavIcon name="activity" size={size} className="tab-ico" />;
   return <KindIcon kind={section === "vigils" ? "vigil" : "ritual"} size={size} className="tab-ico" />;

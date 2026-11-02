@@ -280,7 +280,7 @@ export function withFileLock<R>(lockPath: string, fn: () => R, timing: LockTimin
 const RITUAL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "cadence", "anchor",
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
-  "source", "at", "tz", "from", "args", "timeout", "follow_up", "flare_deliver", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
+  "source", "at", "tz", "from", "args", "timeout", "follow_up", "candle_deliver", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
 const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "follow_up_may", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
@@ -289,7 +289,7 @@ const PROFILE_KEYS: readonly string[] = [
 ];
 const VIGIL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "from", "due", "until",
-  "gate_command", "heavy", "agent", "tags", "imported_from", "flare", "flare_deliver",
+  "gate_command", "heavy", "agent", "tags", "imported_from", "candle", "candle_deliver",
 ];
 
 function isScalar(value: FrontmatterValue): value is FrontmatterScalar {
@@ -448,13 +448,13 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
     if (followUp !== "headless") throw new Error(`${where}: 'follow_up' must be headless or attended, got '${followUp}'`);
     ritual.follow_up = followUp;
   }
-  const flareDeliver = reader.optionalList("flare_deliver");
-  if (flareDeliver !== undefined) ritual.flare_deliver = flareDeliver;
+  const candleDeliver = reader.optionalList("candle_deliver");
+  if (candleDeliver !== undefined) ritual.candle_deliver = candleDeliver;
 }
 
-function toFlareSeverity(value: string, where: string): Severity {
+function toCandleSeverity(value: string, where: string): Severity {
   const severity = SEVERITIES.find((candidate) => candidate === value);
-  if (severity === undefined) throw new Error(`${where}: 'flare' must be one of ${SEVERITIES.join(", ")}, got '${value}'`);
+  if (severity === undefined) throw new Error(`${where}: 'candle' must be one of ${SEVERITIES.join(", ")}, got '${value}'`);
   return severity;
 }
 
@@ -475,10 +475,10 @@ function decodeVigil(reader: FieldReader): Vigil {
     const value = reader.optionalString(key);
     if (value !== undefined) vigil[key] = value;
   }
-  const flare = reader.optionalString("flare");
-  if (flare !== undefined) vigil.flare = toFlareSeverity(flare, `vigil '${vigil.slug}'`);
-  const flareDeliver = reader.optionalList("flare_deliver");
-  if (flareDeliver !== undefined) vigil.flare_deliver = flareDeliver;
+  const candle = reader.optionalString("candle");
+  if (candle !== undefined) vigil.candle = toCandleSeverity(candle, `vigil '${vigil.slug}'`);
+  const candleDeliver = reader.optionalList("candle_deliver");
+  if (candleDeliver !== undefined) vigil.candle_deliver = candleDeliver;
   return vigil;
 }
 
@@ -568,7 +568,7 @@ function encodeHeader(item: Item): FrontmatterHeader {
     putIfSet(entries, "host", item.host);
     putIfSet(entries, "source", item.source);
     for (const key of ["at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
-    if (item.flare_deliver !== undefined) entries.flare_deliver = [...item.flare_deliver];
+    if (item.candle_deliver !== undefined) entries.candle_deliver = [...item.candle_deliver];
     putIfSet(entries, "def_dirty", item.def_dirty === undefined ? undefined : String(item.def_dirty));
     putIfSet(entries, "def_host", item.def_host);
     putIfSet(entries, "def_at", item.def_at);
@@ -594,8 +594,8 @@ function encodeHeader(item: Item): FrontmatterHeader {
   putIfSet(entries, "agent", item.agent);
   entries.tags = [...item.tags];
   putIfSet(entries, "imported_from", item.imported_from);
-  putIfSet(entries, "flare", item.flare);
-  if (item.flare_deliver !== undefined) entries.flare_deliver = [...item.flare_deliver];
+  putIfSet(entries, "candle", item.candle);
+  if (item.candle_deliver !== undefined) entries.candle_deliver = [...item.candle_deliver];
   return entries;
 }
 

@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, FlareDetail, FlareRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingPollEntry, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, CandleDetail, CandleRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingPollEntry, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -120,7 +120,7 @@ const STATUS: HostStatus = {
       ],
       milestonesArchived: 3,
       findings: { needsYou: 2, open: 3 },
-      flares: { lit: 0 },
+      candles: { lit: 0 },
       error: null,
     },
   ],
@@ -350,8 +350,8 @@ const DONE_TRAIL: ActivityEntry[] = [
   { at: "2026-09-28T08:00:00.000Z", who: "timer", actor: "timer", kind: "run-started", item: { type: "run", id: DONE, title: "Daily report" }, run: DONE, text: "Run started by timer", links: { ritual: "daily-report", run: DONE }, tone: "run" },
 ];
 
-/** A flare of the fake host: every text that comes from outside holds markup, which must stay text. */
-function flareRow(key: string, extra: Partial<FlareRow> = {}): FlareRow {
+/** A candle of the fake host: every text that comes from outside holds markup, which must stay text. */
+function candleRow(key: string, extra: Partial<CandleRow> = {}): CandleRow {
   return {
     project: "demo",
     key,
@@ -368,25 +368,25 @@ function flareRow(key: string, extra: Partial<FlareRow> = {}): FlareRow {
   };
 }
 
-const FLARES: FlareRow[] = [
-  flareRow(`tls ${EVIL}`, { title: `Certificate ${EVIL} expires`, target: `shop ${EVIL}`, source: "ritual:daily-report", ritual: "daily-report", run: DONE, bodySha: "body", deliver: ["push", "email"] }),
-  flareRow("vigil:soak", { title: "Guard soak", severity: "medium", source: "vigil:soak", reports: 1 }),
-  flareRow("nightly-audit", { title: "Nightly audit found a leak", severity: "critical", reports: 9 }),
-  flareRow("answered-one", { status: "answered", stillReported: true, answered: { at: "2026-09-28T07:00:00.000Z", who: "web:op", note: `fix ${EVIL}`, severity: "high" } }),
-  flareRow("accepted-one", { status: "accepted", severity: "low", accepted: { at: "2026-09-28T07:00:00.000Z", who: "web:op", severity: "low", note: "known" } }),
-  flareRow("gone-one", { status: "gone", severity: "info" }),
+const CANDLES: CandleRow[] = [
+  candleRow(`tls ${EVIL}`, { title: `Certificate ${EVIL} expires`, target: `shop ${EVIL}`, source: "ritual:daily-report", ritual: "daily-report", run: DONE, bodySha: "body", deliver: ["push", "email"] }),
+  candleRow("vigil:soak", { title: "Guard soak", severity: "medium", source: "vigil:soak", reports: 1 }),
+  candleRow("nightly-audit", { title: "Nightly audit found a leak", severity: "critical", reports: 9 }),
+  candleRow("answered-one", { status: "answered", stillReported: true, answered: { at: "2026-09-28T07:00:00.000Z", who: "web:op", note: `fix ${EVIL}`, severity: "high" } }),
+  candleRow("accepted-one", { status: "accepted", severity: "low", accepted: { at: "2026-09-28T07:00:00.000Z", who: "web:op", severity: "low", note: "known" } }),
+  candleRow("out-one", { status: "out", severity: "info" }),
 ];
 
-const FLARE_BODY = `The report says **bad** ${EVIL}`;
+const CANDLE_BODY = `The report says **bad** ${EVIL}`;
 
-/** The detail of a fake flare: the row, its body parsed to one paragraph, and its delivery. */
-function flareDetailOf(project: string, key: string): FlareDetail | null {
-  const row = project === "demo" ? FLARES.find((candidate) => candidate.key === key) : undefined;
+/** The detail of a fake candle: the row, its body parsed to one paragraph, and its delivery. */
+function candleDetailOf(project: string, key: string): CandleDetail | null {
+  const row = project === "demo" ? CANDLES.find((candidate) => candidate.key === key) : undefined;
   if (row === undefined) return null;
   const hasBody = row.bodySha !== undefined;
   return {
     row,
-    body: hasBody ? FLARE_BODY : null,
+    body: hasBody ? CANDLE_BODY : null,
     blocks: hasBody ? [{ kind: "paragraph", lines: [[{ kind: "text", text: "The report says " }, { kind: "bold", text: "bad" }, { kind: "text", text: ` ${EVIL}` }]] }] : null,
     delivery: row.deliver === undefined ? [] : [{ channel: "push", state: "sent", host: "host-a", at: "2026-09-28T08:00:05.000Z", tries: 0 }, { channel: "email", state: "failed", host: "host-b", at: "2026-09-28T08:00:06.000Z", tries: 1, reason: "not set up on host" }],
   };
@@ -406,8 +406,8 @@ const context: WebContext = {
   system: () => SYSTEM,
   backups: () => BACKUPS,
   findings: () => Promise.resolve(FINDINGS),
-  flares: () => Promise.resolve(FLARES),
-  flare: (project, key) => flareDetailOf(project, key),
+  candles: () => Promise.resolve(CANDLES),
+  candle: (project, key) => candleDetailOf(project, key),
   emailSetUp: () => true,
   emailProblem: () => null,
   activity: (_project, options) => (options?.run === DONE ? DONE_TRAIL : []),
@@ -1804,19 +1804,19 @@ function hrefsOf(html: string): string[] {
   return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => match[1] ?? "");
 }
 
-test("the frame: a drawer button naming the scope, Places, and six tabs: Overview, Vigils, Rituals, Findings, Flares, Milestones", async () => {
+test("the frame: a drawer button naming the scope, Places, and six tabs: Overview, Vigils, Rituals, Findings, Candles, Milestones", async () => {
   const { body } = await readWith("/w/demo", {}, lateStatus());
   assert.match(body, /<details data-menu="true" class="drawer"><summary class="topbar">.*?<span class="topbar-cap">Workspace<\/span><span class="topbar-now">demo<\/span>/u, "the top bar is the drawer button");
   assert.equal(body.includes("Sections"), false, "no section tabs under a top bar any more");
   assert.equal(body.includes("<footer"), false, "no footer");
   assert.equal(body.includes('class="gear'), false, "no gear in a bar");
   const tabs = navOf(body, "Tabs");
-  assert.deepEqual(hrefsOf(tabs), ["/w/demo", "/w/demo/vigils", "/w/demo/rituals", "/w/demo/findings", "/w/demo/flares", "/w/demo/milestones"], "the six tabs in order, no Runs");
+  assert.deepEqual(hrefsOf(tabs), ["/w/demo", "/w/demo/vigils", "/w/demo/rituals", "/w/demo/findings", "/w/demo/candles", "/w/demo/milestones"], "the six tabs in order, no Runs");
   assert.ok(linkTo(tabs, "/w/demo")?.includes('aria-current="page"'), "the Overview tab is lit on the Overview");
   assert.equal([...tabs.matchAll(/aria-current/gu)].length, 1, "one tab is lit");
   const all = await get("/milestones");
   const allTabs = navOf(all.body, "Tabs");
-  assert.deepEqual(hrefsOf(allTabs), ["/all", "/vigils", "/rituals", "/findings", "/flares", "/milestones"], "the tabs of all workspaces have plain addresses");
+  assert.deepEqual(hrefsOf(allTabs), ["/all", "/vigils", "/rituals", "/findings", "/candles", "/milestones"], "the tabs of all workspaces have plain addresses");
   assert.ok(linkTo(allTabs, "/milestones")?.includes('aria-current="page"'), "the Milestones tab is lit");
   // The badges: vigils due today or late, rituals late.
   const rituals = await readWith("/rituals", {}, lateStatus());
@@ -1840,7 +1840,7 @@ test("Places lists All workspaces and each workspace with what needs you; the sc
   const { body } = await readWith("/w/demo/rituals", {}, status);
   const places = navOf(body, "Places");
   const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Flares", "Milestones", "Runs", "Activity", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
   assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
   assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
   assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
@@ -1883,10 +1883,10 @@ test("a host page points the tabs and Places at the last scope: the cookie dariu
     return (await (await handler(new Request(`http://darius.test${path}`, { headers }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
   };
   const atlas = await read("/status", "atlas");
-  assert.deepEqual(hrefsOf(navOf(atlas, "Tabs")), ["/w/atlas", "/w/atlas/vigils", "/w/atlas/rituals", "/w/atlas/findings", "/w/atlas/flares", "/w/atlas/milestones"]);
+  assert.deepEqual(hrefsOf(navOf(atlas, "Tabs")), ["/w/atlas", "/w/atlas/vigils", "/w/atlas/rituals", "/w/atlas/findings", "/w/atlas/candles", "/w/atlas/milestones"]);
   assert.ok(scopeRow(navOf(atlas, "Places"), "/w/atlas")?.includes('aria-current="true"'), "the last scope is the marked one");
   assert.match(atlas, /<span class="topbar-cap">Host<\/span><span class="topbar-now">testhost<\/span>/u, "a host page names the host");
-  assert.deepEqual(hrefsOf(navOf(await read("/profiles", "*"), "Tabs")), ["/all", "/vigils", "/rituals", "/findings", "/flares", "/milestones"], "* is all workspaces");
+  assert.deepEqual(hrefsOf(navOf(await read("/profiles", "*"), "Tabs")), ["/all", "/vigils", "/rituals", "/findings", "/candles", "/milestones"], "* is all workspaces");
   const ghost = await read("/settings", "gone");
   assert.equal(hrefsOf(navOf(ghost, "Tabs"))[0], "/all", "a workspace this host lacks is ignored: no default, so all workspaces");
   const withDefault = await readWith("/status", { ws: "demo" }, status);
@@ -2690,61 +2690,61 @@ test("the old /runs?project= address still redirects and keeps the new filters",
   assert.equal(response.headers.get("location"), "/w/demo/runs?kind=follow-up&ack=open");
 });
 
-// --- the Flares place (0.112.0) ----------------------------------------------------------------
+// --- the Candles place (0.112.0) ----------------------------------------------------------------
 
 /** A page as plain text: the React comment marks are gone, the tags are gone. */
 function plainOf(body: string): string {
   return body.replaceAll("<!-- -->", "").replaceAll(/<script\b[\s\S]*?<\/script>/gu, " ").replaceAll(/<[^>]*>/gu, " ").replaceAll("&amp;", "&").replaceAll("&quot;", '"').replaceAll(/\s+/gu, " ");
 }
 
-async function flarePage(path: string, override: Partial<WebContext> = {}): Promise<{ status: number; body: string; text: string }> {
+async function candlePage(path: string, override: Partial<WebContext> = {}): Promise<{ status: number; body: string; text: string }> {
   const response = await handler(new Request(`http://darius.test${path}`), { ...context, ...override });
   const body = (await response.text()).replaceAll("<!-- -->", "");
   return { status: response.status, body, text: plainOf(body) };
 }
 
-/** The demo workspace with `lit` lit flares. */
+/** The demo workspace with `lit` lit candles. */
 function litStatus(lit: number): HostStatus {
   const [demo, ...rest] = STATUS.projects;
-  return { ...STATUS, projects: [{ ...demo!, flares: { lit } }, ...rest] };
+  return { ...STATUS, projects: [{ ...demo!, candles: { lit } }, ...rest] };
 }
 
-test("Flares list: the lit ones by default with severity, target, age and how often they were seen; the rest with ?view=all", async () => {
-  const lit = await flarePage("/flares");
+test("Candles list: the lit ones by default with severity, target, age and how often they were seen; the rest with ?view=all", async () => {
+  const lit = await candlePage("/candles");
   assert.equal(lit.status, 200);
-  assert.ok(lit.text.includes("The lit flares in every workspace, worst first."));
+  assert.ok(lit.text.includes("The lit candles in every workspace, worst first."));
   assert.ok(lit.text.includes("lit (3)") && lit.text.includes("all (6)"), "the two views carry their counts");
   assert.ok(lit.body.includes("Nightly audit found a leak") && lit.body.includes("Guard soak"));
   assert.ok(lit.body.includes("Certificate &lt;script&gt;alert(1)&lt;/script&gt; expires") && lit.body.includes("shop &lt;script&gt;alert(1)&lt;/script&gt;"), "title and target are text");
   assert.equal(lit.body.includes(EVIL), false, "no raw markup");
   assert.ok(lit.text.includes("seen 9 times") && lit.text.includes("seen 1 time"), "seen N times");
   assert.ok(lit.text.includes("first seen 27 Sep"), "the age");
-  assert.equal(lit.body.includes("Answered") || lit.body.includes("Gone"), false, "the closed ones wait behind the other view");
-  assert.ok(lit.body.includes(`href="/w/demo/flares/${encodeURIComponent("vigil:soak")}"`), "a row opens its flare, the key encoded");
-  assert.ok(lit.body.includes('href="/flares?view=all"'), "a plain way to see the rest");
-  const all = await flarePage("/flares?view=all");
-  assert.ok(all.text.includes("All flares in every workspace, the lit ones first."));
-  for (const word of ["Lit", "Answered", "Accepted", "Gone", "reported again"]) assert.ok(all.text.includes(word), word);
+  assert.equal(lit.body.includes("Answered") || lit.body.includes("Out"), false, "the closed ones wait behind the other view");
+  assert.ok(lit.body.includes(`href="/w/demo/candles/${encodeURIComponent("vigil:soak")}"`), "a row opens its candle, the key encoded");
+  assert.ok(lit.body.includes('href="/candles?view=all"'), "a plain way to see the rest");
+  const all = await candlePage("/candles?view=all");
+  assert.ok(all.text.includes("All candles in every workspace, the lit ones first."));
+  for (const word of ["Lit", "Answered", "Accepted", "Out", "reported again"]) assert.ok(all.text.includes(word), word);
   assert.ok(all.body.indexOf("Nightly audit found a leak") < all.body.indexOf("Title of answered-one"), "lit before answered");
-  const same = await flarePage("/flares?view=nonsense");
-  assert.ok(same.text.includes("The lit flares"), "an unknown view is the default one");
-  const one = await flarePage("/w/demo/flares");
-  assert.ok(one.text.includes("The lit flares in demo, worst first."));
+  const same = await candlePage("/candles?view=nonsense");
+  assert.ok(same.text.includes("The lit candles"), "an unknown view is the default one");
+  const one = await candlePage("/w/demo/candles");
+  assert.ok(one.text.includes("The lit candles in demo, worst first."));
 });
 
-test("Flares list: an empty page says so, and the severity is the chip a finding has", async () => {
-  const none = await flarePage("/flares", { flares: () => Promise.resolve([]) });
-  assert.ok(none.text.includes("No flare has been lit."));
-  const closed = await flarePage("/flares", { flares: () => Promise.resolve(FLARES.filter((row) => row.status !== "lit")) });
-  assert.ok(closed.text.includes("No flare is lit."), "closed ones exist, none is lit");
-  const lit = await flarePage("/flares");
+test("Candles list: an empty page says so, and the severity is the chip a finding has", async () => {
+  const none = await candlePage("/candles", { candles: () => Promise.resolve([]) });
+  assert.ok(none.text.includes("No candle has been lit."));
+  const closed = await candlePage("/candles", { candles: () => Promise.resolve(CANDLES.filter((row) => row.status !== "lit")) });
+  assert.ok(closed.text.includes("No candle is lit."), "closed ones exist, none is lit");
+  const lit = await candlePage("/candles");
   assert.match(lit.body, /<span class="chip-x c-bad">critical<\/span>/u, "critical is the bad tone, as in Findings");
   assert.match(lit.body, /<span class="chip-x c-late">high<\/span>/u);
   assert.match(lit.body, /<span class="chip-x c-gold">medium<\/span>/u);
 });
 
-test("Flare detail: text as text, the body, the source, the delivery per channel, the history, and the two buttons", async () => {
-  const page = await flarePage(`/w/demo/flares/${encodeURIComponent(`tls ${EVIL}`)}`);
+test("Candle detail: text as text, the body, the source, the delivery per channel, the history, and the two buttons", async () => {
+  const page = await candlePage(`/w/demo/candles/${encodeURIComponent(`tls ${EVIL}`)}`);
   assert.equal(page.status, 200);
   assert.equal(page.body.includes(EVIL), false, "no raw markup anywhere");
   assert.ok(page.body.includes("Certificate &lt;script&gt;alert(1)&lt;/script&gt; expires"));
@@ -2755,79 +2755,79 @@ test("Flare detail: text as text, the body, the source, the delivery per channel
   assert.ok(page.body.includes(`href="/w/demo/runs/${DONE}"`), "the run link");
   assert.ok(page.text.includes("lit at high"), "the history");
   assert.ok(page.text.includes("Answer") && page.text.includes("Accept risk"), "the two buttons");
-  assert.equal(page.text.includes("Accepting this risk also closes the vigil"), false, "a ritual flare does not close a vigil");
-  assert.ok(page.body.includes(`aria-label="Answer the flare: Certificate &lt;script&gt;`), "the button names its flare");
+  assert.equal(page.text.includes("Accepting this risk also closes the vigil"), false, "a ritual candle does not close a vigil");
+  assert.ok(page.body.includes(`aria-label="Answer the candle: Certificate &lt;script&gt;`), "the button names its candle");
 });
 
-test("Flare detail: a flare of a vigil links to the vigil and says before the tap that an accept closes it", async () => {
-  const page = await flarePage(`/w/demo/flares/${encodeURIComponent("vigil:soak")}`);
+test("Candle detail: a candle of a vigil links to the vigil and says before the tap that an accept closes it", async () => {
+  const page = await candlePage(`/w/demo/candles/${encodeURIComponent("vigil:soak")}`);
   assert.equal(page.status, 200);
   assert.ok(page.body.includes('href="/w/demo/vigils/soak"') && page.text.includes("vigil soak"));
   assert.ok(page.text.includes("Accepting this risk also closes the vigil soak."));
-  assert.equal(page.text.includes("And start a follow-up run"), false, "the checkbox shows only after the tap, and only for a flare from a run");
+  assert.equal(page.text.includes("And start a follow-up run"), false, "the checkbox shows only after the tap, and only for a candle from a run");
 });
 
-test("Flare detail: an answered flare says who answered, and that it was reported again; accepted and gone have no buttons", async () => {
-  const answered = await flarePage("/w/demo/flares/answered-one");
+test("Candle detail: an answered candle says who answered, and that it was reported again; accepted and out have no buttons", async () => {
+  const answered = await candlePage("/w/demo/candles/answered-one");
   assert.ok(answered.body.includes("Answered by web:op on 28 Sep: fix &lt;script&gt;alert(1)&lt;/script&gt;"), "the decision");
-  assert.ok(answered.text.includes("reported again after you closed this flare"), "stillReported in words");
+  assert.ok(answered.text.includes("reported again after you closed this candle"), "stillReported in words");
   assert.equal(answered.text.includes(">Answer<"), false);
-  assert.ok(answered.body.includes("Accept risk") && !/>Answer</u.test(answered.body), "an answered flare can still be accepted, not answered again");
-  const accepted = await flarePage("/w/demo/flares/accepted-one");
+  assert.ok(answered.body.includes("Accept risk") && !/>Answer</u.test(answered.body), "an answered candle can still be accepted, not answered again");
+  const accepted = await candlePage("/w/demo/candles/accepted-one");
   assert.ok(accepted.text.includes("Risk accepted by web:op on 28 Sep: known"));
   assert.equal(accepted.body.includes("Accept risk") || accepted.body.includes("Send answer"), false, "nothing left to do");
-  const gone = await flarePage("/w/demo/flares/gone-one");
-  assert.ok(gone.text.includes("Gone") && gone.text.includes("stopped reporting it"));
-  assert.equal(gone.body.includes("Accept risk"), false);
+  const out = await candlePage("/w/demo/candles/out-one");
+  assert.ok(out.text.includes("Out") && out.text.includes("stopped reporting it"));
+  assert.equal(out.body.includes("Accept risk"), false);
 });
 
-test("Flare detail: the loopback viewer gets no buttons and a line that says why; an unknown flare is a 404", async () => {
-  const local = await flarePage(`/w/demo/flares/${encodeURIComponent("vigil:soak")}`, { canWrite: false });
+test("Candle detail: the loopback viewer gets no buttons and a line that says why; an unknown candle is a 404", async () => {
+  const local = await candlePage(`/w/demo/candles/${encodeURIComponent("vigil:soak")}`, { canWrite: false });
   assert.ok(local.text.includes("No buttons here: this page was opened from this host."));
   assert.equal(/<button[^>]*>Answer<\/button>/u.test(local.body), false);
-  const missing = await flarePage("/w/demo/flares/nope");
+  const missing = await candlePage("/w/demo/candles/nope");
   assert.equal(missing.status, 404);
-  assert.ok(missing.text.includes("No flare nope in workspace demo."));
-  assert.equal((await flarePage("/w/atlas/flares/gone-one")).status, 404, "a key of another workspace is not found");
+  assert.ok(missing.text.includes("No candle nope in workspace demo."));
+  assert.equal((await candlePage("/w/atlas/candles/out-one")).status, 404, "a key of another workspace is not found");
 });
 
-test("Overview: lit flares are the first cards of Needs you, the strip counts them, Places and the tab carry the count", async () => {
+test("Overview: lit candles are the first cards of Needs you, the strip counts them, Places and the tab carry the count", async () => {
   const status = litStatus(3);
-  const page = await flarePage("/w/demo", { status: () => status });
+  const page = await candlePage("/w/demo", { status: () => status });
   const { body } = page;
   assert.equal(page.status, 200);
   const needs = body.slice(body.indexOf('id="needs"'));
-  assert.ok(needs.includes("Nightly audit found a leak"), "a flare card is there");
-  const firstCard = needs.indexOf('<article id="flare-');
-  assert.ok(firstCard !== -1, "flare cards");
+  assert.ok(needs.includes("Nightly audit found a leak"), "a candle card is there");
+  const firstCard = needs.indexOf('<article id="candle-');
+  assert.ok(firstCard !== -1, "candle cards");
   const firstOther = Math.min(...["held-", "asks-", "failed-", "flagged-"].map((prefix) => needs.indexOf(`<article id="${prefix}`)).filter((at) => at !== -1));
-  assert.ok(firstCard < firstOther, "flares come before the held and flagged cards");
-  assert.match(plainOf(body), /3 flares/u, "the strip counts them");
-  assert.match(navOf(body, "Tabs"), /<span class="tab-bdg tone-wait" title="3 lit">/u, "the Flares tab shows the count only when flares are lit");
-  const quiet = await flarePage("/w/demo", { status: () => litStatus(0), flares: () => Promise.resolve([]) });
-  assert.equal(navOf(quiet.body, "Tabs").includes("lit"), false, "no count without a lit flare");
-  assert.equal(quiet.body.includes('<article id="flare-'), false, "no card without a lit flare");
+  assert.ok(firstCard < firstOther, "candles come before the held and flagged cards");
+  assert.match(plainOf(body), /3 candles/u, "the strip counts them");
+  assert.match(navOf(body, "Tabs"), /<span class="tab-bdg tone-wait" title="3 lit">/u, "the Candles tab shows the count only when candles are lit");
+  const quiet = await candlePage("/w/demo", { status: () => litStatus(0), candles: () => Promise.resolve([]) });
+  assert.equal(navOf(quiet.body, "Tabs").includes("lit"), false, "no count without a lit candle");
+  assert.equal(quiet.body.includes('<article id="candle-'), false, "no card without a lit candle");
 });
 
-test("Run page: an item that lit a flare is marked and links to it", async () => {
-  const withFlare: RunResult = { ...RESULT, questions: [], items: [{ key: "tls", title: "Certificate", severity: "high", state: "needs-decision", flare: true }, { title: "Plain", severity: "low", state: "open" }] };
+test("Run page: an item that lit a candle is marked and links to it", async () => {
+  const withCandle: RunResult = { ...RESULT, questions: [], items: [{ key: "tls", title: "Certificate", severity: "high", state: "needs-decision", candle: true }, { title: "Plain", severity: "low", state: "open" }] };
   const row = RUNS.find((candidate) => candidate.run === DONE)!;
-  const page = await flarePage(`/w/demo/runs/${DONE}`, { run: () => runDetail(row, withFlare) });
+  const page = await candlePage(`/w/demo/runs/${DONE}`, { run: () => runDetail(row, withCandle) });
   assert.equal(page.status, 200);
-  assert.equal(page.body.split('class="ritem-flare"').length - 1, 1, "one mark: the plain item has none");
-  assert.ok(page.body.includes('href="/w/demo/flares/tls"') && page.text.includes("Open the flare"));
+  assert.equal(page.body.split('class="ritem-candle"').length - 1, 1, "one mark: the plain item has none");
+  assert.ok(page.body.includes('href="/w/demo/candles/tls"') && page.text.includes("Open the candle"));
 });
 
 test("Settings, Notifications: a read-only email line, with no address and no button", async () => {
-  const set = await flarePage("/settings/notifications");
+  const set = await candlePage("/settings/notifications");
   assert.ok(set.text.includes("Email: set up"));
-  const notSet = await flarePage("/settings/notifications", { emailSetUp: () => false });
+  const notSet = await candlePage("/settings/notifications", { emailSetUp: () => false });
   assert.ok(notSet.text.includes("Email: not set up on this host"));
   assert.equal(/<input[^>]*type="(?:email|text)"/u.test(notSet.body), false, "no field");
   assert.equal(notSet.text.toLowerCase().includes("test email"), false, "no test button");
 });
 
 test("Settings, Notifications: a broken email file shows as a problem with its reason", async () => {
-  const broken = await flarePage("/settings/notifications", { emailSetUp: () => false, emailProblem: () => "email.json is not valid JSON" });
+  const broken = await candlePage("/settings/notifications", { emailSetUp: () => false, emailProblem: () => "email.json is not valid JSON" });
   assert.ok(broken.text.includes("Email: not set up on this host. Problem: email.json is not valid JSON"));
 });

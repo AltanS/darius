@@ -92,21 +92,21 @@ test("the repo holds the static text: 12 skills and no agent, with no em dash an
   assert.match(readFileSync(join(dir, "work.md"), "utf8"), /canonical schema: `darius delegation`/u);
 });
 
-test("the flare skill holds both recipes, the delivery options and what a run never does", () => {
-  const text = readFileSync(join(skillSourceDir(), "flare.md"), "utf8");
-  assert.match(text, /^---\nname: darius-flare\n/u);
+test("the candle skill holds both recipes, the delivery options and what a run never does", () => {
+  const text = readFileSync(join(skillSourceDir(), "candle.md"), "utf8");
+  assert.match(text, /^---\nname: darius-candle\n/u);
   for (const part of [
     'cadence = "1w"',
-    "flare_deliver",
-    '"flare": true',
+    "candle_deliver",
+    '"candle": true',
     "needs-decision",
-    "darius vigil add xyz --in 7d --flare high --stdin < body.md",
-    "--flare-deliver",
-    "darius flare light",
-    "POST /api/flare/light",
+    "darius vigil add xyz --in 7d --candle high --stdin < body.md",
+    "--candle-deliver",
+    "darius candle light",
+    "POST /api/candle/light",
     "darius email set",
     "`kinds` in `.darius.toml` must list `vigil`",
-    "A run never runs `flare light`",
+    "A run never runs `candle light`",
   ]) {
     assert.ok(text.includes(part), part);
   }
@@ -367,4 +367,38 @@ test("setup says which hooks are not ok, and nothing when all three are", () => 
   assert.match(skillDetail(), /hooks: missing Stop, differs PostToolUse; see darius skill hook$/u);
   writeFileSync(join(claude, "settings.json"), darius(env, ["skill", "hook"]).stdout);
   assert.doesNotMatch(skillDetail(), /hooks:/u);
+});
+
+/** Puts the stamped skill of the retired first name in place, as 0.114 left it. */
+function writeOldSkill(claude: string): string {
+  const dir = join(claude, "skills", "darius-flare");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), stampText("---\nname: darius-flare\n---\nold skill\n", "0.114.1"));
+  return dir;
+}
+
+test("setup, install and uninstall remove the stale stamped skill of the first name; an unstamped one stays", () => {
+  const { claude, env } = sandbox();
+  darius(env, ["skill", "install"]);
+  const old = writeOldSkill(claude);
+  const step = (): { detail: string } => JSON.parse(darius(env, ["setup", "--json"]).stdout).steps.find((entry: { what: string }) => entry.what === "skill");
+  assert.match(step().detail, /removed .*darius-flare\/SKILL\.md \(retired\)/u);
+  assert.ok(!existsSync(old), "the stale folder is gone");
+  assert.ok(existsSync(join(claude, "skills", "darius-candle", "SKILL.md")));
+
+  writeOldSkill(claude);
+  const install = JSON.parse(darius(env, ["skill", "install", "--json"]).stdout);
+  assert.equal(install.retiredSkills.length, 1);
+  assert.ok(!existsSync(old));
+  const states = JSON.parse(darius(env, ["skill", "status", "--json"]).stdout).filter((entry: Entry) => !entry.name.startsWith("hook "));
+  assert.ok(states.every((entry: Entry) => entry.state === "ok"), "status lists no stale skill and every file is ok");
+
+  writeOldSkill(claude);
+  assert.equal(JSON.parse(darius(env, ["skill", "uninstall", "--json"]).stdout).retiredSkills.length, 1);
+  assert.ok(!existsSync(old));
+
+  mkdirSync(old, { recursive: true });
+  writeFileSync(join(old, "SKILL.md"), "my own skill\n");
+  step();
+  assert.equal(readFileSync(join(old, "SKILL.md"), "utf8"), "my own skill\n");
 });

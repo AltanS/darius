@@ -76,11 +76,11 @@ test("every kind of the union has an entry, with its who, actor and links", () =
     ["finding-closed", [line("finding.closed", "web:altan", { item: RITUAL, key: "post-12", note: "wontfix" })]],
     ["finding-reopened", [line("finding.reopened", "web:altan", { item: RITUAL, key: "post-12" })]],
     ["finding-reset", [line("finding.reset", "altan", { item: RITUAL, note: "start over" })]],
-    ["flare-lit", [line("flare.lit", "altan", { key: "cert", title: "Certificate expires", severity: "high", source: "script" })]],
-    ["flare-answered", [line("flare.answered", "web:altan", { key: "cert", note: "renewed", severity: "high" })]],
-    ["flare-accepted", [line("flare.accepted", "web:altan", { key: "cert", severity: "high" })]],
-    ["flare-cleared", [line("flare.cleared", "altan", { key: "cert" })]],
-    ["flare-reopened", [line("flare.reopened", "altan", { key: "cert" })]],
+    ["candle-lit", [line("candle.lit", "altan", { key: "cert", title: "Certificate expires", severity: "high", source: "script" })]],
+    ["candle-answered", [line("candle.answered", "web:altan", { key: "cert", note: "renewed", severity: "high" })]],
+    ["candle-accepted", [line("candle.accepted", "web:altan", { key: "cert", severity: "high" })]],
+    ["candle-blown-out", [line("candle.blown-out", "altan", { key: "cert" })]],
+    ["candle-relit", [line("candle.relit", "altan", { key: "cert" })]],
     ["ritual-lifecycle", [line("ritual.lifecycle", "altan", { item: RITUAL, state: "paused" })]],
     ["ritual-rescheduled", [line("ritual.rescheduled", "altan", { item: RITUAL, due: "2026-10-20" })]],
   ];
@@ -297,122 +297,122 @@ test("WebContext.activity merges over projects, newest first, and runRows carrie
   assert.equal(child?.ackKind, null);
 });
 
-test("flare lines make flare entries: the flare is the item, its key is the link, and the title comes from the report", () => {
+test("candle lines make candle entries: the candle is the item, its key is the link, and the title comes from the report", () => {
   const entries = activityOf(PROJECT, [
-    line("flare.lit", "ci", { key: "cert", title: "Certificate expires", severity: "high", source: "ci:nightly", target: "shop.example.com" }),
-    line("flare.answered", "web:altan", { key: "cert", note: "renewed on the 3rd", severity: "high" }),
+    line("candle.lit", "ci", { key: "cert", title: "Certificate expires", severity: "high", source: "ci:nightly", target: "shop.example.com" }),
+    line("candle.answered", "web:altan", { key: "cert", note: "renewed on the 3rd", severity: "high" }),
   ]);
-  assert.deepEqual(entries.map((entry) => entry.kind), ["flare-answered", "flare-lit"], "newest first");
+  assert.deepEqual(entries.map((entry) => entry.kind), ["candle-answered", "candle-lit"], "newest first");
   const [answered, lit] = entries;
-  assert.deepEqual(answered?.item, { type: "flare", id: "cert", title: "Certificate expires" }, "the title of the report, not the key");
-  assert.deepEqual(answered?.links, { flare: "cert" });
-  assert.equal(answered?.text, "Flare answered by web:altan: renewed on the 3rd");
-  assert.equal(lit?.text, "Flare lit by ci: Certificate expires, high");
+  assert.deepEqual(answered?.item, { type: "candle", id: "cert", title: "Certificate expires" }, "the title of the report, not the key");
+  assert.deepEqual(answered?.links, { candle: "cert" });
+  assert.equal(answered?.text, "Candle answered by web:altan: renewed on the 3rd");
+  assert.equal(lit?.text, "Candle lit by ci: Certificate expires, high");
   assert.deepEqual(lit?.detail, ["Target: shop.example.com", "Source: ci:nightly"]);
   assert.equal(lit?.tone, "wait");
 });
 
-test("a report of a flare that is lit already is not news; a worse one, or one after it closed, is", () => {
-  const lit = (severity: string) => line("flare.lit", "ci", { key: "cert", title: "Certificate expires", severity, source: "ci" });
+test("a report of a candle that is lit already is not news; a worse one, or one after it closed, is", () => {
+  const lit = (severity: string) => line("candle.lit", "ci", { key: "cert", title: "Certificate expires", severity, source: "ci" });
   const kinds = (lines: LedgerLine[]): string[] => activityOf(PROJECT, lines).map((entry) => `${entry.kind}:${entry.text.split(" by ")[0]}`);
-  assert.deepEqual(kinds([lit("high"), lit("high"), lit("low")]), ["flare-lit:Flare lit"], "seen again, or less bad: no entry");
-  assert.deepEqual(kinds([lit("medium"), lit("high")]), ["flare-lit:Flare raised at high", "flare-lit:Flare lit"], "a higher severity is news");
+  assert.deepEqual(kinds([lit("high"), lit("high"), lit("low")]), ["candle-lit:Candle lit"], "seen again, or less bad: no entry");
+  assert.deepEqual(kinds([lit("medium"), lit("high")]), ["candle-lit:Candle raised at high", "candle-lit:Candle lit"], "a higher severity is news");
   assert.deepEqual(
-    kinds([lit("high"), line("flare.accepted", "web:altan", { key: "cert", severity: "high" }), lit("high"), lit("critical")]),
-    ["flare-lit:Flare lit again at critical", "flare-accepted:Flare accepted", "flare-lit:Flare lit"],
+    kinds([lit("high"), line("candle.accepted", "web:altan", { key: "cert", severity: "high" }), lit("high"), lit("critical")]),
+    ["candle-lit:Candle lit again at critical", "candle-accepted:Candle accepted", "candle-lit:Candle lit"],
     "a report at the closed severity stays closed; a worse one lights it again",
   );
-  assert.deepEqual(kinds([lit("high"), line("flare.cleared", "altan", { key: "cert" }), lit("low")]), ["flare-lit:Flare lit", "flare-cleared:Flare cleared", "flare-lit:Flare lit"], "after gone any report lights it");
+  assert.deepEqual(kinds([lit("high"), line("candle.blown-out", "altan", { key: "cert" }), lit("low")]), ["candle-lit:Candle lit", "candle-blown-out:Candle blown out", "candle-lit:Candle lit"], "after gone any report lights it");
 });
 
-test("flare notes are masked like every operator text, and a flare line with no key is left out", () => {
-  const entries = activityOf(PROJECT, [line("flare.accepted", "web:altan", { key: "cert", severity: "low", note: "token sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789 is fine" }), line("flare.answered", "web:altan", { note: "no key", severity: "low" })]);
+test("candle notes are masked like every operator text, and a candle line with no key is left out", () => {
+  const entries = activityOf(PROJECT, [line("candle.accepted", "web:altan", { key: "cert", severity: "low", note: "token sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789 is fine" }), line("candle.answered", "web:altan", { note: "no key", severity: "low" })]);
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.text.includes("sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789"), false);
 });
 
-// --- a flare that a run reports (0.113.4) ---------------------------------------------------
+// --- a candle that a run reports (0.113.4) ---------------------------------------------------
 
 const { putBlob } = await import("../src/core/store.ts");
 
-let flareRuns = 0;
+let candleRuns = 0;
 
 /** A completed run of the `daily` ritual whose result holds these flagged items. */
 function reportRun(project: ReturnType<typeof openProject>, items: ReadonlyArray<{ key: string; title?: string; severity?: string; target?: string }>, resultSha?: string): string {
-  flareRuns += 1;
-  const run = `01JFLR${String(flareRuns).padStart(20, "0")}`;
-  const filled = items.map((item) => ({ title: `Flare ${item.key}`, severity: "high", state: "needs-decision", ...item, flare: true }));
+  candleRuns += 1;
+  const run = `01JFLR${String(candleRuns).padStart(20, "0")}`;
+  const filled = items.map((item) => ({ title: `Candle ${item.key}`, severity: "high", state: "needs-decision", ...item, candle: true }));
   const sha = resultSha ?? putBlob(project, `${JSON.stringify({ v: 1, status: "ok", summary: "s", items: filled })}\n`);
   appendLine(project, { who: "timer", type: "run.started", item: RITUAL, run });
   appendLine(project, { who: "timer", type: "run.completed", item: RITUAL, run, outcome: "complete", result_sha: sha });
   return run;
 }
 
-test("a flare that a run reports shows as a lit row, a repeat shows none, and a rise or a relight reads like an operator's", () => {
-  const project = openProject("act-run-flare", { create: true });
+test("a candle that a run reports shows as a lit row, a repeat shows none, and a rise or a relight reads like an operator's", () => {
+  const project = openProject("act-run-candle", { create: true });
   const first = reportRun(project, [{ key: "cert", title: "Certificate expires", severity: "high", target: "shop.example.com" }, { key: "disk", title: "Disk is full", severity: "medium" }]);
   const ctx = webContext("test");
-  const rows = ctx.activity("act-run-flare");
-  assert.deepEqual(rows.map((row) => row.kind), ["run-completed", "flare-lit", "flare-lit", "run-started"], "the run row first, then what it lit, in the order of the result");
+  const rows = ctx.activity("act-run-candle");
+  assert.deepEqual(rows.map((row) => row.kind), ["run-completed", "candle-lit", "candle-lit", "run-started"], "the run row first, then what it lit, in the order of the result");
   const [, cert, disk] = rows;
-  assert.equal(cert?.text, "Flare lit by daily: Certificate expires, high");
-  assert.equal(disk?.text, "Flare lit by daily: Disk is full, medium");
+  assert.equal(cert?.text, "Candle lit by daily: Certificate expires, high");
+  assert.equal(disk?.text, "Candle lit by daily: Disk is full, medium");
   assert.equal(cert?.tone, "wait");
-  assert.deepEqual(cert?.item, { type: "flare", id: "cert", title: "Certificate expires" });
-  assert.equal(cert?.links.flare, "cert");
+  assert.deepEqual(cert?.item, { type: "candle", id: "cert", title: "Certificate expires" });
+  assert.equal(cert?.links.candle, "cert");
   assert.equal(cert?.links.run, first);
   assert.deepEqual(cert?.detail, ["Target: shop.example.com"]);
 
   reportRun(project, [{ key: "cert", title: "Certificate expires", severity: "high" }]);
-  assert.equal(ctx.activity("act-run-flare").filter((row) => row.kind === "flare-lit").length, 2, "a re-report of a lit flare is no row");
+  assert.equal(ctx.activity("act-run-candle").filter((row) => row.kind === "candle-lit").length, 2, "a re-report of a lit candle is no row");
 
   reportRun(project, [{ key: "cert", title: "Certificate expires", severity: "critical" }]);
-  assert.equal(ctx.activity("act-run-flare")[1]?.text, "Flare raised at critical by daily");
+  assert.equal(ctx.activity("act-run-candle")[1]?.text, "Candle raised at critical by daily");
 
-  appendLine(project, { who: "web:altan", type: "flare.accepted", key: "cert", severity: "critical" });
+  appendLine(project, { who: "web:altan", type: "candle.accepted", key: "cert", severity: "critical" });
   reportRun(project, [{ key: "cert", title: "Certificate expires", severity: "critical" }]);
-  assert.equal(ctx.activity("act-run-flare").filter((row) => row.kind === "flare-lit").length, 3, "a report at the closed severity stays closed");
+  assert.equal(ctx.activity("act-run-candle").filter((row) => row.kind === "candle-lit").length, 3, "a report at the closed severity stays closed");
   const lines = readLedger(project);
   const completed = lines.filter((entry) => entry.type === "run.completed");
   assert.equal(completed.length, 4);
 });
 
 test("a rise after an accept reads 'lit again', and the rows of a run follow the ritual and run filters", () => {
-  const project = openProject("act-run-flare-2", { create: true });
+  const project = openProject("act-run-candle-2", { create: true });
   const run = reportRun(project, [{ key: "cert", severity: "medium" }]);
-  appendLine(project, { who: "web:altan", type: "flare.accepted", key: "cert", severity: "medium" });
+  appendLine(project, { who: "web:altan", type: "candle.accepted", key: "cert", severity: "medium" });
   reportRun(project, [{ key: "cert", severity: "high" }]);
   const ctx = webContext("test");
-  const rows = ctx.activity("act-run-flare-2");
-  assert.deepEqual(rows.map((row) => row.kind), ["run-completed", "flare-lit", "run-started", "flare-accepted", "run-completed", "flare-lit", "run-started"]);
-  assert.equal(rows[1]?.text, "Flare lit again at high by daily");
-  assert.equal(ctx.activity("act-run-flare-2", { run }).filter((row) => row.kind === "flare-lit").length, 1, "the run's own timeline holds its flare row");
-  assert.equal(ctx.activity("act-run-flare-2", { ritual: "daily" }).filter((row) => row.kind === "flare-lit").length, 2);
-  assert.equal(ctx.activity("act-run-flare-2", { finding: "cert" }).length, 0);
+  const rows = ctx.activity("act-run-candle-2");
+  assert.deepEqual(rows.map((row) => row.kind), ["run-completed", "candle-lit", "run-started", "candle-accepted", "run-completed", "candle-lit", "run-started"]);
+  assert.equal(rows[1]?.text, "Candle lit again at high by daily");
+  assert.equal(ctx.activity("act-run-candle-2", { run }).filter((row) => row.kind === "candle-lit").length, 1, "the run's own timeline holds its candle row");
+  assert.equal(ctx.activity("act-run-candle-2", { ritual: "daily" }).filter((row) => row.kind === "candle-lit").length, 2);
+  assert.equal(ctx.activity("act-run-candle-2", { finding: "cert" }).length, 0);
 });
 
-test("flare text from a run is plain text, masked, and a malformed or missing result gives no row and no error", () => {
-  const project = openProject("act-run-flare-3", { create: true });
+test("candle text from a run is plain text, masked, and a malformed or missing result gives no row and no error", () => {
+  const project = openProject("act-run-candle-3", { create: true });
   const hostile = "<img src=x onerror=alert(1)> token sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789";
   reportRun(project, [{ key: "xss", title: hostile, severity: "low", target: hostile }]);
   reportRun(project, [], putBlob(project, "this is not json\n"));
   reportRun(project, [], "0".repeat(64));
   appendLine(project, { who: "timer", type: "run.started", item: RITUAL, run: "01JFLRNOBLOB0000000000000A" });
   appendLine(project, { who: "timer", type: "run.completed", item: RITUAL, run: "01JFLRNOBLOB0000000000000A", outcome: "complete" });
-  const rows = webContext("test").activity("act-run-flare-3");
-  const flareRows = rows.filter((row) => row.kind === "flare-lit");
-  assert.equal(flareRows.length, 1);
-  const shown = JSON.stringify(flareRows[0]);
+  const rows = webContext("test").activity("act-run-candle-3");
+  const candleRows = rows.filter((row) => row.kind === "candle-lit");
+  assert.equal(candleRows.length, 1);
+  const shown = JSON.stringify(candleRows[0]);
   assert.equal(shown.includes("sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789"), false, "a secret in the title is masked");
-  assert.ok(flareRows[0]?.text.includes("<img src=x onerror=alert(1)>"), "kept as plain text: the page renders it as text, never as HTML");
+  assert.ok(candleRows[0]?.text.includes("<img src=x onerror=alert(1)>"), "kept as plain text: the page renders it as text, never as HTML");
   assert.equal(rows.filter((row) => row.kind === "run-completed").length, 4, "every run still has its own row");
 });
 
-test("a window with no completed run reads no result, and one with a completed run gets the flare rows", () => {
-  const project = openProject("act-run-flare-4", { create: true });
+test("a window with no completed run reads no result, and one with a completed run gets the candle rows", () => {
+  const project = openProject("act-run-candle-4", { create: true });
   reportRun(project, [{ key: "cert", severity: "high" }]);
   appendLine(project, { who: "web:altan", type: "run.acknowledged", item: RITUAL, run: "01JFLR00000000000000000001", note: "seen" });
   const ctx = webContext("test");
-  assert.deepEqual(ctx.activity("act-run-flare-4", { limit: 1 }).map((row) => row.kind), ["ack-note"]);
-  assert.deepEqual(ctx.activity("act-run-flare-4", { limit: 3 }).map((row) => row.kind), ["ack-note", "run-completed", "flare-lit"]);
+  assert.deepEqual(ctx.activity("act-run-candle-4", { limit: 1 }).map((row) => row.kind), ["ack-note"]);
+  assert.deepEqual(ctx.activity("act-run-candle-4", { limit: 3 }).map((row) => row.kind), ["ack-note", "run-completed", "candle-lit"]);
 });

@@ -1,6 +1,6 @@
 /**
- * `darius email status|set|test`: the email channel of flare notices
- * (src/core/email.ts; docs/concept.md, "Flares").
+ * `darius email status|set|test`: the email channel of candle notices
+ * (src/core/email.ts; docs/concept.md, "Candles").
  *
  *   email status       set up or not, the host of the url and the recipient
  *                      count. Never the token, never an address. Exit 1 when
@@ -9,7 +9,7 @@
  *                      <config>/email.json with mode 0600. `since` becomes now
  *                      when it is absent. Only stdin: a token on the command
  *                      line would stand in the shell history. It adds a line
- *                      when open flares asked for email and were not sent
+ *                      when open candles asked for email and were not sent
  *                      (a count, and it writes nothing)
  *   email test         sends one test message, and writes no ledger line
  *
@@ -18,7 +18,7 @@
  * src/harness/gate.ts (writesEmail) denies the line. `status` passes.
  */
 
-import { unsentEmailFlares } from "../core/alerts.ts";
+import { unsentEmailCandles } from "../core/alerts.ts";
 import { emailStatus, parseEmailInput, readEmailSettings, sendEmail, writeEmailSettings, type EmailSettings } from "../core/email.ts";
 import { hostId } from "../core/ledger.ts";
 import { endpointHost } from "../core/redact.ts";
@@ -85,9 +85,9 @@ function set(args: ParsedArgs): number {
     printJson({ ok: true, host, recipients: settings.to.length, since: settings.since });
     return 0;
   }
-  const unsent = unsentEmailFlares();
-  console.log(`✓ email is set up: ${host}, ${recipients(settings.to.length)}. Flares from before ${settings.since} send no mail.`);
-  if (unsent > 0) console.log(unsent === 1 ? "1 open flare was not sent on email. It stays in the app." : `${String(unsent)} open flares were not sent on email. They stay in the app.`);
+  const unsent = unsentEmailCandles();
+  console.log(`✓ email is set up: ${host}, ${recipients(settings.to.length)}. Candles from before ${settings.since} send no mail.`);
+  if (unsent > 0) console.log(unsent === 1 ? "1 open candle was not sent on email. It stays in the app." : `${String(unsent)} open candles were not sent on email. They stay in the app.`);
   return 0;
 }
 
@@ -108,7 +108,7 @@ async function sendTest(args: ParsedArgs): Promise<number> {
 export const emailCommand: Command = {
   name: "email",
   flags: [],
-  summary: "the email channel of flare notices: status, set, test",
+  summary: "the email channel of candle notices: status, set, test",
   usage: `email ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];

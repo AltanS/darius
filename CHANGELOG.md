@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.115.0] - 2026-11-02
+
+### Changed
+
+- Flares are now candles. You light a candle and you blow it out. The status `gone` is now `out`.
+- Names that changed: the verb `darius candle light|list|show|answer|accept|blow-out|relight`, the ledger types `candle.lit`, `candle.answered`, `candle.accepted`, `candle.blown-out` and `candle.relit`, the marker key `candle_deliver`, the result key `"candle": true`, the vigil flags `--candle`, `--candle-deliver` and `--no-candle`, the API paths `/api/candles` and `/api/candle`, the web place `/candles`, the run prompt section `## Open candles` and the skill `/darius-candle`.
+- No old name is accepted, and there are no aliases. Old ledger lines of the first name are unknown types and are ignored.
+- `darius setup`, `darius update` and `darius skill install` remove the stale stamped skill of the first name. A skill without a darius stamp stays.
+
+### Fixed
+
+- `test/web-serve-perf.test.ts` waits until the server takes connections, not a fixed 200 ms.
+
 ## [0.114.1] - 2026-11-02
 
 ### Fixed

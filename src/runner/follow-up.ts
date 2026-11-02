@@ -200,7 +200,7 @@ function approvedItemLines(item: ResultItem): string[] {
     ...block("proposed", proposal?.proposed ?? "(no proposal: decide from the title and the detail, within the policy)"),
     ...block("why", proposal?.why),
     ...block("expected effect", proposal?.effect),
-    ...(item.flare === true ? ['  flare: this item is a flare. Report it with `"flare": true`, so state fixed clears the flare.'] : []),
+    ...(item.candle === true ? ['  candle: this item is a candle. Report it with `"candle": true`, so state fixed puts the candle out.'] : []),
   ];
 }
 

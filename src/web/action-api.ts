@@ -151,24 +151,24 @@
  * tailnet identity, and the loopback viewer is refused for the same reason: a
  * check runs the vigil's Commands.
  *
- * Flares have two reads and three writes (0.111.0; docs/concept.md, "Flares"):
+ * Candles have two reads and three writes (0.111.0; docs/concept.md, "Candles"):
  *
- *   GET /api/flares?project=&status=   200 { ok: true, flares: [FlareRow] }
+ *   GET /api/candles?project=&status=   200 { ok: true, candles: [CandleRow] }
  *                             both optional: every project, every status
- *   GET /api/flare?project=&key=       200 { ok: true, flare: FlareRow, body } | 404 { ok: false, error }
- *   POST /api/flare/answer    body { project, key, note, followUp? }
+ *   GET /api/candle?project=&key=       200 { ok: true, candle: CandleRow, body } | 404 { ok: false, error }
+ *   POST /api/candle/answer    body { project, key, note, followUp? }
  *                             200 { ok: true }
  *                             | 202 { ok: true, run, host, id, at }  (followUp: the run started)
  *                             | 202 { ok: true, pending: true, host, id, at, message }
  *                             | 409 or 503 { ok: false, error }
- *   POST /api/flare/accept    body { project, key, note? }
+ *   POST /api/candle/accept    body { project, key, note? }
  *                             200 { ok: true } | 409 { ok: false, error }
- *   POST /api/flare/light     body { project, key, title, severity, target?, body?, deliver?, source? }
+ *   POST /api/candle/light     body { project, key, title, severity, target?, body?, deliver?, source? }
  *                             200 { ok: true } | 400, 403, 409, 413 or 415 { ok: false, error }
  *
  * A read needs only what `darius serve` checked first, so the loopback viewer
  * reads too. A browser request marked `Sec-Fetch-Site: cross-site` is refused,
- * as in pendingApi. Flare text is untrusted: anyone who lights a flare writes
+ * as in pendingApi. Candle text is untrusted: anyone who lights a candle writes
  * it. It leaves as JSON data only, and the app draws it as text.
  *
  * `answer` and `accept` have the guards of `findingApi`: a tailnet identity,
@@ -192,12 +192,12 @@
  * positional and may start with `-`, goes after `--`. `body` reaches the CLI
  * on stdin.
  *
- * `answer` with `followUp` starts `darius flare answer --follow-up` detached,
+ * `answer` with `followUp` starts `darius candle answer --follow-up` detached,
  * because that verb waits for the run. It checks readiness first as
  * POST /api/run/follow-up does, adds `--on <host>` when the ritual belongs to
  * another host, and waits for the "started run" line. The CLI writes
- * `flare.answered` only when the run started, so a refused follow-up is a 409
- * and leaves the flare as it was.
+ * `candle.answered` only when the run started, so a refused follow-up is a 409
+ * and leaves the candle as it was.
  */
 
 import { spawn } from "node:child_process";
@@ -208,7 +208,7 @@ import { fileURLToPath } from "node:url";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { answerProblem, type QuestionAnswer } from "../core/answers.ts";
 import { collectFindings, type Finding } from "../core/finding-index.ts";
-import { FLARE_STATUSES, flareSettleRefusal } from "../core/flare-index.ts";
+import { CANDLE_STATUSES, candleSettleRefusal } from "../core/candle-index.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
 import { clean, KEY_MAX, normalizeKey, SEVERITIES, TEXT_LIMITS, type Severity } from "../core/result.ts";
 import { isSlug, itemRef, listProjects, openProject } from "../core/store.ts";
@@ -219,7 +219,7 @@ import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
 import { viewRun } from "../runner/run-due.ts";
 import { errorMessage } from "../runtime.ts";
 import type { FollowUpReadiness, PendingPollEntry } from "./api.ts";
-import { collectFlareRows, flareDetail } from "./flares.ts";
+import { collectCandleRows, candleDetail } from "./candles.ts";
 import { markEnded, pollStarts, recordPending, type LedgerView, type PendingInput } from "./pending.ts";
 import { MAX_BODY, isSameOrigin, type PushApiReply } from "./push-api.ts";
 
@@ -1205,34 +1205,34 @@ export async function vigilApi(request: ActionRequest, viewer: ActionViewer, dep
   return checkReply(outcome, () => logSince(log, offset), { id, host: hostId(), at });
 }
 
-// --- flares (0.111.0) --------------------------------------------------------------------
+// --- candles (0.111.0) --------------------------------------------------------------------
 
-const FLARES_PATH = "/api/flares";
-const FLARE_PATH = "/api/flare";
-const FLARE_API_PREFIX = "/api/flare/";
-const FLARE_ANSWER_PATH = `${FLARE_API_PREFIX}answer`;
-const FLARE_ACCEPT_PATH = `${FLARE_API_PREFIX}accept`;
-const FLARE_LIGHT_PATH = `${FLARE_API_PREFIX}light`;
+const CANDLES_PATH = "/api/candles";
+const CANDLE_PATH = "/api/candle";
+const CANDLE_API_PREFIX = "/api/candle/";
+const CANDLE_ANSWER_PATH = `${CANDLE_API_PREFIX}answer`;
+const CANDLE_ACCEPT_PATH = `${CANDLE_API_PREFIX}accept`;
+const CANDLE_LIGHT_PATH = `${CANDLE_API_PREFIX}light`;
 
-/** Why the loopback viewer cannot settle a flare; the same reason as a finding: a run could settle its own. */
-export const LOOPBACK_FLARE_SETTLE = "settling a flare needs a tailnet identity; open the page by its tailnet address";
-/** Why the loopback viewer cannot light a flare: any local process is that viewer, and a local script has the CLI. */
-export const LOOPBACK_FLARE_LIGHT = "lighting a flare over HTTP needs a tailnet identity; on this host use darius flare light";
+/** Why the loopback viewer cannot settle a candle; the same reason as a finding: a run could settle its own. */
+export const LOOPBACK_CANDLE_SETTLE = "settling a candle needs a tailnet identity; open the page by its tailnet address";
+/** Why the loopback viewer cannot light a candle: any local process is that viewer, and a local script has the CLI. */
+export const LOOPBACK_CANDLE_LIGHT = "lighting a candle over HTTP needs a tailnet identity; on this host use darius candle light";
 
-const ANSWER_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "followUp"]);
-const ACCEPT_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note"]);
-const LIGHT_FLARE_KEYS: ReadonlySet<string> = new Set(["project", "key", "title", "severity", "target", "body", "deliver", "source"]);
+const ANSWER_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "followUp"]);
+const ACCEPT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note"]);
+const LIGHT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "title", "severity", "target", "body", "deliver", "source"]);
 /** Push, email, both with a comma, or none (the app only): what `--deliver` takes, in the form it takes. */
-const FLARE_DELIVER = /^(?:none|(?:push|email)(?:,(?:push|email))*)$/u;
+const CANDLE_DELIVER = /^(?:none|(?:push|email)(?:,(?:push|email))*)$/u;
 /** The source of a report over HTTP that names none. */
-const FLARE_SOURCE_DEFAULT = "api";
-/** darius writes these sources itself. `flare accept` closes the vigil a source of `vigil:<slug>` names, so a caller may not claim one. */
-const RESERVED_FLARE_SOURCE = /^(?:ritual|vigil):/u;
-/** A vigil's own flare key: a report from outside would end its link to the vigil. */
-const RESERVED_FLARE_KEY = /^vigil:/u;
+const CANDLE_SOURCE_DEFAULT = "api";
+/** darius writes these sources itself. `candle accept` closes the vigil a source of `vigil:<slug>` names, so a caller may not claim one. */
+const RESERVED_CANDLE_SOURCE = /^(?:ritual|vigil):/u;
+/** A vigil's own candle key: a report from outside would end its link to the vigil. */
+const RESERVED_CANDLE_KEY = /^vigil:/u;
 
-/** What the flare endpoints need from the host; tests stub all of it. */
-export interface FlareDeps {
+/** What the candle endpoints need from the host; tests stub all of it. */
+export interface CandleDeps {
   run: CliRunner;
   readiness: (project: string, run: string) => Promise<FollowUpReadiness>;
   start: FollowUpStarter;
@@ -1240,26 +1240,26 @@ export interface FlareDeps {
   waitMs?: number;
 }
 
-const DEFAULT_FLARE_DEPS: FlareDeps = { run: runCli, readiness: followUpReadiness, start: startDetachedFollowUp };
+const DEFAULT_CANDLE_DEPS: CandleDeps = { run: runCli, readiness: followUpReadiness, start: startDetachedFollowUp };
 
-/** Whether `darius serve` hands this path to `flareApi`. */
-export function isFlarePath(path: string): boolean {
-  return path === FLARES_PATH || path === FLARE_PATH || path.startsWith(FLARE_API_PREFIX);
+/** Whether `darius serve` hands this path to `candleApi`. */
+export function isCandlePath(path: string): boolean {
+  return path === CANDLES_PATH || path === CANDLE_PATH || path.startsWith(CANDLE_API_PREFIX);
 }
 
-/** One request to a flare path, already past the access check. */
-export async function flareApi(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps = DEFAULT_FLARE_DEPS): Promise<PushApiReply> {
+/** One request to a candle path, already past the access check. */
+export async function candleApi(request: ActionRequest, viewer: ActionViewer, deps: CandleDeps = DEFAULT_CANDLE_DEPS): Promise<PushApiReply> {
   switch (request.path) {
-    case FLARES_PATH:
-      return readFlares(request);
-    case FLARE_PATH:
-      return readFlare(request);
-    case FLARE_ANSWER_PATH:
-      return answerFlare(request, viewer, deps);
-    case FLARE_ACCEPT_PATH:
-      return acceptFlare(request, viewer, deps);
-    case FLARE_LIGHT_PATH:
-      return lightFlare(request, viewer, deps);
+    case CANDLES_PATH:
+      return readCandles(request);
+    case CANDLE_PATH:
+      return readCandle(request);
+    case CANDLE_ANSWER_PATH:
+      return answerCandle(request, viewer, deps);
+    case CANDLE_ACCEPT_PATH:
+      return acceptCandle(request, viewer, deps);
+    case CANDLE_LIGHT_PATH:
+      return lightCandle(request, viewer, deps);
     default:
       return fail(404, "no such endpoint");
   }
@@ -1268,14 +1268,14 @@ export async function flareApi(request: ActionRequest, viewer: ActionViewer, dep
 // The reads.
 
 /** The guards of a read: GET or HEAD, and no page of another site. A read changes nothing, so it has no Origin check. */
-function flareReadRefusal(request: ActionRequest): PushApiReply | undefined {
+function candleReadRefusal(request: ActionRequest): PushApiReply | undefined {
   if (request.method !== "GET" && request.method !== "HEAD") return fail(405, "GET only");
   if (request.headers.get("sec-fetch-site") === "cross-site") return fail(403, "the request must come from the darius page");
   return undefined;
 }
 
-function isFlareStatus(status: string): boolean {
-  return FLARE_STATUSES.some((known) => known === status);
+function isCandleStatus(status: string): boolean {
+  return CANDLE_STATUSES.some((known) => known === status);
 }
 
 /** Rows hold only JSON values; the round trip makes them one. */
@@ -1283,37 +1283,37 @@ function jsonOf<T>(value: T): JsonValue {
   return JSON.parse(JSON.stringify(value));
 }
 
-function readFlares(request: ActionRequest): PushApiReply {
-  const refused = flareReadRefusal(request);
+function readCandles(request: ActionRequest): PushApiReply {
+  const refused = candleReadRefusal(request);
   if (refused !== undefined) return refused;
   const query = new URLSearchParams(request.query ?? "");
   const project = query.get("project") ?? "";
   const status = query.get("status") ?? "";
   if (project !== "" && !PROJECT_NAME.test(project)) return fail(400, "project must be a project name");
   if (project !== "" && !listProjects().includes(project)) return fail(400, `no project ${project}`);
-  if (status !== "" && !isFlareStatus(status)) return fail(400, `status must be one of ${FLARE_STATUSES.join(", ")}`);
-  const rows = collectFlareRows(project === "" ? null : project).filter((row) => status === "" || row.status === status);
-  return { status: 200, body: { ok: true, flares: jsonOf(rows) } };
+  if (status !== "" && !isCandleStatus(status)) return fail(400, `status must be one of ${CANDLE_STATUSES.join(", ")}`);
+  const rows = collectCandleRows(project === "" ? null : project).filter((row) => status === "" || row.status === status);
+  return { status: 200, body: { ok: true, candles: jsonOf(rows) } };
 }
 
-function readFlare(request: ActionRequest): PushApiReply {
-  const refused = flareReadRefusal(request);
+function readCandle(request: ActionRequest): PushApiReply {
+  const refused = candleReadRefusal(request);
   if (refused !== undefined) return refused;
   const query = new URLSearchParams(request.query ?? "");
   const project = query.get("project") ?? "";
   if (!PROJECT_NAME.test(project)) return fail(400, "project must be a project name");
   if (!listProjects().includes(project)) return fail(400, `no project ${project}`);
-  const named = readFlareKey(query.get("key") ?? undefined);
+  const named = readCandleKey(query.get("key") ?? undefined);
   if ("error" in named) return fail(400, named.error);
-  const detail = flareDetail(project, named.key);
-  if (detail === null) return fail(404, `no flare '${named.key}' in ${project}`);
-  return { status: 200, body: { ok: true, flare: jsonOf(detail.row), body: detail.body } };
+  const detail = candleDetail(project, named.key);
+  if (detail === null) return fail(404, `no candle '${named.key}' in ${project}`);
+  return { status: 200, body: { ok: true, candle: jsonOf(detail.row), body: detail.body } };
 }
 
 // The body of a write.
 
-/** A flare key: one line, not blank, at most KEY_MAX characters, refused and not clipped. The CLI stores it normalized, so it is compared so. */
-function readFlareKey(value: JsonValue | undefined): { key: string } | { error: string } {
+/** A candle key: one line, not blank, at most KEY_MAX characters, refused and not clipped. The CLI stores it normalized, so it is compared so. */
+function readCandleKey(value: JsonValue | undefined): { key: string } | { error: string } {
   const problem = { error: `key must be one line of plain text, at most ${String(KEY_MAX)} characters` };
   if (!isText(value) || /\p{Cc}/u.test(value)) return problem;
   const key = normalizeKey(value);
@@ -1343,7 +1343,7 @@ function readSettleBody(parsed: JsonValue, known: ReadonlySet<string>): SettleBo
   if (extra !== undefined) return { error: extra };
   const { project, followUp } = parsed;
   if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
-  const named = readFlareKey(parsed.key);
+  const named = readCandleKey(parsed.key);
   if ("error" in named) return named;
   const note = readNote(parsed.note);
   if ("error" in note) return note;
@@ -1365,13 +1365,13 @@ interface LightBody {
 /** Every field of a light, checked. Severity and deliver are checked here, before the CLI, so only known words reach its argv. */
 function readLightBody(parsed: JsonValue): LightBody | { error: string } {
   if (!isRecord(parsed)) return { error: "send { project, key, title, severity, target?, body?, deliver?, source? }" };
-  const extra = unknownField(parsed, LIGHT_FLARE_KEYS);
+  const extra = unknownField(parsed, LIGHT_CANDLE_KEYS);
   if (extra !== undefined) return { error: extra };
   const { project, severity, deliver, body } = parsed;
   if (!isText(project) || !PROJECT_NAME.test(project)) return { error: "project must be a project name" };
-  const named = readFlareKey(parsed.key);
+  const named = readCandleKey(parsed.key);
   if ("error" in named) return named;
-  if (RESERVED_FLARE_KEY.test(named.key)) return { error: "key: vigil: keys belong to vigils" };
+  if (RESERVED_CANDLE_KEY.test(named.key)) return { error: "key: vigil: keys belong to vigils" };
   const title = readLine(parsed.title, "title", TEXT_LIMITS.title);
   if ("error" in title) return title;
   if (title.text === undefined) return { error: "title is required" };
@@ -1381,10 +1381,10 @@ function readLightBody(parsed: JsonValue): LightBody | { error: string } {
   if ("error" in target) return target;
   const source = readLine(parsed.source, "source", TEXT_LIMITS.target);
   if ("error" in source) return source;
-  if (source.text !== undefined && RESERVED_FLARE_SOURCE.test(source.text)) return { error: "source: ritual: and vigil: sources are darius's own" };
-  if (deliver !== undefined && deliver !== null && (!isText(deliver) || !FLARE_DELIVER.test(deliver))) return { error: "deliver must be push, email, push,email or none" };
+  if (source.text !== undefined && RESERVED_CANDLE_SOURCE.test(source.text)) return { error: "source: ritual: and vigil: sources are darius's own" };
+  if (deliver !== undefined && deliver !== null && (!isText(deliver) || !CANDLE_DELIVER.test(deliver))) return { error: "deliver must be push, email, push,email or none" };
   if (body !== undefined && body !== null && !isText(body)) return { error: "body must be text" };
-  const light: LightBody = { project, key: named.key, title: title.text, severity: known, source: source.text ?? FLARE_SOURCE_DEFAULT };
+  const light: LightBody = { project, key: named.key, title: title.text, severity: known, source: source.text ?? CANDLE_SOURCE_DEFAULT };
   if (target.text !== undefined) light.target = target.text;
   if (isText(deliver)) light.deliver = deliver;
   if (isText(body) && body.trim() !== "") light.body = body;
@@ -1401,45 +1401,45 @@ function cliReply(answer: CliAnswer): PushApiReply {
 
 /** The argv of `answer` and `accept`. Every value through `flagArg`, the key after `--`. */
 function settleArgv(verb: "answer" | "accept", body: { project: string; key: string; note?: string }, viewer: ActionViewer): string[] {
-  const argv = ["flare", verb, flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json"];
+  const argv = ["candle", verb, flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json"];
   if (body.note !== undefined) argv.push(flagArg("note", body.note));
   argv.push("--", body.key);
   return argv;
 }
 
-async function acceptFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
-  const guarded = guard(request, viewer, LOOPBACK_FLARE_SETTLE);
+async function acceptCandle(request: ActionRequest, viewer: ActionViewer, deps: CandleDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_CANDLE_SETTLE);
   if ("reply" in guarded) return guarded.reply;
-  const body = readSettleBody(guarded.parsed, ACCEPT_FLARE_KEYS);
+  const body = readSettleBody(guarded.parsed, ACCEPT_CANDLE_KEYS);
   if ("error" in body) return fail(400, body.error);
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
-  const found = flareDetail(body.project, body.key);
-  if (found === null) return fail(400, `no flare '${body.key}' in ${body.project}`);
-  const refused = flareSettleRefusal("accept", found.row);
+  const found = candleDetail(body.project, body.key);
+  if (found === null) return fail(400, `no candle '${body.key}' in ${body.project}`);
+  const refused = candleSettleRefusal("accept", found.row);
   if (refused !== undefined) return fail(409, refused);
   return cliReply(await deps.run(settleArgv("accept", body, viewer)));
 }
 
-async function answerFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
-  const guarded = guard(request, viewer, LOOPBACK_FLARE_SETTLE);
+async function answerCandle(request: ActionRequest, viewer: ActionViewer, deps: CandleDeps): Promise<PushApiReply> {
+  const guarded = guard(request, viewer, LOOPBACK_CANDLE_SETTLE);
   if ("reply" in guarded) return guarded.reply;
-  const body = readSettleBody(guarded.parsed, ANSWER_FLARE_KEYS);
+  const body = readSettleBody(guarded.parsed, ANSWER_CANDLE_KEYS);
   if ("error" in body) return fail(400, body.error);
   if (body.note === undefined) return fail(400, "note is required: an answer says what was decided");
   if (!listProjects().includes(body.project)) return fail(400, `no project ${body.project}`);
-  const found = flareDetail(body.project, body.key);
-  if (found === null) return fail(400, `no flare '${body.key}' in ${body.project}`);
-  const refused = flareSettleRefusal("answer", found.row);
+  const found = candleDetail(body.project, body.key);
+  if (found === null) return fail(400, `no candle '${body.key}' in ${body.project}`);
+  const refused = candleSettleRefusal("answer", found.row);
   if (refused !== undefined) return fail(409, refused);
   if (!body.followUp) return cliReply(await deps.run(settleArgv("answer", body, viewer)));
   const { run, ritual, source } = found.row;
   if (run === undefined || ritual === undefined) {
-    return fail(409, `flare '${body.key}' has no run to follow up: its newest report came from ${source}. Answer it without a follow-up, and act on it yourself.`);
+    return fail(409, `candle '${body.key}' has no run to follow up: its newest report came from ${source}. Answer it without a follow-up, and act on it yourself.`);
   }
-  return startFlareFollowUp({ project: body.project, key: body.key, note: body.note, run, ritual }, viewer, deps);
+  return startCandleFollowUp({ project: body.project, key: body.key, note: body.note, run, ritual }, viewer, deps);
 }
 
-interface FlareFollowUp {
+interface CandleFollowUp {
   project: string;
   key: string;
   note: string;
@@ -1449,27 +1449,27 @@ interface FlareFollowUp {
 
 /**
  * As POST /api/run/follow-up: ready first, here or on the ritual's host, then
- * the CLI detached, because `flare answer --follow-up` waits for the run. The
- * CLI writes `flare.answered` when the run started, and only then.
+ * the CLI detached, because `candle answer --follow-up` waits for the run. The
+ * CLI writes `candle.answered` when the run started, and only then.
  */
-async function startFlareFollowUp(flare: FlareFollowUp, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
-  const { project, key, note, run, ritual } = flare;
+async function startCandleFollowUp(candle: CandleFollowUp, viewer: ActionViewer, deps: CandleDeps): Promise<PushApiReply> {
+  const { project, key, note, run, ritual } = candle;
   const ready = await deps.readiness(project, run);
   if (!ready.ready) return fail(409, ready.reason);
-  if (!ready.items.some((item) => item.key === key)) return fail(409, `run ${run} has no open decision on flare '${key}' to follow up. Answer it without a follow-up.`);
+  if (!ready.items.some((item) => item.key === key)) return fail(409, `run ${run} has no open decision on candle '${key}' to follow up. Answer it without a follow-up.`);
   const on = ready.via === undefined ? undefined : ready.host;
   // The name comes from the store. A name that starts with `-` would reach ssh as an option.
   if (on !== undefined && !HOST_NAME.test(on)) return fail(409, "the follow-up did not start: the ritual's host name is not valid");
   const who = `web:${viewer.who}`;
-  const argv = ["flare", "answer", "--follow-up", flagArg("project", project), flagArg("note", note), flagArg("who", who)];
+  const argv = ["candle", "answer", "--follow-up", flagArg("project", project), flagArg("note", note), flagArg("who", who)];
   if (on !== undefined) argv.push(flagArg("on", on));
   argv.push("--", key);
   const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "follow-up", project, ritual, parent: run, host: ready.host });
   const outcome = await spawnWatched(deps, { project, run, logName: "follow-up.log", line: STARTED_LINE, host: ready.host, record }, () => ({ argv, on }));
-  return flareFollowUpReply(outcome, ready.host);
+  return candleFollowUpReply(outcome, ready.host);
 }
 
-function flareFollowUpReply(outcome: RunNowOutcome, host: string): PushApiReply {
+function candleFollowUpReply(outcome: RunNowOutcome, host: string): PushApiReply {
   const ask = outcome.ask;
   if ("failed" in outcome) return fail(409, outcome.failed);
   if ("started" in outcome) return { status: 202, body: withAsked({ ok: true, run: outcome.started, host: outcome.host }, ask) };
@@ -1481,18 +1481,18 @@ function flareFollowUpReply(outcome: RunNowOutcome, host: string): PushApiReply 
 /** The guards of `light`, in the order docs/concept.md lists them. A browser sends `Origin` on every POST; a CI job sends none. */
 function lightGuard(request: ActionRequest, viewer: ActionViewer): Guarded {
   if (request.method !== "POST") return { reply: fail(405, "POST only") };
-  if (viewer.local === true) return { reply: fail(403, LOOPBACK_FLARE_LIGHT) };
+  if (viewer.local === true) return { reply: fail(403, LOOPBACK_CANDLE_LIGHT) };
   const origin = request.headers.get("origin");
-  if (origin === "null") return { reply: fail(403, "a request with Origin: null cannot light a flare") };
+  if (origin === "null") return { reply: fail(403, "a request with Origin: null cannot light a candle") };
   if (origin !== null && !isSameOrigin(request.headers, process.env.DARIUS_WEB_URL?.trim())) return { reply: fail(403, "the request must come from the darius page") };
   const site = request.headers.get("sec-fetch-site");
-  if (site === "cross-site" || site === "same-site") return { reply: fail(403, "a page of another site cannot light a flare") };
+  if (site === "cross-site" || site === "same-site") return { reply: fail(403, "a page of another site cannot light a candle") };
   return jsonPayload(request, "too large");
 }
 
 /** The argv of `light`. Every value through `flagArg`, the key after `--`, the body on stdin only. */
 function lightArgv(body: LightBody, viewer: ActionViewer): string[] {
-  const argv = ["flare", "light", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), flagArg("title", body.title), flagArg("severity", body.severity), flagArg("source", body.source), "--json"];
+  const argv = ["candle", "light", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), flagArg("title", body.title), flagArg("severity", body.severity), flagArg("source", body.source), "--json"];
   if (body.target !== undefined) argv.push(flagArg("target", body.target));
   if (body.deliver !== undefined) argv.push(flagArg("deliver", body.deliver));
   if (body.body !== undefined) argv.push("--stdin");
@@ -1500,7 +1500,7 @@ function lightArgv(body: LightBody, viewer: ActionViewer): string[] {
   return argv;
 }
 
-async function lightFlare(request: ActionRequest, viewer: ActionViewer, deps: FlareDeps): Promise<PushApiReply> {
+async function lightCandle(request: ActionRequest, viewer: ActionViewer, deps: CandleDeps): Promise<PushApiReply> {
   const guarded = lightGuard(request, viewer);
   if ("reply" in guarded) return guarded.reply;
   const body = readLightBody(guarded.parsed);
