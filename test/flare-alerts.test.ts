@@ -18,7 +18,7 @@ import { join } from "node:path";
 
 import { parseArgs } from "../src/cli/args.ts";
 import { flareCommand } from "../src/cli/flare.ts";
-import { flareAlerts, flushAlerts, MAX_TRIES, NOT_SET_UP, sendAlerts, type Alert } from "../src/core/alerts.ts";
+import { channelProblems, flareAlerts, flushAlerts, MAX_TRIES, NOT_SET_UP, sendAlerts, type Alert } from "../src/core/alerts.ts";
 import { emailSettingsFile, writeEmailSettings, type EmailSettings } from "../src/core/email.ts";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import type { LedgerLine, Ritual } from "../src/core/model.ts";
@@ -585,6 +585,77 @@ test("a bad email.json does not stop the flush: push still goes out, and the tra
     }
   }
   assertStoreClean();
+});
+
+/** Runs `body` with this text as push.json, and puts the real keys back after. */
+async function withPushFile(content: string, body: () => Promise<void>): Promise<void> {
+  const saved = readFileSync(pushKeysFile(), "utf8");
+  writeFileSync(pushKeysFile(), content);
+  try {
+    await body();
+  } finally {
+    writeFileSync(pushKeysFile(), saved, { mode: 0o600 });
+  }
+}
+
+test("a bad push.json does not stop the flush: email still goes out, and the trace holds no key material", async () => {
+  const secret = "PRIVATE-KEY-MATERIAL-1234";
+  const broken = [`{"v":1,"private":"${secret}"`, JSON.stringify({ v: 1, private: secret, public: "p" })];
+  for (const content of broken) {
+    await withPushFile(content, async () => {
+      await withEmail(emailSettings(), async () => {
+        const project = fresh(`fa-push-bad-${String(content.length)}`);
+        const lit = light(project, "k", { deliver: ["push", "email"] });
+        const delivery = await flushAlerts({ projects: [project.name] });
+        assert.equal(delivery?.sent, 1, "email goes out");
+        assert.equal(service.mail.length, 1);
+        const [trace] = failures(project, `line:${lit.id}:push`);
+        assert.match(String(trace?.error), /^not set up on host: push\.json /u);
+        assert.equal(String(trace?.error).includes(secret), false);
+        assert.equal(String(trace?.error).includes(SANDBOX), false, "a base name, not a path");
+        for (const { path, text } of filesUnder(join(process.env.DARIUS_STATE_DIR ?? "", project.name))) assert.equal(text.includes(secret), false, path);
+      });
+    });
+  }
+});
+
+test("channelProblems names a broken push.json or email.json with the reason and no value", async () => {
+  assert.deepEqual(channelProblems(), []);
+  await withPushFile("not json at all", async () => {
+    writeFileSync(emailSettingsFile(), `{"token":"${TOKEN}"`, { mode: 0o600 });
+    try {
+      const found = channelProblems();
+      assert.equal(found.length, 2);
+      assert.match(found[0] ?? "", /^push\.json is not valid JSON/u);
+      assert.equal(found[1], "email.json is not valid JSON");
+      assert.equal(found.join("\n").includes(TOKEN), false);
+    } finally {
+      rmSync(emailSettingsFile(), { force: true });
+    }
+  });
+});
+
+test("one project that throws is one entry in failed, and the others still go", async () => {
+  const project = fresh("fa-iso");
+  light(project, "k");
+  const delivery = await flushAlerts({ projects: ["fa-no-such-project", project.name] });
+  assert.equal(delivery?.sent, 1);
+  assert.equal(delivery?.failed.length, 1);
+  assert.match(delivery?.failed[0] ?? "", /^fa-no-such-project: /u);
+});
+
+test("an alert from a line older than 24 hours does not go out after a repair, a flare notice does; now is respected", async () => {
+  const project = fresh("fa-24h");
+  appendLine(project, { who: "t", type: "run.completed", item: "ritual/heartbeat", run: "OLD1", outcome: "failed", at: tick() });
+  const lit = light(project, "waited");
+  const twoDays = Date.now() + 48 * 3_600_000;
+  const delivery = await flushAlerts({ projects: [project.name], now: twoDays });
+  assert.equal(delivery?.sent, 1, "only the flare notice");
+  assert.deepEqual(lines(project, "alert.sent").map((line) => line.key), [`line:${lit.id}:push`]);
+
+  appendLine(project, { who: "t", type: "run.completed", item: "ritual/heartbeat", run: "NEW1", outcome: "failed", at: tick() });
+  // At the real time both lines are under a day old, so the held back one goes now, with the new one.
+  assert.equal((await flushAlerts({ projects: [project.name] }))?.sent, 2, "a line under 24 hours old goes");
 });
 
 test("flare light sends its own email before it exits, and its stderr holds no value on a failure", async () => {

@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.1] - 2026-11-02
+
+### Fixed
+
+- A `push.json` that cannot be read no longer stops the flush. Push closes with the reason "not set up on host: push.json ..." as email does, and the reason quotes no key. The messages of `readPushKeys` name the file by base name.
+- `flushAlerts` catches per project. A project that throws is one `<project>: <message>` entry in `failed`, and the others still go.
+- An alert from a ledger line older than 24 hours does not go out after a channel is repaired, so there is no burst of old news. A flare notice is not held to that limit.
+
+### Changed
+
+- `darius doctor` ends with an "Alert channels" warning for a `push.json` or `email.json` that cannot be read, with the reason and no value.
+- Settings, Notifications shows the reason on its email line when `email.json` is broken. `WebContext` has `emailProblem()`.
+
 ## [0.113.0] - 2026-11-02
 
 ### Added

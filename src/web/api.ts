@@ -1224,6 +1224,8 @@ export interface WebContext {
   flare(project: string, key: string): FlareDetail | null;
   /** Whether the email channel is set up on this host (0.112.0). Says nothing else: no address, no token. */
   emailSetUp(): boolean;
+  /** Why the email file cannot be read (0.113.1), or null. A reason such as "email.json is not valid JSON": it never quotes a value. */
+  emailProblem(): string | null;
   /** Whether this host can start a follow-up of the run now (0.48.0). Reads only. */
   followUp(project: string, run: string): Promise<FollowUpReadiness>;
   /**

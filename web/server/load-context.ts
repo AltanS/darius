@@ -24,6 +24,7 @@ export function loadContext(context: WebContext): AppLoadContext {
     flares: () => context.flares(),
     flare: (project, key) => context.flare(project, key),
     emailSetUp: () => context.emailSetUp(),
+    emailProblem: () => context.emailProblem(),
     activity: (project, options) => context.activity(project, options),
     pending: (project) => context.pending(project),
     followUp: (project, run) => context.followUp(project, run),

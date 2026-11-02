@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ process.env.DARIUS_CONFIG_DIR = join(sandbox, "config");
 process.env.DARIUS_TAILSCALE = join(sandbox, "no-tailscale");
 
 const words = await import("../web/app/lib/flares.ts");
-const { writeEmailSettings, parseEmailInput } = await import("../src/core/email.ts");
+const { emailSettingsFile, writeEmailSettings, parseEmailInput } = await import("../src/core/email.ts");
 const { FLARE_ACCEPTED, FLARE_LIT } = await import("../src/core/flare-index.ts");
 const { appendLine } = await import("../src/core/ledger.ts");
 const { openProject, putBlob } = await import("../src/core/store.ts");
@@ -242,4 +242,17 @@ test("the email line of Settings: false without the file, true with it, and it s
   assert.equal(context.emailSetUp(), false);
   writeEmailSettings(parseEmailInput(JSON.stringify({ url: "https://mail.example.test/send", token: "token-placeholder", from: "darius@example.test", to: ["ops@example.test"] })));
   assert.equal(context.emailSetUp(), true);
+});
+
+test("a broken email file is a problem on the context, with the reason and no value", () => {
+  rmSync(emailSettingsFile(), { force: true });
+  const context = webContext("owner");
+  assert.equal(context.emailProblem(), null);
+  writeFileSync(emailSettingsFile(), '{"token":"token-placeholder"', { mode: 0o600 });
+  try {
+    assert.equal(context.emailSetUp(), false);
+    assert.equal(context.emailProblem(), "email.json is not valid JSON");
+  } finally {
+    rmSync(emailSettingsFile(), { force: true });
+  }
 });

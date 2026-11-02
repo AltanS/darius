@@ -101,8 +101,10 @@ const text = new TextEncoder();
 
 // --- keys ---------------------------------------------------------------------------
 
+const PUSH_FILE_NAME = "push.json";
+
 export function pushKeysFile(): string {
-  return join(configDir(), "push.json");
+  return join(configDir(), PUSH_FILE_NAME);
 }
 
 function isRecord(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {
@@ -113,7 +115,11 @@ function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
 }
 
-/** The keys of this host; null without the file. A broken file is an error that never quotes it. */
+/**
+ * The keys of this host; null without the file. A broken file is an error that
+ * never quotes it. The message names the file by its base name, because it can
+ * end up in a synced ledger line and a full path holds a user name.
+ */
 export function readPushKeys(): PushKeys | null {
   const file = pushKeysFile();
   if (!existsSync(file)) return null;
@@ -121,12 +127,22 @@ export function readPushKeys(): PushKeys | null {
   try {
     raw = JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    throw new Error(`${file} is not valid JSON; copy it again from the host that made the keys`);
+    throw new Error(`${PUSH_FILE_NAME} is not valid JSON; copy it again from the host that made the keys`);
   }
   if (!isRecord(raw) || raw.v !== 1 || !isText(raw.subject) || !isText(raw.public) || !isText(raw.private) || !isText(raw.since)) {
-    throw new Error(`${file} needs v 1, subject, public, private and since`);
+    throw new Error(`${PUSH_FILE_NAME} needs v 1, subject, public, private and since`);
   }
   return { v: 1, subject: raw.subject, public: raw.public, private: raw.private, since: raw.since };
+}
+
+/** Why `push.json` cannot be read, or null when it is fine or absent. Holds no key material. Never throws. */
+export function pushKeysProblem(): string | null {
+  try {
+    readPushKeys();
+    return null;
+  } catch (cause) {
+    return errorMessage(cause);
+  }
 }
 
 export function writePushKeys(keys: PushKeys): void {

@@ -175,6 +175,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     flares: () => Promise.resolve(collectFlareRows()),
     flare: (project, key) => flareDetail(project, key),
     emailSetUp: () => emailStatus().isSetUp,
+    emailProblem: () => emailStatus().problem,
     activity: (project, options) => collectActivity(project, options),
     pending: (project) => collectPending(project),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),

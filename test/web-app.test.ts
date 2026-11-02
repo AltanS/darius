@@ -409,6 +409,7 @@ const context: WebContext = {
   flares: () => Promise.resolve(FLARES),
   flare: (project, key) => flareDetailOf(project, key),
   emailSetUp: () => true,
+  emailProblem: () => null,
   activity: (_project, options) => (options?.run === DONE ? DONE_TRAIL : []),
   pending: () => [],
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
@@ -2824,4 +2825,9 @@ test("Settings, Notifications: a read-only email line, with no address and no bu
   assert.ok(notSet.text.includes("Email: not set up on this host"));
   assert.equal(/<input[^>]*type="(?:email|text)"/u.test(notSet.body), false, "no field");
   assert.equal(notSet.text.toLowerCase().includes("test email"), false, "no test button");
+});
+
+test("Settings, Notifications: a broken email file shows as a problem with its reason", async () => {
+  const broken = await flarePage("/settings/notifications", { emailSetUp: () => false, emailProblem: () => "email.json is not valid JSON" });
+  assert.ok(broken.text.includes("Email: not set up on this host. Problem: email.json is not valid JSON"));
 });

@@ -1,5 +1,5 @@
-import { C as __require, S as __exportAll, _ as useRouteLoaderData, a as Meta, b as require_react, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteError, h as useRevalidator, i as Links, l as ScrollRestoration, m as useNavigation, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withComponentProps, w as __toESM, x as __commonJSMin, y as withErrorBoundaryProps } from "./chunk-H4DAEOV7-CxcVxk3C.js";
-//#region node_modules/react-dom/cjs/react-dom.production.js
+import { C as __require, S as __exportAll, _ as useRouteLoaderData, a as Meta, b as require_react, c as Scripts, d as isRouteErrorResponse, f as redirect, g as useRouteError, h as useRevalidator, i as Links, l as ScrollRestoration, m as useNavigation, o as NavLink, p as useLocation, r as Link, s as Outlet, t as ServerRouter, u as data, v as withComponentProps, w as __toESM, x as __commonJSMin, y as withErrorBoundaryProps } from "./chunk-H4DAEOV7-CDWn9Bxm.js";
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -152,7 +152,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/index.js
+//#region ../../../../web/node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -166,7 +166,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server-legacy.node.production.js
 /**
 * @license React
 * react-dom-server-legacy.node.production.js
@@ -4260,7 +4260,7 @@ var require_react_dom_server_legacy_node_production = /* @__PURE__ */ __commonJS
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-server.node.production.js
+//#region ../../../../web/node_modules/react-dom/cjs/react-dom-server.node.production.js
 /**
 * @license React
 * react-dom-server.node.production.js
@@ -8871,7 +8871,7 @@ var import_server_node = (/* @__PURE__ */ __commonJSMin(((exports) => {
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var NonceContext = (0, import_react.createContext)(void 0);
 //#endregion
-//#region node_modules/react/cjs/react-jsx-runtime.production.js
+//#region ../../../../web/node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -8906,7 +8906,7 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region node_modules/react/jsx-runtime.js
+//#region ../../../../web/node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
@@ -21936,7 +21936,15 @@ var settings_notifications_exports = /* @__PURE__ */ __exportAll({
 	meta: () => meta$5
 });
 function loader$8({ context }) {
-	return { emailSetUp: context.emailSetUp() };
+	return {
+		emailSetUp: context.emailSetUp(),
+		emailProblem: context.emailProblem()
+	};
+}
+/** A broken file reads as a problem with its reason, not as a quiet "not set up". The reason holds no value. */
+function emailLine(isSetUp, problem) {
+	if (problem !== null) return `Email: not set up on this host. Problem: ${problem}`;
+	return isSetUp ? "Email: set up" : "Email: not set up on this host";
 }
 var meta$5 = () => [{ title: "Notifications | Settings | darius" }];
 var settings_notifications_default = withComponentProps(function SettingsNotifications({ loaderData }) {
@@ -21954,7 +21962,7 @@ var settings_notifications_default = withComponentProps(function SettingsNotific
 				help: "No address is shown.",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "st-value",
-					children: loaderData.emailSetUp ? "Email: set up" : "Email: not set up on this host"
+					children: emailLine(loaderData.emailSetUp, loaderData.emailProblem)
 				})
 			})
 		})]
@@ -24511,7 +24519,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/settings-notifications-BnLLipFW.js",
+			"module": "/assets/settings-notifications-2krbpkSo.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-Dcz7o3_7.js",
 				"/assets/jsx-runtime-DAtKG4JV.js",
@@ -24792,8 +24800,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-bafbc254.js",
-	"version": "bafbc254",
+	"url": "/assets/manifest-ebf37f29.js",
+	"version": "ebf37f29",
 	"sri": void 0
 };
 //#endregion

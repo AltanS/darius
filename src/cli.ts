@@ -26,6 +26,7 @@ import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } fr
 import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
+import { channelProblems } from "./core/alerts.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
@@ -315,7 +316,24 @@ function isFullDoctor(argv: readonly string[]): boolean {
   return argv[0] === "doctor" && !argv.includes("--quick") && !argv.includes("--help") && !argv.includes("-h");
 }
 
+/**
+ * After a full `doctor`: a push or email file that cannot be read is a
+ * problem. It names the file and the reason, and never a value. It is a
+ * warning, as the tree conflicts are: the exit code stays the legacy one.
+ */
+function printChannelProblems(argv: readonly string[]): void {
+  const problems = channelProblems();
+  if (problems.length === 0) return;
+  if (argv.includes("--json")) {
+    for (const problem of problems) console.error(`darius: WARN: alert channel: ${problem}`);
+    return;
+  }
+  const lines = problems.map((problem) => `  WARN: ${problem}. Alerts on that channel wait until the file is fixed.`);
+  process.stdout.write(`\n## Alert channels\n\n${lines.join("\n")}\n`);
+}
+
 function printDoctorNotes(argv: readonly string[]): void {
+  printChannelProblems(argv);
   const notes = doctorNotes(process.cwd());
   if (notes.length === 0) return;
   if (argv.includes("--json")) {

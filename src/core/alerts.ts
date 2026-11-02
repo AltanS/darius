@@ -51,12 +51,12 @@ import { existsSync } from "node:fs";
 
 import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
-import { readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
+import { emailStatus, readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { FLARE_LIT, flareOpenings, type FlareOpened, type FlareOpening } from "./flare-index.ts";
 import type { JsonValue, LedgerLine, Ritual } from "./model.ts";
 import { projectDir } from "./paths.ts";
-import { activeDevices, broadcast, readPushKeys, type Notice } from "./push.ts";
+import { activeDevices, broadcast, pushKeysProblem, readPushKeys, type Notice } from "./push.ts";
 import { parseResult, readSummary } from "./result.ts";
 import { getBlobText, GLOBAL_PROJECT, listProjects, openProject, type Project } from "./store.ts";
 
@@ -445,8 +445,13 @@ interface OpenChannel {
   send(alert: Alert): Promise<Outcome>;
 }
 
-/** Null when this host has no keys or no device subscribed yet: then nothing is sent, and nothing piles up. */
-function openPush(): OpenChannel | null {
+/** A channel as this host has it: open, or closed with the reason a flare notice records. */
+interface Opening {
+  channel: OpenChannel | null;
+  reason: string;
+}
+
+function openedPush(): OpenChannel | null {
   const keys = readPushKeys();
   if (keys === null || !existsSync(projectDir(GLOBAL_PROJECT))) return null;
   const global = openProject(GLOBAL_PROJECT);
@@ -462,6 +467,20 @@ function openPush(): OpenChannel | null {
   };
 }
 
+/**
+ * Closed (null channel) when this host has no keys or no device subscribed yet:
+ * then nothing is sent, and nothing piles up. A bad `push.json` is a reason and
+ * not a throw, so email and the other projects still go. The reason quotes no
+ * value (src/core/push.ts, `readPushKeys`).
+ */
+function openPush(): Opening {
+  try {
+    return { channel: openedPush(), reason: NOT_SET_UP };
+  } catch (cause) {
+    return { channel: null, reason: `${NOT_SET_UP}: ${errorMessage(cause)}` };
+  }
+}
+
 function emailChannel(settings: EmailSettings): OpenChannel {
   return {
     since: settings.since,
@@ -472,14 +491,8 @@ function emailChannel(settings: EmailSettings): OpenChannel {
   };
 }
 
-/** The email channel, and what a flare notice records while it is closed. */
-interface EmailOpening {
-  channel: OpenChannel | null;
-  reason: string;
-}
-
 /** A bad file is a reason and not a throw, so the other alerts still go. The reason quotes no value. */
-function openEmail(): EmailOpening {
+function openEmail(): Opening {
   try {
     const settings = readEmailSettings();
     return { channel: settings === null ? null : emailChannel(settings), reason: NOT_SET_UP };
@@ -498,8 +511,19 @@ interface Channels {
 
 /** Opens every channel once. */
 function openChannels(): Channels {
+  const push = openPush();
   const email = openEmail();
-  return { push: openPush(), email: email.channel, closedReason: { push: NOT_SET_UP, email: email.reason } };
+  return { push: push.channel, email: email.channel, closedReason: { push: push.reason, email: email.reason } };
+}
+
+/** One line per alert channel file that cannot be read, with the reason and no value. Empty when all is well. For `darius doctor`. */
+export function channelProblems(): string[] {
+  const found: string[] = [];
+  const push = pushKeysProblem();
+  if (push !== null) found.push(push);
+  const email = emailStatus().problem;
+  if (email !== null) found.push(email);
+  return found;
 }
 
 /** A notice that failed before email was set up is history: its line is older than `since`, and setup must not send it. */
@@ -562,26 +586,49 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
   return delivery;
 }
 
-/** Sends what the ledgers of this host hold and nobody was told yet. Null when this host cannot send on push and has no flare notice to trace. */
+/**
+ * An alert that waited longer than this for a closed channel is stale news.
+ * After a repair, the old lines stay silent, so there is no burst. A flare
+ * notice is not held to this: it is still open until someone settles it.
+ */
+const WAITED_MAX_MS = 24 * 3_600_000;
+
+/** The later of the channel's `since` and `now` minus a day. */
+function newsFloor(since: string, now: number): string {
+  const floor = new Date(now - WAITED_MAX_MS).toISOString();
+  return since > floor ? since : floor;
+}
+
+/**
+ * Sends what the ledgers of this host hold and nobody was told yet. Null when
+ * this host cannot send on push and has no flare notice to trace. A project
+ * that throws is one entry in `failed`, and the others still go.
+ */
 export async function flushAlerts(options: { isDryRun?: boolean; projects?: readonly string[]; now?: number } = {}): Promise<Delivery | null> {
   const channels = openChannels();
   const since = { push: channels.push?.since, email: channels.email?.since };
   const host = hostId();
+  const now = options.now ?? Date.now();
   const total = emptyDelivery();
   let isActive = channels.push !== null;
   // `_global` holds the gate checks; listProjects leaves it out. Without push keys it has nothing to send.
   const names = options.projects ?? [...listProjects(), GLOBAL_PROJECT];
   for (const name of names) {
     if (name === GLOBAL_PROJECT && channels.push === null) continue;
-    const project = openProject(name);
-    const ledger = readLedger(project);
-    const news = channels.push === null ? [] : ledgerAlerts(project, ledger, channels.push.since, host, options.now);
-    const delivery = await sendAlerts(project, [...news, ...flareAlerts(project, ledger, { host, since })], options);
-    if (delivery === null) continue;
-    isActive = true;
-    total.sent += delivery.sent;
-    total.failed.push(...delivery.failed);
-    total.pending.push(...delivery.pending);
+    try {
+      const project = openProject(name);
+      const ledger = readLedger(project);
+      const news = channels.push === null ? [] : ledgerAlerts(project, ledger, newsFloor(channels.push.since, now), host, now);
+      const delivery = await sendAlerts(project, [...news, ...flareAlerts(project, ledger, { host, since })], options);
+      if (delivery === null) continue;
+      isActive = true;
+      total.sent += delivery.sent;
+      total.failed.push(...delivery.failed);
+      total.pending.push(...delivery.pending);
+    } catch (cause) {
+      isActive = true;
+      total.failed.push(`${name}: ${errorMessage(cause)}`);
+    }
   }
   return isActive ? total : null;
 }
