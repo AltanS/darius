@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.118.0] - 2026-11-02
+
+### Added
+
+- The box broker (`src/core/box-broker.ts`): one Unix socket per run, mode 0600, outside the box. It takes `run hold <run> --question Q...` and `run complete <run> --outcome X [--findings-stdin] [--json]` for its own run only, and refuses every other flag, verb and run id with exit 2 and one line. `--project` passes only as the run's own project, which the run prompt names; it is checked and never passed on.
+- The broker runs the real CLI as an argv list, with an env built from scratch: the run, its policy, the project and `who` come from the runner, never from the request. stdin is capped at the findings limit plus 64 KB, one request runs at a time, and a child is stopped after 60 s. Each request is one line in `<run dir>/broker.jsonl`.
+- Inside a box, `darius run hold` and `darius run complete` send the command line to `/run/darius/broker.sock` and print the reply with its exit code, so a refused result block reads as it does outside. `DARIUS_BOX_BROKER` overrides the path; the test suite points it at a missing file.
 ## [0.116.0] - 2026-11-02
 
 ### Added

@@ -20,6 +20,8 @@
  *                  The findings may end with one ```darius-result block
  *                  (src/core/result.ts); a run darius launched must hand one
  *                  in to complete, and an invalid block is refused.
+ *                  Inside a box both go to the broker outside
+ *                  (src/core/box-broker.ts, 0.118.0), which runs them there.
  *   run ack <run> [--answer N=TEXT ...] [--note TEXT] [--who W] [--on HOST]
  *                  one answer per question, and a note; both reach the next
  *                  run of the ritual until a run that read them completes
@@ -78,6 +80,7 @@ import { ulid } from "../core/ulid.ts";
 import { followUpOf } from "../runner/follow-up.ts";
 import { parseAnswerFlags } from "../core/answers.ts";
 import { acknowledgeEarlier, acknowledgeRun, answerRun, answerRunMany } from "../runner/hold.ts";
+import { askBroker, boxBrokerSocket } from "../core/box-broker.ts";
 import { readStdin } from "./args.ts";
 import { forwardOn, runFollowUp, runNow, runResume } from "./run-due.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -654,6 +657,24 @@ function runProposal(args: ParsedArgs): number {
   return 0;
 }
 
+// --- box broker ---------------------------------------------------------------------
+
+/**
+ * Inside a box (src/core/box-broker.ts) the store is read-only, so `run hold`
+ * and `run complete` send the command line as typed to the broker outside,
+ * and print what the real CLI printed there, with its exit code. The broker
+ * decides what passes. Outside a box there is no socket, and nothing changes.
+ */
+async function forwardToBroker(socket: string, args: ParsedArgs): Promise<number> {
+  const argv = process.argv.slice(2);
+  if (argv[0] !== "run") throw new UsageError("run hold and run complete in a box need the darius command line");
+  const stdin = args.flags["findings-stdin"] === true ? (args.stdin ?? readStdin()) : undefined;
+  const reply = await askBroker(socket, stdin === undefined ? { argv } : { argv, stdin });
+  process.stdout.write(reply.stdout);
+  process.stderr.write(reply.stderr);
+  return reply.exit;
+}
+
 // --- dispatch ---------------------------------------------------------------------
 
 export const runCommand: Command = {
@@ -663,6 +684,8 @@ export const runCommand: Command = {
   usage: `run ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
+    const broker = verb === "hold" || verb === "complete" ? boxBrokerSocket() : undefined;
+    if (broker !== undefined) return forwardToBroker(broker, args);
     switch (verb) {
       case "start":
         return runStart(args);
