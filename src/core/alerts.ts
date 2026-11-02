@@ -33,11 +33,15 @@
  * is built; the default is push. Each channel has its own readiness check
  * (`CHANNELS`), so a channel does not depend on push keys. A flare notice on
  * a channel that is not set up on this host would be lost with no trace, so
- * it writes `alert.failed` with the reason "not set up on host". That counts
- * toward MAX_TRIES, so the trace repeats at most MAX_TRIES times. A line older
- * than the `since` of its channel is history and sends nothing. Email
- * (src/core/email.ts) has its own text, with less in it, and a bad `email.json`
- * counts as not set up with the reason added, so it cannot stop the flush.
+ * it writes `alert.failed` with the reason "not set up on host". That line is a
+ * trace and not a try: it does not count toward MAX_TRIES, and it is written
+ * once per key and reason, not once per flush. A line older than the `since`
+ * of its channel is history and sends nothing, and nothing replays it later.
+ * A notice that waited for a repair goes out only if a flare of its opening is
+ * still lit; if all are answered, accepted or gone, it is dropped with no
+ * line. Email (src/core/email.ts) has its own text, with less in it. A bad
+ * `email.json` or `push.json` counts as not set up with the reason added, so
+ * it cannot stop the flush.
  *
  * WHEN. `flushAlerts` runs after every run-due batch, `run now` and `run
  * resume`, and after `darius sync` (the sync timer, every 15 minutes), which
@@ -53,7 +57,7 @@ import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { emailStatus, readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
-import { FLARE_LIT, flareOpenings, type FlareOpened, type FlareOpening } from "./flare-index.ts";
+import { collectFlares, FLARE_LIT, flareOpenings, type FlareOpened, type FlareOpening } from "./flare-index.ts";
 import type { JsonValue, LedgerLine, Ritual } from "./model.ts";
 import { projectDir } from "./paths.ts";
 import { activeDevices, broadcast, pushKeysProblem, readPushKeys, type Notice } from "./push.ts";
@@ -410,16 +414,27 @@ interface SendState {
   tries: Map<string, number>;
   retries: Map<string, Alert>;
   lastFailed: Map<string, string>;
+  /** The `error` of the newest trace of each key. */
+  traces: Map<string, string>;
+}
+
+/** An `alert.failed` line that says only that the channel was closed. It is a trace and not a try, also in a ledger from before 0.113.2. */
+function isTrace(line: LedgerLine): line is LedgerLine & { error: string } {
+  return isText(line.error) && line.error.startsWith(NOT_SET_UP);
 }
 
 /** The send state of every key, from the ledger. */
 function sendState(ledger: readonly LedgerLine[]): SendState {
-  const state: SendState = { sent: new Set(), tries: new Map(), retries: new Map(), lastFailed: new Map() };
+  const state: SendState = { sent: new Set(), tries: new Map(), retries: new Map(), lastFailed: new Map(), traces: new Map() };
   for (const line of ledger) {
     const { key } = line;
     if (!isText(key)) continue;
     if (line.type === "alert.sent") state.sent.add(key);
     else if (line.type === "alert.failed") {
+      if (isTrace(line)) {
+        state.traces.set(key, line.error);
+        continue;
+      }
       state.tries.set(key, (state.tries.get(key) ?? 0) + 1);
       state.lastFailed.set(key, line.at);
       // A line written before channels were named is a push line. A channel this darius does not know is not ours to retry.
@@ -532,6 +547,35 @@ function isHistoryOnEmail(retry: Alert, state: SendState, email: OpenChannel | n
   return (state.lastFailed.get(retry.key) ?? "") < email.since;
 }
 
+/** The id of the ledger line a flare key stands for, `line:<id>:<channel>`. */
+function lineIdOfFlareKey(key: string): string | undefined {
+  return /^line:([^:]+):(?:push|email)$/u.exec(key)?.[1];
+}
+
+/**
+ * Tells whether a flare notice is still worth sending: a flare of its opening
+ * is lit. A flare that was answered, accepted or cleared since is settled, and
+ * the operator needs no word about it. The walk runs on the first question
+ * only, so a flush without a flare notice pays nothing. An opening this
+ * darius cannot find counts as open: it sends, as before.
+ */
+function openFlareCheck(project: Project, ledger: readonly LedgerLine[]): (key: string) => boolean {
+  let known: { status: Map<string, string>; openings: Map<string, FlareOpening> } | undefined;
+  const load = (): NonNullable<typeof known> => {
+    known ??= {
+      status: new Map(collectFlares(project, ledger).map((flare) => [flare.key, flare.status])),
+      openings: new Map(flareOpenings(project, ledger).map((opening) => [opening.line.id, opening])),
+    };
+    return known;
+  };
+  return (key) => {
+    const id = lineIdOfFlareKey(key);
+    const opening = id === undefined ? undefined : load().openings.get(id);
+    if (opening === undefined) return true;
+    return opening.flares.some((flare) => load().status.get(flare.key) === "lit");
+  };
+}
+
 /** What a failed notice leaves in the ledger: enough to send it again. */
 function failedLine(alert: Alert, error: string): LedgerLineInput {
   return { who: WHO, type: "alert.failed", key: alert.key, channel: channelOf(alert), error, title: alert.title, body: alert.body, url: alert.url };
@@ -545,19 +589,31 @@ async function sendOn(channel: OpenChannel, alert: Alert): Promise<Outcome> {
   }
 }
 
+/** The trace of a flare notice on a closed channel: once per key and reason, never a try. */
+function trace(project: Project, alert: Alert, reason: string, state: SendState, delivery: Delivery): void {
+  if (state.traces.get(alert.key) === reason) return;
+  appendLine(project, failedLine(alert, reason));
+  state.traces.set(alert.key, reason);
+  delivery.failed.push(`${alert.key}: ${reason}`);
+}
+
 /**
  * Sends each alert not sent yet on its channel to every recipient, and
  * records the outcome in the project ledger. Alerts that failed before go
  * again with their stored notice and channel, even when nothing rebuilds them
  * (a skip). One pass per channel, each with its own readiness check. A flare
- * notice on a channel this host has not set up writes `alert.failed` with the
- * reason "not set up on host" (counted in MAX_TRIES); any other alert on such
- * a channel stays silent. A dry run sends and records nothing. Null when this
- * host sends nothing, records nothing and has no flare notice to trace.
+ * notice on a channel this host has not set up writes one `alert.failed` trace
+ * with the reason "not set up on host" per key and reason; a trace is not a
+ * try. Any other alert on such a channel stays silent. A flare notice whose
+ * flares are all settled is not sent and leaves no line. A dry run sends and
+ * records nothing. Null when this host sends nothing, records nothing and has
+ * no flare notice to trace.
  */
 export async function sendAlerts(project: Project, alerts: readonly Alert[], options: { isDryRun?: boolean } = {}): Promise<Delivery | null> {
   const channels = openChannels();
-  const state = sendState(readLedger(project));
+  const ledger = readLedger(project);
+  const state = sendState(ledger);
+  const isOpen = openFlareCheck(project, ledger);
   const retries = [...state.retries.values()].filter((retry) => !alerts.some((alert) => alert.key === retry.key) && !isHistoryOnEmail(retry, state, channels.email));
   const queue = [...alerts, ...retries];
   if (channels.push === null && !queue.some((alert) => isFlareKey(alert.key))) return null;
@@ -566,12 +622,16 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
     const channel = channels[name];
     for (const alert of queue) {
       if (channelOf(alert) !== name || state.sent.has(alert.key) || (state.tries.get(alert.key) ?? 0) >= MAX_TRIES) continue;
+      if (isFlareKey(alert.key) && !isOpen(alert.key)) continue;
       if (options.isDryRun === true) {
         if (channel !== null) delivery.pending.push(alert);
         continue;
       }
-      if (channel === null && !isFlareKey(alert.key)) continue;
-      const outcome: Outcome = channel === null ? { delivered: 0, error: channels.closedReason[name] } : await sendOn(channel, alert);
+      if (channel === null) {
+        if (isFlareKey(alert.key)) trace(project, alert, channels.closedReason[name], state, delivery);
+        continue;
+      }
+      const outcome = await sendOn(channel, alert);
       if (outcome.delivered > 0) {
         appendLine(project, { who: WHO, type: "alert.sent", key: alert.key, channel: name, devices: outcome.delivered });
         state.sent.add(alert.key);
@@ -631,4 +691,29 @@ export async function flushAlerts(options: { isDryRun?: boolean; projects?: read
     }
   }
   return isActive ? total : null;
+}
+
+/**
+ * How many lit flares asked for email and have no `alert.sent` on it, across
+ * the projects of the local store. `darius email set` says it, because a flare
+ * from before `since`, or one that never had a closed channel's notice, stays
+ * in the app only. Reads the ledgers and writes nothing. A project that does
+ * not read counts as none.
+ */
+export function unsentEmailFlares(): number {
+  let count = 0;
+  for (const name of listProjects()) {
+    try {
+      const project = openProject(name);
+      const ledger = readLedger(project);
+      for (const flare of collectFlares(project, ledger)) {
+        if (flare.status !== "lit") continue;
+        const email = flareDelivery(project, ledger, flare.key).find((one) => one.channel === "email");
+        if (email !== undefined && email.state !== "sent") count += 1;
+      }
+    } catch {
+      // A project that does not read cannot say. The count is a hint, and `email set` must not fail on it.
+    }
+  }
+  return count;
 }

@@ -165,7 +165,7 @@ function failures(project: Project, key: string): LedgerLine[] {
 
 // --- a host that cannot send -----------------------------------------------------------
 
-test("without push keys a flare notice leaves one trace per flush, at most MAX_TRIES, and a plain alert leaves none", async () => {
+test("without push keys a flare notice leaves one trace however many flushes run, and a plain alert leaves none", async () => {
   const project = fresh("fa-bare");
   const failedRun = appendLine(project, { who: "timer", type: "run.completed", item: "ritual/heartbeat", run: "B1", outcome: "failed", at: tick() });
   const byDefault = light(project, "k1");
@@ -177,8 +177,9 @@ test("without push keys a flare notice leaves one trace per flush, at most MAX_T
   assert.deepEqual(first?.failed.toSorted(), [`${emailKey}: ${NOT_SET_UP}`, `${pushKey}: ${NOT_SET_UP}`].toSorted());
   for (let attempt = 0; attempt < MAX_TRIES + 2; attempt += 1) await flushAlerts({ projects: [project.name] });
 
-  assert.equal(failures(project, pushKey).length, MAX_TRIES, "the trace stops at MAX_TRIES");
-  assert.equal(failures(project, emailKey).length, MAX_TRIES);
+  assert.equal(failures(project, pushKey).length, 1, "one trace per key and reason, not one per flush");
+  assert.equal(failures(project, emailKey).length, 1);
+  assert.deepEqual((await flushAlerts({ projects: [project.name] }))?.failed, [], "a repeat flush reports nothing new");
   const [trace] = failures(project, pushKey);
   assert.equal(trace?.channel, "push");
   assert.equal(trace?.error, NOT_SET_UP);
@@ -204,7 +205,7 @@ test("a flush of every project works on a host with no _global project, and an e
   assert.equal(delivery?.sent, 0);
 });
 
-test("a notice with tries left goes out when push is set up later; one that used its tries does not", async () => {
+test("a notice that was traced goes out when push is set up later, however many traces it has", async () => {
   const project = fresh("fa-late");
   const lit = light(project, "late");
   await flushAlerts({ projects: [project.name] });
@@ -215,9 +216,8 @@ test("a notice with tries left goes out when push is set up later; one that used
   assert.equal(lines(project, "alert.sent").filter((line) => line.key === `line:${lit.id}:push`).length, 1);
   const bare = fresh("fa-bare");
   await flush(bare);
-  const flareKeys = lines(bare, "flare.lit").map((flare) => `line:${flare.id}:push`);
-  assert.equal(flareKeys.length, 2);
-  assert.equal(lines(bare, "alert.sent").some((sent) => flareKeys.includes(String(sent.key))), false, "three tries are gone: that notice is not sent now");
+  const pushKey = `line:${lines(bare, "flare.lit")[0]?.id ?? ""}:push`;
+  assert.equal(lines(bare, "alert.sent").filter((sent) => sent.key === pushKey).length, 1, "a trace is not a try: the notice goes now");
 });
 
 // --- one notice per line ---------------------------------------------------------------
@@ -345,7 +345,7 @@ test("a retry keeps its channel: a failed push goes again on push, and email nev
 
   assert.deepEqual(lines(project, "alert.sent").map((sent) => [sent.key, sent.channel]), [[pushKey, "push"]]);
   assert.equal(failures(project, pushKey).length, 1);
-  assert.equal(failures(project, emailKey).length, MAX_TRIES, "the email trace is bounded");
+  assert.equal(failures(project, emailKey).length, 1, "the email trace is written once");
 });
 
 test("a retried notice that sendState rebuilds from a failed line names the channel of that line", async () => {
@@ -667,6 +667,104 @@ test("flare light sends its own email before it exits, and its stderr holds no v
     assert.equal(service.mail.length, 1);
     assert.match(result.stderr, /127\.0\.0\.1 answered 403/u);
     for (const secret of [TOKEN, MAIL_FROM, ...MAIL_TO, MAIL_PATH]) assert.equal(result.stderr.includes(secret), false, secret);
+  });
+});
+
+// --- a closed channel and a repair (0.113.2) -------------------------------------------
+
+/** Lines written by a darius from before 0.113.2: each flush on a closed channel left one, up to MAX_TRIES. */
+function oldTraces(project: Project, key: string, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    appendLine(project, { who: "darius:alerts", type: "alert.failed", key, channel: "email", error: NOT_SET_UP, title: "Flare lit, high: Flare k", body: `${project.name}: needs you.`, url: `/w/${project.name}/flares/k`, at: tick() });
+  }
+}
+
+function settle(project: Project, key: string): void {
+  appendLine(project, { who: "op", type: "flare.accepted", key, severity: "high", at: tick() });
+}
+
+test("a trace is written once per key and reason, and a new reason writes one more", async () => {
+  const project = fresh("fa-trace-once");
+  const lit = light(project, "k", { deliver: ["email"] });
+  const emailKey = `line:${lit.id}:email`;
+  for (let attempt = 0; attempt < MAX_TRIES + 2; attempt += 1) await flushAlerts({ projects: [project.name] });
+  assert.equal(failures(project, emailKey).length, 1);
+
+  writeFileSync(emailSettingsFile(), JSON.stringify(emailSettings()), { mode: 0o644 });
+  chmodSync(emailSettingsFile(), 0o644);
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) await flushAlerts({ projects: [project.name] });
+  } finally {
+    rmSync(emailSettingsFile(), { force: true });
+  }
+  const traces = failures(project, emailKey);
+  assert.equal(traces.length, 2, "one more for the new reason, and no more for the repeats");
+  assert.equal(traces[0]?.error, NOT_SET_UP);
+  assert.match(String(traces[1]?.error), /^not set up on host: email\.json must be readable by its owner only/u);
+});
+
+test("an old ledger with three traces still sends after setup when the line is newer than since", async () => {
+  const project = fresh("fa-old-traces");
+  const lit = light(project, "k", { deliver: ["email"] });
+  const emailKey = `line:${lit.id}:email`;
+  oldTraces(project, emailKey, MAX_TRIES);
+  await withEmail(emailSettings({ since: "2000-01-01T00:00:00.000Z" }), async () => {
+    const delivery = await flushAlerts({ projects: [project.name] });
+    assert.equal(delivery?.sent, 1);
+    assert.equal(service.mail.length, 1);
+  });
+  assert.deepEqual(lines(project, "alert.sent").map((line) => line.key), [emailKey]);
+});
+
+test("an old ledger with traces stays silent when the line is older than since", async () => {
+  const project = fresh("fa-old-silent");
+  const lit = light(project, "k", { deliver: ["email"] });
+  oldTraces(project, `line:${lit.id}:email`, MAX_TRIES);
+  const before = alertLines(project).length;
+  await withEmail(emailSettings({ since: tick() }), async () => {
+    await flushAlerts({ projects: [project.name] });
+    assert.deepEqual(service.mail, []);
+  });
+  assert.equal(alertLines(project).length, before, "no send and no new line");
+});
+
+test("a flare that was settled while the channel was closed is not sent after the repair, and leaves no line", async () => {
+  const project = fresh("fa-settled");
+  const lit = light(project, "k", { deliver: ["email"] });
+  await flushAlerts({ projects: [project.name] });
+  settle(project, "k");
+  const before = alertLines(project).length;
+  await withEmail(emailSettings(), async () => {
+    await flushAlerts({ projects: [project.name] });
+    assert.deepEqual(service.mail, []);
+  });
+  assert.equal(alertLines(project).length, before);
+  assert.equal(lines(project, "alert.sent").some((line) => line.key === `line:${lit.id}:email`), false);
+});
+
+test("a rebuilt retry of a settled flare is not sent either, and one open flare of the opening is enough to send", async () => {
+  const project = fresh("fa-settled-retry");
+  const lit = light(project, "k", { deliver: ["email"] });
+  await withEmail(emailSettings(), async () => {
+    service.mailStatus = 500;
+    await flushAlerts({ projects: [project.name] });
+    assert.equal(failures(project, `line:${lit.id}:email`).length, 1, "a real failure, with a stored notice");
+    settle(project, "k");
+    service.mail = [];
+    service.mailStatus = 202;
+    const before = alertLines(project).length;
+    await flushAlerts({ projects: [project.name] });
+    assert.deepEqual(service.mail, [], "the retry is dropped");
+    assert.equal(alertLines(project).length, before);
+  });
+
+  const many = fresh("fa-settled-some");
+  runWithFlares(many, "audit", [{ key: "a" }, { key: "b" }]);
+  settle(many, "a");
+  const key = `line:${lines(many, "run.completed")[0]?.id ?? ""}:email`;
+  await withEmail(emailSettings(), async () => {
+    const delivery = await sendAlerts(many, [{ key, tag: key, channel: "email", title: "2 flares in audit", body: "many", url: "/w/fa-settled-some/flares" }]);
+    assert.equal(delivery?.sent, 1, "b is still lit");
   });
 });
 

@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.2] - 2026-11-02
+
+### Fixed
+
+- A flare notice on a channel that is not set up no longer uses up its tries. An `alert.failed` line whose error starts with "not set up on host" is a trace, not a try, also in an old ledger. The trace is written once per key and reason, not once per flush, and a different reason writes one new trace.
+- A notice that waited for a repair goes out only if a flare of its opening is still lit. If all are answered, accepted or gone, it is not sent and no line is written. This covers new notices and retries rebuilt from a failed line. A line older than the channel's `since` stays history.
+
+### Added
+
+- `darius email set` prints `<n> open flares were not sent on email. They stay in the app.` when open flares asked for email and were not sent. It prints nothing at 0 and writes nothing.
+
 ## [0.113.1] - 2026-11-02
 
 ### Fixed
