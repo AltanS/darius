@@ -1,13 +1,13 @@
 /**
  * `darius skill [install|uninstall|status|hook]`: teach a Claude Code session
- * darius with one generated skill file and 11 static procedure skills
+ * darius with one generated skill file and 12 static procedure skills
  * (docs/concept.md, "Claude Code sessions and skills").
  *
  *   darius skill              print the generated SKILL.md text (also `darius --skill`)
- *   darius skill install      write 12 stamped files under <claude>, which is
+ *   darius skill install      write 13 stamped files under <claude>, which is
  *                             $CLAUDE_CONFIG_DIR, else ~/.claude:
  *                               skills/darius/SKILL.md          generated
- *                               skills/darius-<name>/SKILL.md   11 procedure skills
+ *                               skills/darius-<name>/SKILL.md   12 procedure skills
  *                             The static text lives in `skills/` of this repo
  *                             (see skills/README.md). No write when a file is
  *                             the same. A file there without a darius stamp is
@@ -69,7 +69,7 @@ export const TRACKER_VERB_GROUPS: readonly (readonly [string, string])[] = [
   ["Worklogs", "`worklog open|append|close|list|set-stage|dispatch|park|distill|index`"],
   ["Sessions", "`claim`, `release`, `loop-check`, `counsel-gate`, `agents`"],
   ["Vigils", "`vigil add|list|set-body|set|close`"],
-  ["Hooks", "`hook-stop`, `hook-drift`, `delegation validate|return-validate <json>`"],
+  ["Delegation", "`delegation validate|return-validate <json>`"],
   ["Health", "`doctor [--fix]`, `migrate`, `scan artifacts|stubs <path>`"],
 ];
 
@@ -84,59 +84,57 @@ darius owns every tracker verb. Rituals and runs live in the darius store; the r
 
 ## Rules
 
-- Never edit files under ~/.local/share/darius by hand, except spec text in the tracker tree. Task marks, statuses, the index, worklogs and vigils take darius verbs; the vigils/ folder there is generated.
+- Never edit files under ~/.local/share/darius by hand, except spec text in the tracker tree. Marks, statuses, the index, worklogs and vigils take darius verbs.
 - \`kinds\` in .darius.toml says what the store owns (default: rituals only). With \`vigil\`, vigils are store items; imported open ones are heavy (the sweep skips them) until \`vigil set <slug> --no-heavy\`. With \`milestone\`, the tracker tree is in the store and the checkout has no .tracker; \`darius root\` prints the tree. Spec paths are tracker-relative (\`M1-x/01-y.md\`); \`.tracker/...\` still works. None of it is in git.
-- A real .tracker/ folder in git is moved by \`darius onboard\`: run \`onboard scan\` first; \`onboard\` only when the operator asks.
+- A real .tracker/ folder in git is moved by \`darius onboard\`: \`onboard scan\` first, \`onboard\` only when the operator asks.
 - Read tracker state only through the CLI (\`status\`, \`list\`, \`show <spec> --json\`), never the index, a README or a spec file.
-- A \`depends_on\` entry is a spec path, or \`02\` or \`02-name\` for a spec of the same milestone.
-- "Shipped, but check X once Y happens" is a vigil. Arm it at once, checklist in the same call: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
-- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file and its reason; do not fix it.
-- A secret in a worklog: stop, tell the user, treat it as compromised (rotate). Never write one.
+- A \`depends_on\` entry is a spec path, or \`02\`, \`02-name\` in the same milestone.
+- "Shipped, but check X once Y happens" is a vigil. Arm it at once with its checklist: \`vigil add <slug> --name N --until "Y" --stdin\`. An armed vigil with no executable \`Command:\` fails \`doctor\`.
+- A worklog is distilled, never deleted. \`/darius-dream\` submits stubs only with \`worklog distill <file> --stdin\`, never \`--force\`. Report an ineligible file and why; do not fix it.
+- A secret in a worklog: stop, tell the user, rotate it. Never write one.
 - The main thread drives the Work Loop through \`/darius-work\`. An architect main model writes specs itself (at most 5 items each), not a worker.
-- One project per folder: \`darius root\` names it. An item that \`list\`, \`show\` or \`run show\` does not know here belongs to another project: say so and ask which one. Never search ~/.local/share/darius or the disk for it, never \`cd\` into another repo or \`mv\` a store folder. \`due --all-projects\` is the one cross-project read.
-- Run darius inside the repo. A repo without .darius.toml or .tracker/ needs \`darius init\` first.
-- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line); procedure belongs in the skill.
+- One project per folder: \`darius root\` names it. An item that \`list\`, \`show\` or \`run show\` does not know here belongs to another project: say so and ask which. Never search ~/.local/share/darius or the disk for it, never \`cd\` into another repo or \`mv\` a store folder. \`due --all-projects\` is the one cross-project read.
+- Run darius inside the repo; a repo without .darius.toml or .tracker/ needs \`darius init\`.
+- In a v3 project rituals are defined in .darius.toml: edit it and commit, then \`ritual reconcile\`. \`ritual set\` changes only host, owner, tags and due. Add to a policy with \`may_extra\` and \`hold_extra\`; \`marker check --resolved <slug>\` prints the effective policy. Pass input to the skill with \`args\` (one line), not procedure.
 - Pass --json where a verb takes it and read stdout. Pass a ritual or vigil body over --stdin and run findings over --findings-stdin with a quoted heredoc (<<'EOF').
 
 ## Prose
 
-For worklog entries, findings, handoff and vigil bodies.
-
-- Short sentences, facts. Name the thing, its state, the next step. At most 8 lines per entry.
-- Findings: at most 4000 characters; the result block holds the items.
+Worklog entries, findings, handoff and vigil bodies: short factual sentences. Name the thing, its state, the next step. At most 8 lines per entry. Findings: at most 4000 characters; the result block holds the items.
 
 ## Exit codes
 
 - 0: done.
 - 1: refused or failed. Read stderr. Never fall back to editing files.
 - 2: usage error. Fix the command line.
-- 3: the environment is inconclusive. Stop and report.
+- 3: inconclusive. Stop and report.
 
 ## Verbs
 `;
 
 function trackerVerbs(): string {
   const lines = TRACKER_VERB_GROUPS.map(([group, verbs]) => `- ${group}: ${verbs}`);
-  return `\nTracker verbs, on the tracker tree (each is \`darius <verb>\`):\n\n${lines.join("\n")}\n`;
+  return `\nTracker verbs (each is \`darius <verb>\`):\n\n${lines.join("\n")}\n`;
 }
 
 const TAIL = `
-\`run now\` starts a ritual unattended in its own session and refuses mode off. For that one, run \`run start\`, work, then \`run complete\`.
-\`run follow-up <run> --approve N|--item KEY\` is for a person: a new run of question N's lines as written, or of item KEY's proposal.
-\`finding close|reopen|reset\` are for a person; \`finding list|show\` read a ritual's keyed items.
-\`flare list|show\` read flares. \`flare light|answer|accept|clear|reopen\` are for a person or a script; a run sets \`"flare": true\` on a result item.
+\`run now\` starts a ritual unattended and refuses mode off; for that, run \`run start\`, work, then \`run complete\`.
+\`run follow-up <run> --approve N|--item KEY\` (a new run of question N's lines, or of item KEY's proposal) and \`finding close|reopen|reset\` are for a person.
+A flare needs the operator to decide or follow up; a finding is for the record. More: \`/darius-flare\`. Delivery: \`flare_deliver\`, \`--deliver\`; \`none\` is the app only.
+- Every 7 days: a ritual (\`cadence = "1w"\`); its skill ends with a result item \`"flare": true\`, a stable \`key\`, state \`needs-decision\`.
+- One check in 7 days: \`vigil add xyz --in 7d --flare high --stdin < body.md\`. A pass closes it, a fail lights the flare. Needs \`vigil\` in \`kinds\`.
+- A script: \`flare light <key> --title T --severity S\`. A run never lights, answers, accepts or clears by command; it reports in the result block. \`flare list|show\` read.
 On the wrong host \`run now|resume|follow-up\` refuse and print an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
 
-A snapshot is a dated tar.gz of this host's store, kept locally, optionally in an S3 bucket.
+A snapshot is a dated tar.gz of this host's store, local, optionally in an S3 bucket.
 
-- Read: \`snapshot status\`, \`snapshot list [--remote]\`, \`snapshot config\`, \`snapshot credentials\`.
-- Act: \`snapshot create\` makes one now; \`snapshot check\` tests the bucket.
-- Settings: \`snapshot config set <key> <value>\` and \`unset <key>\`. Set \`endpoint\` and \`bucket\` together.
+- Read: \`snapshot status|config|credentials\`, \`snapshot list [--remote]\`. Act: \`snapshot create\` (now), \`snapshot check\` (the bucket).
+- Settings: \`snapshot config set|unset <key> [value]\`. Set \`endpoint\` and \`bucket\` together.
 - Key pair: \`printf %s "$SECRET" | darius snapshot credentials set --key-id ID\`. \`snapshot credentials clear\` removes it.
 - Never put the secret in a command line, a flag, or a file in the repo.
-- Exit 3 from a snapshot verb: the bucket could not be reached; the local snapshot is fine.
+- Exit 3 from a snapshot verb: the bucket could not be reached; the local copy is fine.
 - \`darius restore\` only when the operator asks. Other hosts: \`snapshot config push\`.
 `;
 
@@ -149,7 +147,7 @@ export function renderSkill(commands: readonly SkillVerb[], version: string = VE
   const rows = commands
     .filter((command) => command.audience === "session")
     .map((command) => `| \`darius ${tableCell(command.usage ?? command.name)}\` | ${tableCell(command.summary)} |`);
-  const body = `${HEAD}\n| Verb | What it does |\n| --- | --- |\n${rows.join("\n")}\n${trackerVerbs()}${TAIL}\n`;
+  const body = `${HEAD}\n| Verb | Use |\n| --- | --- |\n${rows.join("\n")}\n${trackerVerbs()}${TAIL}\n`;
   return `${body}${stampLine(body, version)}\n`;
 }
 
@@ -186,7 +184,7 @@ export function skillPath(dir: string = claudeDir()): string {
   return join(dir, "skills", "darius", "SKILL.md");
 }
 
-/** The 11 procedure skills of the tracker plugin. Each is `skills/<name>.md` in this repo. */
+/** The 12 procedure skills: the 11 of the tracker plugin, and flare (0.113.0). Each is `skills/<name>.md` in this repo. */
 export const PROCEDURE_SKILLS: readonly string[] = [
   "work",
   "work-plan",
@@ -199,6 +197,7 @@ export const PROCEDURE_SKILLS: readonly string[] = [
   "dream",
   "worklog",
   "structural-review",
+  "flare",
 ];
 
 /** The static skill text: `skills/` at the root of this checkout or install, found from this module. */
@@ -215,7 +214,7 @@ export interface ManagedFile {
 }
 
 /**
- * The 12 files of the set, in order: the generated skill, then the 11
+ * The 13 files of the set, in order: the generated skill, then the 12
  * procedure skills. Throws when a static source file is missing.
  */
 export function managedFiles(
@@ -583,7 +582,7 @@ export const skillCommand: Command = {
   name: "skill",
   flags: [],
   summary:
-    "print the Claude Code skill for darius; install | uninstall the skill and 11 procedure skills; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
+    "print the Claude Code skill for darius; install | uninstall the skill and 12 procedure skills; status lists them and checks the hooks; hook prints the SessionStart, Stop and PostToolUse hooks",
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];
     switch (verb) {

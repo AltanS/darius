@@ -535,7 +535,7 @@ function runReconcile(args: ParsedArgs): number {
 
 export const ritualCommand: Command = {
   name: "ritual",
-  summary: "rituals and their lifecycle; reconcile mirrors a v3 .darius.toml into the store; export builds one from the store",
+  summary: "rituals and their lifecycle; reconcile mirrors .darius.toml into the store; export builds one",
   audience: "session",
   // In a v3 project add and retire are refused for repo rituals, and set takes host, owner, agent, tag and due only.
   usage: `ritual ${VERBS.replaceAll(" | ", "|")}`,

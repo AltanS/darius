@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.0] - 2026-11-02
+
+### Added
+
+- The `/darius-flare` skill (`skills/flare.md`, the 12th procedure skill). It says how to choose between a flare, a finding, a vigil and a ritual, and holds the recipes: a ritual that lights a flare, a vigil that closes or lights a flare, and a script or CI job. It also covers delivery and what a run never does.
+- The `darius` skill names both recipes with the real commands (`vigil add xyz --in 7d --flare high --stdin < body.md`), the delivery options, and the rule that a run reports a flare through its result block and never answers, accepts or clears one.
+- `docs/backlog.md` lists what the flare design cut from the first version.
+
+### Changed
+
+- `darius skill install` writes 13 files, `skill status` lists 13. The skill text was tightened to make room. It no longer lists `hook-stop` and `hook-drift` (a hook runs them, a session does not), and the summaries of `due`, `init`, `marker check`, `milestone archive`, `ritual` and `spec check` are shorter.
+- README and `docs/marker.md` name `flare_deliver` for a ritual, and `--in`, `--flare` for a vigil with `vigil` in `kinds`. The marker table no longer says that email sends nothing.
+
 ## [0.112.0] - 2026-11-02
 
 ### Added

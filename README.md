@@ -104,7 +104,7 @@ The `/darius-*` skills and the `darius` command do the work that the old `tracke
 ~/.claude/
 ├── skills/
 │   ├── darius/SKILL.md             # teaches a session the darius commands
-│   └── darius-work/SKILL.md        # one of 11 procedure skills
+│   └── darius-work/SKILL.md        # one of 12 procedure skills
 ```
 
 ### A normal day
@@ -591,6 +591,9 @@ darius flare reopen dep/cve-2026-0001    # take back an answer or an accept
 - `light` on a lit key at the same or a lower severity exits `0` and says "already lit, seen again".
   A higher severity raises the flare, and a report after it is gone lights it again. `--stdin` stores
   a body. The key is one line of at most 120 characters. A longer key is refused, not cut.
+- A ritual that lights flares can set `flare_deliver = ["push", "email"]` in `.darius.toml`: `[]` means the
+  app only, and no key means `push`. A run cannot choose its channel. `darius email set` must have run on a host
+  that sends email.
 - A run lights a flare only through its result: an item with `"flare": true`, a `key` and the state
   `needs-decision`. The state `fixed` clears it. A run cannot run the write verbs: the CLI refuses
   them inside a run, and the gate denies them. It can run `flare list` and `flare show`.

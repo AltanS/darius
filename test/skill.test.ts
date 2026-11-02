@@ -87,6 +87,18 @@ test("the skill names may_extra, hold_extra, marker check --resolved and marker 
   assert.match(text, /\| `darius marker check \[dir\] \[--resolved <slug>\]` \|/u);
 });
 
+test("the skill names both flare recipes, the choice and the rule for a run", () => {
+  const { env } = sandbox();
+  const text = darius(env, ["skill"]).stdout;
+  assert.match(text, /vigil add .*--flare/u);
+  assert.match(text, /`vigil` in `kinds`/u);
+  assert.match(text, /`"flare": true`, a stable `key`, state `needs-decision`/u);
+  assert.match(text, /`flare_deliver`, `--deliver`; `none` is the app only/u);
+  assert.match(text, /A run never lights, answers, accepts or clears by command/u);
+  assert.match(text, /a finding is for the record/u);
+  assert.match(text, /`\/darius-flare`/u);
+});
+
 test("the verb table lists the session verbs only, in registry order", () => {
   const { env } = sandbox();
   const text = darius(env, ["skill"]).stdout;
@@ -133,7 +145,7 @@ test("skill status: exit 1 and the fix with no skill, exit 0 for a user-level or
   assert.equal(fromPlugin.code, 0, fromPlugin.stderr);
   const [generated, ...others] = JSON.parse(fromPlugin.stdout);
   assert.deepEqual(generated, { name: "darius", path: join(plugin, "skills", "darius", "SKILL.md"), state: "ok", version: VERSION, source: "plugin" });
-  assert.equal(others.length, 11 + 3, "11 files and 3 hooks");
+  assert.equal(others.length, 12 + 3, "12 files and 3 hooks");
   assert.ok(others.every((entry: { state: string; source: string }) => entry.state === "missing" && entry.source === "user"));
   const setup = JSON.parse(darius(env, ["setup", "--json"]).stdout);
   const step = setup.steps.find((entry: { what: string }) => entry.what === "skill");

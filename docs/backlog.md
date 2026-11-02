@@ -34,6 +34,22 @@ means no cap, so existing setups do not change when it ships.
   start line for every run, not only for a run with grants (0.47.1). Needs an answer for runs
   started before 0.47.1, which have no sha.
 
+## Flares: cut from the first version
+
+The flare design note (2026-11-01) left these out on purpose. Flares shipped in 0.106.0 to 0.113.0.
+
+- Model-free command rituals: a ritual that runs a shell command with no model. This is the real cost fix for a simple check; today a check of this kind costs a model run, or a vigil.
+- Reminders: nothing alerts again for a flare that stays open.
+- Delivery by severity: the channels depend on the flare's severity. Today the channel list is per ritual, vigil or call.
+- SMTP: the email channel is HTTP JSON only. SMTP would go behind the same `sendEmail` function.
+- Tokens for callers outside the tailnet: `POST /api/flare/light` takes a tailnet identity only.
+- TUI rows: the Due screen lists lit flares, with answer and accept keys.
+- Address filters: status, ritual and severity in the address of the Flares place.
+- The list of open flares on the ritual page.
+- A test button for email in Settings, Notifications (`POST /api/email/test`). `darius email test` is the CLI path.
+- A reopen API: `flare reopen` and `flare clear` are CLI only.
+- Follow-up for a flare from outside: `answer --follow-up` needs a newest report from a run. A flare from a script or a vigil has no parent run.
+
 ## Marker v3 follow-ups
 
 Left out of the v3 design on purpose (design section 14).

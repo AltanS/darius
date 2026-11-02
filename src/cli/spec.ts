@@ -52,7 +52,7 @@ export const specCommand: Command = {
   help: USAGE,
   flags: [],
   audience: "session",
-  summary: "check a spec without a model: checkable items, depends_on targets, risk and rollback",
+  summary: "check a spec without a model: items, depends_on, risk and rollback",
   usage: "spec check <spec> [--json]",
   async run(args) {
     if (args.positional[0] === "check") return runCheck(args);
