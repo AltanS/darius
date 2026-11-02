@@ -184,10 +184,13 @@
  * This stops a web page. It does not stop a run on another tailnet host, which
  * can send any header: the gate and report mode stop that.
  *
- * Each write runs the CLI as an argv list with no shell. `--` goes before the
- * key, and each free text goes as `--flag=value`, because the CLI looks for
- * `-h` and `--help` before it parses the line. `--note -h` would print the
- * help, exit 0 and write nothing. `body` reaches the CLI on stdin.
+ * Each write runs the CLI as an argv list with no shell. Every value goes as
+ * ONE word, `--flag=value`, built by `flagArg` and nowhere else. Two words
+ * (`--note`, then the text) let the text act as a flag: `-h` would print the
+ * help, exit 0 and write nothing, and `--project=other` would be parsed as
+ * the flag it spells (an argument injection). A key or an id, which is a
+ * positional and may start with `-`, goes after `--`. `body` reaches the CLI
+ * on stdin.
  *
  * `answer` with `followUp` starts `darius flare answer --follow-up` detached,
  * because that verb waits for the run. It checks readiness first as
@@ -268,6 +271,15 @@ export interface CliAnswer {
   killed?: boolean;
   /** One plain line that says why it failed; empty on success. */
   error: string;
+}
+
+/**
+ * One argv word that sets a flag: `--name=value`. The only way a value that
+ * came from a request reaches the CLI's argv, so a text that starts with `-`
+ * or reads as a flag stays the value of this flag and nothing else.
+ */
+export function flagArg(name: string, value: string): string {
+  return `--${name}=${value}`;
 }
 
 /** Runs the CLI with `argv` and waits for it. `input` goes to its stdin. */
@@ -614,12 +626,13 @@ async function startFollowUp(request: ActionRequest, viewer: ActionViewer, deps:
  * host (0.69.0). Every value is one argv word, never a shell string.
  */
 export function followUpArgv(body: { project: string; run: string; approve: readonly number[]; items: readonly string[]; note?: string }, viewer: ActionViewer, on: string | undefined): string[] {
-  const argv = ["run", "follow-up", body.run, "--project", body.project];
-  for (const n of body.approve) argv.push("--approve", String(n));
-  for (const key of body.items) argv.push("--item", key);
-  if (body.note !== undefined) argv.push("--note", body.note);
-  argv.push("--who", `web:${viewer.who}`);
-  if (on !== undefined) argv.push("--on", on);
+  const argv = ["run", "follow-up", flagArg("project", body.project)];
+  for (const n of body.approve) argv.push(flagArg("approve", String(n)));
+  for (const key of body.items) argv.push(flagArg("item", key));
+  if (body.note !== undefined) argv.push(flagArg("note", body.note));
+  argv.push(flagArg("who", `web:${viewer.who}`));
+  if (on !== undefined) argv.push(flagArg("on", on));
+  argv.push("--", body.run);
   return argv;
 }
 
@@ -763,10 +776,10 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
     if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
     on = host.on;
   }
-  const argv = ["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json"];
-  if (body.note !== undefined) argv.push("--note", body.note);
-  for (const answer of body.answers) argv.push("--answer", `${String(answer.n)}=${answer.text}`);
-  if (on !== undefined) argv.push("--on", on);
+  const argv = ["run", "ack", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json"];
+  if (body.note !== undefined) argv.push(flagArg("note", body.note));
+  for (const answer of body.answers) argv.push(flagArg("answer", `${String(answer.n)}=${answer.text}`));
+  if (on !== undefined) argv.push(flagArg("on", on));
   argv.push("--", body.run);
   const answer = await deps.run(argv);
   if (answer.killed === true || (on !== undefined && answer.code === SSH_EXIT)) {
@@ -834,8 +847,9 @@ function startRunNow(body: { project: string; run: string }, slug: string, viewe
   const host = on ?? hostId();
   const record = (spawned: Spawned): string => recordPending({ ...spawned, who: `web:${viewer.who}`, kind: "run-now", project: body.project, ritual: slug, parent: body.run, host });
   return spawnWatched(deps, { project: body.project, run: body.run, logName: "run-now.log", line: NOW_STARTED_LINE, host, record }, () => {
-    const argv = ["run", "now", slug, "--project", body.project, "--who", `web:${viewer.who}`];
-    if (on !== undefined) argv.push("--on", on);
+    const argv = ["run", "now", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`)];
+    if (on !== undefined) argv.push(flagArg("on", on));
+    argv.push("--", slug);
     return { argv, on };
   });
 }
@@ -898,9 +912,9 @@ async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: Ac
   }
   if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
   const who = `web:${viewer.who}`;
-  const argv = ["run", "answer", "--project", body.project, "--who", who, "--json"];
-  for (const answer of body.answers) argv.push("--answer", `${String(answer.n)}=${answer.text}`);
-  if (host.on !== undefined) argv.push("--on", host.on);
+  const argv = ["run", "answer", flagArg("project", body.project), flagArg("who", who), "--json"];
+  for (const answer of body.answers) argv.push(flagArg("answer", `${String(answer.n)}=${answer.text}`));
+  if (host.on !== undefined) argv.push(flagArg("on", host.on));
   argv.push("--", body.run);
   const written = await deps.run(argv);
   // ssh failed or a signal ended the CLI: the host did not answer, which is not the run's refusal.
@@ -908,8 +922,9 @@ async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: Ac
     return fail(502, host.on === undefined ? `darius did not finish: ${written.error}` : `${host.on} did not answer: ${written.error}`);
   }
   if (written.code !== 0) return fail(409, written.error);
-  const resumeArgv = ["resume", body.run, "--project", body.project, "--who", who];
-  if (host.on !== undefined) resumeArgv.push("--on", host.on);
+  const resumeArgv = ["resume", flagArg("project", body.project), flagArg("who", who)];
+  if (host.on !== undefined) resumeArgv.push(flagArg("on", host.on));
+  resumeArgv.push("--", body.run);
   const where = host.on ?? hostId();
   const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "resume", project: body.project, ritual: slug, parent: body.run, host: where });
   return resumeReply(await spawnWatched(deps, { project: body.project, run: body.run, logName: "resume.log", line: RESUME_STARTED_LINE, host: where, record }, () => ({ argv: ["run", ...resumeArgv], on: host.on })), where);
@@ -982,7 +997,7 @@ async function acknowledgeEarlier(request: ActionRequest, viewer: ActionViewer, 
   let count = 0;
   let firstError = "";
   for (const id of body.runs) {
-    const answer = await deps.run(["run", "ack", "--project", body.project, "--who", `web:${viewer.who}`, "--json", "--", id]);
+    const answer = await deps.run(["run", "ack", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json", "--", id]);
     if (answer.code === 0) count += 1;
     else if (firstError === "") firstError = answer.error;
   }
@@ -1064,9 +1079,9 @@ export async function findingApi(request: ActionRequest, viewer: ActionViewer, d
   } else if (found.status !== "closed") {
     return fail(409, `that finding is not closed (status: ${found.status}); there is nothing to reopen`);
   }
-  const argv = ["finding", verb, "--ritual", body.ritual, "--project", body.project];
-  if (body.note !== undefined) argv.push("--note", body.note);
-  argv.push("--who", `web:${viewer.who}`, "--json", "--", body.key);
+  const argv = ["finding", verb, flagArg("ritual", body.ritual), flagArg("project", body.project)];
+  if (body.note !== undefined) argv.push(flagArg("note", body.note));
+  argv.push(flagArg("who", `web:${viewer.who}`), "--json", "--", body.key);
   const answer = await deps.run(argv);
   if (answer.code !== 0) return fail(409, answer.error);
   return { status: 200, body: { ok: true } };
@@ -1105,7 +1120,7 @@ function readCheckBody(parsed: JsonValue): CheckBody {
 
 /** The argv of the check. Every value is one argv word, never a shell string. */
 export function vigilCheckArgv(body: { project: string; slug: string }, viewer: ActionViewer): string[] {
-  return ["vigil", "sweep", body.slug, "--project", body.project, "--json", "--who", `web:${viewer.who}`];
+  return ["vigil", "sweep", flagArg("project", body.project), "--json", flagArg("who", `web:${viewer.who}`), "--", body.slug];
 }
 
 /** The sentence of a sweep that ended without a "started" line: its stderr refusal, or the reason of a `--json` skip. */
@@ -1384,10 +1399,10 @@ function cliReply(answer: CliAnswer): PushApiReply {
   return answer.code === 0 ? { status: 200, body: { ok: true } } : fail(409, answer.error);
 }
 
-/** The argv of `answer` and `accept`. Free text as `--flag=value`, the key after `--`. */
+/** The argv of `answer` and `accept`. Every value through `flagArg`, the key after `--`. */
 function settleArgv(verb: "answer" | "accept", body: { project: string; key: string; note?: string }, viewer: ActionViewer): string[] {
-  const argv = ["flare", verb, "--project", body.project, `--who=web:${viewer.who}`, "--json"];
-  if (body.note !== undefined) argv.push(`--note=${body.note}`);
+  const argv = ["flare", verb, flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json"];
+  if (body.note !== undefined) argv.push(flagArg("note", body.note));
   argv.push("--", body.key);
   return argv;
 }
@@ -1446,8 +1461,8 @@ async function startFlareFollowUp(flare: FlareFollowUp, viewer: ActionViewer, de
   // The name comes from the store. A name that starts with `-` would reach ssh as an option.
   if (on !== undefined && !HOST_NAME.test(on)) return fail(409, "the follow-up did not start: the ritual's host name is not valid");
   const who = `web:${viewer.who}`;
-  const argv = ["flare", "answer", "--follow-up", "--project", project, `--note=${note}`, `--who=${who}`];
-  if (on !== undefined) argv.push("--on", on);
+  const argv = ["flare", "answer", "--follow-up", flagArg("project", project), flagArg("note", note), flagArg("who", who)];
+  if (on !== undefined) argv.push(flagArg("on", on));
   argv.push("--", key);
   const record = (spawned: Spawned): string => recordPending({ ...spawned, who, kind: "follow-up", project, ritual, parent: run, host: ready.host });
   const outcome = await spawnWatched(deps, { project, run, logName: "follow-up.log", line: STARTED_LINE, host: ready.host, record }, () => ({ argv, on }));
@@ -1475,11 +1490,11 @@ function lightGuard(request: ActionRequest, viewer: ActionViewer): Guarded {
   return jsonPayload(request, "too large");
 }
 
-/** The argv of `light`. Free text as `--flag=value`, the key after `--`, the body on stdin only. */
+/** The argv of `light`. Every value through `flagArg`, the key after `--`, the body on stdin only. */
 function lightArgv(body: LightBody, viewer: ActionViewer): string[] {
-  const argv = ["flare", "light", "--project", body.project, `--who=web:${viewer.who}`, `--title=${body.title}`, `--severity=${body.severity}`, `--source=${body.source}`, "--json"];
-  if (body.target !== undefined) argv.push(`--target=${body.target}`);
-  if (body.deliver !== undefined) argv.push(`--deliver=${body.deliver}`);
+  const argv = ["flare", "light", flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), flagArg("title", body.title), flagArg("severity", body.severity), flagArg("source", body.source), "--json"];
+  if (body.target !== undefined) argv.push(flagArg("target", body.target));
+  if (body.deliver !== undefined) argv.push(flagArg("deliver", body.deliver));
   if (body.body !== undefined) argv.push("--stdin");
   argv.push("--", body.key);
   return argv;

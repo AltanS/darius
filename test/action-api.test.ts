@@ -231,7 +231,7 @@ test("ready: it starts run follow-up detached with the approved numbers, the not
   assert.deepEqual(bodyWithoutId(answer.body), { ok: true, run: CHILD, host: "host-a" });
   assert.equal(stub.started.length, 1);
   const [started] = stub.started;
-  assert.deepEqual(started?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "3", "--approve", "1", "--note", "push it now", "--who", "web:owner on phone"]);
+  assert.deepEqual(started?.argv, ["run", "follow-up", `--project=${PROJECT}`, "--approve=3", "--approve=1", "--note=push it now", "--who=web:owner on phone", "--", RUN]);
   const runDir = join(openProject(PROJECT).root, "runs", RUN);
   assert.equal(started?.log, join(runDir, "follow-up.log"));
   assert.ok(existsSync(runDir), "the parent's run dir exists for the log");
@@ -243,8 +243,8 @@ test("decision follow-up: approve [] with a note starts the CLI with --note and 
   const stub = deps({ ready: true, host: "host-a", profile: "opus-skip", surface: "herdr", questions: [], items: [] });
   const answer = await actionApi(post({ ...VALID, approve: [], note: "  fix the five\nposts " }), { who: "owner" }, stub);
   assert.equal(answer.status, 202);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--note", "fix the five posts", "--who", "web:owner"]);
-  assert.ok(!(stub.started[0]?.argv ?? []).includes("--approve"), "no --approve");
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", `--project=${PROJECT}`, "--note=fix the five posts", "--who=web:owner", "--", RUN]);
+  assert.ok(!(stub.started[0]?.argv ?? []).some((word) => word.startsWith("--approve")), "no --approve");
   const noNote = await actionApi(post({ ...VALID, approve: [] }), { who: "owner" }, deps(READY));
   assert.equal(noNote.status, 400, "neither numbers nor a note is refused");
   const grant = await actionApi(post({ ...VALID, approve: [], note: "x", grant: ["date"] }), { who: "owner" }, stub);
@@ -258,10 +258,10 @@ test("items: approved keys go to the CLI as --item words, after the numbers, nev
   const odd = "it's $(odd) `key` \\";
   const answer = await actionApi(post({ ...VALID, approve: [], items: ["post-12/title", odd] }), { who: "owner" }, stub);
   assert.equal(answer.status, 202, JSON.stringify(answer.body));
-  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--item", "post-12/title", "--item", odd, "--who", "web:owner"]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", `--project=${PROJECT}`, "--item=post-12/title", `--item=${odd}`, "--who=web:owner", "--", RUN]);
   const both = deps(READY);
   await actionApi(post({ ...VALID, approve: [1], items: ["post-12/title"], note: "go" }), { who: "owner" }, both);
-  assert.deepEqual(both.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "1", "--item", "post-12/title", "--note", "go", "--who", "web:owner"]);
+  assert.deepEqual(both.started[0]?.argv, ["run", "follow-up", `--project=${PROJECT}`, "--approve=1", "--item=post-12/title", "--note=go", "--who=web:owner", "--", RUN]);
 });
 
 test("items: a key that is not an approvable item of the parent is 400 with a sentence, and nothing starts", async () => {
@@ -277,8 +277,8 @@ test("forwarded: when readiness ran on the ritual's host, the CLI gets --on <hos
   const note = `it's "done"; $(rm -rf ~) \`id\` \\`;
   const answer = await actionApi(post({ ...VALID, items: ["post-12/title"], note }), { who: "owner" }, stub);
   assert.deepEqual(replyWithoutId(answer), { status: 202, body: { ok: true, run: CHILD, host: "minibuch" } });
-  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", RUN, "--project", PROJECT, "--approve", "1", "--item", "post-12/title", "--note", note, "--who", "web:owner", "--on", "minibuch"]);
-  assert.deepEqual(followUpArgv({ project: "p", run: "r", approve: [], items: [], note: "n" }, { who: "w" }, undefined), ["run", "follow-up", "r", "--project", "p", "--note", "n", "--who", "web:w"], "no --on for this host");
+  assert.deepEqual(stub.started[0]?.argv, ["run", "follow-up", `--project=${PROJECT}`, "--approve=1", "--item=post-12/title", `--note=${note}`, "--who=web:owner", "--on=minibuch", "--", RUN]);
+  assert.deepEqual(followUpArgv({ project: "p", run: "r", approve: [], items: [], note: "n" }, { who: "w" }, undefined), ["run", "follow-up", "--project=p", "--note=n", "--who=web:w", "--", "r"], "no --on for this host");
 });
 
 test("outcome: a refusal or a skip is 409 with the CLI's sentence; an ssh failure is 503; nothing comes in time is 202 pending with a message", async () => {
@@ -420,11 +420,11 @@ test("close: it runs finding close with the ritual, the project, the note and th
   const answer = await findingApi(closeRequest({ ...CLOSE, note: "  known\nissue " }), { who: "owner on phone" }, stub);
   assert.equal(answer.status, 200);
   assert.deepEqual(answer.body, { ok: true });
-  assert.deepEqual(stub.calls, [["finding", "close", "--ritual", "check", "--project", FINDING_PROJECT, "--note", "known issue", "--who", "web:owner on phone", "--json", "--", "link-12"]]);
+  assert.deepEqual(stub.calls, [["finding", "close", "--ritual=check", `--project=${FINDING_PROJECT}`, "--note=known issue", "--who=web:owner on phone", "--json", "--", "link-12"]]);
   const flagLike = await findingApi(closeRequest({ ...CLOSE, key: "--odd" }), { who: "owner" }, stub);
   assert.equal(flagLike.status, 200);
   assert.deepEqual(stub.calls[1]?.slice(-2), ["--", "--odd"], "a key that looks like a flag stays a key");
-  assert.ok(!(stub.calls[1] ?? []).includes("--note"), "no note, no flag");
+  assert.ok(!(stub.calls[1] ?? []).some((word) => word.startsWith("--note")), "no note, no flag");
 });
 
 test("close: when the CLI refuses, the answer is 409 with its reason", async () => {
@@ -519,13 +519,13 @@ test("ack: it runs run ack with the project, the viewer, the note and the run af
   const bare = await actionApi(ackRequest(ACK), { who: "owner on phone" }, stub);
   assert.equal(bare.status, 200);
   assert.deepEqual(bare.body, { ok: true });
-  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", RUN]);
+  assert.deepEqual(stub.calls[0], ["run", "ack", `--project=${PROJECT}`, "--who=web:owner on phone", "--json", "--", RUN]);
   const noted = await actionApi(ackRequest({ ...ACK, note: "  seen\nit, skip " }), { who: "owner" }, stub);
   assert.equal(noted.status, 200);
-  assert.deepEqual(stub.calls[1], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--note", "seen it, skip", "--", RUN]);
+  assert.deepEqual(stub.calls[1], ["run", "ack", `--project=${PROJECT}`, "--who=web:owner", "--json", "--note=seen it, skip", "--", RUN]);
   const blank = await actionApi(ackRequest({ ...ACK, note: " \n " }), { who: "owner" }, stub);
   assert.equal(blank.status, 200);
-  assert.ok(!(stub.calls[2] ?? []).includes("--note"), "a blank note is no note");
+  assert.ok(!(stub.calls[2] ?? []).some((word) => word.startsWith("--note")), "a blank note is no note");
   assert.deepEqual([stub.started, stub.asked], [[], []], "an acknowledgement starts no follow-up");
 });
 
@@ -662,12 +662,12 @@ test("ack answers: they reach the CLI as --answer N=TEXT words, trimmed to one l
   const stub = nowDeps();
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 2, text: " go\n ahead " }, { n: 1, text: "no=yes" }] }), { who: "owner on phone" }, stub);
   assert.deepEqual(sent, { status: 200, body: { ok: true } });
-  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--answer", "2=go ahead", "--answer", "1=no=yes", "--", ASK_NEW]);
+  assert.deepEqual(stub.calls[0], ["run", "ack", `--project=${PROJECT}`, "--who=web:owner on phone", "--json", "--answer=2=go ahead", "--answer=1=no=yes", "--", ASK_NEW]);
   assert.deepEqual(stub.started, [], "no runNow, no run");
   const ten = Array.from({ length: 10 }, (_, index) => ({ n: index + 1, text: "ok" }));
   assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: ten }), { who: "owner" }, stub)).status, 200);
   assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [] }), { who: "owner" }, stub)).status, 200, "an empty list is a bare ack");
-  assert.ok(!(stub.calls[2] ?? []).includes("--answer"));
+  assert.ok(!(stub.calls[2] ?? []).some((word) => word.startsWith("--answer")));
   assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "x".repeat(500) }] }), { who: "owner" }, stub)).status, 200, "500 characters fit");
 });
 
@@ -677,7 +677,7 @@ test("run now: after the ack the server starts run now for the ritual of the run
   assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, run: CHILD, host: "host-a" } });
   assert.equal(stub.calls.length, 1, "the ack ran first");
   assert.equal(stub.started.length, 1);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner"], "the slug comes from the run's item; this host is right, so no --on");
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--", "daily"], "the slug comes from the run's item; this host is right, so no --on");
   assert.ok(stub.started[0]?.log.endsWith(join("runs", ASK_NEW, "run-now.log")));
   assert.deepEqual([stub.asked], [[]], "no follow-up readiness is asked");
 });
@@ -687,7 +687,7 @@ test("run now: when the ritual belongs to another host, the argv ends with --on 
   const stub = { ...nowDeps(), nowHost: (project: string, slug: string) => (asked.push(`${project}/${slug}`), "host-b") };
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, stub);
   assert.equal(sent.status, 200);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--on=host-b", "--", "daily"]);
   assert.deepEqual(asked, [`${PROJECT}/daily`]);
 });
 
@@ -718,7 +718,7 @@ test("run now: a host name that is not a plain host name is refused before the a
   }
   const fine = { ...nowDeps(), nowHost: () => "host-b.tail1234.ts.net" };
   await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, fine);
-  assert.deepEqual(fine.started[0]?.argv.slice(-2), ["--on", "host-b.tail1234.ts.net"]);
+  assert.deepEqual(fine.started[0]?.argv.slice(-3), ["--on=host-b.tail1234.ts.net", "--", "daily"]);
   const plain = { ...nowDeps(), nowHost: () => "-bad" };
   assert.equal((await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, plain)).status, 200, "a plain Send answer never reads the host");
   assert.equal(plain.calls.length, 1);
@@ -743,13 +743,13 @@ test("run now on a ritual of another host: the ack and the run both go there wit
   };
   const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }], runNow: true }), { who: "owner" }, stub);
   assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, run: CHILD, host: "host-b" } });
-  assert.deepEqual(stub.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--on", "host-b", "--", ASK_NEW]);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "daily", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  assert.deepEqual(stub.calls[0], ["run", "ack", `--project=${PROJECT}`, "--who=web:owner", "--json", "--answer=1=yes", "--on=host-b", "--", ASK_NEW]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--on=host-b", "--", "daily"]);
   assert.deepEqual(order, ["ack", "run"], "the answer is there before the run starts");
 
   const local = { ...nowDeps(), nowHost: () => "host-b" };
   await actionApi(ackRequest({ ...ACK_NEW_BODY, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, local);
-  assert.deepEqual(local.calls[0], ["run", "ack", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--", ASK_NEW], "no --on without runNow: sync carries it");
+  assert.deepEqual(local.calls[0], ["run", "ack", `--project=${PROJECT}`, "--who=web:owner", "--json", "--answer=1=yes", "--", ASK_NEW], "no --on without runNow: sync carries it");
   assert.deepEqual(local.started, []);
 
   const down = { ...nowDeps(undefined, { code: 255, error: "ssh: connect to host host-b port 22: no route" }), nowHost: () => "host-b" };
@@ -761,7 +761,7 @@ test("run now on a ritual of another host: the ack and the run both go there wit
 test("run now: the default host rule reads the ritual; a ritual the store does not have gives no --on", async () => {
   const stub = nowDeps();
   await actionApi(ackRequest({ project: PROJECT, run: OTHER_RITUAL, runNow: true }), { who: "owner" }, stub);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "weekly", "--project", PROJECT, "--who", "web:owner"]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--", "weekly"]);
 });
 
 test("run now: no ack, no run. A refused ack (also the second click on an acknowledged run) starts nothing", async () => {
@@ -913,8 +913,8 @@ test("ack-earlier: it acks each id bare, once, as the viewer, and counts them; a
   const sent = await actionApi(post({ project: PROJECT, run: ASK_NEW, runs: [ASK_MID, ASK_OLD] }, { path: "/api/run/ack-earlier" }), { who: "owner on phone" }, stub);
   assert.deepEqual(sent, { status: 200, body: { ok: true, count: 2 } });
   assert.deepEqual(stub.calls, [
-    ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", ASK_MID],
-    ["run", "ack", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--", ASK_OLD],
+    ["run", "ack", `--project=${PROJECT}`, "--who=web:owner on phone", "--json", "--", ASK_MID],
+    ["run", "ack", `--project=${PROJECT}`, "--who=web:owner on phone", "--json", "--", ASK_OLD],
   ]);
   let n = 0;
   const flaky: ActionDeps = { ...ackDeps(), run: () => Promise.resolve(++n === 1 ? { code: 1, error: "run is already acknowledged by owner" } : { code: 0, error: "" }) };
@@ -948,12 +948,12 @@ test("run now: the default host rule sends a ritual pinned to another host there
   const stub = nowDeps();
   const sent = await actionApi(ackRequest({ project: PROJECT, run: pinned, runNow: true }), { who: "owner" }, stub);
   assert.equal(sent.status, 200);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "now", "pinned", "--project", PROJECT, "--who", "web:owner", "--on", "host-b"], "the server read the pin from the store; this host is host-a");
+  assert.deepEqual(stub.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--on=host-b", "--", "pinned"], "the server read the pin from the store; this host is host-a");
   store.writeItem({ header: { ...header, host: "host-a", updated: new Date().toISOString() }, body: "Do it.\n" }, { who: "test" });
   const here = seedAsk("01JASKPINNED2000000000AAAA", "ritual/pinned");
   const local = nowDeps();
   await actionApi(ackRequest({ project: PROJECT, run: here, runNow: true }), { who: "owner" }, local);
-  assert.deepEqual(local.started[0]?.argv, ["run", "now", "pinned", "--project", PROJECT, "--who", "web:owner"], "a ritual pinned to this host needs no --on");
+  assert.deepEqual(local.started[0]?.argv, ["run", "now", `--project=${PROJECT}`, "--who=web:owner", "--", "pinned"], "a ritual pinned to this host needs no --on");
 });
 
 test("ack-earlier: earlier means an earlier start time, like the page", async () => {
@@ -1087,9 +1087,9 @@ test("held: it writes the answers with one CLI call, run id after --, each answe
   const stub = nowDeps(RESUMES);
   const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 2, text: " main\n now " }, { n: 1, text: "--force, yes" }], resume: true }), { who: "owner on phone" }, stub);
   assert.deepEqual(replyWithoutId(sent), { status: 200, body: { ok: true, resumed: true, run: "01JHELD00000000000000000AA", host: "host-a" } });
-  assert.deepEqual(stub.calls, [["run", "answer", "--project", PROJECT, "--who", "web:owner on phone", "--json", "--answer", "2=main now", "--answer", "1=--force, yes", "--", run]]);
+  assert.deepEqual(stub.calls, [["run", "answer", `--project=${PROJECT}`, "--who=web:owner on phone", "--json", "--answer=2=main now", "--answer=1=--force, yes", "--", run]]);
   assert.equal(stub.started.length, 1);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", run, "--project", PROJECT, "--who", "web:owner on phone"], "this host is right, so no --on");
+  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", `--project=${PROJECT}`, "--who=web:owner on phone", "--", run], "this host is right, so no --on");
   assert.ok(stub.started[0]?.log.endsWith(join("runs", run, "resume.log")));
 });
 
@@ -1106,8 +1106,8 @@ test("held: when the ritual belongs to another host, the answer and the resume b
   const run = seedHeld();
   const stub = { ...nowDeps(RESUMES), nowHost: () => "host-b" };
   await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, stub);
-  assert.deepEqual(stub.calls[0], ["run", "answer", "--project", PROJECT, "--who", "web:owner", "--json", "--answer", "1=yes", "--on", "host-b", "--", run]);
-  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", run, "--project", PROJECT, "--who", "web:owner", "--on", "host-b"]);
+  assert.deepEqual(stub.calls[0], ["run", "answer", `--project=${PROJECT}`, "--who=web:owner", "--json", "--answer=1=yes", "--on=host-b", "--", run]);
+  assert.deepEqual(stub.started[0]?.argv, ["run", "resume", `--project=${PROJECT}`, "--who=web:owner", "--on=host-b", "--", run]);
   for (const host of ["-oProxyCommand=x", "host b", ""]) {
     const bad = { ...nowDeps(RESUMES), nowHost: () => host };
     const refused = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, bad);
@@ -1385,8 +1385,8 @@ test("check: it starts the sweep of that vigil with the project, --json and the 
   assert.deepEqual(bodyWithoutId(answer.body), { ok: true, started: true, host: "host-a" });
   assert.ok(Date.now() - began < 250, "the sweep is still running; the POST did not wait for it");
   assert.equal(stub.started.length, 1);
-  assert.deepEqual(stub.started[0]?.argv, ["vigil", "sweep", "armed", "--project", PROJECT, "--json", "--who", "web:owner on phone"]);
-  assert.deepEqual(vigilCheckArgv(CHECK, { who: "w" }), ["vigil", "sweep", "armed", "--project", PROJECT, "--json", "--who", "web:w"]);
+  assert.deepEqual(stub.started[0]?.argv, ["vigil", "sweep", `--project=${PROJECT}`, "--json", "--who=web:owner on phone", "--", "armed"]);
+  assert.deepEqual(vigilCheckArgv(CHECK, { who: "w" }), ["vigil", "sweep", `--project=${PROJECT}`, "--json", "--who=web:w", "--", "armed"]);
   assert.ok(!stub.started[0]?.argv.includes("--force"), "the page never lifts the cooldown");
   assert.equal(stub.started[0]?.log, join(openProject(PROJECT).root, "sweeps", "armed.log"));
 });
@@ -1596,4 +1596,90 @@ test("GET /api/pending: GET only, no cross-site caller, bad ids and too many ids
   const many = Array.from({ length: PENDING_IDS_MAX + 1 }, (_, index) => `01JGHOST${String(index).padStart(18, "0")}`);
   assert.equal(pendingApi(pollRequest(`?ids=${many.join(",")}`)).status, 400);
   assert.deepEqual(pendingApi(pollRequest("")).body, { ok: true, starts: [] });
+});
+
+// --- argument injection (0.113.3) ----------------------------------------------------------
+//
+// Text from a request is one argv word, `--flag=value`. As two words, a note of `-h` printed the
+// help and wrote nothing, and a note of `--project=other` was read as a flag.
+
+const FLAG_LIKE = ["-h", "--help", "--project=other", "--note=x"];
+
+/** Fails when `text` stands as a word of its own before `--`: it must ride inside a `--flag=...` word or come after `--`. */
+function assertDataOnly(argv: readonly string[], text: string): void {
+  const dashes = argv.indexOf("--");
+  argv.forEach((word, index) => {
+    if (!word.includes(text) || (dashes !== -1 && index > dashes)) return;
+    assert.notEqual(word, text, `${text} stands alone in ${JSON.stringify(argv)}`);
+    assert.match(word, /^--(?:note|answer|item)=/u, `${text} rides in the wrong word of ${JSON.stringify(argv)}`);
+  });
+}
+
+test("follow-up: a note, an item key and the run are data, whatever they look like", async () => {
+  for (const text of FLAG_LIKE) {
+    const stub = deps({ ...READY, items: [{ key: text, title: "odd key" }] });
+    const answer = await actionApi(post({ ...VALID, note: text, items: [text] }), { who: "owner" }, stub);
+    assert.equal(answer.status, 202, `${text}: ${errorOf(answer.body)}`);
+    const argv = stub.started[0]?.argv ?? [];
+    assertDataOnly(argv, text);
+    assert.ok(argv.includes(`--note=${text}`) && argv.includes(`--item=${text}`), text);
+    assert.deepEqual(argv.slice(-2), ["--", RUN]);
+  }
+});
+
+test("ack: a note and an answer of -h or --project=other reach the real CLI as text and change nothing else", async () => {
+  const stub = ackDeps();
+  for (const text of FLAG_LIKE) {
+    await actionApi(ackRequest({ ...ACK, note: text, answers: [{ n: 1, text }] }), { who: "owner" }, stub);
+    const argv = stub.calls.at(-1) ?? [];
+    assertDataOnly(argv, text);
+    assert.ok(argv.includes(`--note=${text}`) && argv.includes(`--answer=1=${text}`), text);
+  }
+
+  const real: ActionDeps & { started: Started[] } = { ...nowDeps(), run: runCli };
+  for (const [index, note] of ["-h", "--project=other"].entries()) {
+    const asked = seedAsk(`01JASKINJECT0000000000AAA${String(index)}`);
+    const reply = await actionApi(ackRequest({ project: PROJECT, run: asked, note, answers: [{ n: 1, text: note }, { n: 2, text: "later" }] }), { who: "owner" }, real);
+    assert.equal(reply.status, 200, `${note}: ${errorOf(reply.body)}`);
+    const line = readLedger(openProject(PROJECT)).find((candidate) => candidate.type === "run.acknowledged" && candidate.run === asked);
+    assert.equal(line?.note, note);
+    assert.deepEqual(line?.answers, [{ n: 1, text: note }, { n: 2, text: "later" }]);
+    assert.equal(line?.project, PROJECT, "the project is the one asked for");
+  }
+  assert.equal(existsSync(join(process.env.DARIUS_STATE_DIR ?? "", "other")), false, "no project 'other' was made");
+});
+
+test("held: answers of -h or --project=other are written as text, and the run goes after --", async () => {
+  for (const text of FLAG_LIKE) {
+    const run = seedHeld();
+    const stub = nowDeps(RESUMES);
+    const reply = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text }, { n: 2, text: "ok" }], resume: true }), { who: "owner" }, stub);
+    assert.equal(reply.status, 200, `${text}: ${errorOf(reply.body)}`);
+    assertDataOnly(stub.calls[0] ?? [], text);
+    assert.ok((stub.calls[0] ?? []).includes(`--answer=1=${text}`));
+    assert.deepEqual(stub.started[0]?.argv.slice(-2), ["--", run]);
+  }
+  const run = seedHeld([["Which?"]]);
+  const stub: ActionDeps & { started: Started[] } = { ...nowDeps(RESUMES), run: runCli };
+  const sent = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "-h" }], resume: true }), { who: "owner" }, stub);
+  assert.equal(sent.status, 200, errorOf(sent.body));
+  assert.deepEqual(answeredLines(run).map((line) => line.text), ["-h"]);
+});
+
+test("finding close: a note of -h or --project=other is one word, and the key goes after --", async () => {
+  for (const text of FLAG_LIKE) {
+    const stub = closeDeps();
+    await findingApi(closeRequest({ ...CLOSE, note: text }), { who: "owner" }, stub);
+    const argv = stub.calls[0] ?? [];
+    assertDataOnly(argv, text);
+    assert.ok(argv.includes(`--note=${text}`), text);
+    assert.deepEqual(argv.slice(-2), ["--", "link-12"]);
+  }
+});
+
+test("run now and the vigil check: the slug is a positional, after --", async () => {
+  const stub = nowDeps();
+  await actionApi(ackRequest({ project: PROJECT, run: ASK_NEW, runNow: true }), { who: "owner" }, stub);
+  assert.deepEqual(stub.started[0]?.argv.slice(-2), ["--", "daily"]);
+  assert.deepEqual(vigilCheckArgv({ project: PROJECT, slug: "--project=other" }, { who: "w" }).slice(-2), ["--", "--project=other"]);
 });

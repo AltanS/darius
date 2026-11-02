@@ -688,7 +688,7 @@ nothing: `mode` is `store`, `git` or `none`, and `trackerRoot` is the absolute p
 - `2`: usage. A missing argument, an unknown option, a bad value, an unknown verb.
 - `3`: the environment gave no answer (no bucket, no `bash`, no harness).
 
-`--help` or `-h` anywhere in a command prints its usage and exits `0`; nothing else runs. With
+`--help` or `-h` anywhere in a command prints its usage and exits `0`; nothing else runs. `-h` right after a flag that takes a value (`--note -h`) is ambiguous: it exits `2` and runs nothing. Write `--note=-h` for the value. With
 `--json`, stdout holds JSON only, also on an error: `{"ok":false,"error":"...","code":2}`.
 
 ## Commands

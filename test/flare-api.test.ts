@@ -356,7 +356,7 @@ test("light: the argv has -- before the key, free text as --flag=value, and no b
   const sent = deps.runs[0];
   assert.ok(sent !== undefined);
   assert.deepEqual(sent.argv, [
-    "flare", "light", "--project", LIT, "--who=web:owner on phone", "--title=Vulnerable dependency", "--severity=high", "--source=ci:nightly", "--json",
+    "flare", "light", `--project=${LIT}`, "--who=web:owner on phone", "--title=Vulnerable dependency", "--severity=high", "--source=ci:nightly", "--json",
     "--target=web/app", "--deliver=email", "--stdin", "--", "--help",
   ]);
   assert.equal(sent.input, secret, "the body goes on stdin");
@@ -501,8 +501,8 @@ test("answer and accept: the argv has -- before the key and the note as --note=v
   freshFlare("--help");
   assert.equal((await flareApi(post(ANSWER_PATH, { project: SETTLING, key: "--help", note: "-h" }), TAILNET, deps)).status, 200);
   assert.equal((await flareApi(post(ACCEPT_PATH, { project: SETTLING, key: "--help", note: "--follow-up" }), TAILNET, deps)).status, 200);
-  assert.deepEqual(deps.runs[0], { argv: ["flare", "answer", "--project", SETTLING, "--who=web:owner on phone", "--json", "--note=-h", "--", "--help"], input: undefined });
-  assert.deepEqual(deps.runs[1], { argv: ["flare", "accept", "--project", SETTLING, "--who=web:owner on phone", "--json", "--note=--follow-up", "--", "--help"], input: undefined });
+  assert.deepEqual(deps.runs[0], { argv: ["flare", "answer", `--project=${SETTLING}`, "--who=web:owner on phone", "--json", "--note=-h", "--", "--help"], input: undefined });
+  assert.deepEqual(deps.runs[1], { argv: ["flare", "accept", `--project=${SETTLING}`, "--who=web:owner on phone", "--json", "--note=--follow-up", "--", "--help"], input: undefined });
 });
 
 test("real CLI: answer and accept write their line with --who web:, and a note or key that looks like a flag stays data", async () => {
@@ -528,6 +528,16 @@ test("real CLI: answer and accept write their line with --who web:, and a note o
   assert.match(errorOf(again.body), /already answered by web:owner on phone/u);
   const twice = await flareApi(post(ACCEPT_PATH, { project: name, key: "--follow-up" }), TAILNET, REAL_RUN);
   assert.equal(twice.status, 409);
+});
+
+test("real CLI: a note of --project=other is text on the flare of its own project (0.113.3)", async () => {
+  const name = "settle-inject";
+  freshFlare("k", name);
+  freshFlare("k", "settle-inject-other");
+  const accepted = await flareApi(post(ACCEPT_PATH, { project: name, key: "k", note: "--project=settle-inject-other" }), TAILNET, REAL_RUN);
+  assert.equal(accepted.status, 200, errorOf(accepted.body));
+  assert.equal(collectFlares(openProject(name)).find((flare) => flare.key === "k")?.accepted?.note, "--project=settle-inject-other");
+  assert.equal(collectFlares(openProject("settle-inject-other")).find((flare) => flare.key === "k")?.status, "lit", "the other project is untouched");
 });
 
 test("accept: a refused status is 409 and the CLI does not run; a CLI refusal comes back as 409", async () => {
@@ -564,7 +574,7 @@ test("follow-up: on this host it starts the CLI detached, with no --on, the key 
   assert.equal(started.body.run, STARTED);
   assert.equal(started.body.host, "host-a");
   assert.deepEqual(deps.runs, [], "it does not wait for the run");
-  assert.deepEqual(deps.starts, [["flare", "answer", "--follow-up", "--project", FOLLOWING, "--note=--help", "--who=web:owner on phone", "--", "vuln"]]);
+  assert.deepEqual(deps.starts, [["flare", "answer", "--follow-up", `--project=${FOLLOWING}`, "--note=--help", "--who=web:owner on phone", "--", "vuln"]]);
   assert.equal(answeredLines(FOLLOWING), 0, "the API writes no answer; the CLI does when the run started");
 });
 
@@ -574,7 +584,7 @@ test("follow-up: on a ritual of another host it passes --on <host>", async () =>
   assert.equal(started.status, 202, errorOf(started.body));
   assert.ok(isRecord(started.body));
   assert.equal(started.body.host, "host-b");
-  assert.deepEqual(deps.starts, [["flare", "answer", "--follow-up", "--project", FOLLOWING, "--note=--help", "--who=web:owner on phone", "--on", "host-b", "--", "vuln"]]);
+  assert.deepEqual(deps.starts, [["flare", "answer", "--follow-up", `--project=${FOLLOWING}`, "--note=--help", "--who=web:owner on phone", "--on=host-b", "--", "vuln"]]);
 });
 
 test("follow-up: a host name that could act as an ssh option starts nothing", async () => {

@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.113.3] - 2026-11-02
+
+### Fixed
+
+- A flag value of `-h` no longer prints help and writes nothing. `--help` anywhere before a bare `--` is still help, and a bare `-h` is help too, except right after a bare `--flag` that takes a value. Then `darius` exits 2 with "-h after --note is ambiguous. For help, put -h first. For a value, write --note=-h." and runs nothing. `--note=-h` stores `-h`. This holds for native and legacy verbs.
+- Argument injection in the web actions: a note of `--project=other` was passed as two argv words and read as a flag. Every value from a request now goes as one `--flag=value` word through `flagArg` in `src/web/action-api.ts`, and a run id, key or slug goes after `--`. This covers follow-up, ack, answer, resume, run now, finding close and reopen, vigil check and the flare actions.
+- The project that routes a verb (`--project`) is read before a bare `--` only, so a key after `--` cannot pick the project.
+
 ## [0.113.2] - 2026-11-02
 
 ### Fixed
