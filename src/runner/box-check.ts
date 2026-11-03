@@ -62,6 +62,7 @@ import { GLOBAL_PROJECT, itemRef, openProject, type Project } from "../core/stor
 import { localToday } from "../core/sweep.ts";
 import { ulid } from "../core/ulid.ts";
 import { claudeHarness } from "../harness/claude.ts";
+import type { ChildEnv } from "../surface/headless.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
 import { openBox, type BoxScope, type OpenBox, type SandboxRequest } from "./box-launch.ts";
@@ -629,8 +630,8 @@ function fakeEnd(end: { code: number | null } | { error: Error }, seen: { stdout
  * find the user manager when `[box] slice` puts a scope in front, as a run's
  * full env has it. bwrap clears it all inside.
  */
-function scopeEnv(): Record<string, string> {
-  const env: Record<string, string> = { PATH: process.env.PATH ?? "" };
+function scopeEnv(): ChildEnv {
+  const env: ChildEnv = { PATH: process.env.PATH ?? "" };
   for (const name of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) {
     const value = process.env[name];
     if (value !== undefined && value !== "") env[name] = value;
