@@ -24,10 +24,18 @@
  *      herdr tab keeps the harness after the run ends), and wait for them
  *      (src/core/box-reap.ts)
  *   8. walk the work dir again and rename each `.git`, `.claude`,
- *      `.darius.toml` and bare repo the run made (`checkPlants` in
- *      src/core/box-work.ts); skipped when the work dir was read-only. What
- *      it cannot settle, or a box that would not die, taints the work dir
- *      (src/core/box-taint.ts)
+ *      `.darius.toml`, `.mcp.json` and bare repo the run made (`checkPlants`
+ *      in src/core/box-work.ts); skipped when the work dir was read-only. A
+ *      box that would not die taints the work dir with no walk; so does what
+ *      the walk cannot settle (src/core/box-taint.ts)
+ *
+ * Around all of it, on a box host, the launch holds the work dir's lock
+ * (src/core/box-pending.ts): a launch in the same work dir, or in a folder
+ * above or below, skips as `lease-held` until it ends. Before step 5 the
+ * launch writes a pending record, and removes it after step 8. The first step
+ * of every launch, in any sandbox mode, settles the pending records of dead
+ * runners in its work dir or above or below: it reaps that box and runs its
+ * check. SIGTERM and SIGINT run steps 6 to 8 before the runner exits.
  *
  * A tainted work dir runs nothing, boxed or not: every launch there is
  * `box-broken` until `darius box clear <work dir>`.
@@ -39,7 +47,7 @@
  * box host: it runs as on an `off` host, with one run.log line that says so.
  */
 
-import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -49,7 +57,8 @@ import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles }
 import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
 import { reapBox, REAP_WAIT_MS, type Reaped } from "../core/box-reap.ts";
 import { addTaint, taintReason, taintsOn } from "../core/box-taint.ts";
-import { checkPlants, PLANT_CHECK_CAP_MS, realOr, type PlantCheck } from "../core/box-work.ts";
+import { isAlive, overlaps, readPending, removePending, selfProc, takeLock, writePending, type PendingBox, type WorkLock } from "../core/box-pending.ts";
+import { checkPlants, PLANT_CHECK_CAP_MS, realOr, scanExtra, type PlantCheck } from "../core/box-work.ts";
 import { findSystemdRun, randomTag, scopePrefix, scopeUnit } from "../core/box-scope.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
 import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
@@ -92,11 +101,18 @@ export interface SandboxRequest {
   /** The profile's `env_pass`. */
   envPass: readonly string[];
   /**
-   * Called once after the post-run check when it blocked a plant or left
-   * something unresolved, so the caller can record it on the run. A throw is
-   * caught.
+   * Called once after a post-run check that blocked a plant or left something
+   * unresolved, so the caller can record it on the run. `owner` is the run
+   * the check was for: this launch's, or a dead runner's whose pending record
+   * this launch settled. A throw is caught.
    */
-  onPlants?: (check: PlantCheck) => void;
+  onPlants?: (check: PlantCheck, owner: PlantOwner) => void;
+}
+
+/** The run a post-run check was for. */
+export interface PlantOwner {
+  run: string;
+  project: string;
 }
 
 /** The sandbox a body runs in. */
@@ -112,8 +128,12 @@ export interface RunSandbox {
   isRitualOff: boolean;
 }
 
-/** What `withRunSandbox` gives back: the body's value, or why the box could not be built. */
-export type SandboxEnd<T> = { ran: T } | { boxBroken: string };
+/**
+ * What `withRunSandbox` gives back: the body's value; why the box could not
+ * be built or the work dir is tainted; or `busy`, another launch holds the
+ * work dir's lock, and a later try may start.
+ */
+export type SandboxEnd<T> = { ran: T } | { boxBroken: string } | { busy: string };
 
 /** One open box: the argv prefix, the proxy's policy, the darius path the box runs, and how to close it. */
 export interface OpenBox {
@@ -304,6 +324,7 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     envPass: request.envPass,
     facts,
   });
+  checkExtras(plan.writable, realOr(request.workDir));
   const policy = await boxPolicy(request.ritual, request.harness);
   let proxy: BoxProxy | undefined;
   let broker: Broker | undefined;
@@ -359,6 +380,28 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   };
 }
 
+/** How long the walk of all writable extras may take, together. */
+const EXTRA_SCAN_CAP_MS = 30_000;
+
+/**
+ * Refuses a writable extra that holds a `.git`, `.claude`, `.darius.toml`,
+ * `.mcp.json` or bare repo, or that the walk cannot vouch for: the box gives
+ * a writable extra no read-only guards, so the run could change what a later
+ * unboxed tool trusts there. The work dir inside an extra is left to the
+ * work dir's own walk.
+ */
+function checkExtras(extras: readonly string[], workDir: string): void {
+  const deadline = Date.now() + EXTRA_SCAN_CAP_MS;
+  for (const path of extras) {
+    const scan = scanExtra({ path, pruned: [workDir], deadline });
+    const guard = scan.guards[0];
+    if (guard !== undefined) throw new BoxError(`the writable extra ${path} holds ${guard}, a .git, .claude, .darius.toml, .mcp.json or bare repo the box cannot keep read-only there; take it out of [box] writable or the ritual's writable, so this run does not start`);
+    const problem = scan.problems[0];
+    if (problem !== undefined) throw new BoxError(`${problem}; the walk of the writable extra ${path} cannot vouch for what is there, so this run does not start`);
+    if (scan.timedOut) throw new BoxError(`the walk of the writable extras stopped within the ${String(EXTRA_SCAN_CAP_MS / 1000)} s cap at ${path}; a guard it did not reach would be writable in the box, so this run does not start`);
+  }
+}
+
 /**
  * A launch on the terminal (herdr) has no `--new-session`, so only the kernel
  * knob stops TIOCSTI from typing into the operator's terminal. It is read at
@@ -404,32 +447,100 @@ function brokenReason(cause: unknown): string {
   return message === "" ? "the box could not be built" : message;
 }
 
+/** The cleanups of the boxes open in this process: a SIGTERM or SIGINT runs them before the exit. */
+const OPEN_BOXES = new Set<() => Promise<void>>();
+/** How long the signal cleanup may take before the runner exits anyway: the reap's wait and the check's cap fit. */
+const SIGNAL_CLEANUP_MS = 45_000;
+const SIGNALS = ["SIGTERM", "SIGINT"] as const;
+const SIGNAL_EXIT = { SIGTERM: 143, SIGINT: 130 } as const satisfies Record<(typeof SIGNALS)[number], number>;
+let isExiting = false;
+
+/** On SIGTERM or SIGINT with a box open: reap and check every open box, best effort, then exit as the signal would. */
+function onSignal(signal: (typeof SIGNALS)[number]): void {
+  if (isExiting) return;
+  isExiting = true;
+  setTimeout(() => process.exit(SIGNAL_EXIT[signal]), SIGNAL_CLEANUP_MS);
+  void Promise.allSettled([...OPEN_BOXES].map((cleanup) => cleanup())).then(() => process.exit(SIGNAL_EXIT[signal]));
+}
+
+const SIGNAL_HANDLERS = { SIGTERM: () => onSignal("SIGTERM"), SIGINT: () => onSignal("SIGINT") } as const;
+
+/** Keeps `cleanup` for a signal while the box is open; the handlers are on only while a box is. */
+function trackBox(cleanup: () => Promise<void>): () => void {
+  if (OPEN_BOXES.size === 0) for (const signal of SIGNALS) process.on(signal, SIGNAL_HANDLERS[signal]);
+  OPEN_BOXES.add(cleanup);
+  return () => {
+    OPEN_BOXES.delete(cleanup);
+    if (OPEN_BOXES.size === 0 && !isExiting) for (const signal of SIGNALS) process.off(signal, SIGNAL_HANDLERS[signal]);
+  };
+}
+
+/** One run of `fn`, however often it is called: the body's end and a signal share the cleanup. */
+function once(fn: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | undefined;
+  return () => {
+    running ??= fn();
+    return running;
+  };
+}
+
 /**
- * Runs `body` in this host's sandbox for one launch. For `box`, the box is
- * built first and closed after the body, also when it throws. A box that
- * cannot be built runs nothing: the result is `boxBroken`, and the reason is
- * in run.log. A tainted work dir gives `boxBroken` in every mode, `mask`
- * and `off` too; otherwise those two never do.
+ * Runs `body` in this host's sandbox for one launch. Every launch first takes
+ * the work dir's lock (a held one gives `busy`) and settles what dead runners
+ * left there (`settlePending`). On a box host it holds the lock to the end of
+ * the post-run check; elsewhere it lets go before the body. For `box`, the
+ * box is built first and closed after the body, also when it throws. A box
+ * that cannot be built runs nothing: the result is `boxBroken`, and the
+ * reason is in run.log. A tainted work dir gives `boxBroken` in every mode,
+ * `mask` and `off` too; otherwise those two never do.
  */
 export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox: RunSandbox) => Promise<T>): Promise<SandboxEnd<T>> {
-  // A tainted work dir runs nothing, in or out of the box: what a run left there may run code unboxed.
-  const taint = taintsOn(realOr(request.workDir))[0];
-  if (taint !== undefined) {
-    const reason = taintReason(taint);
-    appendRunLog(request.run.dir, `box: this run does not start: ${reason}`);
-    return { boxBroken: reason };
+  const workDir = realOr(request.workDir);
+  const taken = takeLockQuietly(workDir, request.run.id);
+  if ("busy" in taken) {
+    appendRunLog(request.run.dir, `box: this run does not start now: ${taken.busy}`);
+    return { busy: taken.busy };
   }
-  const sandbox = resolveSandbox();
-  if (sandbox.state !== "box") {
-    noteSandbox(request.run.dir, sandbox);
-    const prefix = sandboxPrefix(sandbox);
-    return { ran: await body({ state: sandbox.state, prefix, gatePrefix: prefix, isBox: false, isRitualOff: false }) };
+  const { lock } = taken;
+  try {
+    await settlePending(request, workDir);
+    // A tainted work dir runs nothing, in or out of the box: what a run left there may run code unboxed.
+    const taint = taintsOn(workDir)[0];
+    if (taint !== undefined) {
+      const reason = taintReason(taint);
+      appendRunLog(request.run.dir, `box: this run does not start: ${reason}`);
+      return { boxBroken: reason };
+    }
+    const sandbox = resolveSandbox();
+    if (sandbox.state !== "box") {
+      // No box, so no post-run check: the lock guards only the settling above.
+      lock.release();
+      noteSandbox(request.run.dir, sandbox);
+      const prefix = sandboxPrefix(sandbox);
+      return { ran: await body({ state: sandbox.state, prefix, gatePrefix: prefix, isBox: false, isRitualOff: false }) };
+    }
+    // The operator's opt-out in the committed marker: this ritual runs as on an `off` host. The box keeps the marker read-only.
+    if (request.ritual.sandbox === "off") {
+      appendRunLog(request.run.dir, "box: off for this ritual by the marker");
+      return { ran: await body({ state: "off", prefix: undefined, gatePrefix: undefined, isBox: false, isRitualOff: true }) };
+    }
+    return await inBox(request, { workDir, lock }, body);
+  } finally {
+    lock.release();
   }
-  // The operator's opt-out in the committed marker: this ritual runs as on an `off` host. The box keeps the marker read-only.
-  if (request.ritual.sandbox === "off") {
-    appendRunLog(request.run.dir, "box: off for this ritual by the marker");
-    return { ran: await body({ state: "off", prefix: undefined, gatePrefix: undefined, isBox: false, isRitualOff: true }) };
+}
+
+/** The lock, never a throw: a state dir that cannot hold it is a busy launch, which a later try may start. */
+function takeLockQuietly(workDir: string, run: string): { lock: WorkLock } | { busy: string } {
+  try {
+    return takeLock({ workDir, run });
+  } catch (cause) {
+    return { busy: `the box lock of ${workDir} cannot be taken: ${brokenReason(cause)}` };
   }
+}
+
+/** Opens the box, writes the pending record, runs the body, and settles the work dir after, on a signal too. */
+async function inBox<T>(request: SandboxRequest, held: { workDir: string; lock: WorkLock }, body: (sandbox: RunSandbox) => Promise<T>): Promise<SandboxEnd<T>> {
   let box: OpenBox;
   try {
     box = await openBox(request);
@@ -438,13 +549,95 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
     appendRunLog(request.run.dir, `box: this run does not start, the box could not be built: ${reason}`);
     return { boxBroken: reason };
   }
+  let pending: string;
   try {
-    return { ran: await body({ state: "box", prefix: box.prefix, gatePrefix: box.gatePrefix, isBox: true, isRitualOff: false }) };
-  } finally {
+    pending = writePending({ run: request.run.id, project: request.run.project, runDir: request.run.dir, workDir: held.workDir, ids: [...box.work.ids], isBareTop: box.work.isBareTop, boxDir: box.boxDir, isWorkReadOnly: box.isWorkReadOnly, ...selfProc(), at: new Date().toISOString() });
+  } catch (cause) {
+    await box.close();
+    const reason = `the pending record of the box cannot be written: ${brokenReason(cause)}`;
+    appendRunLog(request.run.dir, `box: this run does not start: ${reason}`);
+    return { boxBroken: reason };
+  }
+  const finish = once(async () => {
     const reaped = await reapQuietly(box.boxDir);
     await box.close();
     afterBox(request, box, reaped);
+    removePendingQuietly(request.run.dir, pending);
+  });
+  const untrack = trackBox(async () => {
+    await finish();
+    held.lock.release();
+  });
+  try {
+    return { ran: await body({ state: "box", prefix: box.prefix, gatePrefix: box.gatePrefix, isBox: true, isRitualOff: false }) };
+  } finally {
+    await finish();
+    untrack();
   }
+}
+
+function removePendingQuietly(runDir: string, file: string): void {
+  try {
+    removePending(file);
+  } catch (cause) {
+    appendRunLog(runDir, `box: the pending record ${file} could not be removed: ${brokenReason(cause)}`);
+  }
+}
+
+/**
+ * Settles the pending record of every runner that died mid-run in `workDir`
+ * (a real path) or a folder above or below: reaps what is left of its box,
+ * runs its post-run check with the guard ids its launch recorded, taints
+ * what that cannot settle, and removes the record. Its lines go to that
+ * run's run.log, and one line to this launch's. A damaged record taints `/`.
+ * Runs under the work dir's lock. Never throws.
+ */
+async function settlePending(request: SandboxRequest, workDir: string): Promise<void> {
+  let entries: ReturnType<typeof readPending>;
+  try {
+    entries = readPending();
+  } catch (cause) {
+    taintDamaged(request, `the pending records cannot be listed (${brokenReason(cause)})`);
+    return;
+  }
+  for (const entry of entries) {
+    if ("damaged" in entry) {
+      taintDamaged(request, `${entry.damaged}; the box of a run may have been left unchecked`);
+      // Kept aside, so `darius box clear /` ends the taint.
+      try {
+        renameSync(entry.file, `${entry.file}.damaged`);
+      } catch {
+        // The taint stands in any case.
+      }
+      continue;
+    }
+    const { record } = entry;
+    if (!overlaps(record.workDir, workDir) || isAlive(record)) continue;
+    await settleDead(request, record);
+    removePendingQuietly(request.run.dir, entry.file);
+  }
+}
+
+function taintDamaged(request: SandboxRequest, reason: string): void {
+  appendRunLog(request.run.dir, `box: unresolved, every work dir is tainted: ${reason}`);
+  try {
+    addTaint({ workDir: "/", run: request.run.id, project: request.run.project, at: new Date().toISOString(), reasons: [reason] });
+  } catch (cause) {
+    appendRunLog(request.run.dir, `box: the taint could not be written: ${brokenReason(cause)}`);
+  }
+}
+
+/** The post-run check of a launch whose runner died. */
+async function settleDead(request: SandboxRequest, record: PendingBox): Promise<void> {
+  const owner: PlantOwner = { run: record.run, project: record.project };
+  const runDir = existsSync(record.runDir) ? record.runDir : request.run.dir;
+  appendRunLog(runDir, `box: the runner of run ${record.run} (pid ${String(record.pid)}) ended before its post-run check; run ${request.run.id} reaps its box and checks the work dir now`);
+  const reaped = await reapQuietly(record.boxDir);
+  const all = settle({ workDir: record.workDir, runDir, launch: { ids: record.ids, isBareTop: record.isBareTop }, isWorkReadOnly: record.isWorkReadOnly, reaped });
+  if (all.unresolved.length > 0) taintWorkDir({ workDir: record.workDir, runDir, owner }, all.unresolved);
+  await clearStaleBox(record.boxDir).catch(() => undefined);
+  appendRunLog(request.run.dir, `box: settled the box of run ${record.run}, whose runner died: ${String(all.blocked.length)} blocked, ${String(all.unresolved.length)} unresolved`);
+  notePlants(request, runDir, all, owner);
 }
 
 /** The reap, never a throw: a reap that fails counts as a box that would not die. */
@@ -456,6 +649,40 @@ async function reapQuietly(boxDir: string): Promise<Reaped> {
   }
 }
 
+/** What one post-run check needs. */
+interface SettleInput {
+  workDir: string;
+  runDir: string;
+  launch: Pick<WorkScan, "ids" | "isBareTop">;
+  isWorkReadOnly: boolean;
+  reaped: Reaped;
+}
+
+/**
+ * The post-run check after the reap. A box that would not die is unresolved
+ * with no walk: a live process could race the renames and the chmods. Writes
+ * the run.log lines and gives the check; never throws.
+ */
+function settle(input: SettleInput): PlantCheck {
+  const { reaped } = input;
+  const unresolved: string[] = [];
+  if (reaped.left.length > 0) unresolved.push(`the box would not die within ${String(REAP_WAIT_MS / 1000)} s (pids ${reaped.left.join(", ")}), so the work dir was not checked`);
+  if (reaped.error !== undefined) unresolved.push(`the box could not be reaped (${reaped.error}), so the work dir was not checked`);
+  let check: PlantCheck = { blocked: [], unresolved: [], repaired: [], isUnfinished: false };
+  if (unresolved.length === 0 && !input.isWorkReadOnly) {
+    try {
+      check = checkPlants({ workDir: input.workDir, launch: input.launch, capMs: PLANT_CHECK_CAP_MS });
+    } catch (cause) {
+      check = { blocked: [], unresolved: [`the post-run check failed: ${brokenReason(cause)}`], repaired: [], isUnfinished: false };
+    }
+  }
+  const all: PlantCheck = { ...check, unresolved: [...unresolved, ...check.unresolved] };
+  for (const line of all.repaired) appendRunLog(input.runDir, `box: ${line}`);
+  for (const line of all.blocked) appendRunLog(input.runDir, `box: blocked ${line}`);
+  for (const line of all.unresolved) appendRunLog(input.runDir, `box: unresolved, the work dir is tainted: ${line}`);
+  return all;
+}
+
 /**
  * The post-run check, after the box is reaped and closed: renames what the
  * run planted in its work dir and writes one run.log line per plant. What it
@@ -463,34 +690,27 @@ async function reapQuietly(boxDir: string): Promise<Reaped> {
  * check to `onPlants`. It never throws: the run's own end matters more.
  */
 function afterBox(request: SandboxRequest, box: Pick<OpenBox, "work" | "isWorkReadOnly">, reaped: Reaped): void {
-  const unresolved: string[] = [];
-  if (reaped.left.length > 0) unresolved.push(`the box would not die within ${String(REAP_WAIT_MS / 1000)} s (pids ${reaped.left.join(", ")})`);
-  if (reaped.error !== undefined) unresolved.push(`the box could not be reaped: ${reaped.error}`);
-  let check: PlantCheck = { blocked: [], unresolved: [], isUnfinished: false };
-  if (!box.isWorkReadOnly) {
-    try {
-      check = checkPlants({ workDir: request.workDir, launch: box.work, capMs: PLANT_CHECK_CAP_MS });
-    } catch (cause) {
-      check = { blocked: [], unresolved: [`the post-run check failed: ${brokenReason(cause)}`], isUnfinished: false };
-    }
-  }
-  const all: PlantCheck = { ...check, unresolved: [...unresolved, ...check.unresolved] };
-  for (const line of all.blocked) appendRunLog(request.run.dir, `box: blocked ${line}`);
-  for (const line of all.unresolved) appendRunLog(request.run.dir, `box: unresolved, the work dir is tainted: ${line}`);
-  if (all.unresolved.length > 0) taintWorkDir(request, all.unresolved);
+  const owner: PlantOwner = { run: request.run.id, project: request.run.project };
+  const all = settle({ workDir: request.workDir, runDir: request.run.dir, launch: box.work, isWorkReadOnly: box.isWorkReadOnly, reaped });
+  if (all.unresolved.length > 0) taintWorkDir({ workDir: realOr(request.workDir), runDir: request.run.dir, owner }, all.unresolved);
+  notePlants(request, request.run.dir, all, owner);
+}
+
+/** Hands a check that blocked or left something to `onPlants`. */
+function notePlants(request: SandboxRequest, runDir: string, all: PlantCheck, owner: PlantOwner): void {
   if (all.blocked.length === 0 && all.unresolved.length === 0) return;
   try {
-    request.onPlants?.(all);
+    request.onPlants?.(all, owner);
   } catch (cause) {
-    appendRunLog(request.run.dir, `box: the post-run check could not be recorded on the run: ${brokenReason(cause)}`);
+    appendRunLog(runDir, `box: the post-run check could not be recorded on the run: ${brokenReason(cause)}`);
   }
 }
 
-/** Taints the run's work dir on this host. A taint that cannot be written is a run.log line: there is nothing else to tell. */
-function taintWorkDir(request: SandboxRequest, reasons: readonly string[]): void {
+/** Taints a work dir on this host. A taint that cannot be written is a run.log line: there is nothing else to tell. */
+function taintWorkDir(target: { workDir: string; runDir: string; owner: PlantOwner }, reasons: readonly string[]): void {
   try {
-    addTaint({ workDir: realOr(request.workDir), run: request.run.id, project: request.run.project, at: new Date().toISOString(), reasons: [...reasons] });
+    addTaint({ workDir: target.workDir, run: target.owner.run, project: target.owner.project, at: new Date().toISOString(), reasons: [...reasons] });
   } catch (cause) {
-    appendRunLog(request.run.dir, `box: the taint could not be written: ${brokenReason(cause)}`);
+    appendRunLog(target.runDir, `box: the taint could not be written: ${brokenReason(cause)}`);
   }
 }

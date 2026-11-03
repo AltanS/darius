@@ -12,12 +12,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { boxPlan, type BoxPlan, type BoxPlanInput } from "../src/core/box.ts";
 import { boxEnterPlanFields, boxFiles, hostBoxFiles, writeBoxFiles } from "../src/core/box-files.ts";
@@ -31,6 +32,7 @@ import { dariusBin } from "../src/runner/launch.ts";
 import type { RitualEntry } from "../src/runner/report.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
+import { lockDir, readPending } from "../src/core/box-pending.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 import { boxStack } from "../src/runner/box-check.ts";
 import { VERSION } from "../src/version.ts";
@@ -816,6 +818,137 @@ test("real bwrap: F5 a box that lives on after the run (as in a herdr tab) is re
   assert.equal(existsSync(join(repo, "live", ".git")), false);
   assert.equal(readdirSync(join(tree.runtime, "darius-box")).length, 0, "the box dir is gone");
   assert.doesNotMatch(readFileSync(join(runDir, "run.log"), "utf8"), /tainted/u);
+});
+
+/** A source file of this checkout as a file URL, for an import in a child process. */
+function srcUrl(path: string): string {
+  return pathToFileURL(join(process.cwd(), path)).href;
+}
+
+/**
+ * A runner in a child process: it opens the box for `request` and starts
+ * `script` in it, then waits until it is killed or `release` appears. In
+ * `survive` the box runs under a shell of its own session, as a herdr tab
+ * keeps it, so it outlives the runner.
+ */
+function childRunner(tree: Tree, input: { request: SandboxRequest; script: string; release?: string; survive?: boolean }): ChildProcess {
+  const runner = join(tree.base, "runner.mjs");
+  writeFileSync(
+    runner,
+    [
+      `import { spawn } from "node:child_process";`,
+      `import { existsSync } from "node:fs";`,
+      `import { withRunSandbox } from ${JSON.stringify(srcUrl("src/runner/box-launch.ts"))};`,
+      `import { claudeHarness } from ${JSON.stringify(srcUrl("src/harness/claude.ts"))};`,
+      `const input = JSON.parse(process.argv[2]);`,
+      `const request = { ...input.request, harness: claudeHarness };`,
+      `const end = await withRunSandbox(request, async (sandbox) => {`,
+      `  const argv = [...(sandbox.prefix ?? []), "/bin/sh", "-c", input.script];`,
+      `  const env = { PATH: process.env.PATH ?? "" };`,
+      `  if (input.survive) spawn("/bin/sh", ["-c", '"$@"; :', "sh", ...argv], { cwd: request.workDir, env, stdio: "ignore", detached: true }).unref();`,
+      `  else spawn(argv[0], argv.slice(1), { cwd: request.workDir, env, stdio: "ignore" });`,
+      `  for (let tries = 0; tries < 1200 && !(input.release && existsSync(input.release)); tries += 1) await new Promise((wait) => setTimeout(wait, 50));`,
+      `  return "released";`,
+      `});`,
+      `console.log(JSON.stringify(end));`,
+      "",
+    ].join("\n"),
+  );
+  const { harness: _harness, ...request } = input.request;
+  return spawn(process.execPath, ["--no-warnings", runner, JSON.stringify({ ...input, request })], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+}
+
+async function waitFor(path: string, ms = 20_000): Promise<boolean> {
+  for (let waited = 0; waited < ms && !existsSync(path); waited += 50) await new Promise((wait) => setTimeout(wait, 50));
+  return existsSync(path);
+}
+
+test("real bwrap: H1 a runner killed mid-run leaves a pending record; the next launch there reaps the box it left, renames its plant and removes the record", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const { repo, runDir, request } = plantSetup(tree, "r-killed");
+  const child = childRunner(tree, { request, survive: true, script: "mkdir -p planted/.git; while :; do date +%s%N > beat; sleep 0.05; done" });
+  let stderr = "";
+  child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+  const exited = new Promise((done) => child.on("exit", done));
+  assert.ok(await waitFor(join(repo, "beat")), `the box runs: ${stderr}`);
+  child.kill("SIGKILL");
+  await exited;
+  const records = readPending();
+  assert.equal(records.length, 1, "the pending record outlives the runner");
+  assert.ok("record" in records[0]! && records[0].record.run === "r-killed");
+  assert.equal(readdirSync(lockDir()).length, 1, "and so does its lock");
+  const beat = readFileSync(join(repo, "beat"), "utf8");
+  await new Promise((wait) => setTimeout(wait, 300));
+  assert.notEqual(readFileSync(join(repo, "beat"), "utf8"), beat, "the box lives on without its runner");
+
+  const next = plantSetup(tree, "r-next");
+  const end = await withRunSandbox({ ...next.request, workDir: repo }, async () => "ran");
+  assert.deepEqual(end, { ran: "ran" });
+  assert.equal(existsSync(join(repo, "planted", ".git")), false, "the dead run's plant is renamed");
+  assert.ok(blockedNext(join(repo, "planted", ".git")) !== undefined);
+  const after = readFileSync(join(repo, "beat"), "utf8");
+  await new Promise((wait) => setTimeout(wait, 300));
+  assert.equal(readFileSync(join(repo, "beat"), "utf8"), after, "the box it left is reaped");
+  assert.deepEqual(readPending(), [], "the record is gone");
+  assert.deepEqual(readdirSync(lockDir()), [], "the stale lock was taken over and let go");
+  assert.equal(readdirSync(join(tree.runtime, "darius-box")).length, 0, "the box dirs are gone");
+  const log = readFileSync(join(runDir, "run.log"), "utf8");
+  assert.match(log, /the runner of run r-killed \(pid \d+\) ended before its post-run check/u);
+  assert.match(log, /box: blocked \S*\/planted\/\.git, a \.git made in the run/u);
+  assert.doesNotMatch(log, /tainted/u);
+});
+
+test("real bwrap: H1 a runner stopped with SIGTERM reaps its box and checks the work dir before it exits", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const { repo, runDir, request } = plantSetup(tree, "r-term");
+  const child = childRunner(tree, { request, survive: true, script: "mkdir -p planted/.git; touch up; sleep 30" });
+  const exited = new Promise<number | null>((done) => child.on("exit", (code) => done(code)));
+  assert.ok(await waitFor(join(repo, "up")), "the box runs");
+  child.kill("SIGTERM");
+  assert.equal(await exited, 143, "the runner exits as SIGTERM would");
+  assert.equal(existsSync(join(repo, "planted", ".git")), false, "its plant is renamed before the exit");
+  assert.deepEqual(readPending(), []);
+  assert.deepEqual(readdirSync(lockDir()), []);
+  assert.match(readFileSync(join(runDir, "run.log"), "utf8"), /box: blocked \S*\/planted\/\.git/u);
+});
+
+test("real bwrap: H2 while a runner holds a box open, a launch in its work dir or a folder below is busy; after it ends the next one starts", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const { repo, request } = plantSetup(tree, "r-holder");
+  const release = join(tree.base, "release");
+  const child = childRunner(tree, { request, release, script: "touch up; sleep 30" });
+  let stdout = "";
+  child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+  const exited = new Promise<number | null>((done) => child.on("exit", done));
+  assert.ok(await waitFor(join(repo, "up")), "the first box runs");
+  for (const dir of [repo, join(repo, "old")]) {
+    const other = plantSetup(tree, `r-busy-${String(dir.length)}`);
+    const end = await withRunSandbox({ ...other.request, workDir: dir }, async () => assert.fail("a second launch must not start"));
+    assert.ok("busy" in end && end.busy.includes("run r-holder"), JSON.stringify(end));
+  }
+  writeFileSync(release, "");
+  assert.equal(await exited, 0);
+  assert.equal(stdout.trim(), JSON.stringify({ ran: "released" }));
+  const next = plantSetup(tree, "r-after");
+  assert.deepEqual(await withRunSandbox({ ...next.request, workDir: repo }, async () => "ran"), { ran: "ran" });
 });
 
 /** Runs an argv without a shell from `cwd`, with only PATH set. */

@@ -219,6 +219,11 @@ export async function runHarnessCheck(input: {
       check.boxBroken = true;
       return check;
     }
+    if ("busy" in sandboxed) {
+      // Another launch holds the work dir's box lock: nothing ran, no ledger line, and the next batch tries again.
+      check.detail = `busy: ${sandboxed.busy}`;
+      return check;
+    }
     const outcome = sandboxed.ran;
     if ("result" in outcome) {
       const { result } = outcome;

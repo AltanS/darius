@@ -294,8 +294,10 @@ whether a run lands in the slice.
 
 `[box] writable` is empty on purpose: a shared cache holds code that later runs and shells load. Inside
 the box the cache is per run. To share one, name a folder, such as `["~/.cache/acme-tool"]`. Darius
-refuses `~/.cache` itself, the store, `~/.claude`, `~/.ssh` and other paths that start code later. An
-unknown key or a refused path is an error that names it. A ritual sets its own network and paths in
+refuses `~/.cache` itself, the store, `~/.claude`, `~/.ssh` and other paths that start code later. At
+each launch it also walks every writable folder and refuses the run when one holds a `.git`, `.claude`,
+`.darius.toml`, `.mcp.json` or bare repo: the box cannot keep those read-only there. An unknown key or a
+refused path is an error that names it. A ritual sets its own network and paths in
 `.darius.toml` with `net`, `reach`, `writable`, `ssh_agent` and `tools` (see `docs/marker.md`). A ritual
 that cannot run in the box at all opts out with `sandbox = "off"` in the committed marker; on a box host
 it then runs with no box and no mask.

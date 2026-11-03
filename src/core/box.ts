@@ -22,8 +22,8 @@
  *   --tmpfs <each hidden home folder>       HIDDEN_HOME_DIRS: socket nests
  *   --bind <agent socket>                   only with a reach entry on port 22, or ssh_agent
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
- *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
- *   --ro-bind <each .git, .claude, .darius.toml and bare repo below the work dir> on itself
+ *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml, <work>/.mcp.json on themselves
+ *   --ro-bind <each .git, .claude, .darius.toml, .mcp.json and bare repo below the work dir> on itself
  *   --ro-bind <run dir>, --bind gate.jsonl, --bind scratch/
  *   --ro-bind ~/.claude, then the adapter's `boxWritable` (--bind, or
  *     --ro-bind over a writable one), a --tmpfs on each `boxScratch`, the per-run copies
@@ -41,7 +41,7 @@
  * linked worktree), so a run can neither write it nor rename or remove it: a
  * mount point cannot be moved. Every `.git` below the work dir (a nested
  * repo, a submodule, a worktree file) gets the same mount, and so does every
- * `.claude` folder and `.darius.toml` below it and every folder git takes for a bare repo
+ * `.claude` folder, `.darius.toml` and `.mcp.json` below it and every folder git takes for a bare repo
  * (`HEAD`, and `objects` and `refs`, or `commondir`). The scan does not look
  * for more of them inside one it found, nor in `node_modules` or a mount point. A work dir
  * with no `.git` (a subfolder of a repo) gets an empty read-only one, so the
@@ -52,9 +52,10 @@
  * A run can still make a new one of those below the top. After the run,
  * with the box reaped, the runner walks the work dir again and renames each
  * guard whose (dev, ino) the launch did not record (`checkPlants` in
- * src/core/box-work.ts): `.git`, `.claude` and `.darius.toml` get
+ * src/core/box-work.ts): `.git`, `.claude`, `.darius.toml` and `.mcp.json` get
  * `.darius-blocked-<random>` on their name, a bare repo's `HEAD` too. What it
- * cannot settle taints the work dir (src/core/box-taint.ts).
+ * cannot settle taints the work dir (src/core/box-taint.ts). A writable
+ * extra gets no such mounts, so the launch refuses one that holds a guard.
  *
  * Refused, with an error that names the path: a writable extra inside or
  * holding the store, the darius config or app dir, `~/.claude`, `~/.ssh`,
@@ -62,9 +63,9 @@
  * files a later unboxed session runs (`~/.local/bin`, git config, every PATH
  * entry of the runner), `/`, `/proc`, `/sys`, `/dev`, `/run` or `/tmp`;
  * `~/.cache` itself; a work dir that holds any of those. Each is checked as
- * written and with its symlinks resolved. A `.git`, `.claude` or
- * `.darius.toml` in the work dir that is a link is refused, and so is a `.git`,
- * `.claude` or `.darius.toml` link anywhere below it: a link in a writable folder can be swapped, and
+ * written and with its symlinks resolved. A `.git`, `.claude`, `.darius.toml`
+ * or `.mcp.json` in the work dir that is a link is refused, and so is such a
+ * link anywhere below it: a link in a writable folder can be swapped, and
  * bwrap mounts on its target. A socket scan that hit its time cap is refused
  * too: a socket it did not reach would connect.
  */
@@ -401,9 +402,13 @@ export interface WorkScan {
   markers: readonly string[];
   /** Every `.darius.toml` below the top that is a link. */
   markerLinks: readonly string[];
+  /** Every `.mcp.json` below the top: Claude Code starts the MCP servers it names in a later unboxed session there. */
+  mcps: readonly string[];
+  /** Every `.mcp.json` below the top that is a link. */
+  mcpLinks: readonly string[];
   /** The work dir itself looks like a bare repo: the plan refuses it, a mount there would cover the whole work dir. */
   isBareTop: boolean;
-  /** The `dev:ino` of every guard found, and of the top `.darius.toml`: the post-run check knows each one wherever it is then. */
+  /** The `dev:ino` of every guard found, and of the top `.darius.toml` and `.mcp.json`: the post-run check knows each one wherever it is then. */
   ids: readonly string[];
   /** Why the scan cannot vouch for the work dir: a folder it cannot read, a name that is not UTF-8. The plan refuses the run. */
   problems: readonly string[];
@@ -505,6 +510,8 @@ export interface BoxPlan {
   agent: boolean;
   /** True when the box shows the work dir read-only: the run can plant nothing there. */
   isWorkReadOnly: boolean;
+  /** The writable extras bound in, as real paths: the launch walks each for guards (`scanExtra` in src/core/box-work.ts). */
+  writable: string[];
 }
 
 /** A path with `~` expanded, normalized, and its facts. */
@@ -890,8 +897,8 @@ function runRebinds(facts: BoxFacts): string[] {
   });
 }
 
-/** The work dir entries a later unboxed session trusts: git's own folder, Claude's project settings, the darius marker. */
-const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
+/** The work dir entries a later unboxed session trusts: git's own folder, Claude's project settings, the darius marker, Claude Code's project MCP servers. */
+const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml", ".mcp.json"];
 
 /**
  * The read-only binds over the work dir's `.git` (a folder, or the file of a
@@ -908,9 +915,12 @@ const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
  * empty `.git` when it looks for the repo. A read-only work dir needs none:
  * the run can make nothing there.
  *
- * Every `.git`, `.claude` folder and bare repo below the top (the work dir
- * scan finds them) is bound read-only on itself too, after the top guards. A
- * `.git` or `.claude` link anywhere is refused. What a run makes there anew
+ * A missing `.darius.toml` or `.mcp.json` gets no mount: a new one is
+ * renamed after the run.
+ *
+ * Every `.git`, `.claude` folder, `.darius.toml`, `.mcp.json` and bare repo
+ * below the top (the work dir scan finds them) is bound read-only on itself
+ * too, after the top guards. A link to one anywhere is refused. What a run makes there anew
  * is renamed after the run (`checkPlants` in src/core/box-work.ts).
  */
 function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creates: BoxCreate[] }): string[] {
@@ -920,18 +930,20 @@ function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creat
   if (claudeLink !== undefined) throw new BoxError(`${claudeLink} is a link; the box keeps a .claude read-only only as a plain folder, so this run does not start`);
   const markerLink = facts.work.markerLinks[0];
   if (markerLink !== undefined) throw new BoxError(`${markerLink} is a link; the box keeps a .darius.toml read-only only as a plain file, so this run does not start`);
+  const mcpLink = facts.work.mcpLinks[0];
+  if (mcpLink !== undefined) throw new BoxError(`${mcpLink} is a link; the box keeps a .mcp.json read-only only as a plain file, so this run does not start`);
   const top = WORK_GUARDS.flatMap((name) => {
     const path = join(work.real, name);
     const entry = facts.entry(path);
     if (entry === undefined) {
-      if (name === ".darius.toml" || work.isReadOnly) return [];
+      if (name === ".darius.toml" || name === ".mcp.json" || work.isReadOnly) return [];
       if (!empty.creates.some((create) => create.path === empty.dir)) empty.creates.push({ path: empty.dir, kind: "dir", mode: 0o500 });
       return ["--ro-bind", empty.dir, path];
     }
     if (entry.link !== undefined || normalize(entry.real) !== path) throw new BoxError(`${path} is a link; the box keeps it read-only only as a plain folder or file, so this run does not start`);
     return ["--ro-bind", path, path];
   });
-  const nested = [...facts.work.gits, ...facts.work.claudes, ...facts.work.markers, ...facts.work.bares].flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
+  const nested = [...facts.work.gits, ...facts.work.claudes, ...facts.work.markers, ...facts.work.mcps, ...facts.work.bares].flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
   return [...top, ...nested];
 }
 
@@ -985,7 +997,8 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
     const entry = facts.entry(normalize(dir));
     if (entry?.kind === "dir") args.push("--ro-bind", normalize(entry.real), normalize(entry.real));
   }
-  for (const path of writableExtras(input, guarded)) args.push("--bind", path, path);
+  const writable = writableExtras(input, guarded);
+  for (const path of writable) args.push("--bind", path, path);
   // After the writable extras, so a cache dir that holds one (~/.cache) cannot uncover it.
   const hidden = hiddenReal(facts);
   for (const dir of hidden) args.push("--tmpfs", dir);
@@ -1003,5 +1016,5 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
   if (!input.hasTty) args.push("--new-session");
   const env = boxEnv(input, agent);
   args.push("--clearenv", ...Object.entries(env).flatMap(([name, value]) => ["--setenv", name, value]));
-  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined, isWorkReadOnly: work.isReadOnly };
+  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined, isWorkReadOnly: work.isReadOnly, writable };
 }

@@ -15,6 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
@@ -33,9 +34,11 @@ import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
-import { clearStaleBox, webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
+import { clearStaleBox, webPorts, withRunSandbox, type PlantOwner, type SandboxRequest } from "../src/runner/box-launch.ts";
 import { boxCommand } from "../src/cli/box.ts";
-import { addTaint, clearTaint } from "../src/core/box-taint.ts";
+import { addTaint, clearTaint, readTaints } from "../src/core/box-taint.ts";
+import { lockDir, pendingDir, selfProc, takeLock, writePending } from "../src/core/box-pending.ts";
+import { scanWork, type PlantCheck } from "../src/core/box-work.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
 import { boxStack } from "../src/runner/box-check.ts";
@@ -139,8 +142,11 @@ case "\${FAKE_CLAUDE_MODE:-complete}" in
       | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
   hold) darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" >/dev/null ;;
   sleep) trap '' TERM; sleep 29.3 ;;
-  plant-bad-name)
-    mkdir -p "$(printf '\\377')/.git"
+  plant-too-long)
+    # A .git whose path is 4080 bytes: the check finds it, and its rename to a longer name fails (ENAMETOOLONG).
+    p=""; while [ $(( \${#PWD} + \${#p} )) -lt 3900 ]; do p="$p/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; done
+    n=$(( 4080 - 5 - 1 - \${#PWD} - \${#p} )); last=""; while [ \${#last} -lt "$n" ]; do last="\${last}b"; done
+    mkdir -p "$PWD$p/$last/.git" && printf '%s\\n' "$PWD$p/$last/.git" > long-plant
     printf 'planted\\n\`\`\`darius-result\\n{"v":1,"status":"ok","summary":"planted"}\\n\`\`\`\\n' \\
       | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
   plant)
@@ -607,19 +613,22 @@ test("F1: what the check cannot settle taints the work dir: every later launch t
   const project = "bx-taint";
   const dir = linkedCheckout(project);
   seedRitual(project, ACT_POLICY);
-  process.env.FAKE_CLAUDE_MODE = "plant-bad-name";
+  process.env.FAKE_CLAUDE_MODE = "plant-too-long";
   try {
     const { entry, stdout } = await runDueJson(project);
     assert.equal(entry?.end, "complete", stdout);
+    const plant = readFileSync(join(dir, "long-plant"), "utf8").trim();
+    const reason = `${plant}, a .git made in the run, not renamed: ENAMETOOLONG`;
     const recorded = linesOf(project, "run.box-blocked");
     assert.equal(recorded.length, 1);
     assert.equal(recorded[0]?.unresolved, true);
-    assert.deepEqual(recorded[0]?.reasons, [`${dir} holds a name that is not valid UTF-8`]);
-    const tainted = JSON.parse(readFileSync(join(process.env.DARIUS_STATE_DIR ?? "", "box", "tainted.json"), "utf8"));
-    assert.equal(tainted.tainted[0]?.workDir, dir);
-    assert.equal(tainted.tainted[0]?.run, entry?.run);
+    assert.deepEqual(recorded[0]?.reasons, [reason]);
+    const tainted = readTaints();
+    assert.equal(tainted.length, 1);
+    assert.equal(tainted[0]?.workDir, dir);
+    assert.equal(tainted[0]?.run, entry?.run);
     const shown = JSON.parse((await runCli(runCommand, ["show", entry?.run ?? "", "--project", project, "--json"])).stdout);
-    assert.deepEqual(shown.box_unresolved, [`${dir} holds a name that is not valid UTF-8`]);
+    assert.deepEqual(shown.box_unresolved, [reason]);
     const alerts = ledgerAlerts(openProject(project), readLedger(openProject(project)), "", hostId()).filter((alert) => alert.title.includes("tainted"));
     assert.equal(alerts.length, 1, "the taint goes out as an alert");
     assert.match(alerts[0]?.title ?? "", /^heartbeat tainted its work dir on /u);
@@ -650,7 +659,7 @@ test("F1: what the check cannot settle taints the work dir: every later launch t
     assert.equal(cleared.code, 0, cleared.stderr);
     assert.match(cleared.stdout, new RegExp(`cleared the taint of ${dir}: run ${entry?.run ?? ""}`, "u"));
     assert.equal((await runCli(boxCommand, ["clear", dir])).code, 1, "nothing left to clear");
-    rmSync(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0xff])]), { recursive: true, force: true });
+    rmSync(join(dir, plant.slice(dir.length + 1).split("/")[0] ?? "missing"), { recursive: true, force: true });
     const after = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
     assert.equal(entryOf(after.stdout)?.end, "complete", after.stdout);
   } finally {
@@ -676,6 +685,152 @@ test("a taint in a folder above or below the work dir blocks it too; a ritual wi
   } finally {
     clearTaint(join(dir, "deep"));
   }
+});
+
+test("H2: a launch holds its work dir's lock: a launch there or in a folder above or below is busy until it ends; an off host lets go before the body; run-due skips a busy one as lease-held", async () => {
+  const work = join(SANDBOX, "bx-lock-work");
+  mkdirSync(join(work, "sub"), { recursive: true });
+  const tries: string[] = [];
+  const end = await withRunSandbox({ ...request("bx-lock"), workDir: work }, async () => {
+    for (const dir of [work, join(work, "sub"), SANDBOX]) {
+      const other = await withRunSandbox({ ...request("bx-lock-2"), workDir: dir }, async () => "ran");
+      tries.push("busy" in other ? `busy ${other.busy}` : JSON.stringify(other));
+    }
+    return "ran";
+  });
+  assert.deepEqual(end, { ran: "ran" });
+  assert.equal(tries.length, 3);
+  for (const entry of tries) assert.match(entry, new RegExp(`^busy the work dir \\S+ is in use: run \\S+ \\(pid ${String(process.pid)}\\) holds the box lock on ${work}`, "u"));
+  assert.deepEqual(readdirSync(lockDir()), [], "the lock is gone after the launch");
+
+  process.env.DARIUS_RUN_SANDBOX = "off";
+  try {
+    const inner = await withRunSandbox({ ...request("bx-lock-off"), workDir: work }, async () => withRunSandbox({ ...request("bx-lock-off-2"), workDir: work }, async () => "inner"));
+    assert.deepEqual(inner, { ran: { ran: "inner" } }, "no box, no post-run check: the lock goes before the body");
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "box";
+  }
+
+  const project = "bx-lock-due";
+  const dir = linkedCheckout(project);
+  seedRitual(project);
+  const held = takeLock({ workDir: dir, run: "01JHELDRUN" });
+  assert.ok("lock" in held);
+  try {
+    fresh();
+    const { entry, stdout } = await runDueJson(project);
+    assert.deepEqual([entry?.action, entry?.reason], ["skipped", "lease-held"], stdout);
+    assert.match(entry?.detail ?? "", /run 01JHELDRUN/u);
+    assert.equal(launches().length, 0, "no harness starts");
+  } finally {
+    if ("lock" in held) held.lock.release();
+  }
+});
+
+/** A pid that is gone now: a child that ran and exited. */
+function deadPid(): number {
+  const ran = spawnSync("true");
+  assert.ok(ran.pid !== undefined && ran.pid > 0);
+  return ran.pid;
+}
+
+test("H1: the pending record of a dead runner: the next launch there, on an off host too, reaps its box, renames its plant by the launch's ids, logs to both runs, records on the owner and removes the record", async () => {
+  const work = join(SANDBOX, "bx-pending-work");
+  mkdirSync(join(work, "old", ".git"), { recursive: true });
+  const launch = scanWork({ workDir: work, capMs: 30_000 });
+  mkdirSync(join(work, "sub", ".git"), { recursive: true });
+  const dead = request("bx-pending");
+  const file = writePending({ run: dead.run.id, project: dead.run.project, runDir: dead.run.dir, workDir: work, ids: [...launch.ids], isBareTop: false, boxDir: join(RUNTIME, "darius-box", dead.run.id), isWorkReadOnly: false, pid: deadPid(), start: "1", at: new Date().toISOString() });
+  // A live runner's record in the same work dir is not touched.
+  const live = writePending({ run: "01JLIVERUN", project: "bx-pending", runDir: dead.run.dir, workDir: work, ids: [], isBareTop: false, boxDir: join(RUNTIME, "darius-box", "01JLIVERUN"), isWorkReadOnly: false, ...selfProc(), at: new Date().toISOString() });
+  const owners: string[] = [];
+  process.env.DARIUS_RUN_SANDBOX = "off";
+  try {
+    const next = { ...request("bx-pending"), workDir: join(work, "sub"), onPlants: (check: PlantCheck, owner: PlantOwner) => owners.push(`${owner.run} ${String(check.blocked.length)}`) };
+    assert.deepEqual(await withRunSandbox(next, async () => "ran"), { ran: "ran" });
+    assert.equal(existsSync(join(work, "sub", ".git")), false, "the dead run's plant is renamed");
+    assert.ok(existsSync(join(work, "old", ".git")), "the repo of its launch stays");
+    assert.equal(existsSync(file), false, "the record is gone");
+    assert.ok(existsSync(live), "a live runner's record stays");
+    assert.deepEqual(owners, [`${dead.run.id} 1`]);
+    const deadLog = readFileSync(join(dead.run.dir, "run.log"), "utf8");
+    assert.match(deadLog, /ended before its post-run check/u);
+    assert.match(deadLog, /box: blocked \S*\/sub\/\.git, a \.git made in the run/u);
+    assert.match(readFileSync(join(next.run.dir, "run.log"), "utf8"), new RegExp(`settled the box of run ${dead.run.id}, whose runner died: 1 blocked, 0 unresolved`, "u"));
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "box";
+    rmSync(live, { force: true });
+  }
+
+  // A damaged record taints every work dir, and moves aside so `darius box clear /` ends it.
+  mkdirSync(pendingDir(), { recursive: true });
+  writeFileSync(join(pendingDir(), "broken.json"), "{");
+  const blocked = await withRunSandbox({ ...request("bx-pending"), workDir: work }, async () => "ran");
+  assert.ok("boxBroken" in blocked && blocked.boxBroken.includes("broken.json does not parse"), JSON.stringify(blocked));
+  assert.ok(existsSync(join(pendingDir(), "broken.json.damaged")));
+  assert.equal(clearTaint("/").length, 1);
+  rmSync(join(pendingDir(), "broken.json.damaged"));
+});
+
+test("L1: each taint is a file of its own: two taints of one work dir both stay; a damaged file and a folder that cannot be listed are a taint on /", { skip: process.getuid?.() === 0 }, () => {
+  const dir = join(SANDBOX, "bx-taints");
+  const at = new Date().toISOString();
+  addTaint({ workDir: "/w/a", run: "01JRUNA", project: "p", at, reasons: ["one"] }, dir);
+  addTaint({ workDir: "/w/a", run: "01JRUNB", project: "p", at, reasons: ["two"] }, dir);
+  assert.deepEqual(readTaints(dir).map((taint) => taint.run).toSorted(), ["01JRUNA", "01JRUNB"]);
+  writeFileSync(join(dir, "zz-damaged.json"), "not json");
+  assert.deepEqual(readTaints(dir).filter((taint) => taint.workDir === "/").length, 1);
+  assert.equal(clearTaint("/w/a", dir).length, 2);
+  assert.equal(clearTaint("/", dir).length, 1, "clear / removes the damaged file");
+  assert.deepEqual(readTaints(dir), []);
+  chmodSync(dir, 0o000);
+  try {
+    const taints = readTaints(dir);
+    assert.equal(taints.length, 1);
+    assert.equal(taints[0]?.workDir, "/");
+    assert.match(taints[0]?.reasons[0] ?? "", /cannot be listed/u);
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+});
+
+/** A folder outside /tmp and /var/tmp, which a writable extra may not be in: in the checkout, removed after. Undefined when it cannot be made. */
+function outsideTmp(): string | undefined {
+  try {
+    const dir = mkdtempSync(join(process.cwd(), ".bx-extra-"));
+    return ["/tmp/", "/var/tmp/"].some((root) => `${dir}/`.startsWith(root)) ? undefined : dir;
+  } catch {
+    return undefined;
+  }
+}
+
+test("M2: a writable extra that holds a .git, .claude, .darius.toml, .mcp.json or bare repo refuses the launch, naming it; the work dir inside an extra is left to its own walk", async (t) => {
+  const extra = outsideTmp();
+  if (extra === undefined) {
+    t.skip("no writable folder outside /tmp and /var/tmp");
+    return;
+  }
+  t.after(() => rmSync(extra, { recursive: true, force: true }));
+  mkdirSync(join(extra, "work", ".git"), { recursive: true });
+  mkdirSync(join(extra, "cache"), { recursive: true });
+  const ok = await withRunSandbox({ ...request("bx-extra"), workDir: join(extra, "work"), isReport: false, ritual: { writable: [extra] } }, async () => "ran");
+  assert.deepEqual(ok, { ran: "ran" });
+  for (const guard of [join("cache", "dep", ".git"), join("cache", ".claude"), join("cache", "x", ".darius.toml"), join("cache", ".mcp.json")]) {
+    const path = join(extra, guard);
+    if (guard.endsWith(".git") || guard.endsWith(".claude")) mkdirSync(path, { recursive: true });
+    else {
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "{}\n");
+    }
+    const end = await withRunSandbox({ ...request("bx-extra"), workDir: join(extra, "work"), isReport: false, ritual: { writable: [extra] } }, async () => "ran");
+    assert.ok("boxBroken" in end && end.boxBroken.includes(`the writable extra ${extra} holds ${path}`), `${guard}: ${JSON.stringify(end)}`);
+    rmSync(join(extra, "cache"), { recursive: true, force: true });
+    mkdirSync(join(extra, "cache"));
+  }
+  // A bare-looking cache, the extra itself.
+  for (const name of ["HEAD", "objects", "refs"]) mkdirSync(join(extra, "cache", name));
+  const bare = await withRunSandbox({ ...request("bx-extra"), workDir: join(extra, "work"), isReport: false, ritual: { writable: [join(extra, "cache")] } }, async () => "ran");
+  assert.ok("boxBroken" in bare && bare.boxBroken.includes(`holds ${join(extra, "cache")},`), JSON.stringify(bare));
 });
 
 test("a run that times out ends, and its box is closed", async () => {

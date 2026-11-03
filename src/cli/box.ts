@@ -32,7 +32,7 @@ import { isatty } from "node:tty";
 
 import { BOX_PROXY_SOCKET } from "../core/box.ts";
 import { boxMarkerPath, connectTunnel, enterBox } from "../core/box-inside.ts";
-import { clearTaint, readTaints, taintFile, type Taint } from "../core/box-taint.ts";
+import { clearTaint, readTaints, taintDir, type Taint } from "../core/box-taint.ts";
 import { realOr } from "../core/box-work.ts";
 import { defaultWho } from "../core/ledger.ts";
 import { GLOBAL_PROJECT, openProject } from "../core/store.ts";
@@ -145,7 +145,7 @@ function runClear(args: ParsedArgs): number {
   const real = realOr(resolve(dir));
   const cleared = clearTaint(real);
   if (cleared.length === 0) {
-    console.error(`darius box clear: no taint on ${real} in ${taintFile()}`);
+    console.error(`darius box clear: no taint on ${real} in ${taintDir()}`);
     return 1;
   }
   for (const taint of cleared) console.log(`✓ cleared the taint of ${taint.workDir}: run ${taint.run} (${taint.project}) at ${taint.at}: ${taint.reasons.join("; ")}`);

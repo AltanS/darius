@@ -14,7 +14,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { checkPlants, scanWork, type PlantCheck } from "../src/core/box-work.ts";
+import { checkPlants, scanExtra, scanWork, type PlantCheck } from "../src/core/box-work.ts";
 
 /** A throwaway base and the work dir in it. */
 interface Fixture {
@@ -221,19 +221,78 @@ test("F1: a read-only parent and an unreadable folder get chmod u+rwx and one mo
   }
 });
 
-test("F1: what the check cannot settle is unresolved: a name that is not UTF-8, its time cap", () => {
+test("a plant under a name that is not UTF-8 is renamed by its bytes; the time cap is unresolved", () => {
   const { base, work } = workDir();
   try {
     const launch = scan(work);
     const bad = Buffer.concat([Buffer.from(`${work}/`), Buffer.from([0xff, 0x41])]);
-    mkdirSync(bad);
-    mkdirSync(Buffer.concat([bad, Buffer.from("/.git")]));
-    assert.deepEqual(check(work, launch).unresolved, [`${work} holds a name that is not valid UTF-8`]);
-    rmSync(Buffer.concat([bad, Buffer.from("/.git")]).toString("latin1"), { force: true });
+    const plant = Buffer.concat([bad, Buffer.from("/.git")]);
+    mkdirSync(plant, { recursive: true });
+    const result = check(work, launch);
+    assert.deepEqual(result.unresolved, []);
+    assert.equal(result.blocked.length, 1, result.blocked.join("\n"));
+    assert.ok(result.blocked[0]?.startsWith(`${work}/\uFFFDA/.git, a .git made in the run, .git renamed to .git.darius-blocked-`), result.blocked[0]);
+    assert.equal(existsSync(plant), false);
+    assert.equal(readdirSync(bad).filter((name) => name.startsWith(".git.darius-blocked-")).length, 1);
     let clock = 0;
     const capped = checkPlants({ workDir: work, launch, capMs: 5, now: () => (clock += 10) });
     assert.equal(capped.isUnfinished, true);
     assert.deepEqual(capped.unresolved, ["the check did not finish within 0 s"]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("M1: a folder of this user with no x bit hides nothing: the launch refuses it, the check makes it readable, renames the plant in it and says so", { skip: process.getuid?.() === 0 }, () => {
+  const { base, work } = workDir();
+  try {
+    const launch = scan(work);
+    plantRepo(join(work, "p", "q"));
+    chmodSync(join(work, "p"), 0o600);
+    assert.deepEqual(scan(work).problems, [`${join(work, "p")} cannot be read or entered; make it readable, or remove it`]);
+    const result = check(work, launch);
+    assert.deepEqual(result.unresolved, []);
+    assertLines(result, [line(join(work, "p", "q", ".git"), "a .git made in the run")]);
+    assert.deepEqual(result.repaired, [`made ${join(work, "p")} readable (chmod u+rwx) to look in it`]);
+    assert.equal(statSync(join(work, "p")).mode & 0o700, 0o700);
+  } finally {
+    chmodSync(join(work, "p"), 0o755);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("L3: a .mcp.json is a guard: the launch records the top one and lists nested ones; a new one, at the top or below, is renamed", () => {
+  const { base, work } = workDir();
+  try {
+    put(join(work, ".mcp.json"), "{}\n");
+    put(join(work, "a", ".mcp.json"), "{}\n");
+    const launch = scan(work);
+    assert.deepEqual(launch.mcps, [join(work, "a", ".mcp.json")]);
+    assert.equal(launch.ids.length, 2, "the top .git is the plan's own mount; the top and the nested .mcp.json are recorded");
+    put(join(work, "b", ".mcp.json"), '{"mcpServers":{"x":{"command":"touch"}}}\n');
+    assertLines(check(work, launch), [line(join(work, "b", ".mcp.json"), "a .mcp.json made in the run")]);
+    assert.ok(existsSync(join(work, ".mcp.json")) && existsSync(join(work, "a", ".mcp.json")), "the known ones stay");
+    rmSync(join(work, ".mcp.json"));
+    const bare = scan(work);
+    put(join(work, ".mcp.json"), "{}\n");
+    assertLines(check(work, bare), [line(join(work, ".mcp.json"), "a .mcp.json made in the run")]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("M2: scanExtra finds every guard in a writable extra, its top too, and leaves out the work dir in it", () => {
+  const { base, work } = workDir();
+  try {
+    const extra = join(base, "extra");
+    mkdirSync(join(extra, "w", ".git"), { recursive: true });
+    const deadline = Date.now() + 30_000;
+    assert.deepEqual(scanExtra({ path: extra, pruned: [join(extra, "w")], deadline }), { guards: [], problems: [], timedOut: false });
+    mkdirSync(join(extra, "dep", ".git"), { recursive: true });
+    put(join(extra, ".mcp.json"), "{}\n");
+    assert.deepEqual(scanExtra({ path: extra, pruned: [join(extra, "w")], deadline }).guards.toSorted(), [join(extra, ".mcp.json"), join(extra, "dep", ".git")]);
+    for (const name of ["HEAD", "objects", "refs"]) mkdirSync(join(work, "cache", name), { recursive: true });
+    assert.deepEqual(scanExtra({ path: join(work, "cache"), pruned: [], deadline }).guards, [join(work, "cache")], "a bare-looking extra is a guard itself");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

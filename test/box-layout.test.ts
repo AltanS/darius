@@ -31,7 +31,7 @@ const MEMORY = `${PROJECT}/memory`;
 const SCRATCH = ["shell-snapshots", "session-env", "todos", "tasks", "debug", "statsig", "file-history"].map((name) => `${HOME}/.claude/${name}`);
 
 /** A work dir scan that found nothing. */
-const NO_WORK: WorkScan = { sockets: [], gits: [], gitLinks: [], claudes: [], claudeLinks: [], markers: [], markerLinks: [], bares: [], isBareTop: false, ids: [], problems: [], timedOut: false, capMs: 30_000 };
+const NO_WORK: WorkScan = { sockets: [], gits: [], gitLinks: [], claudes: [], claudeLinks: [], markers: [], markerLinks: [], mcps: [], mcpLinks: [], bares: [], isBareTop: false, ids: [], problems: [], timedOut: false, capMs: 30_000 };
 
 /** A fake filesystem: path to entry. A missing path has no entry. */
 type Tree = Map<string, BoxEntry>;
@@ -270,19 +270,21 @@ test("scanWork: lists every nested .claude folder and .claude link, and every ba
   }
 });
 
-test("scanWork: a folder it cannot read and a name that is not UTF-8 are problems; a mount point is not entered", { skip: process.getuid?.() === 0 }, () => {
+test("scanWork: a folder it cannot read and a guard under a name that is not UTF-8 are problems; such a name alone is walked; a mount point is not entered", { skip: process.getuid?.() === 0 }, () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-scan-problems-")));
   const locked = join(base, "w", "locked");
   try {
     const work = join(base, "w");
     mkdirSync(join(locked, "sub"), { recursive: true });
-    mkdirSync(Buffer.concat([Buffer.from(`${work}/`), Buffer.from([0xff, 0x41])]));
+    const bad = Buffer.concat([Buffer.from(`${work}/`), Buffer.from([0xff, 0x41])]);
+    mkdirSync(Buffer.concat([bad, Buffer.from("/.git")]), { recursive: true });
+    mkdirSync(Buffer.concat([Buffer.from(`${work}/`), Buffer.from([0xfe]), Buffer.from("/plain")]), { recursive: true });
     mkdirSync(join(work, "mnt", ".git"), { recursive: true });
     mkdirSync(join(work, "vol", ".git"), { recursive: true });
     chmodSync(locked, 0o000);
     const mountinfo = `36 35 98:0 / ${work}/mnt rw - tmpfs tmpfs rw\n37 35 98:0 / /other\\040dir rw - tmpfs tmpfs rw\n`;
     const scan = scanWork({ workDir: work, capMs: 30_000, mountinfo });
-    assert.deepEqual([...scan.problems].toSorted(), [`${locked} cannot be read (EACCES)`, `${work} holds a name that is not valid UTF-8`].toSorted());
+    assert.deepEqual([...scan.problems].toSorted(), [`${locked} cannot be read or entered; make it readable, or remove it`, `${work}/\uFFFDA/.git has a name that is not valid UTF-8, and the box cannot mount or mask it`].toSorted());
     assert.deepEqual(scan.gits, [join(work, "vol", ".git")], "the mount point is pruned, nothing else");
     assert.ok(mountPoints(mountinfo).has("/other dir"), "mountinfo escapes are undone");
   } finally {

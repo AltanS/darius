@@ -910,6 +910,11 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
       if (resume === undefined) discardButLog(prepared.files.dir);
       return skipped(slug, "box-broken", sandboxed.boxBroken);
     }
+    if ("busy" in sandboxed) {
+      // Another launch holds the work dir's box lock: a held lease, quiet, and the next sweep tries again.
+      discard(prepared.files);
+      return skipped(slug, "lease-held", sandboxed.busy);
+    }
     if (sandboxed.ran.isDiscarded === true) discard(prepared.files);
     return sandboxed.ran.entry;
   } finally {
@@ -928,7 +933,10 @@ function sandboxRequest(ctx: ProjectContext, target: RunTarget, prepared: Prepar
     ritual: target.box,
     harness,
     envPass: profile.envPass ?? [],
-    onPlants: (check) => recordPlants(ctx, target.run, check),
+    // A dead runner's check in another project's work dir is in that run's run.log and the taint; only this project's ledger is open here.
+    onPlants: (check, owner) => {
+      if (owner.project === ctx.project.name) recordPlants(ctx, owner.run, check);
+    },
   };
 }
 
