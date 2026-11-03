@@ -478,9 +478,15 @@ function reportOfItem(item: ResultItem, at: { ritual: string; seen: CandleSeen; 
   return report;
 }
 
-/** A fixed report puts the candle out, as a blow-out does. */
+/**
+ * A fixed report puts the candle out, as a blow-out does. Only a run of the
+ * candle's own ritual may do that: a fixed report from any other run is
+ * ignored, so one ritual cannot put out the candles of another
+ * (`foreignFixes` names them for the run).
+ */
 function blowOutByReport(track: Track | undefined, report: Report): void {
   if (track === undefined || track.status === "out") return;
+  if (track.ritual === undefined || track.ritual !== report.ritual) return;
   const blownOut: CandleBlowOut = { at: report.seen.at, who: report.who };
   endTrack(track, stepOf(report, "blown-out", track.severity), blownOut);
 }
@@ -634,4 +640,29 @@ export function collectCandles(project: Project, ledger?: readonly LedgerLine[])
 /** For each ledger line that opened or raised candles, in ledger order: the line and those candles. */
 export function candleOpenings(project: Project, ledger: readonly LedgerLine[]): CandleOpening[] {
   return walk(project, ledger).openings;
+}
+
+/** A fixed report a run sent for a candle of another ritual (or of none), which does not put it out. */
+export interface ForeignFix {
+  key: string;
+  /** The candle's ritual, when a run lit it. */
+  ritual?: string;
+}
+
+/** The fixed, flagged items of `result` that name an open candle whose ritual is not `ritual`. */
+export function foreignFixes(candles: readonly Candle[], ritual: string, result: RunResult): ForeignFix[] {
+  const open = new Map(candles.filter((candle) => candle.status !== "out").map((candle) => [candle.key, candle]));
+  const fixes: ForeignFix[] = [];
+  for (const [key, item] of flaggedItems(result)) {
+    const candle = open.get(key);
+    if (item.state !== "fixed" || candle === undefined || candle.ritual === ritual) continue;
+    fixes.push(candle.ritual === undefined ? { key } : { key, ritual: candle.ritual });
+  }
+  return fixes;
+}
+
+/** The run-log line for one foreign fix. */
+export function foreignFixLine(fix: ForeignFix, ritual: string): string {
+  const owner = fix.ritual === undefined ? "no ritual" : `ritual ${fix.ritual}`;
+  return `darius: candle '${fix.key}' belongs to ${owner}; a fixed report from ritual ${ritual} does not put it out`;
 }

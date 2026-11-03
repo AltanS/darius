@@ -43,7 +43,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,7 +52,7 @@ import { boxPathProblem } from "../core/box-files.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { projectDir, stateDir } from "../core/paths.ts";
-import { isBoxChosen, probeBwrap } from "../core/sandbox.ts";
+import { isBoxChosen, probeBwrap, readTiocsti, TIOCSTI_KNOB, type TiocstiRead } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, itemRef, openProject, type Project } from "../core/store.ts";
 import { localToday } from "../core/sweep.ts";
 import { ulid } from "../core/ulid.ts";
@@ -62,8 +62,6 @@ import { VERSION } from "../version.ts";
 import { openBox, type OpenBox, type SandboxRequest } from "./box-launch.ts";
 import { writeRunFiles } from "./launch.ts";
 
-/** The kernel knob that lets TIOCSTI push input into a terminal; 0 turns it off. */
-export const TIOCSTI_KNOB = "/proc/sys/dev/tty/legacy_tiocsti";
 const CHECK_PROJECT = "box-check";
 const CHECK_SLUG = "box-check";
 const HARNESS_TIMEOUT_MS = 150_000;
@@ -156,9 +154,6 @@ export interface Observed {
   public: Asked;
   broker: { exit: number | string; stdout: string; stderr: string };
 }
-
-/** The tiocsti knob as read on this host. */
-export type TiocstiRead = { value: string } | { missing: true } | { error: string };
 
 /** What the steps are judged from. */
 export interface StepFacts {
@@ -562,16 +557,6 @@ export function bwrapVersion(): string {
   return text === "" ? "unknown" : text.split("\n")[0]?.slice(0, 40) ?? "unknown";
 }
 
-/** The tiocsti knob at `path`. */
-export function readTiocsti(path: string = TIOCSTI_KNOB): TiocstiRead {
-  if (!existsSync(path)) return { missing: true };
-  try {
-    return { value: readFileSync(path, "utf8").trim() };
-  } catch (cause) {
-    return { error: errorMessage(cause) };
-  }
-}
-
 function isSocketPath(path: string): boolean {
   try {
     return lstatSync(path).isSocket();
@@ -727,16 +712,35 @@ export async function runBoxCheck(input: { global: Project; who: string; timeout
     rmSync(base, { recursive: true, force: true });
   }
   const steps = judgeSteps({ box: inBox.box, observed: inBox.observed, tiocsti: readTiocsti(input.tiocstiPath), hostSockets, brokerCompleted: inBox.brokerCompleted });
-  const check = boxCheckOf({ host, bwrap: bwrapVersion(), kernel: release(), run }, steps);
+  const check = boxCheckOf({ host, ...boxStack(), run }, steps);
   appendLine(input.global, boxCheckedLine(check, input.who));
   return check;
 }
 
 // --- the ledger and the gate --------------------------------------------------------
 
-/** The newest `box.checked` line of `darius` on `host`. */
-export function latestBoxCheck(ledger: readonly LedgerLine[], at: { host: string; darius: string }): LedgerLine | undefined {
-  return ledger.findLast((line) => line.type === "box.checked" && line.host === at.host && line.darius === at.darius);
+/** What a box check proves its pass for: this host, this darius, this kernel and this bwrap. */
+export interface BoxCheckKey {
+  host: string;
+  darius: string;
+  kernel: string;
+  bwrap: string;
+}
+
+/** The newest `box.checked` line of `darius` on `host`, with this kernel and bwrap. */
+export function latestBoxCheck(ledger: readonly LedgerLine[], at: BoxCheckKey): LedgerLine | undefined {
+  return ledger.findLast((line) => line.type === "box.checked" && line.host === at.host && line.darius === at.darius && line.kernel === at.kernel && line.bwrap === at.bwrap);
+}
+
+/** The kernel release and the bwrap version: a pass holds for these only. */
+export interface BoxStack {
+  kernel: string;
+  bwrap: string;
+}
+
+/** The kernel release and the bwrap version as a check records them. */
+export function boxStack(): BoxStack {
+  return { kernel: release(), bwrap: bwrapVersion() };
 }
 
 /** Whether boxed runs may start: `ready`, maybe with what a dry run would do first; or why not (a `box-broken` skip). */
@@ -749,7 +753,8 @@ function failedText(failed: readonly string[]): string {
 /**
  * The gate of every boxed launch, asked once per batch: run-due, `run now`,
  * `run resume` and `run follow-up`. Outside the box it is always ready. A
- * passing check for this host and darius version is enough. A failed one
+ * passing check for this host, darius version, kernel release and bwrap
+ * version is enough: a kernel or bwrap update needs a new check. A failed one
  * from today skips as `box-broken` until `darius box check` passes or the
  * next day. Without one the check runs now, outside a dry run.
  */
@@ -761,16 +766,21 @@ export async function boxReadiness(input: {
   openGlobal: () => Project | null;
   onCheck: (check: BoxCheck) => void;
   runCheck?: (global: Project, who: string) => Promise<BoxCheck>;
+  /** The kernel release and bwrap version; tests give fixed ones. */
+  stack?: BoxStack;
 }): Promise<BoxReadiness> {
   if (!(input.isBox ?? isBoxChosen())) return { ready: true };
   const host = hostId();
   const global = input.openGlobal();
-  const latest = global === null ? undefined : latestBoxCheck(readLedger(global), { host, darius: VERSION });
+  // No bwrap: no check could pass. Each launch refuses as box-broken with the probe's reason and a run.log.
+  if (input.stack === undefined && "problem" in probeBwrap()) return { ready: true };
+  const stack = input.stack ?? boxStack();
+  const latest = global === null ? undefined : latestBoxCheck(readLedger(global), { host, darius: VERSION, ...stack });
   if (latest?.outcome === "pass") return { ready: true };
   if (latest !== undefined && localToday(new Date(latest.at)) === input.today) {
     return { ready: false, detail: `the box check of darius ${VERSION} on ${host} failed today${failedText(textList(latest.failed))}; run darius box check` };
   }
-  if (input.isDryRun || global === null) return { ready: true, pending: `would run darius box check for darius ${VERSION} first` };
+  if (input.isDryRun || global === null) return { ready: true, pending: `would run darius box check for darius ${VERSION}, kernel ${stack.kernel}, bwrap ${stack.bwrap} first` };
   const check = await (input.runCheck ?? ((project, who) => runBoxCheck({ global: project, who })))(global, input.who);
   input.onCheck(check);
   if (check.outcome === "pass") return { ready: true };

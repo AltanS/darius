@@ -1,0 +1,2 @@
+# Empty on purpose. scripts/run.sh starts Bun with --config pointing here, so
+# Bun never reads a bunfig.toml (a preload, say) from the folder darius runs in.

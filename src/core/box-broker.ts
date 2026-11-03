@@ -193,6 +193,8 @@ function checkComplete(run: string, flags: ReadFlags): BrokerCheck {
  */
 export function checkBrokerArgv(argv: readonly string[], run: string, project?: string): BrokerCheck {
   for (const token of argv) {
+    // spawn throws on a NUL byte. A word that is not text is refused when the request is decoded.
+    if (token.includes("\0")) return { refused: "a word of argv holds a NUL byte" };
     const forbidden = forbiddenToken(token);
     if (forbidden !== undefined) return { refused: forbidden };
   }
@@ -301,11 +303,17 @@ function childReply(end: ChildEnd): BrokerReply {
 
 async function runChild(program: readonly string[], input: ChildRun): Promise<BrokerReply> {
   const [bin = "", ...lead] = program;
-  const child = spawn(bin, [...lead, ...input.argv], {
-    cwd: input.cwd,
-    env: input.env,
-    stdio: [input.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(bin, [...lead, ...input.argv], {
+      cwd: input.cwd,
+      env: input.env,
+      stdio: [input.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+  } catch (cause) {
+    // spawn throws, not emits, on a bad argument (a NUL byte, say).
+    return childReply({ code: null, timedOut: false, failure: errorMessage(cause), timeoutMs: input.timeoutMs, stdout: "", stderr: "" });
+  }
   input.onStart(child);
   const out = { text: "" };
   const err = { text: "" };
@@ -459,7 +467,10 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
         reply(refusal(message));
         return;
       }
-      void answer(buffered.slice(0, newline)).then(reply);
+      // A request must never take the runner down: any throw becomes an error reply.
+      void answer(buffered.slice(0, newline))
+        .catch((cause: unknown): BrokerReply => ({ exit: 1, stdout: "", stderr: `darius: box broker: ${errorMessage(cause)}\n` }))
+        .then(reply);
     });
   };
 

@@ -207,7 +207,7 @@ function boxSettings(table: Record<string, TomlValue>, file: string): Config["bo
   const sshAgent = optionalBoolean(table, "ssh_agent", false, "box", file);
   const value = table.writable;
   if (value === undefined) return { sshAgent };
-  if (!Array.isArray(value)) throw new Error(`${file}: [box] writable must be a list of paths: writable = ["~/.cache"]`);
+  if (!Array.isArray(value)) throw new Error(`${file}: [box] writable must be a list of paths: writable = ["~/.cache/my-tool"]`);
   const dirs = hostProtectedDirs();
   for (const path of value) {
     const problem = writableProblem(path, dirs);

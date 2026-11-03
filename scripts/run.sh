@@ -71,8 +71,13 @@ esac
 target="$ROOT/src/$entry.ts"
 want="${DARIUS_RUNTIME:-any}"
 
+# Bun reads bunfig.toml (a preload runs code), tsconfig.json (paths remap
+# imports) and .env (sets the environment) from the current folder. darius runs
+# in work dirs a run may write, so it points Bun at fixed files of its own and
+# turns .env loading off. Node reads none of these unless a flag asks.
 if [ "$want" != "node" ] && BUN="$(find_bun)"; then
-  exec "$BUN" "$target" "$@"
+  exec "$BUN" --no-env-file --config="$ROOT/scripts/run-bunfig.toml" \
+    --tsconfig-override="$ROOT/scripts/run-tsconfig.json" "$target" "$@"
 fi
 
 if [ "$want" != "bun" ] && NODE="$(find_node)"; then

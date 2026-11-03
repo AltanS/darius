@@ -49,7 +49,7 @@ function fresh(name: string): string {
 }
 
 function policy(): BoxPolicy {
-  return { net: "public", reach: [], harnessHosts: [], ownAddresses: [], webPorts: [] };
+  return { net: "public", reach: [], harnessHosts: [], ownAddresses: [], ownSubnets: [], webPorts: [] };
 }
 
 /** Allows 127.0.0.1:`port` and nothing else the real rule refuses. */

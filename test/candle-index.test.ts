@@ -10,7 +10,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { collectCandles, candleOpenings, CLEAN_RUNS, type Candle, type CandleOpening } from "../src/core/candle-index.ts";
+import { collectCandles, candleOpenings, CLEAN_RUNS, foreignFixes, foreignFixLine, type Candle, type CandleOpening } from "../src/core/candle-index.ts";
 import { appendLine, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
 import type { Severity } from "../src/core/result.ts";
 import { Seeder, type Item } from "./helpers/finding-seed.ts";
@@ -218,6 +218,23 @@ test("a flagged item in state fixed puts the candle out, as a source blow-out", 
   const last = found.history.at(-1);
   assert.equal(last?.kind, "blown-out");
   assert.equal(last?.run, fixing);
+});
+
+test("a fixed report from another ritual, or for a candle from outside, does not put it out and is named", () => {
+  const seed = new CandleSeeder("fl-foreign-fixed");
+  seed.run("audit", [candle("k", "high")]);
+  seed.light("ext", "high");
+  const fixed = [candle("k", "high", { state: "fixed" }), candle("ext", "high", { state: "fixed" })];
+  const foreign = foreignFixes(seed.candles(), "other", { v: 1, status: "ok", summary: "s", items: fixed });
+  assert.deepEqual(foreign, [{ key: "k", ritual: "audit" }, { key: "ext" }]);
+  assert.match(foreignFixLine({ key: "k", ritual: "audit" }, "other"), /candle 'k' belongs to ritual audit; a fixed report from ritual other does not put it out/u);
+  seed.run("other", fixed);
+  assert.equal(seed.candle("k").status, "lit");
+  assert.equal(seed.candle("ext").status, "lit");
+  seed.run("audit", fixed);
+  assert.equal(seed.candle("k").status, "out", "the candle's own ritual still puts it out");
+  assert.equal(seed.candle("ext").status, "lit", "a candle from outside is blown out by hand");
+  assert.deepEqual(foreignFixes(seed.candles(), "audit", { v: 1, status: "ok", summary: "s", items: fixed }), [{ key: "ext" }]);
 });
 
 test("a fixed report in a failed run does not put the candle out", () => {

@@ -23,11 +23,13 @@
  *   --bind <agent socket>                   only when the run may use ssh
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
  *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
+ *   --ro-bind <each .git below the work dir> on itself
  *   --ro-bind <run dir>, --bind gate.jsonl, --bind scratch/
  *   --ro-bind ~/.claude, then the adapter's `boxWritable` (--bind, or
  *     --ro-bind over a writable one), a --tmpfs on each `boxScratch`, the per-run copies
  *   --tmpfs <masked dir>, --ro-bind /dev/null <masked file>
- *   --ro-bind /dev/null <each socket the home scan found>, but the bound agent
+ *   --ro-bind /dev/null <each socket the home and work dir scans found>, but
+ *     the bound agent
  *   --unshare-net --unshare-pid --die-with-parent [--new-session]
  *   --clearenv --setenv ... -- <command>
  *
@@ -37,8 +39,12 @@
  *
  * `.git` is one read-only mount on its own path (a folder, or the file of a
  * linked worktree), so a run can neither write it nor rename or remove it: a
- * mount point cannot be moved. A run in the box cannot commit; that is the
- * choice Codex's workspace-write sandbox makes too.
+ * mount point cannot be moved. Every `.git` below the work dir (a nested
+ * repo, a submodule, a worktree file) gets the same mount. A work dir with no
+ * `.git` (a subfolder of a repo) gets an empty read-only one, so the run
+ * cannot make one with its own config; git skips an empty `.git` and finds
+ * the repo above. A run in the box cannot commit; that is the choice Codex's
+ * workspace-write sandbox makes too.
  *
  * Refused, with an error that names the path: a writable extra inside or
  * holding the store, the darius config or app dir, `~/.claude`, `~/.ssh`,
@@ -47,8 +53,10 @@
  * entry of the runner), `/`, `/proc`, `/sys`, `/dev`, `/run` or `/tmp`;
  * `~/.cache` itself; a work dir that holds any of those. Each is checked as
  * written and with its symlinks resolved. A `.git`, `.claude` or
- * `.darius.toml` in the work dir that is a link is refused: a link in a
- * writable folder can be swapped, and bwrap mounts on its target.
+ * `.darius.toml` in the work dir that is a link is refused, and so is a `.git`
+ * link anywhere below it: a link in a writable folder can be swapped, and
+ * bwrap mounts on its target. A socket scan that hit its time cap is refused
+ * too: a socket it did not reach would connect.
  */
 
 import { isIP } from "node:net";
@@ -335,14 +343,28 @@ export interface BoxFacts {
   secrets: SecretPaths;
   /** The socket scan of home (`scanSockets` in src/core/box-host.ts): each socket outside the hidden folders is masked. */
   sockets: SocketScan;
+  /** The scan of the work dir (`scanWork` in src/core/box-host.ts): its sockets are masked, each `.git` below its top is bound read-only. */
+  work: WorkScan;
   entry(path: string): BoxEntry | undefined;
 }
 
-/** The sockets found under home. `timedOut`: the scan hit its time cap, so `found` may be short. */
+/** The sockets found under home. `timedOut`: the scan hit its time cap, so `found` may be short, and the plan refuses the run. */
 export interface SocketScan {
   found: readonly string[];
   timedOut: boolean;
-  /** How long the scan may take, for the warning. */
+  /** How long the scan may take, for the refusal. */
+  capMs: number;
+}
+
+/** The scan of the work dir, as real paths. `timedOut`: it hit the time cap, and the plan refuses the run. */
+export interface WorkScan {
+  /** The sockets in the work dir, outside `node_modules`. */
+  sockets: readonly string[];
+  /** Every `.git` below the work dir's top, a folder or a file. */
+  gits: readonly string[];
+  /** Every `.git` below the work dir's top that is a link. */
+  gitLinks: readonly string[];
+  timedOut: boolean;
   capMs: number;
 }
 
@@ -436,8 +458,6 @@ export interface BoxPlan {
   creates: BoxCreate[];
   /** True when the ssh agent socket is bound in. */
   agent: boolean;
-  /** What the launcher writes to `run.log` before the run: a socket scan that hit its cap. */
-  warnings: string[];
 }
 
 /** A path with `~` expanded, normalized, and its facts. */
@@ -678,7 +698,7 @@ interface MaskKeep {
  */
 function socketMasks(facts: BoxFacts, keep: MaskKeep): string[] {
   const sockets = new Set<string>();
-  for (const path of [...facts.sockets.found, ...(keep.unboundAgent === undefined ? [] : [keep.unboundAgent])]) {
+  for (const path of [...facts.sockets.found, ...facts.work.sockets, ...(keep.unboundAgent === undefined ? [] : [keep.unboundAgent])]) {
     const entry = facts.entry(normalize(path));
     if (entry === undefined) continue;
     const real = normalize(entry.real);
@@ -819,23 +839,43 @@ const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
  * `writable`, `ssh_agent` or `tools` for the next run. A link is refused:
  * bwrap would mount on its target, and the run could swap the link.
  *
- * A missing `.claude` gets an empty read-only folder from the box dir, so the
- * run cannot make `.claude/settings.json`. bwrap makes the mount point, so an
- * empty `.claude` folder stays in the checkout after the run; that is
- * accepted. A read-only work dir needs none: the run can make nothing there.
+ * A missing `.claude` or `.git` gets an empty read-only folder from the box
+ * dir, so the run cannot make `.claude/settings.json` or a `.git/config` with
+ * its own `core.fsmonitor`. bwrap makes the mount point, so an empty folder
+ * stays in the checkout after the run; that is accepted, and git skips an
+ * empty `.git` when it looks for the repo. A read-only work dir needs none:
+ * the run can make nothing there.
+ *
+ * Every `.git` below the top (the work dir scan finds them) is bound
+ * read-only on itself too, after the top guards. A `.git` link anywhere is
+ * refused.
  */
 function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creates: BoxCreate[] }): string[] {
-  return WORK_GUARDS.flatMap((name) => {
+  const linked = facts.work.gitLinks[0];
+  if (linked !== undefined) throw new BoxError(`${linked} is a link; the box keeps a .git read-only only as a plain folder or file, so this run does not start`);
+  const top = WORK_GUARDS.flatMap((name) => {
     const path = join(work.real, name);
     const entry = facts.entry(path);
     if (entry === undefined) {
-      if (name !== ".claude" || work.isReadOnly) return [];
-      empty.creates.push({ path: empty.dir, kind: "dir", mode: 0o500 });
+      if (name === ".darius.toml" || work.isReadOnly) return [];
+      if (!empty.creates.some((create) => create.path === empty.dir)) empty.creates.push({ path: empty.dir, kind: "dir", mode: 0o500 });
       return ["--ro-bind", empty.dir, path];
     }
     if (entry.link !== undefined || normalize(entry.real) !== path) throw new BoxError(`${path} is a link; the box keeps it read-only only as a plain folder or file, so this run does not start`);
     return ["--ro-bind", path, path];
   });
+  const nested = facts.work.gits.flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
+  return [...top, ...nested];
+}
+
+function seconds(capMs: number): string {
+  return String(Math.round(capMs / 1000));
+}
+
+/** A scan that hit its cap may have missed a socket, so the run does not start. */
+function checkScans(facts: BoxFacts): void {
+  if (facts.sockets.timedOut) throw new BoxError(`the socket scan of ${facts.home} stopped after ${seconds(facts.sockets.capMs)} s; a socket it did not reach would connect from the box, so this run does not start`);
+  if (facts.work.timedOut) throw new BoxError(`the socket scan of the work dir stopped within the ${seconds(facts.work.capMs)} s cap; a socket or .git it did not reach would stay open in the box, so this run does not start`);
 }
 
 function checkInput(input: BoxPlanInput): void {
@@ -857,6 +897,7 @@ function checkInput(input: BoxPlanInput): void {
 export function boxPlan(input: BoxPlanInput): BoxPlan {
   checkInput(input);
   const { facts } = input;
+  checkScans(facts);
   const runtimeDir = normalize(facts.runtimeDir);
   const boxDir = join(runtimeDir, "darius-box", input.run.id);
   const guarded = guardedPaths(facts);
@@ -892,8 +933,5 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
   if (!input.hasTty) args.push("--new-session");
   const env = boxEnv(input, agent);
   args.push("--clearenv", ...Object.entries(env).flatMap(([name, value]) => ["--setenv", name, value]));
-  const warnings = facts.sockets.timedOut
-    ? [`box: the socket scan of ${facts.home} stopped after ${String(Math.round(facts.sockets.capMs / 1000))} s; the hidden folders are hidden, but a socket elsewhere in the home folder may still connect`]
-    : [];
-  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined, warnings };
+  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined };
 }

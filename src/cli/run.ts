@@ -69,7 +69,7 @@ import { join } from "node:path";
 import { appendLine, defaultWho, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { ritualState } from "../core/due.ts";
 import { collectFindings, findingPromptLines, findingsSection } from "../core/finding-index.ts";
-import { collectCandles, candlePromptLines, candlesSection } from "../core/candle-index.ts";
+import { collectCandles, candlePromptLines, candlesSection, foreignFixes, foreignFixLine } from "../core/candle-index.ts";
 import { handoffLines, latestHandoff, type Handoff } from "../core/handoff.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
@@ -81,6 +81,7 @@ import { followUpOf } from "../runner/follow-up.ts";
 import { parseAnswerFlags } from "../core/answers.ts";
 import { acknowledgeEarlier, acknowledgeRun, answerRun, answerRunMany } from "../runner/hold.ts";
 import { askBroker, boxBrokerSocket } from "../core/box-broker.ts";
+import { clean } from "../tui/text.ts";
 import { readStdin } from "./args.ts";
 import { forwardOn, runFollowUp, runNow, runResume } from "./run-due.ts";
 import { NotFoundError, UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -398,11 +399,17 @@ interface Completion {
 function appendCompletion(args: ParsedArgs, completion: Completion): number {
   const { project, runId, outcome, who, intake } = completion;
   const summary = intake.result === undefined ? undefined : summarizeResult(intake.result);
+  const ignored: string[] = [];
   const completed = project.withLock((): boolean => {
-    const lines = findRunLines(readLedger(project), runId);
+    const ledger = readLedger(project);
+    const lines = findRunLines(ledger, runId);
     const item = runItemRef(lines);
     const phase = currentPhase(lines);
     if (item === undefined || phase === undefined || phase === "closed") return false;
+    const ritual = item.startsWith("ritual/") ? item.slice("ritual/".length) : undefined;
+    if (ritual !== undefined && intake.result !== undefined && outcome === "complete") {
+      for (const fix of foreignFixes(collectCandles(project, ledger), ritual, intake.result)) ignored.push(foreignFixLine(fix, ritual));
+    }
     const findingsSha = intake.findings === undefined ? null : putBlob(project, intake.findings);
     const line: LedgerLineInput = { who, type: "run.completed", item, run: runId, outcome, findings_sha: findingsSha };
     if (intake.result !== undefined && summary !== undefined) {
@@ -422,6 +429,8 @@ function appendCompletion(args: ParsedArgs, completion: Completion): number {
   }
   if (args.json) printJson(summary === undefined ? { ok: true, run: runId, outcome } : { ok: true, run: runId, outcome, result: summaryJson(summary) });
   else console.log(`✓ completed run ${runId} (${outcome})${summary === undefined ? "" : `, ${describeSummary(summary, intake.result?.handoff !== undefined)}`}`);
+  // stderr, so --json keeps one object on stdout; the run log keeps both streams.
+  for (const line of ignored) console.error(line);
   const facts: Parameters<typeof printBanner>[3] = { kind: "complete", outcome };
   if (summary !== undefined) facts.summary = summary;
   printBanner(args, project, runId, facts);
@@ -592,6 +601,11 @@ function describeResult(result: RunResult): string[] {
   return lines;
 }
 
+/** Store text reaches a terminal here: control characters go, as in the TUI, so a run cannot send escapes. */
+function show(text: string): void {
+  console.log(clean(text));
+}
+
 /**
  * Prints one run: its facts, its findings markdown and its result block.
  * A later run reads earlier ones this way (the fact check's carry-over), and
@@ -614,10 +628,10 @@ function runShow(args: ParsedArgs): number {
     return 0;
   }
   const outcome = row.outcome === null ? "" : ` (${row.outcome})`;
-  console.log(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
-  if (isText(skillHash)) console.log(`skill hash ${skillHash.slice(0, 12)}`);
-  if (result !== null) for (const line of describeResult(result)) console.log(line);
-  console.log(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
+  show(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
+  if (isText(skillHash)) show(`skill hash ${skillHash.slice(0, 12)}`);
+  if (result !== null) for (const line of describeResult(result)) show(line);
+  show(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;
 }
 

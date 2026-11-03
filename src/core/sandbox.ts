@@ -25,7 +25,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -33,6 +33,7 @@ import { boxMarkerPath } from "./box-inside.ts";
 import { loadConfigIfPresent, type Config } from "./config.ts";
 import { isMaskedFile } from "./credentials.ts";
 import { configDir } from "./paths.ts";
+import { errorMessage } from "../runtime.ts";
 
 /**
  * How this launch runs: masked behind `prefix`, off by the host's choice,
@@ -209,5 +210,21 @@ export function isInsideMask(): boolean {
     return readdirSync(configDir()).some((name) => isMaskedFile(join(configDir(), name)));
   } catch {
     return false;
+  }
+}
+
+/** The kernel knob that lets TIOCSTI push input into a terminal; 0 turns it off. */
+export const TIOCSTI_KNOB = "/proc/sys/dev/tty/legacy_tiocsti";
+
+/** The tiocsti knob as read on this host. */
+export type TiocstiRead = { value: string } | { missing: true } | { error: string };
+
+/** The tiocsti knob at `path`. `DARIUS_TIOCSTI` points the default at another file (tests). */
+export function readTiocsti(path: string = process.env.DARIUS_TIOCSTI ?? TIOCSTI_KNOB): TiocstiRead {
+  if (!existsSync(path)) return { missing: true };
+  try {
+    return { value: readFileSync(path, "utf8").trim() };
+  } catch (cause) {
+    return { error: errorMessage(cause) };
   }
 }

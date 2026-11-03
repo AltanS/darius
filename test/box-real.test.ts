@@ -19,7 +19,7 @@ import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-import { boxPlan, type BoxPlan } from "../src/core/box.ts";
+import { boxPlan, type BoxPlan, type BoxPlanInput } from "../src/core/box.ts";
 import { boxEnterPlanFields, boxFiles, hostBoxFiles, writeBoxFiles } from "../src/core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../src/core/box-host.ts";
 import { decide, startBoxProxy, type Decide } from "../src/core/box-proxy.ts";
@@ -31,6 +31,7 @@ import { dariusBin } from "../src/runner/launch.ts";
 import type { RitualEntry } from "../src/runner/report.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
+import { boxStack } from "../src/runner/box-check.ts";
 import { VERSION } from "../src/version.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
@@ -531,7 +532,7 @@ test("real bwrap: in box enter, HTTP reaches an allowed local server only throug
   const allowed = new Set([httpPort, echoPort, bannerPort]);
   const allowLocal: Decide = (target, rules) => (target.host === "127.0.0.1" && allowed.has(target.port) ? { allow: true, rule: "reach", addresses: ["127.0.0.1"] } : decide(target, rules));
   const netLines: string[] = [];
-  const proxy = await startBoxProxy({ socketPath: join(plan.boxDir, "proxy.sock"), policy: { net: "public", reach: [], harnessHosts: [], ownAddresses: [], webPorts: [] }, log: (line) => netLines.push(line), decide: allowLocal });
+  const proxy = await startBoxProxy({ socketPath: join(plan.boxDir, "proxy.sock"), policy: { net: "public", reach: [], harnessHosts: [], ownAddresses: [], ownSubnets: [], webPorts: [] }, log: (line) => netLines.push(line), decide: allowLocal });
   t.after(() => proxy.close());
 
   const ran = await runInBox(plan, tree.work, 60_000);
@@ -593,6 +594,118 @@ test("real bwrap: box enter passes the exit code and a signal death out of the b
   }
 });
 
+// --- the work dir: sockets, nested .git, a work dir in a subfolder of a repo (0.123.0) ----
+
+/** The fake harness of the work dir proof: git from the subfolder, writes into each .git, connects to the work dir's sockets. */
+const WORK_HARNESS = `
+const fs = require("node:fs");
+const net = require("node:net");
+const { spawnSync } = require("node:child_process");
+const a = JSON.parse(process.argv[2]);
+const errno = (error) => error.code || (/Read-only file system/.test(error.message) ? "EROFS" : String(error));
+const outcome = (run) => { try { run(); return "ok"; } catch (error) { return errno(error); } };
+const connect = (path) => new Promise((done) => {
+  const socket = net.connect(path);
+  const timer = setTimeout(() => { socket.destroy(); done("timeout"); }, 3000);
+  socket.on("connect", () => { clearTimeout(timer); socket.destroy(); done("ok"); });
+  socket.on("error", (error) => { clearTimeout(timer); done(error.code); });
+});
+(async () => {
+  const git = (...args) => spawnSync("git", args, { cwd: a.sub, encoding: "utf8" });
+  const top = git("rev-parse", "--show-toplevel");
+  const result = {
+    toplevel: top.stdout.trim(),
+    topStatus: top.status,
+    status: git("status", "--short").status,
+    gitConfig: outcome(() => fs.writeFileSync(a.sub + "/.git/config", "[core]\\n\\tfsmonitor = /bin/false\\n")),
+    gitHead: outcome(() => fs.writeFileSync(a.sub + "/.git/HEAD", "ref: refs/heads/main\\n")),
+    nestedConfig: outcome(() => fs.appendFileSync(a.nested + "/.git/config", "[core]\\n")),
+    nestedRename: outcome(() => fs.renameSync(a.nested + "/.git", a.nested + "/.git-moved")),
+    work: outcome(() => fs.writeFileSync(a.sub + "/out.txt", "box\\n")),
+    pg: await connect(a.pg),
+    tmux: await connect(a.tmux),
+  };
+  process.stdout.write(JSON.stringify(result));
+})();
+`;
+
+/** Real git in the throwaway tree, without the system config. */
+function git(cwd: string, ...args: string[]): Ran {
+  const ran = spawnSync("git", ["-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
+  return { code: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+}
+
+test("real bwrap: a work dir in a subfolder of a repo gets an empty read-only .git and git still finds the repo, a nested .git is read-only, and the work dir's sockets are masked", { skip: SKIP }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  // In the fake home: the box shows home read-only, as on a real host, and /var/tmp, where the tree is, is a tmpfs.
+  const repo = join(tree.home, "repo");
+  const sub = join(repo, "sub");
+  const nested = join(sub, "nested");
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  assert.equal(git(tree.base, "init", "-q", repo).code, 0);
+  mkdirSync(join(sub, ".devenv", "state", "postgres"), { recursive: true });
+  assert.equal(git(tree.base, "init", "-q", nested).code, 0);
+  put(join(sub, "README.md"), "sub\n");
+  const pg = join(sub, ".devenv", "state", "postgres", ".s.PGSQL.5432");
+  const tmux = join(sub, "tmux.sock");
+  const servers = [await listen(pg), await listen(tmux)];
+  t.after(() => {
+    for (const server of servers) server.close();
+  });
+
+  const facts = hostBoxFacts({ workDir: sub });
+  assert.deepEqual([...facts.work.sockets].toSorted(), [pg, tmux].toSorted());
+  assert.deepEqual(facts.work.gits, [join(nested, ".git")]);
+  const harness = join(tree.home, "work-harness.cjs");
+  writeFileSync(harness, WORK_HARNESS);
+  const planInput: BoxPlanInput = {
+    bwrap: REAL_BWRAP ?? "",
+    command: [process.execPath, harness, JSON.stringify({ sub, nested, pg, tmux })],
+    run: { id: "r3", dir: tree.runDir, policy: join(tree.runDir, "policy.json"), project: "acme" },
+    workDir: sub,
+    isReport: false,
+    hasTty: false,
+    relayPort: 18_080,
+    ritual: {},
+    host: { sshAgent: false },
+    harness: claudeHarness,
+    envPass: [],
+    facts,
+  };
+  const plan = boxPlan(planInput);
+  prepareBox(plan);
+  const ran = await runInBox(plan, sub);
+  removeBox(plan);
+  assert.equal(ran.code, 0, ran.stderr);
+  // SAFETY: WORK_HARNESS prints exactly this shape.
+  const seen = JSON.parse(ran.stdout) as Record<string, string | number>;
+  assert.equal(seen.toplevel, repo, "inside the box git skips the empty .git and finds the repo above");
+  assert.equal(seen.topStatus, 0);
+  assert.equal(seen.status, 0);
+  for (const name of ["gitConfig", "gitHead", "nestedConfig"]) assert.equal(seen[name], "EROFS", `${name} write is refused`);
+  assert.ok(["EBUSY", "EROFS"].includes(String(seen.nestedRename)), `the nested .git cannot be moved: ${String(seen.nestedRename)}`);
+  assert.equal(seen.work, "ok");
+  assert.equal(seen.pg, "ECONNREFUSED", "a devenv postgres socket in the work dir is masked");
+  assert.equal(seen.tmux, "ECONNREFUSED", "a tmux -S socket in the work dir is masked");
+
+  // After the run: the empty .git stays in the subfolder, and git outside still finds the repo.
+  assert.deepEqual(readdirSync(join(sub, ".git")), []);
+  const after = git(sub, "rev-parse", "--show-toplevel");
+  assert.equal(after.stdout.trim(), repo, after.stderr);
+  assert.equal(git(sub, "add", "README.md").code, 0);
+  assert.match(git(repo, "status", "--short").stdout, /^A {2}sub\/README\.md$/mu);
+  assert.equal(readFileSync(join(nested, ".git", "config"), "utf8").includes("fsmonitor"), false);
+
+  // A .git link anywhere below the work dir refuses the run.
+  mkdirSync(join(sub, "odd"));
+  symlinkSync(join(nested, ".git"), join(sub, "odd", ".git"));
+  assert.throws(() => boxPlan({ ...planInput, facts: hostBoxFacts({ workDir: sub }) }), /odd\/\.git is a link/u);
+});
+
 // --- a ritual run in the box, end to end (spec 05) ---------------------------------
 
 /**
@@ -648,7 +761,7 @@ function boxedRunEnv(tree: Tree): void {
   // The fake's version passed its gate check on this host.
   appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
   // test/box-check.test.ts runs the box check itself; here it passed.
-  appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, bwrap: "0.0.0", kernel: "test", outcome: "pass", failed: [], skipped: [] });
+  appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "pass", failed: [], skipped: [] });
 }
 
 function seedBoxedRitual(project: string): void {

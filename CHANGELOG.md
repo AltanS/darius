@@ -2,6 +2,28 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.123.0] - 2026-11-03
+
+### Changed
+
+- A box socket scan that hits its 30 s cap now skips the ritual as `box-broken`. It was a warning in run.log. The scans of home and of the work dir share the cap.
+- The run-due box gate keys a pass on the kernel release and the bwrap version too, so a kernel or bwrap update runs `darius box check` again.
+- A boxed launch in a herdr tab reads `dev.tty.legacy_tiocsti` again each time, and is `box-broken` when it is not 0.
+- A fixed report puts out only a candle of the run's own ritual. A fixed report for a candle of another ritual, or of none, is ignored, with one line on the run's stderr.
+- A box work dir with no `.git`, such as a subfolder of a repo, gets an empty read-only `.git`, and an empty `.git` folder stays there after the run. git skips it and finds the repo above.
+- Under `net = "public"` the proxy treats any address in a subnet of this host's interfaces as private, so it needs a `reach` entry. `198.18.0.0/15` and `192.0.0.0/24` are private, and Teredo `2001::/32` and `100::/64` are refused.
+
+### Fixed
+
+- Bun read `bunfig.toml`, `tsconfig.json` and `.env` from the folder darius started in. A boxed run could write them into its work dir, and the next darius call there ran its code outside the box, or turned the box off. `scripts/run.sh` now starts Bun with `--no-env-file` and a fixed, empty bunfig and tsconfig of its own.
+- A NUL byte in a box broker request made `spawn` throw, and the runner process died. The broker now refuses the word, turns a throw into an error reply, and keeps serving.
+- The box socket scan skipped the work dir, so a socket there (a devenv postgres socket, a `tmux -S` socket) connected from the box. The work dir is scanned now, outside `node_modules`, and its sockets are masked after the work dir bind.
+- Only the top `.git` of the work dir was read-only. Every `.git` in the work dir, a nested repo, a submodule or a worktree file, is now a read-only mount on its own path, and a `.git` link anywhere is refused.
+- The proxy judged IPv4-translated `::ffff:0:0/96` addresses as public. They are judged by their IPv4 now.
+- A launch that found a live launch's box dir removed it when it failed. It now removes only a box dir it made.
+- `darius run show` printed a run's findings and result with their control characters, so a run could send terminal escapes to the operator. It strips them, as the TUI does.
+- The `[box] writable` error example named `~/.cache`, which is refused. It names `~/.cache/my-tool` now.
+
 ## [0.122.0] - 2026-11-03
 
 ### Changed

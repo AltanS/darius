@@ -29,7 +29,7 @@ function socketPath(): string {
 }
 
 function policy(change: Partial<BoxPolicy> = {}): BoxPolicy {
-  return { net: "public", reach: [], harnessHosts: [], ownAddresses: [], webPorts: [], ...change };
+  return { net: "public", reach: [], harnessHosts: [], ownAddresses: [], ownSubnets: [], webPorts: [], ...change };
 }
 
 function hp(text: string): HostPort {
@@ -688,5 +688,66 @@ test("end to end: plain HTTP is one request per upstream connection: Connection:
   } finally {
     await proxy.close();
     raw.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 0.123.0: this host's subnets, IPv4-translated, Teredo, discard-only, benchmarking
+
+test("an address in a subnet of this host's interfaces is private, v4 and v6: a reach entry lets it pass", () => {
+  const rules = policy({ ownSubnets: ["2001:db8:aa:bb::5/64", "203.0.113.5/24", "10.8.0.3/24"] });
+  assertRefused(judge("2001:db8:aa:bb::99", 443, [], rules), "private");
+  assertRefused(judge("printer.example", 443, ["2001:db8:aa:bb:1:2:3:4"], rules), "private");
+  assertRefused(judge("203.0.113.200", 443, [], rules), "private");
+  assertRefused(judge("::ffff:203.0.113.200", 443, [], rules), "private");
+  assertAllowed(judge("2001:db8:aa:bb::99", 443, [], policy({ ...rules, reach: [hp("[2001:db8:aa:bb::99]:443")] })), "reach");
+  assertAllowed(judge("2001:db8:aa:cc::99", 443, [], rules), "public");
+  assertAllowed(judge("203.0.114.1", 443, [], rules), "public");
+  assertRefused(judge("2001:db8:aa:bb::99", 4747, [], policy({ ...rules, webPorts: [{ host: "", port: 4747 }] })), "web-port");
+});
+
+test("IPv4-translated ::ffff:0:0/96 is judged by its IPv4", () => {
+  assertRefused(judge("::ffff:0:7f00:1", 443, [], policy()), "loopback");
+  assertRefused(judge("::ffff:0:a00:1", 443, [], policy()), "private");
+  assertRefused(judge("::ffff:0:c633:6407", 443, [], policy({ ownAddresses: ["198.51.100.7"] })), "this-host");
+  assertAllowed(judge("::ffff:0:c633:6407", 443, [], policy()), "public");
+});
+
+test("Teredo 2001::/32 and discard-only 100::/64 are refused, even when listed", () => {
+  for (const address of ["2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "100::1", "100::ffff:1"]) {
+    assertRefused(judge(address, 443, [], policy()), "reserved");
+    assertRefused(judge("tunnel.example", 443, [address], policy({ reach: [hp("tunnel.example:443")] })), "reserved");
+  }
+  assertAllowed(judge("2001:1::1", 443, [], policy()), "public");
+  assertAllowed(judge("100:0:0:1::1", 443, [], policy()), "public");
+});
+
+test("198.18.0.0/15 and 192.0.0.0/24 are private", () => {
+  for (const address of ["198.18.0.1", "198.19.255.254", "192.0.0.8"]) assertRefused(judge(address, 443, [], policy()), "private");
+  for (const address of ["198.17.255.255", "198.20.0.1", "192.0.1.1"]) assertAllowed(judge(address, 443, [], policy()), "public");
+  assertAllowed(judge("198.18.0.1", 443, [], policy({ reach: [hp("198.18.0.1:443")] })), "reach");
+});
+
+test("a subnet that does not parse is refused at start; a subnet this host gets during a run is private from the next decision on", async () => {
+  const base = { socketPath: socketPath(), log: () => {} };
+  await assert.rejects(startBoxProxy({ ...base, policy: policy({ ownSubnets: ["2001:db8::/129"] }) }));
+  await assert.rejects(startBoxProxy({ ...base, policy: policy({ ownSubnets: ["not-a-subnet"] }) }));
+  let subnets: string[] = [];
+  const seen: Decision[] = [];
+  const record: Decide = (target, rules) => {
+    const decision = decide(target, rules);
+    seen.push(decision);
+    return decision.allow ? { allow: false, rule: "not-listed", reason: "test: no connect" } : decision;
+  };
+  const path = socketPath();
+  const proxy = await startBoxProxy({ socketPath: path, policy: policy(), log: () => {}, decide: record, ownAddresses: () => [], ownSubnets: () => subnets });
+  try {
+    await exchange(path, "CONNECT [2001:db8:aa:bb::99]:443 HTTP/1.1\r\n\r\n");
+    subnets = ["2001:db8:aa:bb::5/64", "bad"];
+    await exchange(path, "CONNECT [2001:db8:aa:bb::99]:443 HTTP/1.1\r\n\r\n");
+    assert.equal(seen[0]?.allow, true);
+    assertRefused(seen[1] ?? refuseNothing(), "private");
+  } finally {
+    await proxy.close();
   }
 });

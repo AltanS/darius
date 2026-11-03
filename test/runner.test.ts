@@ -2404,6 +2404,30 @@ test("run show prints a run's facts, its result and its findings; run list carri
   await assert.rejects(runCli(runCommand, ["show", "01NOPE", "--project", "res-show"]), /no run '01NOPE'/u);
 });
 
+test("run show strips control characters from store text: a run's escapes never reach the terminal", async () => {
+  seedRitual("res-show-esc");
+  const run = JSON.parse((await runCli(runCommand, ["start", "heartbeat", "--project", "res-show-esc", "--json"])).stdout).run;
+  const findings = [
+    "# Check\u001b]0;owned\u0007",
+    "\u001b[2Jcleared\u009b31m‮flipped",
+    "",
+    "```darius-result",
+    JSON.stringify({ v: 1, status: "ok", summary: "fine\u001b[31m red", items: [{ title: "Card\u001b[5m", severity: "low", state: "open" }] }),
+    "```",
+  ].join("\n");
+  const done = await runCli(runCommand, ["complete", run, "--project", "res-show-esc", "--outcome", "complete", "--findings-stdin"], findings);
+  assert.equal(done.code, 0, done.stdout);
+  const text = (await runCli(runCommand, ["show", run, "--project", "res-show-esc"])).stdout;
+  const controls = [...text].filter((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return (code < 0x20 && char !== "\n") || (code >= 0x7f && code <= 0x9f) || code === 0x20_2e;
+  });
+  assert.deepEqual(controls, [], JSON.stringify(text));
+  assert.match(text, /# Check\]0;owned\n\[2Jcleared31mflipped/u);
+  const json = JSON.parse((await runCli(runCommand, ["show", run, "--project", "res-show-esc", "--json"])).stdout);
+  assert.ok(String(json.findings).includes("\u001b]0;owned"), "--json keeps the text as stored; JSON escapes it");
+});
+
 test("a harness that is not on PATH says how to fix it", async () => {
   const { launchHeadless } = await import("../src/surface/headless.ts");
   const result = await launchHeadless({ bin: "claude-not-installed-here", argv: [], cwd: tmpdir(), env: {}, timeoutMs: 5_000 });

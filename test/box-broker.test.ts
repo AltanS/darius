@@ -322,6 +322,43 @@ test("a child over the timeout is killed, and a second request while one runs is
   }
 });
 
+test("a NUL byte or a non-text word in argv is refused, and the broker keeps serving", async () => {
+  const run = "01RUN";
+  const nul = checkBrokerArgv(["run", "hold", run, "--question=a\u0000b"], run);
+  assert.ok("refused" in nul);
+  assert.match(nul.refused, /NUL/u);
+  const f = await fixture("bb-nul");
+  try {
+    const odd: BrokerReply = JSON.parse(await sendRaw(f.socket, `${JSON.stringify({ argv: ["run", "hold", f.run, 7] })}\n`));
+    assert.equal(odd.exit, 2);
+    assert.match(odd.stderr, /a list of words/u);
+    const reply = await askBroker(f.socket, { argv: ["run", "hold", f.run, "--question=a\u0000b"] });
+    assert.equal(reply.exit, 2);
+    assert.match(reply.stderr, /NUL/u);
+    const after = await askBroker(f.socket, { argv: ["run", "hold", f.run, "--question", "still here?"] });
+    assert.equal(after.exit, 0, after.stderr);
+    assert.equal(linesOf(f.project, f.run, "run.held").length, 1);
+  } finally {
+    await f.broker.close();
+  }
+});
+
+test("a spawn that throws becomes an error reply, and the broker keeps serving", async () => {
+  // A NUL in the program path makes spawn throw synchronously.
+  const f = await fixture("bb-throw", { darius: ["/bin/true\u0000x"] });
+  try {
+    const argv = ["run", "hold", f.run, "--question", "q"];
+    const first = await askBroker(f.socket, { argv });
+    assert.equal(first.exit, 1);
+    assert.match(first.stderr, /cannot run darius/u);
+    const second = await askBroker(f.socket, { argv });
+    assert.equal(second.exit, 1);
+    assert.match(second.stderr, /cannot run darius/u);
+  } finally {
+    await f.broker.close();
+  }
+});
+
 // --- the client in src/cli/run.ts, end to end ---------------------------------------------
 
 for (const runtime of RUNTIMES) {

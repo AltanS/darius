@@ -34,6 +34,7 @@ import { claudeHarness } from "../src/harness/claude.ts";
 import { clearStaleBox, webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
+import { boxStack } from "../src/runner/box-check.ts";
 import { VERSION } from "../src/version.ts";
 
 // Short: the box dir's sockets live under the runtime dir, and a Unix socket path has at most 108 bytes.
@@ -84,7 +85,8 @@ const BWRAP_LOG = join(LOGS, "bwrap");
  */
 const FAKE_BWRAP = script(
   "fake-bwrap",
-  `printf 'call %s\\n' "$*" >> "${BWRAP_LOG}"
+  `[ "\${1:-}" = --version ] && { echo "bubblewrap 0.0.0-fake"; exit 0; }
+printf 'call %s\\n' "$*" >> "${BWRAP_LOG}"
 if [ "\${1:-}" = --dev-bind ]; then
   [ "\${FAKE_BWRAP_FAIL:-}" = probe ] && { echo "bwrap: No permissions to create a new namespace" >&2; exit 1; }
   exit 0
@@ -178,10 +180,14 @@ esac
 
 process.env.DARIUS_BWRAP = FAKE_BWRAP;
 process.env.DARIUS_CLAUDE = FAKE_CLAUDE;
+// A herdr launch reads the tiocsti knob each time: a stand-in at 0, so these tests do not hang on the host's.
+const TIOCSTI = join(SANDBOX, "legacy_tiocsti");
+writeFileSync(TIOCSTI, "0\n");
+process.env.DARIUS_TIOCSTI = TIOCSTI;
 process.env.PATH = `${BIN}:${process.env.PATH ?? ""}`;
 // The fake's default version passed its gate check, and this darius version its box check, so a run starts at once.
 appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
-appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, bwrap: "0.0.0", kernel: "test", outcome: "pass", failed: [], skipped: [] });
+appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "pass", failed: [], skipped: [] });
 
 const REPORT_POLICY: Policy = { mode: "report", may: ["Bash(darius *)", "Bash(date)"], hold: ["git push"] };
 const ACT_POLICY: Policy = { ...REPORT_POLICY, mode: "act" };
@@ -460,6 +466,22 @@ test("herdr: an alias the tab's shell does not take closes the tab before the ag
   assert.deepEqual(boxDirs(), []);
 });
 
+test("herdr: a tiocsti knob that is not 0 at launch skips as box-broken, whatever the box check said", async () => {
+  const project = "bx-herdr-tiocsti";
+  linkedCheckout(project, HERDR_MARKER);
+  seedRitual(project);
+  writeFileSync(TIOCSTI, "1\n");
+  try {
+    const { entry, stdout } = await withHerdr({}, () => runDueJson(project));
+    assert.equal(entry?.reason, "box-broken", stdout);
+    assert.match(entry?.detail ?? "", /legacy_tiocsti is 1, not 0/u);
+    assert.equal(herdrCalls().some((line) => line.startsWith("agent start ")), false, "no agent starts");
+  } finally {
+    writeFileSync(TIOCSTI, "0\n");
+  }
+  assert.deepEqual(boxDirs(), []);
+});
+
 test("maskLine leaves the tab's TERM for the tab's shell and quotes every other word", () => {
   const line = maskLine("claude", ["/usr/bin/bwrap", "--setenv", "TERM", TAB_TERM, "--setenv", "X", "$HOME"]);
   // The alias text, as the shell stores it: words in single quotes, the tab's TERM in double quotes.
@@ -639,6 +661,27 @@ test("webPorts: 4747 and 4748, DARIUS_WEB_URL of web.env and next.env by host an
     { host: "darius.example.com", port: 443 },
     { host: "host.example.net", port: 4749 },
   ]);
+});
+
+test("a launch whose box dir belongs to a live launch is box-broken, and leaves that box dir alone", async () => {
+  const req = request("bx-live-dir");
+  const live = join(RUNTIME, "darius-box", req.run.id);
+  mkdirSync(live, { recursive: true, mode: 0o700 });
+  writeFileSync(join(live, "box.json"), "{}\n");
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(join(live, "broker.sock"), resolve));
+  try {
+    let ran = false;
+    const end = await withRunSandbox(req, async () => {
+      ran = true;
+    });
+    assert.equal(ran, false);
+    assert.ok("boxBroken" in end && /is there already/u.test(end.boxBroken), JSON.stringify(end));
+    assert.ok(existsSync(join(live, "box.json")) && existsSync(join(live, "broker.sock")), "the live launch keeps its box dir");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(live, { recursive: true, force: true });
+  }
 });
 
 test("a stale box dir from a dead runner is removed; a live one stays", async () => {

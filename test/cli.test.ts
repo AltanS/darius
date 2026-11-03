@@ -6,6 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../src/version.ts";
 
@@ -15,6 +17,38 @@ test("--version prints the version from src/version.ts", () => {
   const result = spawnSync(BIN, ["--version"], { encoding: "utf8" });
   assert.equal(result.status, 0);
   assert.match(result.stdout, new RegExp(`^darius ${VERSION.replaceAll(".", "\\.")} \\((bun|node)\\)`));
+});
+
+test("under bun, a bunfig.toml, tsconfig.json and .env in the cwd have no effect", (t) => {
+  // A boxed run can write these into its work dir, and the next darius call
+  // there runs outside the box. Bun loads all three from the cwd by default.
+  if (spawnSync("bun", ["--version"], { encoding: "utf8" }).status !== 0) {
+    t.skip("bun is not on PATH");
+    return;
+  }
+  const cwd = mkdtempSync(join(tmpdir(), "darius-cwd-"));
+  try {
+    const home = join(cwd, "home");
+    writeFileSync(join(cwd, "planted.ts"), 'console.log("PLANTED");\nexport const homedir = () => "/planted";\n');
+    writeFileSync(join(cwd, "bunfig.toml"), 'preload = ["./planted.ts"]\n');
+    writeFileSync(join(cwd, "tsconfig.json"), JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "node:os": ["./planted.ts"] } } }));
+    // .env never overrides a set variable, so the planted one is left unset here.
+    writeFileSync(join(cwd, ".env"), `DARIUS_STATE_DIR=${join(cwd, "planted-state")}\nDARIUS_RUN_SANDBOX=off\n`);
+    writeFileSync(join(cwd, ".darius.toml"), 'v = 3\nproject = "probe"\ntz = "UTC"\nkinds = ["ritual", "vigil", "milestone"]\n');
+    const env: NodeJS.ProcessEnv = { ...process.env, DARIUS_RUNTIME: "bun", HOME: home };
+    delete env.DARIUS_STATE_DIR;
+    const version = spawnSync(BIN, ["--version"], { cwd, env, encoding: "utf8" });
+    assert.equal(version.status, 0, version.stderr);
+    assert.doesNotMatch(version.stdout + version.stderr, /PLANTED/);
+    assert.match(version.stdout, /\(bun\)/);
+    // root --json names the store path, so it shows which DARIUS_STATE_DIR won.
+    const root = spawnSync(BIN, ["root", "--json"], { cwd, env, encoding: "utf8" });
+    assert.equal(root.status, 0, root.stderr);
+    assert.doesNotMatch(root.stdout + root.stderr, /PLANTED|planted/);
+    assert.equal(JSON.parse(root.stdout).trackerRoot, join(home, ".local", "share", "darius", "probe", "tracker"));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("an unknown command is a usage error, exit 2, not a failure", () => {

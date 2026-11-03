@@ -9,7 +9,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join, normalize } from "node:path";
 
 import { secretPaths } from "../harness/gate.ts";
-import { BoxError, hiddenHomeDirs, type BoxEntry, type BoxEnv, type BoxFacts, type BoxPlan, type SocketScan } from "./box.ts";
+import { BoxError, hiddenHomeDirs, type BoxEntry, type BoxEnv, type BoxFacts, type BoxPlan, type SocketScan, type WorkScan } from "./box.ts";
 import { loadConfigIfPresent } from "./config.ts";
 import { appDir, configDir, stateDir } from "./paths.ts";
 import { maskedPaths } from "./sandbox.ts";
@@ -40,10 +40,12 @@ function plainEnv(): BoxEnv {
   return env;
 }
 
-/** How long the socket scan of home may take (coordinator ruling 2026-11-02). */
+/** How long the socket scan of home and the work dir may take, together (coordinator ruling 2026-11-02). */
 export const SOCKET_SCAN_CAP_MS = 30_000;
-/** Folder names the socket scan never enters, wherever they are. */
+/** Folders the home scan never enters, wherever they are. */
 const PRUNED_NAMES: ReadonlySet<string> = new Set(["node_modules", ".git"]);
+/** Folders the work dir scan never enters, for speed: a package tree holds no live socket. */
+const WORK_PRUNED_NAMES: ReadonlySet<string> = new Set(["node_modules"]);
 
 /** What the socket scan walks and skips. */
 export interface SocketScanInput {
@@ -73,23 +75,39 @@ function lstatOf(path: string): Stats | undefined {
   }
 }
 
+interface WalkInput {
+  root: string;
+  /** Folder names never entered. */
+  prunedNames: ReadonlySet<string>;
+  /** Folders never entered, by path. */
+  prune: ReadonlySet<string>;
+  deadline: number;
+  now: () => number;
+  /** Called for each entry named `.git` below the root, with whether it is a link. */
+  onGit?: (path: string, isLink: boolean) => void;
+}
+
+/** The sockets one walk found, and whether it ran out of time first. */
+interface Walked {
+  found: string[];
+  timedOut: boolean;
+}
+
 /**
- * Every Unix socket under home: `readdirSync` and `lstat`, no shell, no link
- * followed, one filesystem only (as `find -xdev`). It never enters a pruned
- * folder, `node_modules` or `.git`. It stops at the time cap and says so; the
- * hidden folders are a tmpfs in the box in any case.
+ * Every Unix socket under `root`: `readdirSync` and `lstat`, no shell, no link
+ * followed, one filesystem only (as `find -xdev`). `timedOut` when the walk
+ * did not finish before the deadline.
  */
-export function scanSockets(input: SocketScanInput): SocketScan {
-  const now = input.now ?? Date.now;
-  const deadline = now() + input.capMs;
-  const prune = new Set(input.prune.map((path) => normalize(path)));
-  const device = lstatOf(input.home)?.dev;
+function walkSockets(input: WalkInput): Walked {
+  const root = normalize(input.root);
+  const device = lstatOf(root)?.dev;
   const found: string[] = [];
-  const pending = [normalize(input.home)];
+  const pending = [root];
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    if (now() > deadline) return { found, timedOut: true, capMs: input.capMs };
+    if (input.now() > input.deadline) return { found, timedOut: true };
     for (const entry of entriesOf(dir)) {
       const path = join(dir, entry.name);
+      if (entry.name === ".git" && dir !== root) input.onGit?.(path, entry.isSymbolicLink());
       if (entry.isSymbolicLink()) continue;
       if (entry.isSocket()) {
         found.push(path);
@@ -99,12 +117,60 @@ export function scanSockets(input: SocketScanInput): SocketScan {
       const stat = entry.isDirectory() || entry.isFile() ? undefined : lstatOf(path);
       if (stat?.isSocket() === true) found.push(path);
       const isDir = entry.isDirectory() || stat?.isDirectory() === true;
-      if (!isDir || PRUNED_NAMES.has(entry.name) || prune.has(path)) continue;
+      if (!isDir || input.prunedNames.has(entry.name) || input.prune.has(path)) continue;
       if (lstatOf(path)?.dev !== device) continue;
       pending.push(path);
     }
   }
-  return { found, timedOut: false, capMs: input.capMs };
+  return { found, timedOut: false };
+}
+
+/**
+ * Every Unix socket under home. It never enters a pruned folder,
+ * `node_modules` or `.git`. It stops at the time cap and says so; the plan
+ * then refuses the run (box-broken).
+ */
+export function scanSockets(input: SocketScanInput): SocketScan {
+  const now = input.now ?? Date.now;
+  const walked = walkSockets({
+    root: input.home,
+    prunedNames: PRUNED_NAMES,
+    prune: new Set(input.prune.map((path) => normalize(path))),
+    deadline: now() + input.capMs,
+    now,
+  });
+  return { ...walked, capMs: input.capMs };
+}
+
+/** What the work dir scan walks. */
+export interface WorkScanInput {
+  /** The work dir's real path. */
+  workDir: string;
+  capMs: number;
+  now?: () => number;
+}
+
+/**
+ * The work dir's sockets (a devenv postgres socket, a `tmux -S` socket) and
+ * every `.git` below its top, in one walk. It enters `.git` folders, but never
+ * `node_modules`. A `.git` that is a link is listed in `gitLinks`.
+ */
+export function scanWork(input: WorkScanInput): WorkScan {
+  const now = input.now ?? Date.now;
+  const gits: string[] = [];
+  const gitLinks: string[] = [];
+  const walked = walkSockets({
+    root: input.workDir,
+    prunedNames: WORK_PRUNED_NAMES,
+    prune: new Set(),
+    deadline: now() + input.capMs,
+    now,
+    onGit: (path, isLink) => {
+      if (isLink) gitLinks.push(path);
+      else gits.push(path);
+    },
+  });
+  return { sockets: walked.found, gits, gitLinks, timedOut: walked.timedOut, capMs: input.capMs };
 }
 
 /** The real path of `path`, or `path` when it is not there. */
@@ -113,9 +179,9 @@ function realOr(path: string): string {
 }
 
 /**
- * The facts of this host for a box plan, with the socket scan of home.
- * `workDir`'s tree is not scanned. Throws a BoxError when XDG_RUNTIME_DIR is
- * not an absolute path.
+ * The facts of this host for a box plan, with the socket scan of home and the
+ * scan of the work dir, which share one time cap. Throws a BoxError when
+ * XDG_RUNTIME_DIR is not an absolute path.
  */
 export function hostBoxFacts(at: { workDir: string }): BoxFacts {
   const runtimeDir = process.env.XDG_RUNTIME_DIR ?? "";
@@ -123,8 +189,12 @@ export function hostBoxFacts(at: { workDir: string }): BoxFacts {
   const user = userInfo();
   const home = homedir();
   const prune = [...hiddenHomeDirs(home), at.workDir].flatMap((path) => [path, realOr(path)]);
+  const started = Date.now();
+  const sockets = scanSockets({ home, prune, capMs: SOCKET_SCAN_CAP_MS });
+  const work = scanWork({ workDir: realOr(at.workDir), capMs: Math.max(0, SOCKET_SCAN_CAP_MS - (Date.now() - started)) });
   return {
-    sockets: scanSockets({ home, prune, capMs: SOCKET_SCAN_CAP_MS }),
+    sockets,
+    work,
     home,
     user: process.env.USER ?? user.username,
     uid: user.uid,
@@ -149,10 +219,24 @@ function isPlain(path: string, kind: "file" | "dir"): boolean {
  * Makes what the plan names, before the launch: the box dir (mode 0700, new),
  * the empty `gate.jsonl` and `scratch/` in the run dir, and the per-run
  * copies (mode 0600). Throws a BoxError when the box dir is there already, or
- * when a file to make appears as a link or as the wrong type.
+ * when a file to make appears as a link or as the wrong type. On a throw it
+ * removes the box dir only when it made it: a box dir that was there belongs
+ * to a live launch.
  */
 export function prepareBox(plan: BoxPlan): void {
   mkdirSync(dirname(plan.boxDir), { recursive: true, mode: 0o700 });
+  let isMade = false;
+  try {
+    makeBox(plan, () => {
+      isMade = true;
+    });
+  } catch (cause) {
+    if (isMade) removeBox(plan);
+    throw cause;
+  }
+}
+
+function makeBox(plan: BoxPlan, onBoxDir: () => void): void {
   for (const create of plan.creates) {
     try {
       if (create.kind === "dir") mkdirSync(create.path, { mode: create.mode });
@@ -163,6 +247,7 @@ export function prepareBox(plan: BoxPlan): void {
       if (create.path === plan.boxDir) throw new BoxError(`the box dir ${plan.boxDir} is there already`);
       if (!isPlain(create.path, create.kind)) throw new BoxError(`${create.path} must be a plain ${create.kind === "file" ? "file" : "folder"}`);
     }
+    if (create.path === plan.boxDir) onBoxDir();
     chmodSync(create.path, create.mode);
   }
   if (plan.copies.length === 0) return;

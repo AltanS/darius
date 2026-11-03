@@ -6,13 +6,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { scanSockets } from "../src/core/box-host.ts";
-import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan } from "../src/core/box.ts";
+import { scanSockets, scanWork } from "../src/core/box-host.ts";
+import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan, type WorkScan } from "../src/core/box.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 
 const HOME = "/home/op";
@@ -85,6 +85,7 @@ interface Overrides {
   runId?: string;
   relayPort?: number;
   sockets?: SocketScan;
+  work?: WorkScan;
 }
 
 function input(overrides: Overrides = {}): BoxPlanInput {
@@ -118,6 +119,7 @@ function input(overrides: Overrides = {}): BoxPlanInput {
         home: HOME,
       },
       sockets: overrides.sockets ?? { found: [], timedOut: false, capMs: 30_000 },
+      work: overrides.work ?? { sockets: [], gits: [], gitLinks: [], timedOut: false, capMs: 30_000 },
       entry: (path) => tree.get(path),
     },
   };
@@ -197,15 +199,54 @@ test("a linked worktree's .git file is bound read-only on itself", () => {
   assert.ok(at(argv, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`) > at(argv, "--bind", WORK, WORK));
 });
 
-test("a missing .claude gets an empty read-only folder from the box dir; in report mode it gets none", () => {
-  const plan = boxPlan(input());
+test("a missing .claude or .git gets an empty read-only folder from the box dir; in report mode it gets none", () => {
+  const tree = baseTree();
+  for (const path of [...tree.keys()].filter((key) => key.startsWith(`${WORK}/.git`))) tree.delete(path);
+  const plan = boxPlan(input({ tree }));
   const empty = `${plan.boxDir}/empty`;
   assert.ok(at(plan.argv, "--ro-bind", empty, `${WORK}/.claude`) > at(plan.argv, "--bind", WORK, WORK));
+  assert.ok(at(plan.argv, "--ro-bind", empty, `${WORK}/.git`) > at(plan.argv, "--bind", WORK, WORK), "a work dir in a subfolder of a repo cannot make its own .git");
+  assert.equal(plan.creates.filter((create) => create.path === empty).length, 1, "the empty folder is made once");
   assert.ok(plan.creates.some((create) => create.path === empty && create.kind === "dir" && create.mode === 0o500), "the launcher makes the empty folder");
   assert.equal(has(plan.argv, "--ro-bind", `${WORK}/.darius.toml`), false, "a missing marker is left out");
   const report = boxPlan(input({ isReport: true }));
   assert.equal(has(report.argv, "--ro-bind", `${report.boxDir}/empty`), false, "a read-only work dir needs no mount point");
   assert.equal(report.creates.some((create) => create.path.endsWith("/empty")), false);
+});
+
+test("every .git below the work dir is bound read-only on itself, after the top guards; a .git link anywhere is refused", () => {
+  const nested = [`${WORK}/vendor/lib/.git`, `${WORK}/sub/.git`];
+  const work: WorkScan = { sockets: [], gits: nested, gitLinks: [], timedOut: false, capMs: 30_000 };
+  const { argv } = boxPlan(input({ work }));
+  for (const path of nested) assert.ok(at(argv, "--ro-bind", path, path) > at(argv, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`), path);
+  const linked: WorkScan = { ...work, gitLinks: [`${WORK}/sub/deeper/.git`] };
+  assert.throws(() => boxPlan(input({ work: linked })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith(`${WORK}/sub/deeper/.git is a link`));
+});
+
+test("scanWork: finds the work dir's sockets, in .git too, never in node_modules; lists every .git below the top and each .git link", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-work-scan-")));
+  const servers: Server[] = [];
+  try {
+    const work = join(base, "w");
+    for (const sub of [".git", ".devenv/state/postgres", "node_modules/x/.git", "nested/.git", "sub/module"]) mkdirSync(join(work, sub), { recursive: true });
+    const want = [join(work, ".devenv", "state", "postgres", ".s.PGSQL.5432"), join(work, "tmux.sock"), join(work, ".git", "fsmonitor--daemon.ipc")];
+    for (const path of [...want, join(work, "node_modules", "x", "n.sock")]) servers.push(await listenOn(path));
+    writeFileSync(join(work, "sub", "module", ".git"), "gitdir: ../../.git/modules/module\n");
+    mkdirSync(join(base, "elsewhere"));
+    symlinkSync(join(base, "elsewhere"), join(work, "nested", "linked"));
+    mkdirSync(join(work, "odd"));
+    symlinkSync(join(base, "elsewhere"), join(work, "odd", ".git"));
+    const scan = scanWork({ workDir: work, capMs: 30_000 });
+    assert.deepEqual([...scan.sockets].toSorted(), want.toSorted());
+    assert.deepEqual([...scan.gits].toSorted(), [join(work, "nested", ".git"), join(work, "sub", "module", ".git")].toSorted(), "the top .git has its own guard; node_modules is not entered");
+    assert.deepEqual(scan.gitLinks, [join(work, "odd", ".git")]);
+    assert.equal(scan.timedOut, false);
+    let clock = 0;
+    assert.equal(scanWork({ workDir: work, capMs: 5, now: () => (clock += 10) }).timedOut, true);
+  } finally {
+    for (const server of servers) server.close();
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("a .git, .claude or .darius.toml that is a link is refused: the run could swap the link", () => {
@@ -630,7 +671,6 @@ test("every scanned socket is masked behind /dev/null, last; the bound agent is 
   const scan: SocketScan = { found: sockets, timedOut: false, capMs: 30_000 };
   const unbound = boxPlan(input({ tree, sockets: scan }));
   for (const path of sockets) assert.ok(has(unbound.argv, "--ro-bind", "/dev/null", path), path);
-  assert.deepEqual(unbound.warnings, []);
   const bound = boxPlan(input({ tree, sockets: scan, ritual: { sshAgent: true } }));
   assert.ok(has(bound.argv, "--bind", AGENT, AGENT));
   assert.equal(has(bound.argv, "--ro-bind", "/dev/null", AGENT), false, "the bound agent stays reachable");
@@ -639,11 +679,18 @@ test("every scanned socket is masked behind /dev/null, last; the bound agent is 
   assert.ok(at(bound.argv, "--ro-bind", "/dev/null", `${HOME}/.config/someapp/app.sock`) > lastBind);
 });
 
-test("a socket scan that hit its cap: the plan goes on with the hidden folders and carries a warning for run.log", () => {
-  const plan = boxPlan(input({ sockets: { found: [], timedOut: true, capMs: 30_000 } }));
-  assert.equal(plan.warnings.length, 1);
-  assert.match(plan.warnings[0] ?? "", /^box: the socket scan of \/home\/op stopped after 30 s/u);
-  assert.ok(has(plan.argv, "--tmpfs", "/var/tmp"));
+test("a socket scan of home or of the work dir that hit its cap refuses the run: a socket it missed would connect", () => {
+  assert.throws(() => boxPlan(input({ sockets: { found: [], timedOut: true, capMs: 30_000 } })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith("the socket scan of /home/op stopped after 30 s"));
+  const work: WorkScan = { sockets: [], gits: [], gitLinks: [], timedOut: true, capMs: 30_000 };
+  assert.throws(() => boxPlan(input({ work })), (cause: Error) => cause instanceof BoxError && /the socket scan of the work dir stopped/u.test(cause.message));
+});
+
+test("every socket the work dir scan found is masked behind /dev/null, after the work dir bind", () => {
+  const tree = baseTree();
+  const sockets = [`${WORK}/.devenv/state/postgres/.s.PGSQL.5432`, `${WORK}/sock`];
+  for (const path of sockets) tree.set(path, { real: path, kind: "other" });
+  const { argv } = boxPlan(input({ tree, work: { sockets, gits: [], gitLinks: [], timedOut: false, capMs: 30_000 } }));
+  for (const path of sockets) assert.ok(at(argv, "--ro-bind", "/dev/null", path) > at(argv, "--bind", WORK, WORK), path);
 });
 
 test("scanSockets: finds sockets without following links, skips pruned folders, node_modules and .git, and stops at its cap", async () => {

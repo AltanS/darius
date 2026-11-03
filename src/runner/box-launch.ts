@@ -34,10 +34,10 @@ import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys } f
 import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles } from "../core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
-import { hostAddresses, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
+import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { configDir } from "../core/paths.ts";
-import { appendRunLog, noteSandbox, probeBwrap, resolveSandbox, sandboxPrefix, type Sandbox } from "../core/sandbox.ts";
+import { appendRunLog, noteSandbox, probeBwrap, readTiocsti, resolveSandbox, sandboxPrefix, TIOCSTI_KNOB, type Sandbox } from "../core/sandbox.ts";
 import type { HarnessAdapter } from "../harness/contract.ts";
 import { errorMessage } from "../runtime.ts";
 import { TAB_TERM } from "../surface/herdr.ts";
@@ -169,6 +169,7 @@ export async function boxPolicy(ritual: RitualBoxKeys, harness: Pick<HarnessAdap
     reach: (ritual.reach ?? []).map((entry) => parseHostPort(entry)),
     harnessHosts: [...harness.boxHosts],
     ownAddresses: hostAddresses(tailnet === null ? [] : [tailnet]),
+    ownSubnets: hostSubnets(),
     webPorts: await withWebAddresses(webPorts(), resolve),
   };
 }
@@ -203,6 +204,7 @@ function netLog(runDir: string): (line: string) => void {
  * says, so the check proves the layout a run gets.
  */
 export async function openBox(request: SandboxRequest): Promise<OpenBox> {
+  if (request.hasTty) checkTiocsti();
   const probe = probeBwrap();
   if ("problem" in probe) throw new BoxError(probe.problem);
   const cfg = loadConfigIfPresent();
@@ -229,6 +231,8 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   let proxy: BoxProxy | undefined;
   let broker: Broker | undefined;
   let isClosed = false;
+  // Only a box dir this launch made is removed: prepareBox refuses one that is there, which a live launch owns.
+  let isPrepared = false;
   const close = async (): Promise<void> => {
     if (isClosed) return;
     isClosed = true;
@@ -239,11 +243,12 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
         // The box dir goes next in any case.
       }
     }
-    removeBox(plan);
+    if (isPrepared) removeBox(plan);
   };
   try {
     await clearStaleBox(plan.boxDir);
     prepareBox(plan);
+    isPrepared = true;
     writeBoxFiles(plan.boxDir, boxFiles(filesInput));
     probeLayout(plan.argv, enter.length);
     proxy = await startBoxProxy({ socketPath: join(plan.boxDir, "proxy.sock"), policy, log: netLog(request.run.dir) });
@@ -259,8 +264,19 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     await close();
     throw cause;
   }
-  for (const warning of plan.warnings) appendRunLog(request.run.dir, warning);
   return { prefix: plan.argv, policy, darius: filesInput.darius, close };
+}
+
+/**
+ * A launch on the terminal (herdr) has no `--new-session`, so only the kernel
+ * knob stops TIOCSTI from typing into the operator's terminal. It is read at
+ * each such launch: a box check passed earlier says nothing about now.
+ */
+function checkTiocsti(): void {
+  const read = readTiocsti();
+  if ("value" in read && read.value === "0") return;
+  const now = "value" in read ? `is ${read.value}` : "missing" in read ? "is missing" : `cannot be read (${read.error})`;
+  throw new BoxError(`${TIOCSTI_KNOB} ${now}, not 0: a run on the terminal could type into it, so this run does not start`);
 }
 
 /** True when something listens on the Unix socket at `path`. */

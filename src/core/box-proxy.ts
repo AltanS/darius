@@ -55,6 +55,12 @@ export interface BoxPolicy {
   /** Every address of this host. Always refused. */
   ownAddresses: string[];
   /**
+   * Every subnet of this host's interfaces, as `address/prefix` (v4 and v6).
+   * An address inside one is private, public or not: a LAN device by its
+   * global IPv6 needs a reach entry too.
+   */
+  ownSubnets: string[];
+  /**
    * The darius web ports. An entry with host `""` is port only: that port on any
    * non-public address. An entry with a host also refuses that host (by name, or
    * by address for an address literal) on that port, public or not. The launch
@@ -110,6 +116,8 @@ export interface BoxProxyOptions {
   decide?: Decide;
   /** This host's addresses now, read for each decision. Tests inject one; the default reads the interfaces. */
   ownAddresses?: () => string[];
+  /** This host's subnets now, read for each decision as `address/prefix`. Tests inject one; the default reads the interfaces. */
+  ownSubnets?: () => string[];
   idleMs?: number;
   maxTunnels?: number;
 }
@@ -187,6 +195,11 @@ function isMapped(bytes: readonly number[]): boolean {
   return bytes.slice(0, 10).every((byte) => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
 }
 
+/** `::ffff:0:0/96`, IPv4-translated (RFC 2765): the last four bytes are the IPv4 it reaches. */
+function isTranslated(bytes: readonly number[]): boolean {
+  return bytes.slice(0, 8).every((byte) => byte === 0) && bytes[8] === 0xff && bytes[9] === 0xff && bytes[10] === 0 && bytes[11] === 0;
+}
+
 /** `64:ff9b::/96`, the well-known NAT64 prefix: the last four bytes are the IPv4 it reaches. */
 function isNat64(bytes: readonly number[]): boolean {
   return bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes.slice(4, 12).every((byte) => byte === 0);
@@ -197,9 +210,9 @@ function isLocalNat64(bytes: readonly number[]): boolean {
   return bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes[4] === 0x00 && bytes[5] === 0x01;
 }
 
-/** IPv6 bytes, or the IPv4 they carry for a mapped or NAT64 address. */
+/** IPv6 bytes, or the IPv4 they carry for a mapped, translated or NAT64 address. */
 function unwrapIPv4(bytes: number[]): number[] {
-  return isMapped(bytes) || isNat64(bytes) ? bytes.slice(12) : bytes;
+  return isMapped(bytes) || isTranslated(bytes) || isNat64(bytes) ? bytes.slice(12) : bytes;
 }
 
 function classifyIPv4(bytes: readonly number[]): AddressClass {
@@ -213,6 +226,9 @@ function classifyIPv4(bytes: readonly number[]): AddressClass {
   if (a === 172 && b >= 16 && b <= 31) return "private";
   if (a === 192 && b === 168) return "private";
   if (a === 100 && b >= 64 && b <= 127) return "private";
+  // 198.18.0.0/15, benchmarking networks; 192.0.0.0/24, IETF protocol assignments.
+  if (a === 198 && (b === 18 || b === 19)) return "private";
+  if (a === 192 && b === 0 && bytes[2] === 0) return "private";
   return "public";
 }
 
@@ -226,6 +242,9 @@ function classifyIPv6(bytes: readonly number[]): AddressClass {
   // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) reach an embedded IPv4: judge that.
   if (isNat64(bytes)) return classifyIPv4(bytes.slice(12));
   if (isLocalNat64(bytes)) return "private";
+  // Teredo (2001::/32) tunnels to an IPv4 the proxy cannot judge; 100::/64 is discard-only.
+  if (a === 0x20 && b === 0x01 && bytes[2] === 0 && bytes[3] === 0) return "reserved";
+  if (a === 0x01 && b === 0x00 && bytes.slice(2, 8).every((byte) => byte === 0)) return "reserved";
   if (a === 0x20 && b === 0x02) return classifyIPv4(bytes.slice(2, 6));
   if (a === 0xfe && (b & 0xc0) === 0x80) return "link-local";
   if (a === 0xfe && (b & 0xc0) === 0xc0) return "private";
@@ -240,6 +259,35 @@ function classify(bytes: readonly number[]): AddressClass {
 
 function sameBytes(left: readonly number[], right: readonly number[]): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+/** A subnet as bytes and a prefix length. */
+interface Subnet {
+  bytes: number[];
+  prefix: number;
+}
+
+/** `address/prefix`, or null when it does not parse. An IPv4-mapped v6 subnet counts as its IPv4. */
+function parseSubnet(text: string): Subnet | null {
+  const slash = text.lastIndexOf("/");
+  if (slash < 0) return null;
+  const prefixText = text.slice(slash + 1);
+  const raw = parseIPv4(text.slice(0, slash)) ?? parseIPv6(text.slice(0, slash).toLowerCase());
+  if (raw === null || !/^\d{1,3}$/u.test(prefixText)) return null;
+  const prefix = Number(prefixText);
+  if (prefix > raw.length * 8) return null;
+  const bytes = unwrapIPv4(raw);
+  return { bytes, prefix: bytes.length === raw.length ? prefix : Math.max(0, prefix - 96) };
+}
+
+function inSubnet(bytes: readonly number[], subnet: Subnet): boolean {
+  if (bytes.length !== subnet.bytes.length) return false;
+  for (let bit = 0; bit < subnet.prefix; bit += 1) {
+    const mask = 0x80 >> (bit % 8);
+    const index = Math.floor(bit / 8);
+    if (((bytes[index] ?? 0) & mask) !== ((subnet.bytes[index] ?? 0) & mask)) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,14 +384,17 @@ export function decide(target: Target, policy: BoxPolicy): Decision {
   if (addresses.length === 0) return refuse("no-address", `${host.name} resolved to no address`);
 
   const own = policy.ownAddresses.map(addressBytes).filter((bytes) => bytes !== null);
+  const subnets = policy.ownSubnets.map(parseSubnet).filter((subnet) => subnet !== null);
   const checked: { text: string; bytes: number[]; kind: AddressClass }[] = [];
   for (const text of addresses) {
     const bytes = addressBytes(text);
     if (bytes === null) return refuse("bad-address", `${host.name} resolved to something that is not an address: ${text}`);
-    const kind = classify(bytes);
-    const always = alwaysRefused(kind);
-    if (always !== null) return refuse(always, `${host.name} resolves to ${text}, ${kind}`);
+    const classified = classify(bytes);
+    const always = alwaysRefused(classified);
+    if (always !== null) return refuse(always, `${host.name} resolves to ${text}, ${classified}`);
     if (own.some((mine) => sameBytes(mine, bytes))) return refuse("this-host", `${host.name} resolves to ${text}, an address of this host`);
+    // A neighbour on one of this host's networks is private, whatever its class: a LAN device by its global IPv6, say.
+    const kind = classified === "public" && subnets.some((subnet) => inSubnet(bytes, subnet)) ? "private" : classified;
     checked.push({ text, bytes, kind });
   }
 
@@ -379,15 +430,31 @@ export function hostAddresses(extra: readonly string[] = []): string[] {
   return [...new Set([...found, ...extra])];
 }
 
-/** The start list plus the addresses this host has now. A read that fails, or an address the proxy cannot parse, adds nothing. */
-function currentOwnAddresses(start: readonly string[], read: () => string[]): string[] {
+/** Every subnet of this host's interfaces, as `address/prefix`. */
+export function hostSubnets(): string[] {
+  const found = Object.values(networkInterfaces()).flatMap((entries) => (entries ?? []).flatMap((entry) => (entry.cidr === null ? [] : [entry.cidr])));
+  return [...new Set(found)];
+}
+
+/** The start list plus what `read` gives now. A read that fails, or an entry `isGood` rejects, adds nothing. */
+function currentList(start: readonly string[], read: () => string[], isGood: (text: string) => boolean): string[] {
   let now: string[] = [];
   try {
-    now = read().filter((address) => addressBytes(address) !== null);
+    now = read().filter(isGood);
   } catch {
     // The start list still holds.
   }
   return [...new Set([...start, ...now])];
+}
+
+/** The start list plus the addresses this host has now. */
+function currentOwnAddresses(start: readonly string[], read: () => string[]): string[] {
+  return currentList(start, read, (address) => addressBytes(address) !== null);
+}
+
+/** The start list plus the subnets this host has now. */
+function currentOwnSubnets(start: readonly string[], read: () => string[]): string[] {
+  return currentList(start, read, (subnet) => parseSubnet(subnet) !== null);
 }
 
 /**
@@ -424,6 +491,9 @@ export function checkPolicy(policy: BoxPolicy): void {
   }
   for (const address of policy.ownAddresses) {
     if (addressBytes(address) === null) throw new Error(`not an address of this host: ${address}`);
+  }
+  for (const subnet of policy.ownSubnets) {
+    if (parseSubnet(subnet) === null) throw new Error(`not a subnet of this host: ${subnet}`);
   }
   for (const entry of policy.webPorts) {
     if (entry.host !== "" && judgeHost(entry.host).kind === "bad") throw new Error(`not a web host: ${entry.host}`);
@@ -620,6 +690,7 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
   const resolve = options.resolve ?? systemResolve;
   const judge = options.decide ?? decide;
   const readOwn = options.ownAddresses ?? (() => hostAddresses());
+  const readSubnets = options.ownSubnets ?? hostSubnets;
   const idleMs = options.idleMs ?? IDLE_MS;
   const maxTunnels = options.maxTunnels ?? MAX_TUNNELS;
   const open = new Set<Socket>();
@@ -648,7 +719,11 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
     let addresses: string[] = [];
     if (host.kind === "address") addresses = [host.name];
     if (host.kind === "name") addresses = await resolve(host.name).catch(() => []);
-    const decision = judge({ host: request.host, port: request.port, addresses }, { ...policy, ownAddresses: currentOwnAddresses(policy.ownAddresses, readOwn) });
+    const decision = judge({ host: request.host, port: request.port, addresses }, {
+      ...policy,
+      ownAddresses: currentOwnAddresses(policy.ownAddresses, readOwn),
+      ownSubnets: currentOwnSubnets(policy.ownSubnets, readSubnets),
+    });
     const logged = { host: request.host, port: request.port, addresses, decision };
     if (!decision.allow) {
       refuseRequest(client, 403, logged);

@@ -16,12 +16,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { release, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import type { Ritual } from "../src/core/model.ts";
 import type { Project } from "../src/core/store.ts";
 import type { BoxCheck, Observed, StepFacts } from "../src/runner/box-check.ts";
+import { readTiocsti } from "../src/core/sandbox.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
 const REAL_BWRAP = (process.env.PATH ?? "")
@@ -163,8 +164,8 @@ test("judgeSteps: tiocsti must be 0; a kernel without the knob fails", () => {
   assert.equal(box.judgeTiocsti({ error: "EACCES" }).outcome, "fail");
   const knob = join(BASE, "legacy_tiocsti");
   writeFileSync(knob, "0\n");
-  assert.deepEqual(box.readTiocsti(knob), { value: "0" });
-  assert.deepEqual(box.readTiocsti(join(BASE, "no-knob")), { missing: true });
+  assert.deepEqual(readTiocsti(knob), { value: "0" });
+  assert.deepEqual(readTiocsti(join(BASE, "no-knob")), { missing: true });
 });
 
 test("judgeSteps: a box that was not built fails `box` and skips the steps inside; tiocsti is still judged", () => {
@@ -244,12 +245,14 @@ function fakeCheck(outcome: "pass" | "fail", ran: string[]): (global: Project, w
   };
 }
 
-function seedCheck(global: Project, input: { darius: string; outcome: "pass" | "fail"; at?: string }): void {
-  const line = { who: "test", type: "box.checked", darius: input.darius, bwrap: "0.11.0", kernel: "6.1.0", outcome: input.outcome, failed: input.outcome === "pass" ? [] : ["tiocsti"], skipped: [] };
+function seedCheck(global: Project, input: { darius: string; outcome: "pass" | "fail"; at?: string; kernel?: string; bwrap?: string }): void {
+  const line = { who: "test", type: "box.checked", darius: input.darius, bwrap: input.bwrap ?? "0.11.0", kernel: input.kernel ?? "6.1.0", outcome: input.outcome, failed: input.outcome === "pass" ? [] : ["tiocsti"], skipped: [] };
   appendLine(global, input.at === undefined ? line : { ...line, at: input.at });
 }
 
-async function gate(global: Project | null, ran: string[], options: { isDryRun?: boolean; outcome?: "pass" | "fail"; isBox?: boolean } = {}): Promise<{ result: Awaited<ReturnType<typeof box.boxReadiness>>; heard: BoxCheck[] }> {
+const STACK = { kernel: "6.1.0", bwrap: "0.11.0" };
+
+async function gate(global: Project | null, ran: string[], options: { isDryRun?: boolean; outcome?: "pass" | "fail"; isBox?: boolean; stack?: { kernel: string; bwrap: string } } = {}): Promise<{ result: Awaited<ReturnType<typeof box.boxReadiness>>; heard: BoxCheck[] }> {
   const heard: BoxCheck[] = [];
   const result = await box.boxReadiness({
     today: localToday(),
@@ -259,6 +262,7 @@ async function gate(global: Project | null, ran: string[], options: { isDryRun?:
     openGlobal: () => global,
     onCheck: (check) => heard.push(check),
     runCheck: fakeCheck(options.outcome ?? "pass", ran),
+    stack: options.stack ?? STACK,
   });
   return { result, heard };
 }
@@ -314,8 +318,22 @@ test("the gate: a new darius version needs a new check, and another host's pass 
   const ran: string[] = [];
   assert.deepEqual((await gate(global, ran)).result, { ready: true });
   assert.equal(ran.length, 1, "0.0.1's pass is not this version's");
-  assert.equal(box.latestBoxCheck(readLedger(global), { host: "other-host", darius: VERSION }), undefined);
-  assert.equal(box.latestBoxCheck(readLedger(global), { host: HOST, darius: VERSION })?.outcome, "pass");
+  assert.equal(box.latestBoxCheck(readLedger(global), { host: "other-host", darius: VERSION, ...STACK }), undefined);
+  assert.equal(box.latestBoxCheck(readLedger(global), { host: HOST, darius: VERSION, ...STACK })?.outcome, "pass");
+});
+
+test("the gate: a new kernel release or bwrap version needs a new check", async () => {
+  const global = openProject("gate-stack", { create: true });
+  seedCheck(global, { darius: VERSION, outcome: "pass" });
+  const ran: string[] = [];
+  assert.deepEqual((await gate(global, ran)).result, { ready: true });
+  assert.equal(ran.length, 0, "the same kernel and bwrap: the pass holds");
+  const kernel = await gate(global, ran, { isDryRun: true, stack: { ...STACK, kernel: "6.2.0" } });
+  assert.match(kernel.result.ready ? (kernel.result.pending ?? "") : "", /would run darius box check for darius .*, kernel 6\.2\.0, bwrap 0\.11\.0 first/u);
+  await gate(global, ran, { stack: { ...STACK, kernel: "6.2.0" } });
+  assert.equal(ran.length, 1, "a kernel update runs the check");
+  await gate(global, ran, { stack: { ...STACK, bwrap: "0.12.0" } });
+  assert.equal(ran.length, 2, "a bwrap update runs the check");
 });
 
 test("the gate: a dry run with no check says it would check first, and runs nothing", async () => {
@@ -336,11 +354,19 @@ function seedRitual(project: string): void {
 
 test("run-due in the box: a failed check from today skips the ritual as box-broken; a pass reaches the harness gate", async (t) => {
   process.env.DARIUS_RUN_SANDBOX = "box";
+  // A stand-in bwrap that passes the probe and names a version, so the gate keys on this kernel and it.
+  const fakeBwrap = join(BASE, "fake-bwrap");
+  writeFileSync(fakeBwrap, '#!/bin/sh\n[ "$1" = --version ] && echo "bubblewrap 9.9.9"\nexit 0\n', { mode: 0o755 });
+  const before = process.env.DARIUS_BWRAP;
+  process.env.DARIUS_BWRAP = fakeBwrap;
   t.after(() => {
     delete process.env.DARIUS_RUN_SANDBOX;
+    process.env.DARIUS_BWRAP = before;
   });
   const global = openProject("_global", { create: true });
-  seedCheck(global, { darius: VERSION, outcome: "fail" });
+  const stack = box.boxStack();
+  assert.deepEqual(stack, { kernel: release(), bwrap: "9.9.9" });
+  seedCheck(global, { darius: VERSION, outcome: "fail", ...stack });
   seedRitual("rd-broken");
   const broken = await runDue({ projects: ["rd-broken"], isDryRun: false, who: "test", timeoutMs: 60_000, now: {} });
   const entry = broken.report.projects[0]?.rituals[0];
@@ -350,7 +376,7 @@ test("run-due in the box: a failed check from today skips the ritual as box-brok
   assert.equal(broken.report.ok, false, "box-broken fails the batch");
   assert.equal(broken.report.boxChecks, undefined, "no check ran");
 
-  seedCheck(global, { darius: VERSION, outcome: "pass" });
+  seedCheck(global, { darius: VERSION, outcome: "pass", ...stack });
   seedRitual("rd-ready");
   const ready = await runDue({ projects: ["rd-ready"], isDryRun: false, who: "test", timeoutMs: 60_000, now: {} });
   const next = ready.report.projects[0]?.rituals[0];
@@ -432,7 +458,7 @@ test("real bwrap: the whole box check on this host, in a temp store and a temp h
     assert.equal(result[name], "pass", `${name}: ${check.steps.find((entry) => entry.name === name)?.reason ?? ""}`);
   }
   assert.notEqual(result["public-https"], "fail", "online it opens, offline it is skipped");
-  assert.equal(result.tiocsti, box.judgeTiocsti(box.readTiocsti()).outcome, "the knob of this kernel");
+  assert.equal(result.tiocsti, box.judgeTiocsti(readTiocsti()).outcome, "the knob of this kernel");
   assert.equal(check.outcome, result.tiocsti === "pass" ? "pass" : "fail");
   assert.notEqual(check.bwrap, "none");
 
