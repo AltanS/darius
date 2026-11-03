@@ -223,6 +223,11 @@ function isRepoRitual(doc: Document<Ritual> | null, slug: string, marker: Marker
   return doc?.header.source === "repo" || (marker?.rituals.some((ritual) => ritual.slug === slug) ?? false);
 }
 
+/** The marker's `sandbox` of the ritual (0.124.0); undefined without one. The store does not mirror it: the run reads the checkout's marker. */
+function markerSandbox(slug: string, marker: Marker | null): "off" | undefined {
+  return marker?.rituals.find((ritual) => ritual.slug === slug)?.sandbox;
+}
+
 /** `<checkout>/.darius.toml:<line> ([rituals.<slug>])`, or the bare table name when no marker is on this host. */
 function definedAt(slug: string, marker: Marker | null): string {
   const line = marker?.rituals.find((ritual) => ritual.slug === slug)?.line;
@@ -314,6 +319,8 @@ interface ListedRitual {
   tz?: string;
   /** The skill's input from the marker (`args`); absent when none is set. */
   args?: string;
+  /** `off`: the marker's `sandbox = "off"` runs it unboxed on a box host (0.124.0); absent otherwise. */
+  sandbox?: "off";
   /** What the operator should see: a stale mirror, a retired slug named again. */
   warnings?: string[];
 }
@@ -339,6 +346,7 @@ function listRituals(project: Project): ListedRitual[] {
     if (doc.header.at !== undefined) listed.at = doc.header.at;
     if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
     if (doc.header.args !== undefined) listed.args = doc.header.args;
+    if (markerSandbox(slug, marker) === "off") listed.sandbox = "off";
     const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker);
     if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
@@ -357,8 +365,9 @@ function runList(args: ParsedArgs): number {
     const host = ritual.host === undefined ? "" : ` host=${ritual.host}`;
     const at = ritual.at === undefined ? "" : ` at=${ritual.at}${ritual.tz === undefined ? "" : ` ${ritual.tz}`}`;
     const source = ritual.source === undefined ? "" : ` ${ritual.source}`;
+    const sandbox = ritual.sandbox === undefined ? "" : ` sandbox=${ritual.sandbox}`;
     console.log(
-      `${ritual.slug.padEnd(28)} ${ritual.lifecycle.padEnd(8)} cadence=${ritual.cadence ?? "-"}${at} anchor=${ritual.anchor}${host}${source}  ${ritual.title}`,
+      `${ritual.slug.padEnd(28)} ${ritual.lifecycle.padEnd(8)} cadence=${ritual.cadence ?? "-"}${at} anchor=${ritual.anchor}${host}${sandbox}${source}  ${ritual.title}`,
     );
     for (const warning of ritual.warnings ?? []) console.log(`! ${warning}`);
   }
@@ -401,6 +410,7 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.timeout !== undefined) console.log(`timeout: ${doc.header.timeout}`);
   console.log(`source: ${showSource(doc, ledger, v3Marker(project))}`);
   if (doc.header.host !== undefined) console.log(`host: ${doc.header.host} (other hosts skip it)`);
+  if (markerSandbox(slug, v3Marker(project)) === "off") console.log('sandbox: off (the marker runs it outside the box on a host with [run] sandbox = "box")');
   console.log(`policy: ${formatPolicy(doc.header.policy)}`);
   if (doc.header.policy.may.length > 0) console.log(`  may: ${doc.header.policy.may.join(", ")}`);
   if (doc.header.policy.hold.length > 0) console.log(`  hold: ${doc.header.policy.hold.join(", ")}`);

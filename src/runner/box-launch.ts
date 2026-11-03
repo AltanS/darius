@@ -23,6 +23,9 @@
  *
  * When a step of 1 to 4 fails, nothing is started, and the caller skips the
  * ritual as `box-broken` with the reason. The reason is in the run's run.log.
+ *
+ * A ritual whose marker says `sandbox = "off"` (0.124.0) skips all of it on a
+ * box host: it runs as on an `off` host, with one run.log line that says so.
  */
 
 import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
@@ -82,6 +85,8 @@ export interface RunSandbox {
   prefix: readonly string[] | undefined;
   /** In the box: a surface that cannot prove it must end the launch, not go on. */
   isBox: boolean;
+  /** The marker's `sandbox = "off"` took this launch out of the host's box (0.124.0); the run's start line records it. */
+  isRitualOff: boolean;
 }
 
 /** What `withRunSandbox` gives back: the body's value, or why the box could not be built. */
@@ -322,7 +327,12 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
   const sandbox = resolveSandbox();
   if (sandbox.state !== "box") {
     noteSandbox(request.run.dir, sandbox);
-    return { ran: await body({ state: sandbox.state, prefix: sandboxPrefix(sandbox), isBox: false }) };
+    return { ran: await body({ state: sandbox.state, prefix: sandboxPrefix(sandbox), isBox: false, isRitualOff: false }) };
+  }
+  // The operator's opt-out in the committed marker: this ritual runs as on an `off` host. The box keeps the marker read-only.
+  if (request.ritual.sandbox === "off") {
+    appendRunLog(request.run.dir, "box: off for this ritual by the marker");
+    return { ran: await body({ state: "off", prefix: undefined, isBox: false, isRitualOff: true }) };
   }
   let box: OpenBox;
   try {
@@ -333,7 +343,7 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
     return { boxBroken: reason };
   }
   try {
-    return { ran: await body({ state: "box", prefix: box.prefix, isBox: true }) };
+    return { ran: await body({ state: "box", prefix: box.prefix, isBox: true, isRitualOff: false }) };
   } finally {
     await box.close();
   }

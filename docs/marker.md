@@ -134,6 +134,7 @@ host to 0.70.0 or later before you commit the first marker with `icon`.
 | `writable` | no | A list of paths (0.117.0), `~/...` or absolute. Extra folders a run in the box may write. |
 | `ssh_agent` | no | `true` (0.117.0). Gives a run in the box the ssh agent. Leave the key out for no agent. |
 | `tools` | no | A list (0.117.0) of `"gh"` and `"aws"` (0.124.0). Shows that login to a run in the box. |
+| `sandbox` | no | `"off"` (0.124.0). Runs this ritual outside the box on a host with `[run] sandbox = "box"`. See "Box keys". |
 
 `[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes`, `on_hold` and `follow_up_may`, with the same rules.
 A policy's `on_hold` applies to every ritual that names the policy.
@@ -178,7 +179,7 @@ an older host refuses an unknown ritual key, and it cannot read a mirrored item 
 
 ## Box keys
 
-Five ritual keys set what a run gets when the host runs it in the box (`[run] sandbox = "box"` in `config.toml`; see the README and "The box" in `docs/concept.md`). On a host with `off` or `mask` they have no effect. They are part of the ritual's definition. A run cannot change them: the box mounts `.darius.toml` read-only.
+Six ritual keys set what a run gets when the host runs it in the box (`[run] sandbox = "box"` in `config.toml`; see the README and "The box" in `docs/concept.md`). On a host with `off` or `mask` they have no effect. They are part of the ritual's definition. A run cannot change them: the box mounts `.darius.toml` read-only.
 
 | Key | Type | Default | Rule |
 |---|---|---|---|
@@ -187,6 +188,7 @@ Five ritual keys set what a run gets when the host runs it in the box (`[run] sa
 | `writable` | list of paths | none | Each path starts with `~/` or `/`, with no `..`. Added to the host's `[box] writable`. A path in or holding the darius store or config, `~/.claude`, `~/.ssh`, a shell rc file, `~/.local/bin`, git config, `/tmp`, `/run` and the like is a marker error. `~/.cache` itself is refused too: name a folder in it. A path that is a PATH entry of the runner is refused at launch. A path that does not exist is left out. |
 | `ssh_agent` | `true` | absent | Binds the ssh agent socket into the box without a `reach` entry on port 22. Use it for ssh on another port, such as `reach = ["git.example.com:2222"]`. `false` is a marker error: leave the key out. |
 | `tools` | list of `"gh"`, `"aws"` | none | `"gh"` leaves `~/.config/gh/hosts.yml` visible. `"aws"` (0.124.0) leaves `~/.aws/credentials` visible, so a tool that calls S3 through the AWS SDK or CLI works. Without the name the box masks that file. Any other name is a marker error. |
+| `sandbox` | `"off"` | absent | `"off"` (0.124.0) takes this ritual out of the box. On a host with `[run] sandbox = "box"` it runs as on an `off` host: no box and no mask. It skips the box check gate, and its `run.log` gets the line `box: off for this ritual by the marker`. Any other value is a marker error. |
 
 The harness API hosts (for Claude Code: `api.anthropic.com` and its login hosts, port 443) pass in every `net` mode, and never to a private address.
 
@@ -222,8 +224,25 @@ ssh_agent = true                      # the agent, with no reach entry
 
 A run in the box cannot commit, because `.git` is read-only. A ritual that changes files writes them in the work dir and hands in the diff.
 
+Some rituals cannot run in the box at all, for example one that commits and pushes through git
+hooks that start a test database in containers. Opt such a ritual out with `sandbox = "off"`:
+
+```toml
+[rituals.release-notes]
+title = "Release notes"
+cadence = "1w"
+skill = "release-notes"
+mode = "act"
+sandbox = "off"                       # this ritual never runs in the box
+```
+
+The opt-out is the operator's, in a reviewed commit. The box mounts `.darius.toml` read-only, so a
+run in the box cannot add the key for a later run. `darius ritual list` shows `sandbox=off`, and
+the run's start line and `darius run show` say that the run did not start in the box. The other
+box keys do nothing for such a ritual. Its runs keep only the gate, as on an `off` host.
+
 Every host must run 0.117.0 or later before a marker uses these keys, and 0.124.0 or later before
-it uses `"aws"` in `tools`: an older host refuses the unknown key or name. Host-wide settings live in
+it uses `"aws"` in `tools` or `sandbox`: an older host refuses the unknown key or name. Host-wide settings live in
 `config.toml` under `[box]` (see the README).
 
 ## Factor shared rules

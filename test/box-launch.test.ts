@@ -22,6 +22,7 @@ import { join } from "node:path";
 
 import { parseArgs } from "../src/cli/args.ts";
 import { harnessCommand } from "../src/cli/harness.ts";
+import { ritualCommand } from "../src/cli/ritual.ts";
 import type { Command } from "../src/cli/registry.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { runDueCommand } from "../src/cli/run-due.ts";
@@ -703,4 +704,105 @@ test("a stale box dir from a dead runner is removed; a live one stays", async ()
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
   await clearStaleBox(join(SANDBOX, "no-such-box"));
+});
+
+// --- sandbox = "off" in the marker (0.124.0) --------------------------------------------
+
+/** One act ritual table of a v3 marker, with `extra` lines. */
+function ritualTable(slug: string, extra: string): string {
+  return [`[rituals.${slug}]`, `title = "${slug}"`, 'cadence = "1d"', `skill = "${slug}"`, 'mode = "act"', 'may = ["Bash(darius *)", "Bash(date)"]', extra, ""].join("\n");
+}
+
+/** A v3 checkout with two act rituals: `unboxed` says `sandbox = "off"`, `boxed` does not. */
+function optOutCheckout(project: string): string {
+  const dir = join(SANDBOX, `${project}-co`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".darius.toml"), ["v = 3", `project = "${project}"`, 'max_mode = "act"', 'tz = "UTC"', "", ritualTable("unboxed", 'sandbox = "off"'), ritualTable("boxed", "")].join("\n"));
+  for (const slug of ["unboxed", "boxed"]) {
+    mkdirSync(join(dir, ".claude", "skills", slug), { recursive: true });
+    writeFileSync(join(dir, ".claude", "skills", slug, "SKILL.md"), `---\nname: ${slug}\ndescription: ${slug}\n---\nRun date, then complete the run.\n`);
+  }
+  openProject(project, { create: true });
+  writeLink(project, dir);
+  return dir;
+}
+
+function runLog(project: string, run: string): string {
+  const file = join(openProject(project).root, "runs", run, "run.log");
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
+test("sandbox = \"off\": on a box host the ritual runs unboxed through run-due, run now, run resume and a follow-up, skips the box check gate, and says so", async () => {
+  const project = "bx-off";
+  optOutCheckout(project);
+  // A box check that failed today: every boxed ritual skips as box-broken until it passes.
+  appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "fail", failed: ["store-write"], skipped: [] });
+  try {
+    fresh();
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const due = await runDueJson(project);
+    // SAFETY: run-due --json prints the batch report.
+    const rituals = (JSON.parse(due.stdout) as { projects: { rituals: Entry[] }[] }).projects[0]?.rituals ?? [];
+    const boxed = rituals.find((entry) => entry.slug === "boxed");
+    const unboxed = rituals.find((entry) => entry.slug === "unboxed");
+    assert.deepEqual([boxed?.action, boxed?.reason], ["skipped", "box-broken"], due.stdout);
+    assert.match(boxed?.detail ?? "", /box check .* failed today/u);
+    assert.equal(unboxed?.end, "complete", due.stdout);
+    // The boxed ritual's gate probes bwrap; nothing else calls it.
+    assert.ok(bwrapLines().every((line) => line === "call --dev-bind / / true"), `no box, no layout probe, no mask: ${bwrapLines().join("\n")}`);
+    const run = unboxed?.run ?? "";
+    assert.match(runLog(project, run), /box: off for this ritual by the marker\n$/u);
+    assert.equal(linesOf(project, "run.started").find((line) => line.run === run)?.sandbox, "off", "the run's start line records it");
+    const shown = await runCli(runCommand, ["show", run, "--project", project, "--json"]);
+    assert.equal(JSON.parse(shown.stdout).sandbox, "off", shown.stdout);
+    const shownText = await runCli(runCommand, ["show", run, "--project", project]);
+    assert.match(shownText.stdout, /sandbox off for this ritual by the marker/u);
+
+    const listed = await runCli(ritualCommand, ["list", "--project", project, "--json"]);
+    // SAFETY: ritual list --json prints the project and its rituals.
+    const list = JSON.parse(listed.stdout) as { rituals: { slug: string; sandbox?: string }[] };
+    assert.equal(list.rituals.find((entry) => entry.slug === "unboxed")?.sandbox, "off", listed.stdout);
+    assert.equal(list.rituals.find((entry) => entry.slug === "boxed")?.sandbox, undefined);
+    const listText = await runCli(ritualCommand, ["list", "--project", project]);
+    assert.match(listText.stdout, /^unboxed .* sandbox=off /mu);
+    assert.doesNotMatch(listText.stdout, /^boxed .*sandbox=/mu);
+
+    process.env.FAKE_CLAUDE_MODE = "hold";
+    const now = await runCli(runCommand, ["now", "unboxed", "--project", project, "--json"]);
+    assert.equal(entryOf(now.stdout)?.end, "held", now.stdout + now.stderr);
+    const held = entryOf(now.stdout)?.run ?? "";
+    assert.match(runLog(project, held), /box: off for this ritual by the marker/u, "run now");
+    assert.equal((await runCli(runCommand, ["answer", held, "1", "yes", "--project", project])).code, 0);
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const resumed = await runCli(runCommand, ["resume", held, "--project", project, "--json"]);
+    assert.equal(entryOf(resumed.stdout)?.end, "complete", resumed.stdout + resumed.stderr);
+    assert.equal(linesOf(project, "run.resumed").find((line) => line.run === held)?.sandbox, "off", "run resume");
+    assert.equal(runLog(project, held).match(/box: off for this ritual by the marker/gu)?.length, 2, "one line per launch");
+
+    const { report } = await runDue({ projects: [project], only: "unboxed", isDryRun: false, who: "test", timeoutMs: 60_000, followUp: { parent: run, approved: [], grants: ["date"], headless: true } });
+    const follow = report.projects[0]?.rituals[0];
+    assert.equal(follow?.end, "complete", JSON.stringify(report));
+    assert.match(runLog(project, follow?.run ?? ""), /box: off for this ritual by the marker/u, "a follow-up");
+    assert.ok(bwrapLines().every((line) => line === "call --dev-bind / / true"), `still no box: ${bwrapLines().join("\n")}`);
+    assert.deepEqual(boxDirs(), []);
+  } finally {
+    appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "pass", failed: [], skipped: [] });
+  }
+});
+
+test("sandbox = \"off\" has no effect on a mask or off host: the run gets the host's sandbox and no line", async () => {
+  const project = "bx-off-host";
+  optOutCheckout(project);
+  process.env.DARIUS_RUN_SANDBOX = "off";
+  try {
+    fresh();
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const { report } = await runDue({ projects: [project], only: "unboxed", isDryRun: false, who: "test", timeoutMs: 60_000 });
+    const entry = report.projects[0]?.rituals[0];
+    assert.equal(entry?.end, "complete", JSON.stringify(report));
+    assert.equal(runLog(project, entry?.run ?? ""), "", "no opt-out line on an off host");
+    assert.equal(linesOf(project, "run.started")[0]?.sandbox, undefined);
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "box";
+  }
 });

@@ -86,7 +86,7 @@ export const BOX_TOOLS = ["gh", "aws"] as const;
 export type BoxTool = (typeof BOX_TOOLS)[number];
 
 /** The secret file each tool leaves visible, by the end of its listed path. */
-const TOOL_FILES: Readonly<Record<BoxTool, string>> = { gh: "/gh/hosts.yml", aws: "/.aws/credentials" };
+const TOOL_FILES = { gh: "/gh/hosts.yml", aws: "/.aws/credentials" } as const satisfies Readonly<Record<BoxTool, string>>;
 
 /** Where the box dir shows inside the box. */
 export const BOX_MOUNT = "/run/darius";
@@ -390,6 +390,8 @@ export interface RitualBoxKeys {
   writable?: readonly string[];
   sshAgent?: boolean;
   tools?: readonly string[];
+  /** `sandbox = "off"` (0.124.0): the launch runs this ritual unboxed (src/runner/box-launch.ts); the plan never sees it. */
+  sandbox?: "off";
 }
 
 /** The host's `[box]` table. `writable` undefined means the default, an empty list. */

@@ -622,14 +622,18 @@ function runShow(args: ParsedArgs): number {
   const sha = completed?.findings_sha;
   const findings = isText(sha) ? getBlobText(project, sha) : null;
   const result = storedResult(project, completed);
-  const skillHash = lines.find((line) => line.type === "run.started")?.skill_hash;
+  const started = lines.find((line) => line.type === "run.started");
+  const skillHash = started?.skill_hash;
+  // 0.124.0: `off` when the marker's `sandbox = "off"` took the run out of the host's box.
+  const sandbox = started?.sandbox === "off" ? "off" : undefined;
   if (args.json) {
-    printJson({ project: project.name, ...row, skill_hash: isText(skillHash) ? skillHash : undefined, findings, result });
+    printJson({ project: project.name, ...row, skill_hash: isText(skillHash) ? skillHash : undefined, sandbox, findings, result });
     return 0;
   }
   const outcome = row.outcome === null ? "" : ` (${row.outcome})`;
   show(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
   if (isText(skillHash)) show(`skill hash ${skillHash.slice(0, 12)}`);
+  if (sandbox === "off") show("sandbox off for this ritual by the marker: the run did not start in the box");
   if (result !== null) for (const line of describeResult(result)) show(line);
   show(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;

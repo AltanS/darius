@@ -433,7 +433,7 @@ function clipNote(note: string): string {
 /** Appends run.started under the project lock, or returns the open run that blocks it. */
 function startRun(
   ctx: ProjectContext,
-  target: { doc: Document<Ritual>; run: string; policySha: string; skillHash?: string | undefined; answersRead: readonly string[] },
+  target: { doc: Document<Ritual>; run: string; policySha: string; skillHash?: string | undefined; answersRead: readonly string[]; isRitualOff: boolean },
 ): { run: string } | { blockedBy: string } {
   const { doc, run, policySha } = target;
   return ctx.project.withLock(() => {
@@ -445,6 +445,8 @@ function startRun(
     if (target.skillHash !== undefined) line.skill_hash = target.skillHash;
     // 0.80.0: the ack ids the prompt showed. Left out when none, so a line reads as before.
     if (target.answersRead.length > 0) line.answers_read = [...target.answersRead];
+    // 0.124.0: the marker's `sandbox = "off"` took the run out of this host's box. Left out otherwise.
+    if (target.isRitualOff) line.sandbox = "off";
     const { followUp } = ctx.options;
     if (followUp !== undefined) {
       line.follow_up_of = followUp.parent;
@@ -544,7 +546,7 @@ function finalizeRun(
 /** Appends run.resumed under the project lock while the run is still held and answered, or returns the run that blocks it. */
 function resumeRun(
   ctx: ProjectContext,
-  target: { run: string; sessionId?: string | undefined; policySha: string; answersRead: readonly string[] },
+  target: { run: string; sessionId?: string | undefined; policySha: string; answersRead: readonly string[]; isRitualOff: boolean },
 ): { run: string } | { blockedBy: string } {
   const { run, sessionId, policySha } = target;
   return ctx.project.withLock(() => {
@@ -555,6 +557,7 @@ function resumeRun(
     else line.session_id = sessionId;
     // 0.80.0: a fresh session got a rebuilt prompt with the pending answers; a live one did not.
     if (target.answersRead.length > 0) line.answers_read = [...target.answersRead];
+    if (target.isRitualOff) line.sandbox = "off";
     appendLine(ctx.project, line);
     return { run };
   });
@@ -617,7 +620,7 @@ interface RunTarget {
   warnings: string[];
   /** The run budget: the ritual's git `timeout`, else the unit's. The lease follows it. */
   timeoutMs: number;
-  /** The ritual's box keys from the marker (`net`, `reach`, `writable`, `ssh_agent`, `tools`); empty without one. */
+  /** The ritual's box keys from the marker (`net`, `reach`, `writable`, `ssh_agent`, `tools`, `sandbox`); empty without one. */
   box: RitualBoxKeys;
 }
 
@@ -894,8 +897,8 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
       if (broken !== undefined) return { entry: skipped(slug, "gate-broken", broken), isDiscarded: true };
       const started =
         resume === undefined
-          ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill), answersRead: prepared.answersRead })
-          : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha, answersRead: prepared.answersRead });
+          ? startRun(ctx, { doc, run, policySha: prepared.policySha, skillHash: skillHash(target.cwd, doc.header.skill), answersRead: prepared.answersRead, isRitualOff: sandbox.isRitualOff })
+          : resumeRun(ctx, { run, sessionId: prepared.sessionId, policySha: prepared.policySha, answersRead: prepared.answersRead, isRitualOff: sandbox.isRitualOff });
       if ("blockedBy" in started) return { entry: skipped(slug, resume === undefined ? "open-run" : "not-resumable", `run ${started.blockedBy}`), isDiscarded: true };
       if (ctx.options.followUp !== undefined) ackParent(ctx, ctx.options.followUp, started.run);
       ctx.options.onStarted?.(started.run);
@@ -936,6 +939,7 @@ function boxKeys(ritual: RepoRitual | undefined): RitualBoxKeys {
   if (ritual.writable !== undefined) keys.writable = ritual.writable;
   if (ritual.sshAgent !== undefined) keys.sshAgent = ritual.sshAgent;
   if (ritual.tools !== undefined) keys.tools = ritual.tools;
+  if (ritual.sandbox !== undefined) keys.sandbox = ritual.sandbox;
   return keys;
 }
 
@@ -996,7 +1000,8 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
     const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp, doc.header);
     if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);
     const surface = chosen;
-    const boxed = await boxGate(ctx);
+    // `sandbox = "off"` in the marker: this ritual runs unboxed, so the box check does not gate it.
+    const boxed: BoxReadiness = repoRitual?.sandbox === "off" ? { ready: true } : await boxGate(ctx);
     if (!boxed.ready) return skipped(slug, "box-broken", boxed.detail);
     const ready = await readiness(ctx, resolution.harness);
     if (!ready.ready) return skipped(slug, ready.isBoxBroken === true ? "box-broken" : "harness-unchecked", ready.detail);

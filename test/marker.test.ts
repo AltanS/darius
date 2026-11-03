@@ -936,6 +936,21 @@ test("box keys: tools = [\"aws\"] reads back, alone and with gh, and changes the
   assert.notEqual(definitionHash(firstRitual(`${RITUAL}mode = "report"\ntools = ["aws"]\n`)), definitionHash(plain));
 });
 
+test("sandbox = \"off\" reads back and changes the definition hash; absent stays absent", () => {
+  const off = firstRitual(`${RITUAL}mode = "report"\nsandbox = "off"\n`);
+  assert.equal(off.sandbox, "off");
+  const plain = firstRitual(`${RITUAL}mode = "report"\n`);
+  assert.equal(plain.sandbox, undefined);
+  assert.equal("sandbox" in plain, false, "absent is stored as no key, so the hash of a ritual without it does not change");
+  assert.notEqual(definitionHash(off), definitionHash(plain));
+});
+
+test("sandbox: any value but \"off\" is a marker error that names the line", () => {
+  for (const line of ['sandbox = "box"', 'sandbox = "mask"', 'sandbox = "OFF"', "sandbox = false", 'sandbox = ["off"]']) {
+    assert.throws(() => firstRitual(`${RITUAL}mode = "report"\n${line}\n`), /\.darius\.toml:\d+: sandbox must be "off", got .*; leave the key out to use the host's sandbox/u, line);
+  }
+});
+
 test("box keys: an unknown value is refused at load with its line", () => {
   const refused: [string, RegExp][] = [
     ['net = "open"', /:\d+: net must be "public", "listed" or "none", got "open"/u],

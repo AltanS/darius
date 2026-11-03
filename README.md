@@ -288,7 +288,9 @@ writable = []          # extra folders every boxed run may write; empty by defau
 the box the cache is per run. To share one, name a folder, such as `["~/.cache/acme-tool"]`. Darius
 refuses `~/.cache` itself, the store, `~/.claude`, `~/.ssh` and other paths that start code later. An
 unknown key or a refused path is an error that names it. A ritual sets its own network and paths in
-`.darius.toml` with `net`, `reach`, `writable`, `ssh_agent` and `tools` (see `docs/marker.md`).
+`.darius.toml` with `net`, `reach`, `writable`, `ssh_agent` and `tools` (see `docs/marker.md`). A ritual
+that cannot run in the box at all opts out with `sandbox = "off"` in the committed marker; on a box host
+it then runs with no box and no mask.
 
 Before the first boxed run of a darius version, `darius box check` must pass on the host. It proves the
 box with a fake harness and no paid call. `run-due` runs it by itself when there is no passing check.

@@ -99,6 +99,12 @@
  * older than 0.117.0 refuses the keys, and one older than 0.124.0 refuses
  * `"aws"` in `tools`.
  *
+ * `sandbox = "off"` (0.124.0) opts one ritual out of the box: on a host with
+ * `[run] sandbox = "box"` it runs as on an `off` host. Any other value is an
+ * error with its line. It is the operator's, in a reviewed commit: the box
+ * mounts `.darius.toml` read-only, so a boxed run cannot add it for a later
+ * run. A host older than 0.124.0 refuses the key.
+ *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
  * policy's notes, a blank line, then the ritual's. `mode`, `may` and `hold`
@@ -197,6 +203,13 @@ export interface RepoRitual {
   sshAgent?: true;
   /** `tools` (0.117.0): logins the box shows; `gh` unmasks `~/.config/gh/hosts.yml`, `aws` (0.124.0) `~/.aws/credentials`. */
   tools?: BoxTool[];
+  /**
+   * `sandbox = "off"` (0.124.0): on a host with `[run] sandbox = "box"` this
+   * ritual runs with no box and no mask, and skips the box check gate. No
+   * effect on an `off` or `mask` host. The operator sets it in a reviewed
+   * commit; the box keeps `.darius.toml` read-only, so a run cannot add it.
+   */
+  sandbox?: "off";
   /** The `[policies.*]` name, for display. */
   policyName?: string;
   /** `may_extra` and `hold_extra` as written, when either is. Already in `policy`; for display only. */
@@ -270,7 +283,7 @@ const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
   "follow_up_may", "follow_up_may_extra", "follow_up", "candle_deliver",
-  "net", "reach", "writable", "ssh_agent", "tools",
+  "net", "reach", "writable", "ssh_agent", "tools", "sandbox",
 ]);
 /** The channels a candle notice can use. `src/core/alerts.ts` sends on them; `candle light --deliver` takes the same words. */
 const CANDLE_CHANNELS: readonly string[] = ["push", "email"];
@@ -548,10 +561,14 @@ function textList(table: Table, key: string, fail: (expected: string) => Error, 
 }
 
 /** The box keys of a ritual table (0.117.0), each checked; absent keys stay absent. */
-function decodeBoxKeys(table: Table, at: { section: string; source: Source }): Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools"> {
+function decodeBoxKeys(table: Table, at: { section: string; source: Source }): Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools" | "sandbox"> {
   const failFor = (key: string) => (expected: string): Error => new Error(`${where(at.source.file, at.source.lines[`${at.section}.${key}`])}: ${key} must be ${expected}`);
-  const keys: Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools"> = {};
-  const { net, ssh_agent: sshAgent } = table;
+  const keys: Pick<RepoRitual, "net" | "reach" | "writable" | "sshAgent" | "tools" | "sandbox"> = {};
+  const { net, ssh_agent: sshAgent, sandbox } = table;
+  if (sandbox !== undefined) {
+    if (sandbox !== "off") throw failFor("sandbox")(`"off", got ${JSON.stringify(sandbox)}; leave the key out to use the host's sandbox`);
+    keys.sandbox = "off";
+  }
   if (net !== undefined) {
     const known = BOX_NETS.find((value) => value === net);
     if (known === undefined) throw failFor("net")(`"public", "listed" or "none", got ${JSON.stringify(net)}`);
