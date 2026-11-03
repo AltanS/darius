@@ -305,7 +305,8 @@ box with a fake harness and no paid call. `run-due` runs it by itself when there
 
 ```bash
 darius box check [--json]    # prove the box on this host; exit 0 pass, 1 fail
-darius box status [--json]   # the newest check per host and darius version
+darius box status [--json]   # the newest check per host and darius version, and tainted work dirs
+darius box clear <work dir>  # remove a work dir's taint after you looked at it
 ```
 
 The box needs bwrap and a kernel with `dev.tty.legacy_tiocsti = 0` (for a herdr tab). `darius doctor`
@@ -768,7 +769,7 @@ the full reference.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
 - `darius candle light|list|show|answer|accept|blow-out|relight`: problems that need you, kept by key. See [Candles](#candles).
 - `darius email status|set|test`: the email channel of candle notices. See [Candles by email](#candles-by-email).
-- `darius box check [--json] | status [--json]`: prove the run sandbox on this host with a fake harness and no paid call, or list the newest box check per host and darius version. See [Unattended runs: the box](#unattended-runs-the-box).
+- `darius box check [--json] | status [--json] | clear <work dir>`: prove the run sandbox on this host with a fake harness and no paid call, list the newest box check per host and darius version and this host's tainted work dirs, or remove a work dir's taint. A work dir is tainted when the box could not settle what a run left there; every run there skips as `box-broken` until you clear it. See [Unattended runs: the box](#unattended-runs-the-box).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.

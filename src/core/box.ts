@@ -23,7 +23,7 @@
  *   --bind <agent socket>                   only with a reach entry on port 22, or ssh_agent
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
  *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
- *   --ro-bind <each .git, .claude and bare repo below the work dir> on itself
+ *   --ro-bind <each .git, .claude, .darius.toml and bare repo below the work dir> on itself
  *   --ro-bind <run dir>, --bind gate.jsonl, --bind scratch/
  *   --ro-bind ~/.claude, then the adapter's `boxWritable` (--bind, or
  *     --ro-bind over a writable one), a --tmpfs on each `boxScratch`, the per-run copies
@@ -41,18 +41,20 @@
  * linked worktree), so a run can neither write it nor rename or remove it: a
  * mount point cannot be moved. Every `.git` below the work dir (a nested
  * repo, a submodule, a worktree file) gets the same mount, and so does every
- * `.claude` folder below it and every folder git takes for a bare repo
+ * `.claude` folder and `.darius.toml` below it and every folder git takes for a bare repo
  * (`HEAD`, and `objects` and `refs`, or `commondir`). The scan does not look
- * for more of them inside one it found, nor in `node_modules`. A work dir
+ * for more of them inside one it found, nor in `node_modules` or a mount point. A work dir
  * with no `.git` (a subfolder of a repo) gets an empty read-only one, so the
  * run cannot make one with its own config; git skips an empty `.git` and
  * finds the repo above. A run in the box cannot commit; that is the choice
  * Codex's workspace-write sandbox makes too.
  *
  * A run can still make a new one of those below the top. After the run,
- * with the box closed, the runner walks the work dir again and renames each
- * new one (`checkPlants` in src/core/box-host.ts): `.git` and `.claude` get
- * `.darius-blocked` on their name, a bare repo's `HEAD` too.
+ * with the box reaped, the runner walks the work dir again and renames each
+ * guard whose (dev, ino) the launch did not record (`checkPlants` in
+ * src/core/box-work.ts): `.git`, `.claude` and `.darius.toml` get
+ * `.darius-blocked-<random>` on their name, a bare repo's `HEAD` too. What it
+ * cannot settle taints the work dir (src/core/box-taint.ts).
  *
  * Refused, with an error that names the path: a writable extra inside or
  * holding the store, the darius config or app dir, `~/.claude`, `~/.ssh`,
@@ -61,8 +63,8 @@
  * entry of the runner), `/`, `/proc`, `/sys`, `/dev`, `/run` or `/tmp`;
  * `~/.cache` itself; a work dir that holds any of those. Each is checked as
  * written and with its symlinks resolved. A `.git`, `.claude` or
- * `.darius.toml` in the work dir that is a link is refused, and so is a `.git`
- * or `.claude` link anywhere below it: a link in a writable folder can be swapped, and
+ * `.darius.toml` in the work dir that is a link is refused, and so is a `.git`,
+ * `.claude` or `.darius.toml` link anywhere below it: a link in a writable folder can be swapped, and
  * bwrap mounts on its target. A socket scan that hit its time cap is refused
  * too: a socket it did not reach would connect.
  */
@@ -85,7 +87,8 @@ export type BoxNet = (typeof BOX_NETS)[number];
 
 /**
  * The tools a ritual's `tools` may name. `gh` unmasks `~/.config/gh/hosts.yml`
- * for that ritual, `aws` (0.124.0) `~/.aws/credentials`. Only the mount changes:
+ * for that ritual, `aws` (0.124.0) `~/.aws/credentials`, `~/.aws/sso/cache` and
+ * `~/.aws/cli/cache`. Only the mount changes:
  * the gate's secret rule (`secretPaths` in src/harness/gate.ts) still refuses
  * the run's own Read of the file, so only a child process (gh, the AWS SDK)
  * sees it.
@@ -95,6 +98,13 @@ export type BoxTool = (typeof BOX_TOOLS)[number];
 
 /** The secret file each tool leaves visible, by the end of its listed path. */
 const TOOL_FILES = { gh: "/gh/hosts.yml", aws: "/.aws/credentials" } as const satisfies Readonly<Record<BoxTool, string>>;
+
+/**
+ * The folders the box masks besides the gate's list, by tool: `aws` keeps its
+ * short-lived credentials there (SSO tokens, assumed-role keys). `tools =
+ * ["aws"]` leaves them visible with the credentials file.
+ */
+const TOOL_DIRS = { gh: [], aws: [".aws/sso/cache", ".aws/cli/cache"] } as const satisfies Readonly<Record<BoxTool, readonly string[]>>;
 
 /** Where the box dir shows inside the box. */
 export const BOX_MOUNT = "/run/darius";
@@ -387,8 +397,16 @@ export interface WorkScan {
   claudeLinks: readonly string[];
   /** Every folder below the top that git takes for a bare repo: a `HEAD` entry, and `objects` and `refs`, or `commondir`. */
   bares: readonly string[];
-  /** The work dir itself looks like a bare repo. It is not bound: it is the work dir. */
+  /** Every `.darius.toml` below the top: a nested checkout's marker. */
+  markers: readonly string[];
+  /** Every `.darius.toml` below the top that is a link. */
+  markerLinks: readonly string[];
+  /** The work dir itself looks like a bare repo: the plan refuses it, a mount there would cover the whole work dir. */
   isBareTop: boolean;
+  /** The `dev:ino` of every guard found, and of the top `.darius.toml`: the post-run check knows each one wherever it is then. */
+  ids: readonly string[];
+  /** Why the scan cannot vouch for the work dir: a folder it cannot read, a name that is not UTF-8. The plan refuses the run. */
+  problems: readonly string[];
   timedOut: boolean;
   capMs: number;
 }
@@ -750,6 +768,7 @@ function maskArgs(input: BoxPlanInput, keep: MaskKeep): string[] {
     ...facts.secrets.dirs,
     ...facts.secrets.files.filter((path) => !shown.some((end) => normalize(path).endsWith(end))),
     join(facts.home, ".npmrc"),
+    ...BOX_TOOLS.filter((tool) => !(input.ritual.tools ?? []).includes(tool)).flatMap((tool) => TOOL_DIRS[tool].map((dir) => join(facts.home, dir))),
   ];
   const dirs = new Set<string>();
   const files = new Set<string>();
@@ -892,13 +911,15 @@ const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
  * Every `.git`, `.claude` folder and bare repo below the top (the work dir
  * scan finds them) is bound read-only on itself too, after the top guards. A
  * `.git` or `.claude` link anywhere is refused. What a run makes there anew
- * is renamed after the run (`checkPlants` in src/core/box-host.ts).
+ * is renamed after the run (`checkPlants` in src/core/box-work.ts).
  */
 function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creates: BoxCreate[] }): string[] {
   const linked = facts.work.gitLinks[0];
   if (linked !== undefined) throw new BoxError(`${linked} is a link; the box keeps a .git read-only only as a plain folder or file, so this run does not start`);
   const claudeLink = facts.work.claudeLinks[0];
   if (claudeLink !== undefined) throw new BoxError(`${claudeLink} is a link; the box keeps a .claude read-only only as a plain folder, so this run does not start`);
+  const markerLink = facts.work.markerLinks[0];
+  if (markerLink !== undefined) throw new BoxError(`${markerLink} is a link; the box keeps a .darius.toml read-only only as a plain file, so this run does not start`);
   const top = WORK_GUARDS.flatMap((name) => {
     const path = join(work.real, name);
     const entry = facts.entry(path);
@@ -910,7 +931,7 @@ function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creat
     if (entry.link !== undefined || normalize(entry.real) !== path) throw new BoxError(`${path} is a link; the box keeps it read-only only as a plain folder or file, so this run does not start`);
     return ["--ro-bind", path, path];
   });
-  const nested = [...facts.work.gits, ...facts.work.claudes, ...facts.work.bares].flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
+  const nested = [...facts.work.gits, ...facts.work.claudes, ...facts.work.markers, ...facts.work.bares].flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
   return [...top, ...nested];
 }
 
@@ -921,6 +942,9 @@ function seconds(capMs: number): string {
 /** A scan that hit its cap may have missed a socket, so the run does not start. */
 function checkScans(facts: BoxFacts): void {
   if (facts.sockets.timedOut) throw new BoxError("the socket list /proc/net/unix cannot be read; a socket the box does not mask would connect from the box, so this run does not start");
+  const problem = facts.work.problems[0];
+  if (problem !== undefined) throw new BoxError(`${problem}; the work dir scan cannot vouch for what is there, so this run does not start`);
+  if (facts.work.isBareTop) throw new BoxError("the work dir itself looks like a bare git repo (HEAD, and objects and refs, or commondir); the box cannot keep it read-only, so this run does not start");
   if (facts.work.timedOut) throw new BoxError(`the socket scan of the work dir stopped within the ${seconds(facts.work.capMs)} s cap; a socket, .git, .claude or bare repo it did not reach would stay open in the box, so this run does not start`);
 }
 

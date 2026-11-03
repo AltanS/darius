@@ -20,9 +20,17 @@
  *   5. run the body: preflight, then the launch
  *   6. close the proxy and the broker, and remove the box dir, also when the
  *      body throws or the run timed out
- *   7. walk the work dir again and rename each `.git`, `.claude` and bare
- *      repo the run made (`checkPlants` in src/core/box-host.ts); skipped
- *      when the work dir was read-only
+ *   7. reap the box: SIGKILL every process of it that is still alive (a
+ *      herdr tab keeps the harness after the run ends), and wait for them
+ *      (src/core/box-reap.ts)
+ *   8. walk the work dir again and rename each `.git`, `.claude`,
+ *      `.darius.toml` and bare repo the run made (`checkPlants` in
+ *      src/core/box-work.ts); skipped when the work dir was read-only. What
+ *      it cannot settle, or a box that would not die, taints the work dir
+ *      (src/core/box-taint.ts)
+ *
+ * A tainted work dir runs nothing, boxed or not: every launch there is
+ * `box-broken` until `darius box clear <work dir>`.
  *
  * When a step of 1 to 4 fails, nothing is started, and the caller skips the
  * ritual as `box-broken` with the reason. The reason is in the run's run.log.
@@ -38,7 +46,10 @@ import { join } from "node:path";
 
 import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys, type WorkScan } from "../core/box.ts";
 import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles } from "../core/box-files.ts";
-import { checkPlants, hostBoxFacts, PLANT_CHECK_CAP_MS, prepareBox, removeBox, type PlantCheck } from "../core/box-host.ts";
+import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
+import { reapBox, REAP_WAIT_MS, type Reaped } from "../core/box-reap.ts";
+import { addTaint, taintReason, taintsOn } from "../core/box-taint.ts";
+import { checkPlants, PLANT_CHECK_CAP_MS, realOr, type PlantCheck } from "../core/box-work.ts";
 import { findSystemdRun, randomTag, scopePrefix, scopeUnit } from "../core/box-scope.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
 import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
@@ -81,8 +92,9 @@ export interface SandboxRequest {
   /** The profile's `env_pass`. */
   envPass: readonly string[];
   /**
-   * Called once after the post-run check when it blocked a plant or did not
-   * finish, so the caller can record it on the run. A throw is caught.
+   * Called once after the post-run check when it blocked a plant or left
+   * something unresolved, so the caller can record it on the run. A throw is
+   * caught.
    */
   onPlants?: (check: PlantCheck) => void;
 }
@@ -117,6 +129,8 @@ export interface OpenBox {
   darius: string;
   /** The launch's scan of the work dir: the post-run check renames what is new. */
   work: WorkScan;
+  /** The box dir, which the outer bwrap names: the reap finds the box by it. */
+  boxDir: string;
   /** The box shows the work dir read-only: no post-run check. */
   isWorkReadOnly: boolean;
   close(): Promise<void>;
@@ -340,6 +354,7 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     darius: filesInput.darius,
     work: facts.work,
     isWorkReadOnly: plan.isWorkReadOnly,
+    boxDir: plan.boxDir,
     close,
   };
 }
@@ -393,9 +408,17 @@ function brokenReason(cause: unknown): string {
  * Runs `body` in this host's sandbox for one launch. For `box`, the box is
  * built first and closed after the body, also when it throws. A box that
  * cannot be built runs nothing: the result is `boxBroken`, and the reason is
- * in run.log. `mask` and `off` never give `boxBroken`.
+ * in run.log. A tainted work dir gives `boxBroken` in every mode, `mask`
+ * and `off` too; otherwise those two never do.
  */
 export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox: RunSandbox) => Promise<T>): Promise<SandboxEnd<T>> {
+  // A tainted work dir runs nothing, in or out of the box: what a run left there may run code unboxed.
+  const taint = taintsOn(realOr(request.workDir))[0];
+  if (taint !== undefined) {
+    const reason = taintReason(taint);
+    appendRunLog(request.run.dir, `box: this run does not start: ${reason}`);
+    return { boxBroken: reason };
+  }
   const sandbox = resolveSandbox();
   if (sandbox.state !== "box") {
     noteSandbox(request.run.dir, sandbox);
@@ -418,31 +441,56 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
   try {
     return { ran: await body({ state: "box", prefix: box.prefix, gatePrefix: box.gatePrefix, isBox: true, isRitualOff: false }) };
   } finally {
+    const reaped = await reapQuietly(box.boxDir);
     await box.close();
-    afterBox(request, box);
+    afterBox(request, box, reaped);
+  }
+}
+
+/** The reap, never a throw: a reap that fails counts as a box that would not die. */
+async function reapQuietly(boxDir: string): Promise<Reaped> {
+  try {
+    return await reapBox({ boxDir });
+  } catch (cause) {
+    return { killed: 0, left: [], error: brokenReason(cause) };
   }
 }
 
 /**
- * The post-run check, after the box is closed: renames what the run planted
- * in its work dir, writes one run.log line per plant, and hands the check to
- * `onPlants`. It never throws: the run's own end matters more.
+ * The post-run check, after the box is reaped and closed: renames what the
+ * run planted in its work dir and writes one run.log line per plant. What it
+ * cannot settle, and a box that would not die, taint the work dir. Hands the
+ * check to `onPlants`. It never throws: the run's own end matters more.
  */
-function afterBox(request: SandboxRequest, box: Pick<OpenBox, "work" | "isWorkReadOnly">): void {
-  if (box.isWorkReadOnly) return;
-  let check: PlantCheck;
-  try {
-    check = checkPlants({ workDir: request.workDir, launch: box.work, run: request.run.id, capMs: PLANT_CHECK_CAP_MS });
-  } catch (cause) {
-    appendRunLog(request.run.dir, `box: the post-run check of the work dir failed: ${brokenReason(cause)}`);
-    check = { blocked: [], isUnfinished: true };
+function afterBox(request: SandboxRequest, box: Pick<OpenBox, "work" | "isWorkReadOnly">, reaped: Reaped): void {
+  const unresolved: string[] = [];
+  if (reaped.left.length > 0) unresolved.push(`the box would not die within ${String(REAP_WAIT_MS / 1000)} s (pids ${reaped.left.join(", ")})`);
+  if (reaped.error !== undefined) unresolved.push(`the box could not be reaped: ${reaped.error}`);
+  let check: PlantCheck = { blocked: [], unresolved: [], isUnfinished: false };
+  if (!box.isWorkReadOnly) {
+    try {
+      check = checkPlants({ workDir: request.workDir, launch: box.work, capMs: PLANT_CHECK_CAP_MS });
+    } catch (cause) {
+      check = { blocked: [], unresolved: [`the post-run check failed: ${brokenReason(cause)}`], isUnfinished: false };
+    }
   }
-  for (const line of check.blocked) appendRunLog(request.run.dir, `box: blocked ${line}`);
-  if (check.isUnfinished) appendRunLog(request.run.dir, `box: the post-run check of the work dir did not finish within ${String(PLANT_CHECK_CAP_MS / 1000)} s; a .git, .claude or bare repo it did not reach stays`);
-  if (check.blocked.length === 0 && !check.isUnfinished) return;
+  const all: PlantCheck = { ...check, unresolved: [...unresolved, ...check.unresolved] };
+  for (const line of all.blocked) appendRunLog(request.run.dir, `box: blocked ${line}`);
+  for (const line of all.unresolved) appendRunLog(request.run.dir, `box: unresolved, the work dir is tainted: ${line}`);
+  if (all.unresolved.length > 0) taintWorkDir(request, all.unresolved);
+  if (all.blocked.length === 0 && all.unresolved.length === 0) return;
   try {
-    request.onPlants?.(check);
+    request.onPlants?.(all);
   } catch (cause) {
     appendRunLog(request.run.dir, `box: the post-run check could not be recorded on the run: ${brokenReason(cause)}`);
+  }
+}
+
+/** Taints the run's work dir on this host. A taint that cannot be written is a run.log line: there is nothing else to tell. */
+function taintWorkDir(request: SandboxRequest, reasons: readonly string[]): void {
+  try {
+    addTaint({ workDir: realOr(request.workDir), run: request.run.id, project: request.run.project, at: new Date().toISOString(), reasons: [...reasons] });
+  } catch (cause) {
+    appendRunLog(request.run.dir, `box: the taint could not be written: ${brokenReason(cause)}`);
   }
 }

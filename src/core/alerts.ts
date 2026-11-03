@@ -55,6 +55,7 @@ import { existsSync } from "node:fs";
 
 import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
+import { RUN_BOX_BLOCKED } from "./box-work.ts";
 import { emailStatus, readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { collectCandles, CANDLE_LIT, candleOpenings, type CandleOpened, type CandleOpening } from "./candle-index.ts";
@@ -173,6 +174,22 @@ function completedAlert(project: Project, line: LedgerLine, run: string): Alert 
   };
 }
 
+/**
+ * A boxed run left what the box could not settle in its work dir, so that
+ * work dir is tainted on its host (src/core/box-taint.ts): every run there
+ * skips as box-broken. The alert names no path: the host's box status does.
+ */
+function taintAlert(project: string, line: LedgerLine, run: string): Alert {
+  const slug = slugOf(line.item);
+  return {
+    key: `line:${line.id}`,
+    tag: `line:${line.id}`,
+    title: `${slug} tainted its work dir on ${line.host}`,
+    body: `${project}: the box could not settle what the run left in its work dir. Runs there skip as box-broken. Look: darius box status, on ${line.host}.`,
+    url: runPath(project, run),
+  };
+}
+
 function checkAlert(line: LedgerLine): Alert | null {
   const { harness, version, outcome } = line;
   if (!isText(harness) || !isText(version) || !isText(outcome) || outcome === "passed") return null;
@@ -242,6 +259,7 @@ export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], si
     let alert: Alert | null = null;
     if (line.type === "run.held" && run !== undefined) alert = heldAlert(project.name, line, run);
     else if (line.type === "run.completed" && run !== undefined) alert = completedAlert(project, line, run);
+    else if (line.type === RUN_BOX_BLOCKED && line.unresolved === true && run !== undefined) alert = taintAlert(project.name, line, run);
     else if (line.type === "harness.checked" && project.name === GLOBAL_PROJECT) alert = checkAlert(line);
     else if (line.type === SNAPSHOT_FAILED && project.name === GLOBAL_PROJECT) alert = failedBackupAlert(line);
     if (alert !== null) alerts.push(alert);

@@ -80,7 +80,7 @@ import { ulid } from "../core/ulid.ts";
 import { followUpOf } from "../runner/follow-up.ts";
 import { parseAnswerFlags } from "../core/answers.ts";
 import { acknowledgeEarlier, acknowledgeRun, answerRun, answerRunMany } from "../runner/hold.ts";
-import { RUN_BOX_BLOCKED } from "../runner/run-due.ts";
+import { RUN_BOX_BLOCKED } from "../core/box-work.ts";
 import { askBroker, boxBrokerSocket } from "../core/box-broker.ts";
 import { clean } from "../tui/text.ts";
 import { readStdin } from "./args.ts";
@@ -603,7 +603,7 @@ function describeResult(result: RunResult): string[] {
 }
 
 /**
- * What the box's post-run check blocked in the run's work dir (src/core/box-host.ts
+ * What the box's post-run check blocked in the run's work dir (src/core/box-work.ts
  * `checkPlants`), from its `run.box-blocked` lines; both keys absent when it
  * blocked nothing and finished.
  */
@@ -613,6 +613,8 @@ function boxBlocked(lines: readonly LedgerLine[]): BoxBlocked {
   const box: BoxBlocked = {};
   if (blocked.length > 0) box.box_blocked = blocked;
   if (checks.some((line) => line.unfinished === true)) box.box_check_unfinished = true;
+  const unresolved = checks.flatMap((line) => (line.unresolved === true && Array.isArray(line.reasons) ? line.reasons.filter((entry) => isText(entry)) : []));
+  if (unresolved.length > 0) box.box_unresolved = unresolved;
   return box;
 }
 
@@ -620,6 +622,8 @@ function boxBlocked(lines: readonly LedgerLine[]): BoxBlocked {
 interface BoxBlocked {
   box_blocked?: string[];
   box_check_unfinished?: true;
+  /** What the check could not settle: the work dir is tainted on the run's host. */
+  box_unresolved?: string[];
 }
 
 /** Store text reaches a terminal here: control characters go, as in the TUI, so a run cannot send escapes. */
@@ -657,7 +661,9 @@ function runShow(args: ParsedArgs): number {
   if (isText(skillHash)) show(`skill hash ${skillHash.slice(0, 12)}`);
   if (sandbox === "off") show("sandbox off for this ritual by the marker: the run did not start in the box");
   for (const line of box.box_blocked ?? []) show(`box blocked: ${line}`);
-  if (box.box_check_unfinished === true) show("box check: the post-run check of the work dir did not finish; a plant it did not reach stays");
+  if (box.box_check_unfinished === true) show("box check: the post-run check of the work dir did not finish");
+  for (const line of box.box_unresolved ?? []) show(`box unresolved: ${line}`);
+  if (box.box_unresolved !== undefined) show("box: the work dir is tainted on the run's host; see darius box status there");
   if (result !== null) for (const line of describeResult(result)) show(line);
   show(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;

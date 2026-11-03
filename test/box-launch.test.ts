@@ -26,13 +26,16 @@ import { ritualCommand } from "../src/cli/ritual.ts";
 import type { Command } from "../src/cli/registry.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { runDueCommand } from "../src/cli/run-due.ts";
-import { appendLine, readLedger } from "../src/core/ledger.ts";
+import { appendLine, hostId, readLedger } from "../src/core/ledger.ts";
+import { ledgerAlerts } from "../src/core/alerts.ts";
 import { writeLink } from "../src/core/links.ts";
 import type { LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { claudeHarness } from "../src/harness/claude.ts";
 import { clearStaleBox, webPorts, withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
+import { boxCommand } from "../src/cli/box.ts";
+import { addTaint, clearTaint } from "../src/core/box-taint.ts";
 import { runDue } from "../src/runner/run-due.ts";
 import { maskLine, TAB_TERM } from "../src/surface/herdr.ts";
 import { boxStack } from "../src/runner/box-check.ts";
@@ -136,6 +139,10 @@ case "\${FAKE_CLAUDE_MODE:-complete}" in
       | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
   hold) darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" >/dev/null ;;
   sleep) trap '' TERM; sleep 29.3 ;;
+  plant-bad-name)
+    mkdir -p "$(printf '\\377')/.git"
+    printf 'planted\\n\`\`\`darius-result\\n{"v":1,"status":"ok","summary":"planted"}\\n\`\`\`\\n' \\
+      | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
   plant)
     mkdir -p sub/.git && printf '[core]\\n\\tfsmonitor = "touch /tmp/pwned"\\n' > sub/.git/config
     printf 'planted\\n\`\`\`darius-result\\n{"v":1,"status":"ok","summary":"planted"}\\n\`\`\`\\n' \\
@@ -528,7 +535,7 @@ test("withRunSandbox: after the box is closed it renames what the body planted i
   const work = join(SANDBOX, "bx-plant-work");
   mkdirSync(join(work, "old", ".git"), { recursive: true });
   writeFileSync(join(work, "old", ".git", "config"), "[core]\n");
-  const checks: { blocked: string[]; isUnfinished: boolean; isBoxGone: boolean }[] = [];
+  const checks: { blocked: string[]; unresolved: string[]; isBoxGone: boolean }[] = [];
   const boxDir = join(RUNTIME, "darius-box", base.run.id);
   const req: SandboxRequest = { ...base, workDir: work, isReport: false, onPlants: (check) => checks.push({ ...check, isBoxGone: !existsSync(boxDir) }) };
   const end = await withRunSandbox(req, async () => {
@@ -541,14 +548,14 @@ test("withRunSandbox: after the box is closed it renames what the body planted i
   assert.deepEqual(end, { ran: "ran" });
   assert.equal(checks.length, 1, "onPlants is called once");
   assert.equal(checks[0]?.isBoxGone, true, "the check runs after the box is closed");
-  assert.deepEqual([...(checks[0]?.blocked ?? [])].toSorted(), [
-    `${join(work, "sub", ".claude")}, a .claude made in the run, .claude renamed to .claude.darius-blocked`,
-    `${join(work, "sub", ".git")}, a .git made in the run, .git renamed to .git.darius-blocked`,
-  ]);
-  assert.ok(existsSync(join(work, "sub", ".git.darius-blocked", "config")) && !existsSync(join(work, "sub", ".git")));
+  assert.deepEqual(checks[0]?.unresolved, []);
+  const blocked = [...(checks[0]?.blocked ?? [])].toSorted();
+  assert.match(blocked[0] ?? "", new RegExp(`^${join(work, "sub", ".claude")}, a \\.claude made in the run, \\.claude renamed to \\.claude\\.darius-blocked-[0-9a-f]{8}$`, "u"));
+  assert.match(blocked[1] ?? "", new RegExp(`^${join(work, "sub", ".git")}, a \\.git made in the run, \\.git renamed to \\.git\\.darius-blocked-[0-9a-f]{8}$`, "u"));
+  assert.ok(!existsSync(join(work, "sub", ".git")) && readdirSync(join(work, "sub")).some((name) => name.startsWith(".git.darius-blocked-")));
   assert.ok(existsSync(join(work, "old", ".git", "config")), "a repo that was there at launch stays");
   const log = readFileSync(join(req.run.dir, "run.log"), "utf8");
-  assert.match(log, /box: blocked \S*\/sub\/\.git, a \.git made in the run, \.git renamed to \.git\.darius-blocked/u);
+  assert.match(log, /box: blocked \S*\/sub\/\.git, a \.git made in the run, \.git renamed to \.git\.darius-blocked-/u);
 
   // Report mode: the work dir was read-only, so there is no check.
   mkdirSync(join(work, "late", ".git"), { recursive: true });
@@ -576,8 +583,9 @@ test("an act run that plants a nested repo: the runner renames it, and run show 
     const { entry, stdout } = await runDueJson(project);
     assert.equal(entry?.end, "complete", stdout);
     assertBoxedAndClosed();
-    const line = `${join(dir, "sub", ".git")}, a .git made in the run, .git renamed to .git.darius-blocked`;
-    assert.ok(existsSync(join(dir, "sub", ".git.darius-blocked", "config")) && !existsSync(join(dir, "sub", ".git")));
+    const blockedName = readdirSync(join(dir, "sub")).find((name) => /^\.git\.darius-blocked-[0-9a-f]{8}$/u.test(name)) ?? "";
+    const line = `${join(dir, "sub", ".git")}, a .git made in the run, .git renamed to ${blockedName}`;
+    assert.ok(existsSync(join(dir, "sub", blockedName, "config")) && !existsSync(join(dir, "sub", ".git")));
     const recorded = linesOf(project, "run.box-blocked");
     assert.equal(recorded.length, 1);
     assert.deepEqual(recorded[0]?.blocked, [line]);
@@ -587,9 +595,86 @@ test("an act run that plants a nested repo: the runner renames it, and run show 
     const json = JSON.parse((await runCli(runCommand, ["show", entry?.run ?? "", "--project", project, "--json"])).stdout);
     assert.deepEqual(json.box_blocked, [line]);
     assert.equal(json.box_check_unfinished, undefined);
+    assert.equal(json.box_unresolved, undefined);
     assert.equal(json.phase, "closed", "the record line does not change the run's phase");
   } finally {
     delete process.env.FAKE_CLAUDE_MODE;
+  }
+});
+
+test("F1: what the check cannot settle taints the work dir: every later launch there skips as box-broken, boxed, on an off host and with sandbox = \"off\", until darius box clear", async () => {
+  fresh();
+  const project = "bx-taint";
+  const dir = linkedCheckout(project);
+  seedRitual(project, ACT_POLICY);
+  process.env.FAKE_CLAUDE_MODE = "plant-bad-name";
+  try {
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.end, "complete", stdout);
+    const recorded = linesOf(project, "run.box-blocked");
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0]?.unresolved, true);
+    assert.deepEqual(recorded[0]?.reasons, [`${dir} holds a name that is not valid UTF-8`]);
+    const tainted = JSON.parse(readFileSync(join(process.env.DARIUS_STATE_DIR ?? "", "box", "tainted.json"), "utf8"));
+    assert.equal(tainted.tainted[0]?.workDir, dir);
+    assert.equal(tainted.tainted[0]?.run, entry?.run);
+    const shown = JSON.parse((await runCli(runCommand, ["show", entry?.run ?? "", "--project", project, "--json"])).stdout);
+    assert.deepEqual(shown.box_unresolved, [`${dir} holds a name that is not valid UTF-8`]);
+    const alerts = ledgerAlerts(openProject(project), readLedger(openProject(project)), "", hostId()).filter((alert) => alert.title.includes("tainted"));
+    assert.equal(alerts.length, 1, "the taint goes out as an alert");
+    assert.match(alerts[0]?.title ?? "", /^heartbeat tainted its work dir on /u);
+    assert.equal(alerts[0]?.body.includes(dir), false, "the alert names no path");
+
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    for (const mode of ["box", "off"]) {
+      process.env.DARIUS_RUN_SANDBOX = mode;
+      fresh();
+      const again = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+      const skip = entryOf(again.stdout);
+      assert.deepEqual([skip?.action, skip?.reason], ["skipped", "box-broken"], `${mode}: ${again.stdout}`);
+      assert.ok(skip?.detail?.includes(`run ${entry?.run ?? ""}`) && skip.detail.includes(`darius box clear ${dir}`), skip?.detail);
+      assert.equal(launches().length, 0, "no harness starts");
+    }
+    process.env.DARIUS_RUN_SANDBOX = "box";
+
+    const status = await runCli(boxCommand, ["status", "--json"]);
+    assert.equal(JSON.parse(status.stdout).tainted[0]?.workDir, dir);
+    assert.match((await runCli(boxCommand, ["status"])).stdout, new RegExp(`! tainted ${dir}: run ${entry?.run ?? ""}`, "u"));
+    process.env.DARIUS_RUN = "01JSOMERUN";
+    try {
+      assert.equal((await runCli(boxCommand, ["clear", dir])).code, 1, "a run cannot clear a taint");
+    } finally {
+      delete process.env.DARIUS_RUN;
+    }
+    const cleared = await runCli(boxCommand, ["clear", dir]);
+    assert.equal(cleared.code, 0, cleared.stderr);
+    assert.match(cleared.stdout, new RegExp(`cleared the taint of ${dir}: run ${entry?.run ?? ""}`, "u"));
+    assert.equal((await runCli(boxCommand, ["clear", dir])).code, 1, "nothing left to clear");
+    rmSync(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0xff])]), { recursive: true, force: true });
+    const after = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+    assert.equal(entryOf(after.stdout)?.end, "complete", after.stdout);
+  } finally {
+    delete process.env.FAKE_CLAUDE_MODE;
+    process.env.DARIUS_RUN_SANDBOX = "box";
+  }
+});
+
+test("a taint in a folder above or below the work dir blocks it too; a ritual with sandbox = \"off\" is blocked", async () => {
+  const project = "bx-taint-off";
+  const dir = optOutCheckout(project);
+  addTaint({ workDir: join(dir, "deep"), run: "01JTAINTRUN", project: "elsewhere", at: new Date().toISOString(), reasons: ["a test"] });
+  try {
+    fresh();
+    const due = await runDueJson(project);
+    // SAFETY: run-due --json prints the batch report.
+    const rituals = (JSON.parse(due.stdout) as { projects: { rituals: Entry[] }[] }).projects[0]?.rituals ?? [];
+    for (const slug of ["unboxed", "boxed"]) {
+      const entry = rituals.find((candidate) => candidate.slug === slug);
+      assert.deepEqual([entry?.action, entry?.reason], ["skipped", "box-broken"], `${slug}: ${due.stdout}`);
+      assert.match(entry?.detail ?? "", /tainted: .*run 01JTAINTRUN \(elsewhere\)/u);
+    }
+  } finally {
+    clearTaint(join(dir, "deep"));
   }
 });
 

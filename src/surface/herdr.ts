@@ -20,6 +20,8 @@
  * than the grace time holds the run with a question naming the tab. On
  * timeout the tab is closed and the run fails as a headless one would.
  *
+ * In the box, the runner reaps the box when the run ends or holds
+ * (src/core/box-reap.ts), so the harness in the tab ends then too.
  * A finished run's tab stays open for the person, so a glance at the panes
  * shows the sign-off (0.52.0). run-due closes it (closeFinishedTabs) when a
  * newer run of the same ritual has started, or when the run ended more than

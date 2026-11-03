@@ -6,12 +6,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { procUnixPaths, scanSockets, scanWork } from "../src/core/box-host.ts";
+import { procUnixPaths, scanSockets } from "../src/core/box-host.ts";
+import { mountPoints, scanWork } from "../src/core/box-work.ts";
 import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan, type WorkScan } from "../src/core/box.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 import { decide as gateDecide, type RunPolicy } from "../src/harness/gate.ts";
@@ -30,7 +31,7 @@ const MEMORY = `${PROJECT}/memory`;
 const SCRATCH = ["shell-snapshots", "session-env", "todos", "tasks", "debug", "statsig", "file-history"].map((name) => `${HOME}/.claude/${name}`);
 
 /** A work dir scan that found nothing. */
-const NO_WORK: WorkScan = { sockets: [], gits: [], gitLinks: [], claudes: [], claudeLinks: [], bares: [], isBareTop: false, timedOut: false, capMs: 30_000 };
+const NO_WORK: WorkScan = { sockets: [], gits: [], gitLinks: [], claudes: [], claudeLinks: [], markers: [], markerLinks: [], bares: [], isBareTop: false, ids: [], problems: [], timedOut: false, capMs: 30_000 };
 
 /** A fake filesystem: path to entry. A missing path has no entry. */
 type Tree = Map<string, BoxEntry>;
@@ -264,6 +265,47 @@ test("scanWork: lists every nested .claude folder and .claude link, and every ba
     assert.equal(scan.isBareTop, false);
     for (const name of ["HEAD", "objects", "refs"]) mkdirSync(join(work, name), { recursive: true });
     assert.equal(scanWork({ workDir: work, capMs: 30_000 }).isBareTop, true, "the work dir itself looks like a bare repo");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("scanWork: a folder it cannot read and a name that is not UTF-8 are problems; a mount point is not entered", { skip: process.getuid?.() === 0 }, () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-scan-problems-")));
+  const locked = join(base, "w", "locked");
+  try {
+    const work = join(base, "w");
+    mkdirSync(join(locked, "sub"), { recursive: true });
+    mkdirSync(Buffer.concat([Buffer.from(`${work}/`), Buffer.from([0xff, 0x41])]));
+    mkdirSync(join(work, "mnt", ".git"), { recursive: true });
+    mkdirSync(join(work, "vol", ".git"), { recursive: true });
+    chmodSync(locked, 0o000);
+    const mountinfo = `36 35 98:0 / ${work}/mnt rw - tmpfs tmpfs rw\n37 35 98:0 / /other\\040dir rw - tmpfs tmpfs rw\n`;
+    const scan = scanWork({ workDir: work, capMs: 30_000, mountinfo });
+    assert.deepEqual([...scan.problems].toSorted(), [`${locked} cannot be read (EACCES)`, `${work} holds a name that is not valid UTF-8`].toSorted());
+    assert.deepEqual(scan.gits, [join(work, "vol", ".git")], "the mount point is pruned, nothing else");
+    assert.ok(mountPoints(mountinfo).has("/other dir"), "mountinfo escapes are undone");
+  } finally {
+    chmodSync(locked, 0o755);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+function idOf(path: string): string {
+  const stat = lstatSync(path);
+  return `${String(stat.dev)}:${String(stat.ino)}`;
+}
+
+test("scanWork: records a dev:ino for every guard and the top .darius.toml, and lists nested markers", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-scan-ids-")));
+  try {
+    const work = join(base, "w");
+    mkdirSync(join(work, "sub", ".git"), { recursive: true });
+    writeFileSync(join(work, ".darius.toml"), "v = 3\n");
+    writeFileSync(join(work, "sub", ".darius.toml"), "v = 3\n");
+    const scan = scanWork({ workDir: work, capMs: 30_000 });
+    assert.deepEqual(scan.markers, [join(work, "sub", ".darius.toml")]);
+    assert.deepEqual([...scan.ids].toSorted(), [idOf(join(work, "sub", ".git")), idOf(join(work, "sub", ".darius.toml")), idOf(join(work, ".darius.toml"))].toSorted());
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -569,6 +611,26 @@ test("tools = [\"aws\"] leaves ~/.aws/credentials visible, at its real path too;
   tree.set(`${HOME}/.aws/credentials`, { real: "/srv/dotfiles/aws-credentials", kind: "file", link: "/srv/dotfiles/aws-credentials" });
   const linked = boxPlan(input({ tree, ritual: { tools: ["aws"] } })).argv;
   assert.equal(has(linked, "--ro-bind", "/dev/null", "/srv/dotfiles/aws-credentials"), false, "a symlinked file is shown at its real path");
+});
+
+test("~/.aws/sso/cache and ~/.aws/cli/cache are masked, short-lived AWS credentials; tools = [\"aws\"] shows them with the credentials file", () => {
+  const tree = baseTree();
+  const caches = [".aws/sso/cache", ".aws/cli/cache"].map((name) => `${HOME}/${name}`);
+  for (const cache of caches) tree.set(cache, { real: cache, kind: "dir" });
+  const masked = boxPlan(input({ tree })).argv;
+  for (const cache of caches) assert.ok(has(masked, "--tmpfs", cache), cache);
+  const shown = boxPlan(input({ tree, ritual: { tools: ["aws"] } })).argv;
+  for (const cache of caches) assert.equal(has(shown, "--tmpfs", cache), false, cache);
+  assert.ok(has(boxPlan(input({ tree, ritual: { tools: ["gh"] } })).argv, "--tmpfs", `${HOME}/.aws/sso/cache`), "gh does not show the AWS caches");
+});
+
+test("a nested .darius.toml is bound read-only like a nested .git, a link to one is refused; a scan problem or a work dir that looks like a bare repo refuses the run", () => {
+  const work: WorkScan = { ...NO_WORK, markers: [`${WORK}/sub/.darius.toml`] };
+  const { argv } = boxPlan(input({ work }));
+  assert.ok(at(argv, "--ro-bind", `${WORK}/sub/.darius.toml`, `${WORK}/sub/.darius.toml`) > at(argv, "--bind", WORK, WORK));
+  assert.throws(() => boxPlan(input({ work: { ...work, markerLinks: [`${WORK}/x/.darius.toml`] } })), /x\/\.darius\.toml is a link/u);
+  assert.throws(() => boxPlan(input({ work: { ...NO_WORK, problems: [`${WORK}/odd holds a name that is not valid UTF-8`] } })), (cause: Error) => cause instanceof BoxError && /odd holds a name that is not valid UTF-8; the work dir scan cannot vouch/u.test(cause.message));
+  assert.throws(() => boxPlan(input({ work: { ...NO_WORK, isBareTop: true } })), (cause: Error) => cause instanceof BoxError && /the work dir itself looks like a bare git repo/u.test(cause.message));
 });
 
 test("tools never unmask darius's own key: a remote.credentials at ~/.aws/credentials stays masked", () => {

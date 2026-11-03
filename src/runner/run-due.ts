@@ -75,7 +75,7 @@ import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } 
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
 import type { RitualBoxKeys } from "../core/box.ts";
-import type { PlantCheck } from "../core/box-host.ts";
+import { RUN_BOX_BLOCKED, type PlantCheck } from "../core/box-work.ts";
 import { appendRunLog, isBoxChosen } from "../core/sandbox.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
@@ -932,8 +932,6 @@ function sandboxRequest(ctx: ProjectContext, target: RunTarget, prepared: Prepar
   };
 }
 
-/** The ledger type of the post-run check's record on a run: what it blocked, and whether it finished. */
-export const RUN_BOX_BLOCKED = "run.box-blocked";
 
 /**
  * Records the post-run check on the run (`run show` prints it). A run that
@@ -945,6 +943,11 @@ function recordPlants(ctx: ProjectContext, run: string, check: PlantCheck): void
     if (item === undefined) return;
     const line: LedgerLineInput = { who: ctx.options.who, type: RUN_BOX_BLOCKED, item, run, blocked: check.blocked };
     if (check.isUnfinished) line.unfinished = true;
+    // The work dir is tainted on this host now (src/core/box-taint.ts); the alert says so.
+    if (check.unresolved.length > 0) {
+      line.unresolved = true;
+      line.reasons = check.unresolved;
+    }
     appendLine(ctx.project, line);
   });
 }

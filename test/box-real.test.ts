@@ -708,21 +708,22 @@ test("real bwrap: a work dir in a subfolder of a repo gets an empty read-only .g
   assert.throws(() => boxPlan({ ...planInput, facts: hostBoxFacts({ workDir: sub }) }), /odd\/\.git is a link/u);
 });
 
-test("real bwrap: a run that makes a new nested repo with its own config gets it renamed after the launch; a nested repo from before stays and is read-only", { skip: SKIP, timeout: 120_000 }, async (t) => {
-  const tree = makeTree();
-  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
-  if (git(tree.base, "--version").code !== 0) {
-    t.skip("git is not on PATH");
-    return;
-  }
-  boxedRunEnv(tree);
-  const repo = join(tree.home, "plant-repo");
+/** A work dir repo, its run dir, and the sandbox request of a launch there. */
+interface PlantSetup {
+  repo: string;
+  runDir: string;
+  request: SandboxRequest;
+}
+
+/** A work dir repo in the fake home with a nested repo `old`, and a sandbox request for it. */
+function plantSetup(tree: Tree, run: string): PlantSetup {
+  const repo = join(tree.home, `repo-${run}`);
   assert.equal(git(tree.base, "init", "-q", repo).code, 0);
   assert.equal(git(tree.base, "init", "-q", join(repo, "old")).code, 0);
-  const runDir = join(tree.store, "acme", "runs", "r-plant");
+  const runDir = join(tree.store, "acme", "runs", run);
   put(join(runDir, "policy.json"), '{"v":1}\n');
   const request: SandboxRequest = {
-    run: { id: "r-plant", dir: runDir, policy: join(runDir, "policy.json"), project: "acme", who: "claude:r-plant" },
+    run: { id: run, dir: runDir, policy: join(runDir, "policy.json"), project: "acme", who: `claude:${run}` },
     workDir: repo,
     isReport: false,
     hasTty: false,
@@ -730,25 +731,91 @@ test("real bwrap: a run that makes a new nested repo with its own config gets it
     harness: claudeHarness,
     envPass: [],
   };
+  return { repo, runDir, request };
+}
+
+/** The one `<name>.darius-blocked-<8 hex>` next to `path`, or undefined. */
+function blockedNext(path: string): string | undefined {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dir = path.slice(0, path.lastIndexOf("/"));
+  const found = readdirSync(dir).find((entry) => entry.startsWith(`${name}.darius-blocked-`));
+  return found === undefined ? undefined : join(dir, found);
+}
+
+test("real bwrap: a new nested repo is renamed after the launch; F2 a run that moves a known repo's parent and plants in its place gets the plant renamed, not the moved repo; F3 a new bare repo does not hide a .git in it", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const { repo, runDir, request } = plantSetup(tree, "r-plant");
+  const pwned = join(tree.base, "pwned");
+  const config = `printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = "touch ${pwned}"\\n'`;
   const script = [
     "mkdir -p sub/.git/objects sub/.git/refs",
     "printf 'ref: refs/heads/main\\n' > sub/.git/HEAD",
-    `printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = "touch ${join(tree.base, "pwned")}"\\n' > sub/.git/config`,
+    `${config} > sub/.git/config`,
     "if printf x >> old/.git/config 2>/dev/null; then echo old-writable; else echo old-refused; fi",
+    // F2: the parent of a read-only mount can be renamed; a new old/.git takes its place.
+    "mv old old-moved && echo moved",
+    `mkdir -p old/.git && ${config} > old/.git/config`,
+    // F3: a bare repo with a .git inside it.
+    "mkdir -p src/objects src/refs src/components/.git && printf 'ref: refs/heads/main\\n' > src/HEAD",
+    `${config} > src/components/.git/config`,
   ].join("; ");
   const end = await withRunSandbox(request, async (sandbox) => runPrefixed([...(sandbox.prefix ?? []), "/bin/sh", "-c", script], repo));
   assert.ok("ran" in end, JSON.stringify(end));
   if (!("ran" in end)) return;
   assert.equal(end.ran.code, 0, end.ran.stderr);
-  assert.equal(end.ran.stdout.trim(), "old-refused", "a nested repo from before the launch is read-only in the box");
-  assert.equal(existsSync(join(repo, "sub", ".git")), false, "the planted .git is renamed after the launch");
-  assert.match(readFileSync(join(repo, "sub", ".git.darius-blocked", "config"), "utf8"), /fsmonitor/u);
-  assert.equal(existsSync(join(repo, "old", ".git", "HEAD")), true);
-  // git in sub now finds the outer repo, and the planted config never runs.
-  assert.equal(git(join(repo, "sub"), "rev-parse", "--show-toplevel").stdout.trim(), repo);
-  git(join(repo, "sub"), "status");
-  assert.equal(existsSync(join(tree.base, "pwned")), false);
+  assert.deepEqual(end.ran.stdout.trim().split("\n"), ["old-refused", "moved"], "a nested repo from before the launch is read-only in the box, but its parent can move");
+  for (const plant of [join(repo, "sub", ".git"), join(repo, "old", ".git"), join(repo, "src", "components", ".git")]) {
+    assert.equal(existsSync(plant), false, `${plant} is renamed after the launch`);
+    assert.match(readFileSync(join(blockedNext(plant) ?? "", "config"), "utf8"), /fsmonitor/u);
+  }
+  assert.equal(existsSync(join(repo, "src", "HEAD")), false, "the bare repo's HEAD is renamed");
+  assert.equal(existsSync(join(repo, "old-moved", ".git", "HEAD")), true, "the operator's repo, moved by the run, is untouched");
+  assert.equal(blockedNext(join(repo, "old-moved", ".git")), undefined);
+  // git in sub now finds the outer repo, and no planted config runs.
+  for (const dir of ["sub", "old", "src", join("src", "components")]) {
+    assert.equal(git(join(repo, dir), "rev-parse", "--show-toplevel").stdout.trim(), repo, dir);
+    git(join(repo, dir), "status");
+  }
+  assert.equal(existsSync(pwned), false);
   assert.match(readFileSync(join(runDir, "run.log"), "utf8"), /box: blocked \S*\/sub\/\.git, a \.git made in the run/u);
+});
+
+test("real bwrap: F5 a box that lives on after the run (as in a herdr tab) is reaped before the check: its process dies, its plant is renamed, and it plants nothing after", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const { repo, runDir, request } = plantSetup(tree, "r-live");
+  let exited: Promise<number | null> = Promise.resolve(null);
+  let pid = 0;
+  const end = await withRunSandbox(request, async (sandbox) => {
+    const [bin = "", ...args] = [...(sandbox.prefix ?? []), "/bin/sh", "-c", "while :; do mkdir -p live/.git; date +%s%N > beat; sleep 0.05; done"];
+    const child = spawn(bin, args, { cwd: repo, env: { PATH: process.env.PATH ?? "" }, stdio: "ignore" });
+    pid = child.pid ?? 0;
+    exited = new Promise((done) => child.on("exit", (code, signal) => done(code ?? (signal === null ? null : 128))));
+    for (let tries = 0; tries < 200 && !existsSync(join(repo, "beat")); tries += 1) await new Promise((wait) => setTimeout(wait, 50));
+    // The run "ends" here, as when herdr sees the ledger complete; the box is still alive.
+    return "ended";
+  });
+  assert.deepEqual(end, { ran: "ended" });
+  assert.notEqual(await Promise.race([exited, new Promise((done) => setTimeout(() => done("alive"), 2000))]), "alive", `the box (bwrap ${String(pid)}) is dead after withRunSandbox`);
+  assert.equal(existsSync(join(repo, "live", ".git")), false, "its plant is renamed");
+  assert.ok(blockedNext(join(repo, "live", ".git")) !== undefined);
+  const beat = readFileSync(join(repo, "beat"), "utf8");
+  await new Promise((wait) => setTimeout(wait, 400));
+  assert.equal(readFileSync(join(repo, "beat"), "utf8"), beat, "nothing in the box runs after the check");
+  assert.equal(existsSync(join(repo, "live", ".git")), false);
+  assert.equal(readdirSync(join(tree.runtime, "darius-box")).length, 0, "the box dir is gone");
+  assert.doesNotMatch(readFileSync(join(runDir, "run.log"), "utf8"), /tainted/u);
 });
 
 /** Runs an argv without a shell from `cwd`, with only PATH set. */
