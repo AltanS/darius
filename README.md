@@ -266,6 +266,43 @@ because it needs `credentials`. The mask is not a full boundary: a run is your o
 `systemd-run --user` or ssh to the same host starts a process outside it. See "What the gate does not
 stop" in `docs/concept.md`.
 
+### Unattended runs: the box
+
+The box is a stronger sandbox for unattended runs, built on bubblewrap. It is off by default. A run in
+the box has a read-only store and config, no host sockets, and no network of its own: its only way out
+is a proxy that darius runs outside, and it finishes or holds itself through a small broker. The
+work dir's `.git`, `.claude` and `.darius.toml` are read-only, so a run in the box cannot commit.
+Unlike the mask, the box fails closed: a box that cannot be built skips the ritual as `box-broken`.
+It is not tied to one harness. Claude Code is the first adapter.
+
+```toml
+[run]
+sandbox = "box"        # "off" (default), "mask" or "box"
+
+[box]
+ssh_agent = false      # true: every boxed run gets the ssh agent
+writable = []          # extra folders every boxed run may write; empty by default
+```
+
+`[box] writable` is empty on purpose: a shared cache holds code that later runs and shells load. Inside
+the box the cache is per run. To share one, name a folder, such as `["~/.cache/acme-tool"]`. Darius
+refuses `~/.cache` itself, the store, `~/.claude`, `~/.ssh` and other paths that start code later. An
+unknown key or a refused path is an error that names it. A ritual sets its own network and paths in
+`.darius.toml` with `net`, `reach`, `writable`, `ssh_agent` and `tools` (see `docs/marker.md`).
+
+Before the first boxed run of a darius version, `darius box check` must pass on the host. It proves the
+box with a fake harness and no paid call. `run-due` runs it by itself when there is no passing check.
+
+```bash
+darius box check [--json]    # prove the box on this host; exit 0 pass, 1 fail
+darius box status [--json]   # the newest check per host and darius version
+```
+
+The box needs bwrap and a kernel with `dev.tty.legacy_tiocsti = 0` (for a herdr tab). `darius doctor`
+warns when the box is set and bwrap fails its probe. The box does not stop public exfiltration under
+the default `net = "public"`, a host you list in `reach`, or files in the work dir that you run later.
+See "The box" and "What the box does not stop" in `docs/concept.md`.
+
 ### Backups
 
 A darius host keeps one backup of its store: a daily `tar.gz` file, called a snapshot. It stays on
@@ -721,6 +758,7 @@ the full reference.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
 - `darius candle light|list|show|answer|accept|blow-out|relight`: problems that need you, kept by key. See [Candles](#candles).
 - `darius email status|set|test`: the email channel of candle notices. See [Candles by email](#candles-by-email).
+- `darius box check [--json] | status [--json]`: prove the run sandbox on this host with a fake harness and no paid call, or list the newest box check per host and darius version. See [Unattended runs: the box](#unattended-runs-the-box).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.

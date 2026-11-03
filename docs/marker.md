@@ -129,6 +129,11 @@ host to 0.70.0 or later before you commit the first marker with `icon`.
 | `follow_up_may_extra` | no | Rules to add to the `follow_up_may` of the named policy, or of the ritual's own. |
 | `follow_up` | no | `attended` (default) or `headless` (0.69.0). How a follow-up of this ritual runs: in a herdr tab, or headless without herdr, from the CLI and from the web page. |
 | `candle_deliver` | no | The channels for the candles a run of this ritual lights (0.108.0): a list of `push` and `email`. `[]` means the app only. Absent means `["push"]`. A run cannot choose its own channel, so the marker does. `email` sends only on a host where `darius email set` has run. |
+| `net` | no | `public` (default), `listed` or `none` (0.117.0). What a run in the box may reach on the network. See "Box keys". |
+| `reach` | no | A list of `"host:port"` pairs (0.117.0). The hosts a run in the box may reach, also on a private address, and port 22. |
+| `writable` | no | A list of paths (0.117.0), `~/...` or absolute. Extra folders a run in the box may write. |
+| `ssh_agent` | no | `true` (0.117.0). Gives a run in the box the ssh agent. Leave the key out for no agent. |
+| `tools` | no | A list (0.117.0). Today only `"gh"`. Shows the `gh` login to a run in the box. |
 
 `[policies.<name>]` takes `mode` (required), `may`, `hold`, `notes`, `on_hold` and `follow_up_may`, with the same rules.
 A policy's `on_hold` applies to every ritual that names the policy.
@@ -170,6 +175,47 @@ or later before it uses `args` or a `"""` string, 0.66.0 or later before it uses
 or later before it uses `candle_deliver`:
 an older host refuses an unknown ritual key, and it cannot read a mirrored item that has `args`,
 `on_hold`, `follow_up_may`, `follow_up`, `candle_deliver` or a note with a newline.
+
+## Box keys
+
+Five ritual keys set what a run gets when the host runs it in the box (`[run] sandbox = "box"` in `config.toml`; see the README and "The box" in `docs/concept.md`). On a host with `off` or `mask` they have no effect. They are part of the ritual's definition. A run cannot change them: the box mounts `.darius.toml` read-only.
+
+| Key | Type | Default | Rule |
+|---|---|---|---|
+| `net` | `"public"`, `"listed"` or `"none"` | `"public"` | `public`: public addresses, plus `reach` and the harness hosts. `listed`: only `reach` and the harness hosts. `none`: only the harness hosts. Any other value is a marker error. |
+| `reach` | list of `"host:port"` | none | Each entry is a host name, an IPv4 address in dotted decimal, or an IPv6 address in brackets, then a port from 1 to 65535. Lower-cased and de-duplicated. A host on a private address (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7) is reachable only through an entry. Port 22 to any host needs an entry, in every `net` mode. Loopback is a marker error. A ritual with an entry also gets the ssh agent. |
+| `writable` | list of paths | none | Each path starts with `~/` or `/`, with no `..`. Added to the host's `[box] writable`. A path in or holding the darius store or config, `~/.claude`, `~/.ssh`, a shell rc file, `~/.local/bin`, git config, `/tmp`, `/run` and the like is a marker error. `~/.cache` itself is refused too: name a folder in it. A path that is a PATH entry of the runner is refused at launch. A path that does not exist is left out. |
+| `ssh_agent` | `true` | absent | Binds the ssh agent socket into the box without a `reach` entry. `false` is a marker error: leave the key out. |
+| `tools` | list of `"gh"` | none | `"gh"` leaves `~/.config/gh/hosts.yml` visible. Without it the box masks that file. Any other name is a marker error. |
+
+The harness API hosts (for Claude Code: `api.anthropic.com` and its login hosts, port 443) pass in every `net` mode, and never to a private address.
+
+```toml
+[rituals.dep-audit]
+title = "Dependency audit"
+cadence = "1w"
+skill = "dep-audit"
+net = "listed"                        # no public network
+reach = ["registry.example.com:443"]  # the one host it needs
+
+[rituals.staging-notes]
+title = "Notes from the staging host"
+cadence = "1d"
+skill = "staging-notes"
+reach = ["staging.example.com:22"]    # ssh to this host only; the agent is bound
+writable = ["~/.cache/acme-tool"]     # one folder, not ~/.cache
+
+[rituals.issue-triage]
+title = "Issue triage"
+cadence = "1d"
+skill = "issue-triage"
+tools = ["gh"]                        # the run may use the gh login
+ssh_agent = true                      # the agent, with no reach entry
+```
+
+A run in the box cannot commit, because `.git` is read-only. A ritual that changes files writes them in the work dir and hands in the diff.
+
+Every host must run 0.117.0 or later before a marker uses these keys: an older host refuses the unknown keys. Host-wide settings live in `config.toml` under `[box]` (see the README).
 
 ## Factor shared rules
 

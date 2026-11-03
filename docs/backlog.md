@@ -55,6 +55,10 @@ The candle design note (2026-11-01) left these out on purpose. Candles shipped i
 What the gate and the mask cannot do (concept, "What the gate does not stop").
 
 - A full boundary for runs: a separate Unix user for runs, and a broker that writes the store for them. This is a design decision for the operator, not a feature to pick up by default. It costs a second user on every host, a new daemon that every write verb goes through, a second login for the harness, and every checkout readable and writable by that user. It is the only thing that stops a hostile run. A token in the web page does not help, because a run can fetch the page.
+- Vigil sweep Commands in the box. A vigil checks private hosts, so a sweep in the box needs its own `reach`. Today the sweep runs outside the box.
+- Git commits from a boxed run. `.git` is read-only in the box, so a run cannot commit. The options are a broker verb that commits for the run after a check of the diff, or an opt-in per ritual that leaves `.git` writable. Either one weakens the `.git` guard, so it needs its own decision.
+- A separate Unix user for runs stays a note. The box blocks writes, sockets and the network without it. The user would still add a real identity boundary, at the cost named above.
+- Harness adapters beyond Claude Code (Codex, opencode, pi) need three fields before they run in the box: `boxWritable` (the login and session paths that persist), `boxScratch` (the per-run folders that must be empty) and `boxHosts` (the API hosts for every `net` mode). `boxCopies` and `boxEnv` too. Without them a ritual that names such a harness cannot be boxed.
 - S3 bucket versioning, as protection against a run that deletes data. A delete keeps the older version, so the bucket survives what the mask does not stop.
 - A Tailscale ACL as the cross-host step: a run host reaches only the ports it needs on other hosts, so a run on one host cannot call the web API of another.
 
