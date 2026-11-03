@@ -14,7 +14,8 @@
  *
  * The flow per run: find or create the workspace `darius-runs`, create a tab
  * in the working dir with the run variables in its env, start the harness
- * in the tab's root pane, type the first message, then watch the ledger.
+ * in the tab's root pane, type the first message and check that it landed
+ * (sendFirstMessage), then watch the ledger.
  * The run ends when the ledger shows it completed or held. An agent that
  * waits for input (blocked at an approval, or idle after a turn) for longer
  * than the grace time holds the run with a question naming the tab. On
@@ -53,7 +54,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JsonValue } from "../core/model.ts";
@@ -69,6 +70,12 @@ export const DEFAULT_POLL_MS = 3_000;
 const SHELL_READY_TIMEOUT_MS = 30_000;
 const SHELL_READY_RETRY_MS = 500;
 export const DEFAULT_WAIT_GRACE_MS = 10 * 60_000;
+/** How long one sent prompt is watched for a sign that it landed. */
+export const DEFAULT_CONFIRM_MS = 30_000;
+/** An agent that stays idle this long after a send, with no other sign, did not get the prompt. */
+export const DEFAULT_IDLE_RESEND_MS = 20_000;
+/** A prompt that did not land is sent again at most this many times. */
+const MAX_RESENDS = 2;
 /** Where a run records its tab, so the next batch can close it. */
 const TAB_FILE = "herdr.json";
 
@@ -191,6 +198,10 @@ export interface HerdrPlan {
   timeoutMs: number;
   pollMs: number;
   graceMs: number;
+  /** How long one sent prompt is watched for a sign that it landed (0.124.1). */
+  confirmMs: number;
+  /** How long the agent may stay idle after a send before the prompt is sent again (0.124.1). */
+  idleMs: number;
   /** The argv of the sandbox to run the harness in (src/core/sandbox.ts), when it is masked or in the box. */
   sandbox?: readonly string[] | undefined;
   /**
@@ -412,6 +423,70 @@ async function waitUntilReady(plan: HerdrPlan, name: string, started: number): P
   }
 }
 
+/** The size of the run's gate log; it grows when a tool call reaches the hook, so the agent got its prompt. */
+function gateLogSize(runDir: string): number {
+  const file = join(runDir, "gate.jsonl");
+  return existsSync(file) ? statSync(file).size : 0;
+}
+
+function showMs(ms: number): string {
+  return ms >= 1_000 ? `${String(Math.round(ms / 1_000))} s` : `${String(ms)} ms`;
+}
+
+type ConfirmEnd = { sign: "confirmed" | "idle" | "blocked" | "unsure" } | { sign: "ended"; end: WatchEnd };
+
+/**
+ * Looks for a sign that the prompt just sent landed (0.124.1): the agent
+ * worked, the gate log grew, or the run already has a protocol line.
+ * "idle" is an agent that stayed idle for `plan.idleMs` with no sign,
+ * "blocked" one that shows a dialog, "unsure" a window that ended with
+ * neither (herdr said done or unknown), so the normal watch takes over.
+ */
+async function confirmPrompt(plan: HerdrPlan, name: string, gateBefore: number, started: number): Promise<ConfirmEnd> {
+  const sentAt = Date.now();
+  let idleSince: number | undefined;
+  for (;;) {
+    if (plan.phase() !== "running" || gateLogSize(plan.runDir) > gateBefore) return { sign: "confirmed" };
+    const state = await agentState(plan, name);
+    if (state === "working") return { sign: "confirmed" };
+    if (state === "gone") return { sign: "unsure" };
+    if (state === "blocked") return { sign: "blocked" };
+    const now = Date.now();
+    if (now - started > plan.timeoutMs) return { sign: "ended", end: { timedOut: true, note: "the run timed out before the first message landed" } };
+    idleSince = state === "idle" ? (idleSince ?? now) : undefined;
+    if (idleSince !== undefined && now - idleSince >= plan.idleMs) return { sign: "idle" };
+    if (now - sentAt >= plan.confirmMs) return { sign: "unsure" };
+    await sleep(plan.pollMs);
+  }
+}
+
+/**
+ * Sends the first message and checks that it landed (0.124.1). `agent start`
+ * can return before Claude Code draws its folder trust dialog, and a prompt
+ * typed into the dialog is lost. A prompt that did not land is sent again
+ * when the agent is idle with no sign of work, and, after a dialog, once the
+ * dialog is answered (the same grace hold as at startup). At most
+ * MAX_RESENDS resends; after that the normal watch and its grace hold take
+ * over. Each resend leaves a line in the run's log.
+ */
+async function sendFirstMessage(plan: HerdrPlan, name: string, started: number): Promise<ReadyEnd> {
+  const gateBefore = gateLogSize(plan.runDir);
+  await call(plan.target, ["agent", "prompt", name, plan.message]);
+  for (let resends = 0; ; resends += 1) {
+    const outcome = await confirmPrompt(plan, name, gateBefore, started);
+    if (outcome.sign === "ended") return { ready: false, end: outcome.end };
+    if (outcome.sign === "confirmed" || outcome.sign === "unsure" || resends >= MAX_RESENDS) return { ready: true };
+    if (outcome.sign === "blocked") {
+      const ready = await waitUntilReady(plan, name, started);
+      if (!ready.ready) return ready;
+      if (plan.phase() !== "running" || gateLogSize(plan.runDir) > gateBefore) return { ready: true };
+    }
+    const why = outcome.sign === "blocked" ? "a dialog was up" : `the agent stayed idle for ${showMs(plan.idleMs)} with no sign of work`;
+    appendRunLog(plan.runDir, `herdr: the first message did not land (${why}); sending it again (resend ${String(resends + 1)} of ${String(MAX_RESENDS)})`);
+    await call(plan.target, ["agent", "prompt", name, plan.message]);
+  }
+}
+
 /** Closes the tab of a box launch that cannot prove its box, and ends the launch as `boxBroken`. */
 async function closeBroken(plan: HerdrPlan, tab: string, started: number, reason: string): Promise<LaunchResult> {
   await runHerdr(plan.target, ["tab", "close", tab]);
@@ -446,7 +521,11 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
         return ended(started, ready.end);
       }
     }
-    await call(plan.target, ["agent", "prompt", name, plan.message]);
+    const sent = await sendFirstMessage(plan, name, started);
+    if (!sent.ready) {
+      if (sent.end.timedOut) await runHerdr(plan.target, ["tab", "close", tab]);
+      return ended(started, sent.end);
+    }
   } catch (cause) {
     if (tab !== undefined) await runHerdr(plan.target, ["tab", "close", tab]);
     return ended(started, { note: "the harness did not start", spawnError: errorMessage(cause) });

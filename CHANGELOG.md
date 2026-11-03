@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.124.1] - 2026-11-03
+
+### Fixed
+
+- In a herdr tab, the first message no longer gets lost in Claude Code's folder trust dialog. `herdr agent start` can return before the dialog is drawn, and the message typed into it was dropped. Then the run sat idle until the grace hold. Now darius checks that the message landed: the agent works, the gate log grows, or the run has a protocol line. If a dialog is up, darius waits until it is answered, as at startup, and sends the message again. If the agent stays idle for 20 s with no sign of work, darius sends it again. It resends at most twice and writes one run.log line for each resend. After that the normal watch and its grace hold apply. The times can be set with `DARIUS_HERDR_CONFIRM_MS` and `DARIUS_HERDR_IDLE_RESEND_MS`.
+
 ## [0.124.0] - 2026-11-03
 
 ### Added

@@ -1365,7 +1365,7 @@ test("herdr surface: a tab in darius-runs, the harness started with its interact
   assert.equal(existsSync(join(openProject(project).root, "runs", run, "herdr.json")), false);
 });
 
-test("herdr surface: an agent that waits for input past the grace time holds the run with a question naming the tab", async () => {
+test("herdr surface: an agent blocked right after the first message holds the run with a question naming the tab (0.124.1: it counts as a dialog)", async () => {
   await addProfile("rd-watch-idle", ["--surface", "herdr"]);
   const project = "rd-herdr-idle";
   seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-watch-idle" } });
@@ -1375,7 +1375,7 @@ test("herdr surface: an agent that waits for input past the grace time holds the
   assert.equal(entry?.end, "held", JSON.stringify(report));
   const held = linesOf(project, "run.held");
   assert.equal(held.length, 1);
-  assert.match(JSON.stringify(held[0]?.questions), /the agent waits for input in herdr tab \\"heartbeat [0-9a-z]{6}\\" \(blocked/u);
+  assert.match(JSON.stringify(held[0]?.questions), /the harness waits at a startup dialog in herdr tab \\"heartbeat [0-9a-z]{6}\\"/u);
   assert.equal(held[0]?.who, `herdr:${entry?.run ?? ""}`);
 });
 

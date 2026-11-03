@@ -89,7 +89,7 @@ import { allowsSubagents } from "../harness/gate.ts";
 import { resolveProfile, type RepoProfiles, type Resolution } from "../harness/profile.ts";
 import { errorMessage } from "../runtime.ts";
 import { launchHeadless, type ChildEnv, type LaunchResult } from "../surface/headless.ts";
-import { closeFinishedTabs, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE, type TabRun } from "../surface/herdr.ts";
+import { closeFinishedTabs, DEFAULT_CONFIRM_MS, DEFAULT_IDLE_RESEND_MS, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE, type TabRun } from "../surface/herdr.ts";
 import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
 import { boxReadiness, type BoxReadiness } from "./box-check.ts";
 import { harnessReadiness, type Readiness } from "./harness-check.ts";
@@ -795,6 +795,8 @@ function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: Prepa
     timeoutMs,
     pollMs: envNumber("DARIUS_HERDR_POLL_MS", DEFAULT_POLL_MS),
     graceMs: envNumber("DARIUS_HERDR_WAIT_GRACE_MS", DEFAULT_WAIT_GRACE_MS),
+    confirmMs: envNumber("DARIUS_HERDR_CONFIRM_MS", DEFAULT_CONFIRM_MS),
+    idleMs: envNumber("DARIUS_HERDR_IDLE_RESEND_MS", DEFAULT_IDLE_RESEND_MS),
     sandbox: sandbox.prefix,
     isBox: sandbox.isBox,
     phase: () => viewRun(readLedger(project), run).phase ?? "running",
