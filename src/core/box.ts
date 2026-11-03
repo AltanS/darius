@@ -341,14 +341,14 @@ export interface BoxFacts {
   masked: MaskedPaths;
   /** The gate's secret list, `secretPaths()` of src/harness/gate.ts. */
   secrets: SecretPaths;
-  /** The socket scan of home (`scanSockets` in src/core/box-host.ts): each socket outside the hidden folders is masked. */
+  /** The bound sockets (`scanSockets` in src/core/box-host.ts, from /proc/net/unix): each one outside the hidden folders is masked. */
   sockets: SocketScan;
   /** The scan of the work dir (`scanWork` in src/core/box-host.ts): its sockets are masked, each `.git` below its top is bound read-only. */
   work: WorkScan;
   entry(path: string): BoxEntry | undefined;
 }
 
-/** The sockets found under home. `timedOut`: the scan hit its time cap, so `found` may be short, and the plan refuses the run. */
+/** The bound sockets the box would show, from /proc/net/unix. `timedOut`: the list could not be read, and the plan refuses the run. */
 export interface SocketScan {
   found: readonly string[];
   timedOut: boolean;
@@ -874,7 +874,7 @@ function seconds(capMs: number): string {
 
 /** A scan that hit its cap may have missed a socket, so the run does not start. */
 function checkScans(facts: BoxFacts): void {
-  if (facts.sockets.timedOut) throw new BoxError(`the socket scan of ${facts.home} stopped after ${seconds(facts.sockets.capMs)} s; a socket it did not reach would connect from the box, so this run does not start`);
+  if (facts.sockets.timedOut) throw new BoxError("the socket list /proc/net/unix cannot be read; a socket the box does not mask would connect from the box, so this run does not start");
   if (facts.work.timedOut) throw new BoxError(`the socket scan of the work dir stopped within the ${seconds(facts.work.capMs)} s cap; a socket or .git it did not reach would stay open in the box, so this run does not start`);
 }
 

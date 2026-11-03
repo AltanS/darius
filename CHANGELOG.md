@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.123.1] - 2026-11-03
+
+### Fixed
+
+- The box found sockets by a walk of home, which took more than 30 s on a real home, so every boxed run failed as `box-broken`. It now reads the kernel's list of bound Unix sockets (`/proc/net/unix`) and masks each one the box would still show, also outside home and in `node_modules` and `.git`. A list that cannot be read refuses the run. The work dir walk for `.git` entries stays.
+
 ## [0.123.0] - 2026-11-03
 
 ### Changed

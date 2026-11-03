@@ -11,7 +11,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { scanSockets, scanWork } from "../src/core/box-host.ts";
+import { procUnixPaths, scanSockets, scanWork } from "../src/core/box-host.ts";
 import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan, type WorkScan } from "../src/core/box.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 
@@ -679,8 +679,8 @@ test("every scanned socket is masked behind /dev/null, last; the bound agent is 
   assert.ok(at(bound.argv, "--ro-bind", "/dev/null", `${HOME}/.config/someapp/app.sock`) > lastBind);
 });
 
-test("a socket scan of home or of the work dir that hit its cap refuses the run: a socket it missed would connect", () => {
-  assert.throws(() => boxPlan(input({ sockets: { found: [], timedOut: true, capMs: 30_000 } })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith("the socket scan of /home/op stopped after 30 s"));
+test("a socket list that cannot be read, or a work dir scan that hit its cap, refuses the run: a socket it missed would connect", () => {
+  assert.throws(() => boxPlan(input({ sockets: { found: [], timedOut: true, capMs: 30_000 } })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith("the socket list /proc/net/unix cannot be read"));
   const work: WorkScan = { sockets: [], gits: [], gitLinks: [], timedOut: true, capMs: 30_000 };
   assert.throws(() => boxPlan(input({ work })), (cause: Error) => cause instanceof BoxError && /the socket scan of the work dir stopped/u.test(cause.message));
 });
@@ -693,28 +693,45 @@ test("every socket the work dir scan found is masked behind /dev/null, after the
   for (const path of sockets) assert.ok(at(argv, "--ro-bind", "/dev/null", path) > at(argv, "--bind", WORK, WORK), path);
 });
 
-test("scanSockets: finds sockets without following links, skips pruned folders, node_modules and .git, and stops at its cap", async () => {
+test("scanSockets: lists bound sockets from /proc/net/unix, in node_modules and .git too, and leaves out pruned folders and tmpfs roots", async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-scan-")));
   const servers: Server[] = [];
   try {
     const home = join(base, "h");
-    for (const sub of ["a/b", "node_modules/x", ".git/y", ".local/state/z", "work/w", "outside"]) mkdirSync(join(home, sub), { recursive: true });
+    for (const sub of ["a/b", "node_modules/x", ".git/y", ".local/state/z", "work/w", "rt"]) mkdirSync(join(home, sub), { recursive: true });
     mkdirSync(join(base, "elsewhere"));
-    const want = [join(home, "a", "b", "one.sock"), join(home, "top.sock")];
-    for (const path of [...want, join(home, "node_modules", "x", "n.sock"), join(home, ".git", "y", "g.sock"), join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(base, "elsewhere", "e.sock")]) {
+    const want = [join(home, "a", "b", "one.sock"), join(home, "top.sock"), join(home, "node_modules", "x", "n.sock"), join(home, ".git", "y", "g.sock")];
+    for (const path of [...want, join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock"), join(base, "elsewhere", "e.sock")]) {
       servers.push(await listenOn(path));
     }
     symlinkSync(join(base, "elsewhere"), join(home, "link"));
-    const scan = scanSockets({ home, prune: [join(home, ".local", "state"), join(home, "work")], capMs: 30_000 });
-    assert.deepEqual([...scan.found].toSorted(), want.toSorted());
+    const scan = scanSockets({ home, prune: [join(home, ".local", "state"), join(home, "work")], tmpfs: [join(home, "rt")], capMs: 30_000 });
+    // The list is host-wide: it holds the sockets above and maybe others of this host.
+    for (const path of want) assert.ok(scan.found.includes(path), path);
+    // elsewhere/ is under the tmpdir, a tmpfs root of the box, and outside home.
+    for (const path of [join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock"), join(base, "elsewhere", "e.sock")]) {
+      assert.equal(scan.found.includes(path), false, path);
+    }
+    assert.ok(scan.found.every((path) => !path.startsWith("/tmp/") || path.startsWith(`${home}/`)), "no socket under a tmpfs root outside home");
     assert.equal(scan.timedOut, false);
-    let clock = 0;
-    const late = scanSockets({ home, prune: [], capMs: 5, now: () => (clock += 10) });
-    assert.equal(late.timedOut, true);
   } finally {
     for (const server of servers) server.close();
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("procUnixPaths: absolute paths only, no abstract sockets, once each", () => {
+  const text = [
+    "Num       RefCount Protocol Flags    Type St Inode Path",
+    "0000000000000000: 00000002 00000000 00010000 0001 01 1001 /home/op/.app/a.sock",
+    "0000000000000000: 00000002 00000000 00010000 0001 01 1002 @/tmp/.X11-unix/X0",
+    "0000000000000000: 00000003 00000000 00000000 0001 03 1003 /home/op/.app/a.sock",
+    "0000000000000000: 00000003 00000000 00000000 0001 03 1004",
+    "0000000000000000: 00000002 00000000 00010000 0001 01 1005 /home/op/with space.sock",
+  ].join("\n");
+  assert.deepEqual(procUnixPaths(text), ["/home/op/.app/a.sock", "/home/op/with space.sock"]);
+  const scan = scanSockets({ home: "/home/op", prune: [], capMs: 30_000, procNetUnix: text });
+  assert.deepEqual(scan.found, [], "paths that are not a socket now are left out");
 });
 
 function listenOn(path: string): Promise<Server> {

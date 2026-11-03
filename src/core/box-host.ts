@@ -4,7 +4,7 @@
  * The plan itself stays pure; this file is all of its filesystem access.
  */
 
-import { chmodSync, closeSync, constants, copyFileSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join, normalize } from "node:path";
 
@@ -42,19 +42,19 @@ function plainEnv(): BoxEnv {
 
 /** How long the socket scan of home and the work dir may take, together (coordinator ruling 2026-11-02). */
 export const SOCKET_SCAN_CAP_MS = 30_000;
-/** Folders the home scan never enters, wherever they are. */
-const PRUNED_NAMES: ReadonlySet<string> = new Set(["node_modules", ".git"]);
 /** Folders the work dir scan never enters, for speed: a package tree holds no live socket. */
 const WORK_PRUNED_NAMES: ReadonlySet<string> = new Set(["node_modules"]);
 
-/** What the socket scan walks and skips. */
+/** What the socket scan reads and skips. */
 export interface SocketScanInput {
   home: string;
-  /** Folders not entered: the hidden folders and the work dir, as written or real. */
+  /** Folders left out: the hidden folders and the work dir, as written or real. */
   prune: readonly string[];
+  /** More folders the box empties, such as XDG_RUNTIME_DIR. */
+  tmpfs?: readonly string[];
   capMs: number;
-  /** The clock, so a test can run out of time. */
-  now?: () => number;
+  /** The `/proc/net/unix` text, for a test. */
+  procNetUnix?: string;
 }
 
 /** The entries of `dir`, or none when it cannot be read. */
@@ -125,21 +125,55 @@ function walkSockets(input: WalkInput): Walked {
   return { found, timedOut: false };
 }
 
+/** The kernel's list of bound Unix sockets in this network namespace. */
+const PROC_NET_UNIX = "/proc/net/unix";
+/** Where the box puts a tmpfs: a socket there is gone in the box already. */
+const TMPFS_ROOTS: readonly string[] = ["/tmp", "/var/tmp", "/run", "/dev", "/proc", "/sys"];
+
+function isUnder(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
+}
+
 /**
- * Every Unix socket under home. It never enters a pruned folder,
- * `node_modules` or `.git`. It stops at the time cap and says so; the plan
- * then refuses the run (box-broken).
+ * The paths of the bound Unix sockets in a `/proc/net/unix` text: the eighth
+ * field, when it is absolute. An abstract socket (`@name`) is left out: it
+ * belongs to the network namespace, and the box has its own.
+ */
+export function procUnixPaths(text: string): string[] {
+  const paths = new Set<string>();
+  for (const line of text.split("\n").slice(1)) {
+    const fields = line.trim().split(/\s+/u);
+    const path = fields.slice(7).join(" ");
+    if (fields.length >= 8 && path.startsWith("/")) paths.add(normalize(path));
+  }
+  return [...paths];
+}
+
+/**
+ * Every bound Unix socket on this host that the box would still show: from
+ * the kernel's list (`/proc/net/unix`), not a walk, so a big home takes no
+ * time. It leaves out the tmpfs roots of the box, the pruned folders (the
+ * hidden folders, and the work dir, which `scanWork` covers) and paths that
+ * are not a socket now. A socket bound in another network namespace (a
+ * container) is not in the list; the containers' folders are hidden.
  */
 export function scanSockets(input: SocketScanInput): SocketScan {
-  const now = input.now ?? Date.now;
-  const walked = walkSockets({
-    root: input.home,
-    prunedNames: PRUNED_NAMES,
-    prune: new Set(input.prune.map((path) => normalize(path))),
-    deadline: now() + input.capMs,
-    now,
+  let text: string;
+  try {
+    text = input.procNetUnix ?? readFileSync(PROC_NET_UNIX, "utf8");
+  } catch {
+    // Without the kernel's list the box cannot know the sockets: refuse the run.
+    return { found: [], timedOut: true, capMs: input.capMs };
+  }
+  const home = normalize(input.home);
+  const pruned = [...input.prune, ...(input.tmpfs ?? [])].map((path) => normalize(path));
+  const found = procUnixPaths(text).filter((path) => {
+    // A home under a tmpfs root (a throwaway test home) is bound back into the box.
+    if (!isUnder(path, home) && TMPFS_ROOTS.some((dir) => isUnder(path, dir))) return false;
+    if (pruned.some((dir) => isUnder(path, dir))) return false;
+    return lstatOf(path)?.isSocket() === true;
   });
-  return { ...walked, capMs: input.capMs };
+  return { found, timedOut: false, capMs: input.capMs };
 }
 
 /** What the work dir scan walks. */
@@ -190,7 +224,7 @@ export function hostBoxFacts(at: { workDir: string }): BoxFacts {
   const home = homedir();
   const prune = [...hiddenHomeDirs(home), at.workDir].flatMap((path) => [path, realOr(path)]);
   const started = Date.now();
-  const sockets = scanSockets({ home, prune, capMs: SOCKET_SCAN_CAP_MS });
+  const sockets = scanSockets({ home, prune, tmpfs: [runtimeDir], capMs: SOCKET_SCAN_CAP_MS });
   const work = scanWork({ workDir: realOr(at.workDir), capMs: Math.max(0, SOCKET_SCAN_CAP_MS - (Date.now() - started)) });
   return {
     sockets,

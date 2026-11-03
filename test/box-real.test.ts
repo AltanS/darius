@@ -213,7 +213,8 @@ test("real bwrap: the box refuses store, run policy, harness settings, .git, the
   assert.equal(facts.store, STORE);
   assert.equal(facts.config, CONFIG);
   assert.equal(facts.runtimeDir, RUNTIME);
-  assert.deepEqual(facts.sockets.found, [HOME_SOCKET], "the scan finds the home socket and skips the hidden folder");
+  assert.ok(facts.sockets.found.includes(HOME_SOCKET), "the scan finds the home socket");
+  assert.equal(facts.sockets.found.includes(HIDDEN_SOCKET), false, "the scan skips the hidden folder");
   // In the fake home: /var/tmp, where the tree is, is a tmpfs in the box.
   const harness = join(HOME, "harness.cjs");
   writeFileSync(harness, HARNESS);
