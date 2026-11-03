@@ -20,6 +20,9 @@
  *   5. run the body: preflight, then the launch
  *   6. close the proxy and the broker, and remove the box dir, also when the
  *      body throws or the run timed out
+ *   7. walk the work dir again and rename each `.git`, `.claude` and bare
+ *      repo the run made (`checkPlants` in src/core/box-host.ts); skipped
+ *      when the work dir was read-only
  *
  * When a step of 1 to 4 fails, nothing is started, and the caller skips the
  * ritual as `box-broken` with the reason. The reason is in the run's run.log.
@@ -30,9 +33,9 @@ import { createConnection } from "node:net";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys } from "../core/box.ts";
+import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys, type WorkScan } from "../core/box.ts";
 import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles } from "../core/box-files.ts";
-import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
+import { checkPlants, hostBoxFacts, PLANT_CHECK_CAP_MS, prepareBox, removeBox, type PlantCheck } from "../core/box-host.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
 import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
@@ -73,6 +76,11 @@ export interface SandboxRequest {
   harness: HarnessAdapter;
   /** The profile's `env_pass`. */
   envPass: readonly string[];
+  /**
+   * Called once after the post-run check when it blocked a plant or did not
+   * finish, so the caller can record it on the run. A throw is caught.
+   */
+  onPlants?: (check: PlantCheck) => void;
 }
 
 /** The sandbox a body runs in. */
@@ -93,6 +101,10 @@ export interface OpenBox {
   policy: BoxPolicy;
   /** The darius CLI as the box sees it. */
   darius: string;
+  /** The launch's scan of the work dir: the post-run check renames what is new. */
+  work: WorkScan;
+  /** The box shows the work dir read-only: no post-run check. */
+  isWorkReadOnly: boolean;
   close(): Promise<void>;
 }
 
@@ -264,7 +276,7 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     await close();
     throw cause;
   }
-  return { prefix: plan.argv, policy, darius: filesInput.darius, close };
+  return { prefix: plan.argv, policy, darius: filesInput.darius, work: facts.work, isWorkReadOnly: plan.isWorkReadOnly, close };
 }
 
 /**
@@ -336,5 +348,30 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
     return { ran: await body({ state: "box", prefix: box.prefix, isBox: true }) };
   } finally {
     await box.close();
+    afterBox(request, box);
+  }
+}
+
+/**
+ * The post-run check, after the box is closed: renames what the run planted
+ * in its work dir, writes one run.log line per plant, and hands the check to
+ * `onPlants`. It never throws: the run's own end matters more.
+ */
+function afterBox(request: SandboxRequest, box: Pick<OpenBox, "work" | "isWorkReadOnly">): void {
+  if (box.isWorkReadOnly) return;
+  let check: PlantCheck;
+  try {
+    check = checkPlants({ workDir: request.workDir, launch: box.work, run: request.run.id, capMs: PLANT_CHECK_CAP_MS });
+  } catch (cause) {
+    appendRunLog(request.run.dir, `box: the post-run check of the work dir failed: ${brokenReason(cause)}`);
+    check = { blocked: [], isUnfinished: true };
+  }
+  for (const line of check.blocked) appendRunLog(request.run.dir, `box: blocked ${line}`);
+  if (check.isUnfinished) appendRunLog(request.run.dir, `box: the post-run check of the work dir did not finish within ${String(PLANT_CHECK_CAP_MS / 1000)} s; a .git, .claude or bare repo it did not reach stays`);
+  if (check.blocked.length === 0 && !check.isUnfinished) return;
+  try {
+    request.onPlants?.(check);
+  } catch (cause) {
+    appendRunLog(request.run.dir, `box: the post-run check could not be recorded on the run: ${brokenReason(cause)}`);
   }
 }

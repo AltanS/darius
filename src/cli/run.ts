@@ -80,6 +80,7 @@ import { ulid } from "../core/ulid.ts";
 import { followUpOf } from "../runner/follow-up.ts";
 import { parseAnswerFlags } from "../core/answers.ts";
 import { acknowledgeEarlier, acknowledgeRun, answerRun, answerRunMany } from "../runner/hold.ts";
+import { RUN_BOX_BLOCKED } from "../runner/run-due.ts";
 import { askBroker, boxBrokerSocket } from "../core/box-broker.ts";
 import { clean } from "../tui/text.ts";
 import { readStdin } from "./args.ts";
@@ -601,6 +602,26 @@ function describeResult(result: RunResult): string[] {
   return lines;
 }
 
+/**
+ * What the box's post-run check blocked in the run's work dir (src/core/box-host.ts
+ * `checkPlants`), from its `run.box-blocked` lines; both keys absent when it
+ * blocked nothing and finished.
+ */
+function boxBlocked(lines: readonly LedgerLine[]): BoxBlocked {
+  const checks = lines.filter((line) => line.type === RUN_BOX_BLOCKED);
+  const blocked = checks.flatMap((line) => (Array.isArray(line.blocked) ? line.blocked.filter((entry) => isText(entry)) : []));
+  const box: BoxBlocked = {};
+  if (blocked.length > 0) box.box_blocked = blocked;
+  if (checks.some((line) => line.unfinished === true)) box.box_check_unfinished = true;
+  return box;
+}
+
+/** The keys `run show --json` adds for the box's post-run check. */
+interface BoxBlocked {
+  box_blocked?: string[];
+  box_check_unfinished?: true;
+}
+
 /** Store text reaches a terminal here: control characters go, as in the TUI, so a run cannot send escapes. */
 function show(text: string): void {
   console.log(clean(text));
@@ -623,13 +644,16 @@ function runShow(args: ParsedArgs): number {
   const findings = isText(sha) ? getBlobText(project, sha) : null;
   const result = storedResult(project, completed);
   const skillHash = lines.find((line) => line.type === "run.started")?.skill_hash;
+  const box = boxBlocked(lines);
   if (args.json) {
-    printJson({ project: project.name, ...row, skill_hash: isText(skillHash) ? skillHash : undefined, findings, result });
+    printJson({ project: project.name, ...row, skill_hash: isText(skillHash) ? skillHash : undefined, ...box, findings, result });
     return 0;
   }
   const outcome = row.outcome === null ? "" : ` (${row.outcome})`;
   show(`${row.run}  ${row.item}  ${row.phase}${outcome}  started ${row.startedAt}${followUpTag(row, (run) => run)}`);
   if (isText(skillHash)) show(`skill hash ${skillHash.slice(0, 12)}`);
+  for (const line of box.box_blocked ?? []) show(`box blocked: ${line}`);
+  if (box.box_check_unfinished === true) show("box check: the post-run check of the work dir did not finish; a plant it did not reach stays");
   if (result !== null) for (const line of describeResult(result)) show(line);
   show(findings === null ? "no findings" : `\n${findings.trimEnd()}`);
   return 0;
