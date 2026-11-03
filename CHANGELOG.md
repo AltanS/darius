@@ -10,13 +10,20 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `darius box check` has a new `slice` step. It passes when a run lands in the slice. It skips when no slice is set or the scope does not start.
 - `tools = ["aws"]` leaves `~/.aws/credentials` visible to that ritual's run in the box. The gate still refuses the run's own read of the file.
 - A ritual can say `sandbox = "off"` in the committed marker. On a host with `[run] sandbox = "box"`, it then runs with no box and no mask, and skips the box check gate. No other value is valid. `darius ritual list`, `darius run show` and the run.log show the opt-out.
-- The box guards nested `.claude` folders and bare git repos in the work dir, as it guards nested `.git` folders: each one is read-only in the box. A `.claude` link below the top stops the run as `box-broken`.
-- After a boxed run, with the box closed, the runner checks the work dir again. Each new `.git`, `.claude` or bare repo is renamed, so a later git or Claude Code session outside the box does not trust it: `.git` becomes `.git.darius-blocked`, `.claude` becomes `.claude.darius-blocked`, and a bare repo's `HEAD` becomes `HEAD.darius-blocked`. Each rename is a run.log line, a `run.box-blocked` ledger line, and a line in `darius run show`. A check that does not finish within 30 s says so. Report-mode runs skip the check. Not covered: `node_modules`, and a plant made in a herdr tab after the run ends.
+- The box guards nested `.claude` folders, nested `.darius.toml` files and bare git repos in the work dir, as it guards nested `.git` folders: each one is read-only in the box. A link to one below the top stops the run as `box-broken`. A work dir that looks like a bare git repo, or that the launch scan cannot fully read, refuses the run.
+- After a boxed run, the runner reaps the box: it kills every process of the run's box and waits up to 5 s, so nothing can race the next step. In a herdr tab the harness ends when the run ends or holds; the tab and its scrollback stay.
+- Then the runner checks the work dir again. It knows each guard from the launch by its device and inode numbers, looks inside new guards, and renames the deepest first. Each new `.git`, `.claude`, `.darius.toml` or bare repo is renamed with `.darius-blocked-<8 hex>` (a bare repo's `HEAD`), so a later git or Claude Code session outside the box does not trust it. Each rename is a run.log line, a `run.box-blocked` ledger line, and a line in `darius run show`. Report-mode runs skip the check. Not covered: `node_modules`.
+- When the check cannot settle what a run left (a failed rename after a `chmod u+rwx` retry, an unreadable folder, a name that is not valid UTF-8, the 30 s cap, a box that will not die), the work dir is tainted on that host. Every later run there skips as `box-broken`, boxed or not, until `darius box clear <work dir>`. `darius box status` lists taints, and an alert says when one is made.
+- The box masks `~/.aws/sso/cache` and `~/.aws/cli/cache`. `tools = ["aws"]` shows them.
 
 ### Changed
 
 - A `reach` entry gives a boxed run the ssh agent only on port 22. Use `ssh_agent = true` for ssh on another port.
 - Every host must run 0.124.0 or later before a marker uses `"aws"` in `tools`, or `sandbox`.
+
+### Fixed
+
+- `nix flake check` passes again. The VM web test follows the `/` redirect. The sandbox suite gets the web packages through a pinned fixed-output derivation, runs without colour, and skips or stubs what a sandbox lacks (no `.git`, no `pnpm`, a tmpdir outside `/tmp`).
 
 ## [0.123.1] - 2026-11-03
 
