@@ -806,3 +806,94 @@ test("sandbox = \"off\" has no effect on a mask or off host: the run gets the ho
     process.env.DARIUS_RUN_SANDBOX = "box";
   }
 });
+
+// --- [box] slice: a systemd user scope per launch (0.124.0) -----------------------------
+
+const SCOPE_LOG = join(LOGS, "systemd-run");
+/** A fake systemd-run: logs its flags, fails on FAKE_SYSTEMD_FAIL=1, else runs what follows `--`, as --scope does. */
+const FAKE_SYSTEMD_RUN = script(
+  "fake-systemd-run",
+  `flags=""
+while [ $# -gt 0 ] && [ "$1" != -- ]; do flags="$flags $1"; shift; done
+shift
+printf 'scope%s :: %s\\n' "$flags" "$*" >> "${SCOPE_LOG}"
+[ "\${FAKE_SYSTEMD_FAIL:-}" = 1 ] && { echo "Failed to connect to user scope bus via local transport" >&2; exit 1; }
+exec "$@"
+`,
+);
+
+function scopeLines(): string[] {
+  return existsSync(SCOPE_LOG) ? readFileSync(SCOPE_LOG, "utf8").trim().split("\n") : [];
+}
+
+async function withSlice<T>(systemdRun: string, fn: () => Promise<T>): Promise<T> {
+  const config = join(process.env.DARIUS_CONFIG_DIR ?? "", "config.toml");
+  writeFileSync(config, '[box]\nslice = "agents.slice"\n');
+  process.env.DARIUS_SYSTEMD_RUN = systemdRun;
+  rmSync(SCOPE_LOG, { force: true });
+  try {
+    return await fn();
+  } finally {
+    rmSync(config, { force: true });
+    delete process.env.DARIUS_SYSTEMD_RUN;
+    delete process.env.FAKE_SYSTEMD_FAIL;
+  }
+}
+
+test("[box] slice: the layout probe, the gate preflight and the harness each start in their own scope of the slice", async () => {
+  await withSlice(FAKE_SYSTEMD_RUN, async () => {
+    fresh();
+    const project = "bx-slice";
+    seedRitual(project);
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.end, "complete", stdout);
+    const run = entry?.run ?? "";
+    const scopes = scopeLines();
+    assert.equal(scopes.length, 3, scopes.join("\n"));
+    const short = run.slice(-8).toLowerCase();
+    for (const line of scopes) {
+      assert.match(line, new RegExp(`^scope --user --scope -q --slice=agents\\.slice --unit=darius-run-${short}-[0-9a-f]{6} --collect :: \\S*fake-bwrap `, "u"), line);
+    }
+    assert.match(scopes[0] ?? "", / -- true$/u, "the layout probe runs through the scope");
+    assert.ok(scopes.some((line) => line.includes(" policy-check ") && line.endsWith("--preflight")), "the preflight");
+    assert.ok(scopes.some((line) => line.includes(`${FAKE_CLAUDE} -p `)), "the harness");
+    const units = scopes.map((line) => /--unit=(\S+)/u.exec(line)?.[1]);
+    assert.equal(new Set(units).size, 3, `one unit per launch: ${units.join(", ")}`);
+    assertBoxedAndClosed();
+    assert.equal(runLog(project, run), "", "a scope that starts needs no line");
+  });
+});
+
+test("[box] slice fails open: a scope that does not start, or no systemd-run, runs the box without it and says so once", async () => {
+  for (const [project, systemdRun, fail, why] of [
+    ["bx-slice-fail", FAKE_SYSTEMD_RUN, "1", /the layout probe failed in a scope of agents\.slice and passed without it \(exit 1: Failed to connect to user scope bus/u],
+    ["bx-slice-none", join(SANDBOX, "no-systemd-run"), "", /systemd-run is not on PATH/u],
+  ] as const) {
+    await withSlice(systemdRun, async () => {
+      fresh();
+      if (fail !== "") process.env.FAKE_SYSTEMD_FAIL = fail;
+      seedRitual(project);
+      process.env.FAKE_CLAUDE_MODE = "complete";
+      const { entry, stdout } = await runDueJson(project);
+      assert.equal(entry?.end, "complete", stdout);
+      const log = runLog(project, entry?.run ?? "");
+      assert.equal(log.match(/box: no scope in agents\.slice, so this run has no \[box\] slice limits: /gu)?.length, 1, log);
+      assert.match(log, why);
+      assert.ok(launches().some((launch) => launch.command.startsWith(`${FAKE_CLAUDE} -p `)), "the harness still runs in the box");
+      assert.ok(scopeLines().length <= 1, `only the probe tried the scope: ${scopeLines().join("\n")}`);
+      assertBoxedAndClosed();
+    });
+  }
+});
+
+test("[box] slice: a layout bwrap refuses stays box-broken, scope or not", async () => {
+  await withSlice(FAKE_SYSTEMD_RUN, async () => {
+    process.env.FAKE_BWRAP_FAIL = "layout";
+    try {
+      await assertBoxBroken("bx-slice-layout", /bwrap refused the box layout/u);
+    } finally {
+      delete process.env.FAKE_BWRAP_FAIL;
+    }
+  });
+});

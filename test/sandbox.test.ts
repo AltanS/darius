@@ -153,6 +153,27 @@ test("[box]: writable is absent by default (the plan's empty list), ssh_agent fa
   });
 });
 
+test("[box] slice: a slice name is kept; a name that does not end in .slice or holds other characters is refused with the file", () => {
+  isolatedConfig('host = "a"\n\n[box]\nslice = "agents.slice"\n', () => assert.deepEqual(loadConfig().box, { sshAgent: false, slice: "agents.slice" }));
+  isolatedConfig('host = "a"\n\n[box]\nslice = "app-agents_2:x.slice"\nwritable = []\n', () => {
+    assert.deepEqual(loadConfig().box, { sshAgent: false, slice: "app-agents_2:x.slice", writable: [] });
+  });
+  const refused: [string, RegExp][] = [
+    ['slice = "agents"', /\[box\] slice "agents" is refused: a slice name ends in \.slice/u],
+    ['slice = "agents.service"', /is refused: a slice name ends in \.slice/u],
+    ['slice = ".slice"', /is refused/u],
+    ['slice = "-.slice"', /is refused/u],
+    ['slice = "a b.slice"', /is refused/u],
+    ['slice = "a/b.slice"', /is refused/u],
+    ['slice = "a;rm.slice"', /is refused/u],
+    [`slice = "${"a".repeat(250)}.slice"`, /is longer than 255 characters/u],
+    ["slice = true", /\[box\] "slice" must be a string/u],
+  ];
+  for (const [line, why] of refused) {
+    isolatedConfig(`host = "a"\n\n[box]\n${line}\n`, () => assert.throws(() => loadConfig(), why, line));
+  }
+});
+
 test("DARIUS_RUN_SANDBOX overrides [run] sandbox for one process; another value is ignored", () => {
   isolatedConfig('host = "a"\n\n[run]\nsandbox = "mask"\n', () => {
     process.env.DARIUS_RUN_SANDBOX = "off";

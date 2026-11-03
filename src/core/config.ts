@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
 import { writableProblem, type ProtectedDirs } from "./box.ts";
+import { sliceProblem } from "./box-scope.ts";
 import { appDir, configDir, stateDir } from "./paths.ts";
 import { parseToml, type TomlValue } from "./toml.ts";
 
@@ -84,8 +85,10 @@ export interface Config {
    * path is checked at load: a path in or holding the store, the config dir,
    * `~/.claude`, `~/.ssh` or another protected path, or `~/.cache` itself, is an
    * error. The plan also refuses a path in or holding a PATH entry of the runner.
+   * `slice` (0.124.0): the systemd user slice each boxed launch starts in, as a
+   * scope of its own (src/core/box-scope.ts); absent means no scope.
    */
-  box: { writable?: readonly string[]; sshAgent: boolean };
+  box: { writable?: readonly string[]; sshAgent: boolean; slice?: string };
   /**
    * `[snapshot]`: the raw table of the local snapshots and their S3 copy
    * (src/core/snapshot-settings.ts validates it and merges it with the
@@ -189,7 +192,7 @@ function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox 
   return known;
 }
 
-const BOX_KEYS: ReadonlySet<string> = new Set(["writable", "ssh_agent"]);
+const BOX_KEYS: ReadonlySet<string> = new Set(["writable", "ssh_agent", "slice"]);
 
 /** The dirs a `writable` path is checked against on this host. */
 export function hostProtectedDirs(): ProtectedDirs {
@@ -205,15 +208,22 @@ function boxSettings(table: Record<string, TomlValue>, file: string): Config["bo
     if (!BOX_KEYS.has(key)) throw new Error(`${file}: [box] has an unknown key "${key}" (known: ${[...BOX_KEYS].join(", ")})`);
   }
   const sshAgent = optionalBoolean(table, "ssh_agent", false, "box", file);
+  const settings: Config["box"] = { sshAgent };
+  if (table.slice !== undefined) {
+    const slice = optionalString(table, "slice", "", "box", file);
+    const problem = sliceProblem(slice);
+    if (problem !== undefined) throw new Error(`${file}: [box] slice "${slice}" is refused: ${problem}`);
+    settings.slice = slice;
+  }
   const value = table.writable;
-  if (value === undefined) return { sshAgent };
+  if (value === undefined) return settings;
   if (!Array.isArray(value)) throw new Error(`${file}: [box] writable must be a list of paths: writable = ["~/.cache/my-tool"]`);
   const dirs = hostProtectedDirs();
   for (const path of value) {
     const problem = writableProblem(path, dirs);
     if (problem !== undefined) throw new Error(`${file}: [box] writable "${path}" is refused: ${problem}`);
   }
-  return { writable: [...new Set(value)], sshAgent };
+  return { ...settings, writable: [...new Set(value)] };
 }
 
 // --- allow_http rule ----------------------------------------------------------

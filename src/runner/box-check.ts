@@ -28,6 +28,11 @@
  *                          the knob fails: herdr launches run without --new-session.
  *   broker-complete        `darius run complete` inside reaches the broker, and the
  *                          run is complete in the temp store
+ *   slice                  with `[box] slice` (0.124.0): the fake harness ran in a
+ *                          `darius-run-*` scope of that slice (its /proc/self/cgroup).
+ *                          No slice set skips it. A scope that did not start skips
+ *                          it too, and never fails the check: resource limits are
+ *                          not a boundary, so a run goes on without them.
  *
  * SAFETY. Nothing is sent past the proxy: a tunnel that opens is closed at
  * once, unused. A write probe opens an existing file without truncating it
@@ -59,7 +64,7 @@ import { ulid } from "../core/ulid.ts";
 import { claudeHarness } from "../harness/claude.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
-import { openBox, type OpenBox, type SandboxRequest } from "./box-launch.ts";
+import { openBox, type BoxScope, type OpenBox, type SandboxRequest } from "./box-launch.ts";
 import { writeRunFiles } from "./launch.ts";
 
 const CHECK_PROJECT = "box-check";
@@ -87,6 +92,7 @@ export const BOX_STEPS = [
   "public-https",
   "tiocsti",
   "broker-complete",
+  "slice",
 ] as const;
 export type BoxStepName = (typeof BOX_STEPS)[number];
 
@@ -153,6 +159,14 @@ export interface Observed {
   ssh: Asked[];
   public: Asked;
   broker: { exit: number | string; stdout: string; stderr: string };
+  /** /proc/self/cgroup as the fake harness read it; "" when it could not. */
+  cgroup?: string;
+}
+
+/** The scope the fake harness ran in: the box's scope, and the unit of the harness's launch when it is on. */
+export interface ScopeSeen {
+  scope: BoxScope;
+  unit?: string;
 }
 
 /** What the steps are judged from. */
@@ -165,6 +179,8 @@ export interface StepFacts {
   hostSockets: PerSocket<boolean>;
   /** The temp store has `run.completed{outcome: complete}` for the check's run. */
   brokerCompleted: boolean;
+  /** The box's scope (`[box] slice`); absent means none. */
+  scope?: ScopeSeen;
 }
 
 // --- judging ------------------------------------------------------------------------
@@ -242,6 +258,23 @@ function judgeBroker(broker: Observed["broker"], isCompleted: boolean): BoxStep 
   return step("broker-complete", "fail", `darius run complete exited ${String(broker.exit)}${tail === "" ? "" : `: ${tail}`}`);
 }
 
+/** The cgroup path of a /proc/self/cgroup text: the cgroup v2 line `0::<path>`; undefined without one. */
+function cgroupPath(text: string): string | undefined {
+  return text.split("\n").find((line) => line.startsWith("0::"))?.slice(3).trim();
+}
+
+/** Pass when the fake harness ran in its scope unit inside the slice. Never a fail: a run without its scope goes on. */
+export function judgeSlice(seen: ScopeSeen | undefined, cgroup: string | undefined): BoxStep {
+  const scope = seen?.scope ?? { kind: "none" };
+  if (scope.kind === "none") return step("slice", "skip", "no [box] slice is set on this host");
+  if (scope.kind === "skipped") return step("slice", "skip", `no scope in ${scope.slice}, so boxed runs here go on without its limits: ${scope.reason}`);
+  const path = cgroupPath(cgroup ?? "");
+  const unit = `${seen?.unit ?? "darius-run"}.scope`;
+  const parts = path?.split("/") ?? [];
+  if (parts.includes(scope.slice) && parts.at(-1) === unit) return step("slice", "pass", `the fake harness ran in ${unit} in ${scope.slice}`);
+  return step("slice", "skip", `the scope started, but the fake harness was not in ${unit} in ${scope.slice} (cgroup ${path ?? "unknown"}); boxed runs go on without its limits`);
+}
+
 /** Every step from what the check saw. Pure. */
 export function judgeSteps(facts: StepFacts): BoxStep[] {
   const tiocsti = judgeTiocsti(facts.tiocsti);
@@ -278,6 +311,7 @@ export function judgeSteps(facts: StepFacts): BoxStep[] {
     judgePublic(observed.public),
     tiocsti,
     judgeBroker(observed.broker, facts.brokerCompleted),
+    judgeSlice(facts.scope, observed.cgroup),
   ];
 }
 
@@ -384,6 +418,7 @@ export function parseObserved(text: string): Observed | undefined {
     ssh,
     public: open,
     broker: { exit, stdout: broker.stdout, stderr: broker.stderr },
+    cgroup: isText(parsed.cgroup) ? parsed.cgroup : "",
   };
 }
 
@@ -497,6 +532,7 @@ seen.ssh = [];
 for (const target of plan.ssh) seen.ssh.push(await viaProxy(target, plan.refuseTimeoutMs));
 seen.public = await viaProxy(plan.publicTarget, plan.publicTimeoutMs);
 seen.broker = await complete();
+try { seen.cgroup = fs.readFileSync("/proc/self/cgroup", "utf8"); } catch { seen.cgroup = ""; }
 process.stdout.write(JSON.stringify(seen));
 `;
 
@@ -588,10 +624,24 @@ function fakeEnd(end: { code: number | null } | { error: Error }, seen: { stdout
   return { stdout: seen.stdout };
 }
 
+/**
+ * The fake harness's env outside the box: PATH, and what systemd-run needs to
+ * find the user manager when `[box] slice` puts a scope in front, as a run's
+ * full env has it. bwrap clears it all inside.
+ */
+function scopeEnv(): Record<string, string> {
+  const env: Record<string, string> = { PATH: process.env.PATH ?? "" };
+  for (const name of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) {
+    const value = process.env[name];
+    if (value !== undefined && value !== "") env[name] = value;
+  }
+  return env;
+}
+
 /** Runs `argv` without a shell and gives its stdout, or why it gave none. Async: the proxy and the broker run in this process. */
 async function runFake(argv: readonly string[], cwd: string, timeoutMs: number): Promise<{ stdout: string } | { none: string }> {
   const [bin = "", ...args] = argv;
-  const child = spawn(bin, args, { cwd, env: { PATH: process.env.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(bin, args, { cwd, env: scopeEnv(), stdio: ["ignore", "pipe", "pipe"] });
   const seen = { stdout: "", stderr: "", isTimedOut: false, timeoutMs };
   const timer = setTimeout(() => {
     seen.isTimedOut = true;
@@ -632,6 +682,13 @@ interface InBox {
   box: StepFacts["box"];
   observed: StepFacts["observed"];
   brokerCompleted: boolean;
+  scope?: ScopeSeen;
+}
+
+/** The scope of an open box, with the unit its harness prefix names. */
+function scopeSeen(box: OpenBox): ScopeSeen {
+  const unit = box.prefix.find((arg) => arg.startsWith("--unit="))?.slice("--unit=".length);
+  return unit === undefined ? { scope: box.scope } : { scope: box.scope, unit };
 }
 
 /** Opens the box for the check's run in the temp store, runs the fake harness, and closes the box. */
@@ -668,7 +725,7 @@ async function runInBox(input: { base: string; realStore: string; timeoutMs: num
         stores: [...new Set([stateDir(), input.realStore])],
         policy: files.policy,
         claudeSettings: join(homedir(), ".claude", "settings.json"),
-        secrets: maskedSecrets(box.prefix, isSocketPath),
+        secrets: maskedSecrets(box.layout, isSocketPath),
         sockets: HOST_SOCKETS,
         web: targets.web,
         ssh: targets.ssh,
@@ -683,7 +740,7 @@ async function runInBox(input: { base: string; realStore: string; timeoutMs: num
       const ran = await runFake([...box.prefix, runtime, script, planFile], work, input.timeoutMs);
       const observed = "none" in ran ? ran : (parseObserved(ran.stdout) ?? { none: "the fake harness printed no report" });
       const completed = readLedger(project).some((line) => line.type === "run.completed" && line.run === input.run && line.outcome === "complete");
-      return { box: { built: true }, observed, brokerCompleted: completed };
+      return { box: { built: true }, observed, brokerCompleted: completed, scope: scopeSeen(box) };
     } finally {
       await box.close();
     }
@@ -711,7 +768,9 @@ export async function runBoxCheck(input: { global: Project; who: string; timeout
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
-  const steps = judgeSteps({ box: inBox.box, observed: inBox.observed, tiocsti: readTiocsti(input.tiocstiPath), hostSockets, brokerCompleted: inBox.brokerCompleted });
+  const facts: StepFacts = { box: inBox.box, observed: inBox.observed, tiocsti: readTiocsti(input.tiocstiPath), hostSockets, brokerCompleted: inBox.brokerCompleted };
+  if (inBox.scope !== undefined) facts.scope = inBox.scope;
+  const steps = judgeSteps(facts);
   const check = boxCheckOf({ host, ...boxStack(), run }, steps);
   appendLine(input.global, boxCheckedLine(check, input.who));
   return check;

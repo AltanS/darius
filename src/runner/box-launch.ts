@@ -36,6 +36,7 @@ import { join } from "node:path";
 import { BoxError, boxPlan, parseHostPort, type HostPort, type RitualBoxKeys } from "../core/box.ts";
 import { BOX_RELAY_PORT, boxEnterPrefix, boxFiles, hostBoxFiles, writeBoxFiles } from "../core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../core/box-host.ts";
+import { findSystemdRun, randomTag, scopePrefix, scopeUnit } from "../core/box-scope.ts";
 import { startBroker, type Broker } from "../core/box-broker.ts";
 import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
@@ -81,8 +82,10 @@ export interface SandboxRequest {
 /** The sandbox a body runs in. */
 export interface RunSandbox {
   state: Sandbox["state"];
-  /** The argv in front of the harness or the gate, program first; undefined when nothing is in front. */
+  /** The argv in front of the harness, program first; undefined when nothing is in front. */
   prefix: readonly string[] | undefined;
+  /** The argv in front of the gate preflight: the same sandbox, and in the box a scope unit of its own. */
+  gatePrefix: readonly string[] | undefined;
   /** In the box: a surface that cannot prove it must end the launch, not go on. */
   isBox: boolean;
   /** The marker's `sandbox = "off"` took this launch out of the host's box (0.124.0); the run's start line records it. */
@@ -94,7 +97,13 @@ export type SandboxEnd<T> = { ran: T } | { boxBroken: string };
 
 /** One open box: the argv prefix, the proxy's policy, the darius path the box runs, and how to close it. */
 export interface OpenBox {
+  /** The harness's argv prefix: the scope when it is on, then bwrap. */
   prefix: string[];
+  /** The gate preflight's prefix: the same box, in a scope unit of its own. */
+  gatePrefix: string[];
+  /** The bwrap argv alone, with no scope in front. */
+  layout: string[];
+  scope: BoxScope;
   policy: BoxPolicy;
   /** The darius CLI as the box sees it. */
   darius: string;
@@ -179,15 +188,52 @@ export async function boxPolicy(ritual: RitualBoxKeys, harness: Pick<HarnessAdap
   };
 }
 
-/** Runs the plan's mounts with `true` instead of the command: a layout bwrap refuses fails here, before anything starts. */
-function probeLayout(prefix: readonly string[], enterLength: number): void {
-  const layout = prefix.slice(0, prefix.length - enterLength);
+/** Runs `layout` (bwrap and its mounts, up to `--`, maybe behind a scope) with `true`; why it failed, or undefined. */
+function layoutProblem(layout: readonly string[]): string | undefined {
   const [bin = "", ...args] = [...layout, "true"];
   const probe = spawnSync(bin, args, { encoding: "utf8", timeout: LAYOUT_PROBE_TIMEOUT_MS });
-  if (probe.error === undefined && probe.status === 0) return;
+  if (probe.error === undefined && probe.status === 0) return undefined;
   const stderr = (probe.stderr ?? "").trim().slice(-300);
   const why = probe.error?.message ?? `exit ${String(probe.status ?? probe.signal)}`;
-  throw new BoxError(`bwrap refused the box layout (${why}${stderr === "" ? "" : `: ${stderr}`})`);
+  return `${why}${stderr === "" ? "" : `: ${stderr}`}`;
+}
+
+/** Runs the plan's mounts with `true` instead of the command: a layout bwrap refuses fails here, before anything starts. */
+function probeLayout(layout: readonly string[]): void {
+  const problem = layoutProblem(layout);
+  if (problem !== undefined) throw new BoxError(`bwrap refused the box layout (${problem})`);
+}
+
+/** The scope a box runs in (src/core/box-scope.ts): none without `[box] slice`, on, or skipped and why. */
+export type BoxScope = { kind: "none" } | { kind: "on"; slice: string; systemdRun: string } | { kind: "skipped"; slice: string; reason: string };
+
+/**
+ * The layout probe, through a scope of `[box] slice` when one is set. A scope
+ * that cannot start fails open: no systemd-run, or a probe that fails in the
+ * scope while the plain probe passes, gives `skipped`. The plain probe still
+ * fails closed: a layout bwrap refuses throws, scope or not.
+ */
+export function probeScoped(input: { slice: string | undefined; run: string; layout: readonly string[] }): BoxScope {
+  const { slice, layout } = input;
+  if (slice === undefined) {
+    probeLayout(layout);
+    return { kind: "none" };
+  }
+  const systemdRun = findSystemdRun();
+  if (systemdRun === undefined) {
+    probeLayout(layout);
+    return { kind: "skipped", slice, reason: "systemd-run is not on PATH or in the NixOS profiles" };
+  }
+  const scoped = layoutProblem([...scopePrefix({ systemdRun, slice, unit: scopeUnit(input.run, randomTag()) }), ...layout]);
+  if (scoped === undefined) return { kind: "on", slice, systemdRun };
+  probeLayout(layout);
+  return { kind: "skipped", slice, reason: `the layout probe failed in a scope of ${slice} and passed without it (${scoped})` };
+}
+
+/** The argv in front of one launch: a fresh scope unit when the scope is on, then the box. */
+function launchPrefix(scope: BoxScope, run: string, argv: readonly string[]): string[] {
+  if (scope.kind !== "on") return [...argv];
+  return [...scopePrefix({ systemdRun: scope.systemdRun, slice: scope.slice, unit: scopeUnit(run, randomTag()) }), ...argv];
 }
 
 /** One line of the proxy's decisions in `<run dir>/net.jsonl`. Best effort: the run matters more than its log. */
@@ -235,6 +281,7 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   const policy = await boxPolicy(request.ritual, request.harness);
   let proxy: BoxProxy | undefined;
   let broker: Broker | undefined;
+  let scope: BoxScope = { kind: "none" };
   let isClosed = false;
   // Only a box dir this launch made is removed: prepareBox refuses one that is there, which a live launch owns.
   let isPrepared = false;
@@ -255,7 +302,9 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     prepareBox(plan);
     isPrepared = true;
     writeBoxFiles(plan.boxDir, boxFiles(filesInput));
-    probeLayout(plan.argv, enter.length);
+    scope = probeScoped({ slice: cfg?.box.slice, run: request.run.id, layout: plan.argv.slice(0, plan.argv.length - enter.length) });
+    // Resource limits are not a boundary: a scope that does not start fails open, and the run says so.
+    if (scope.kind === "skipped") appendRunLog(request.run.dir, `box: no scope in ${scope.slice}, so this run has no [box] slice limits: ${scope.reason}`);
     proxy = await startBoxProxy({ socketPath: join(plan.boxDir, "proxy.sock"), policy, log: netLog(request.run.dir) });
     broker = await startBroker({
       socketPath: join(plan.boxDir, "broker.sock"),
@@ -269,7 +318,8 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
     await close();
     throw cause;
   }
-  return { prefix: plan.argv, policy, darius: filesInput.darius, close };
+  const run = request.run.id;
+  return { prefix: launchPrefix(scope, run, plan.argv), gatePrefix: launchPrefix(scope, run, plan.argv), layout: plan.argv, scope, policy, darius: filesInput.darius, close };
 }
 
 /**
@@ -327,12 +377,13 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
   const sandbox = resolveSandbox();
   if (sandbox.state !== "box") {
     noteSandbox(request.run.dir, sandbox);
-    return { ran: await body({ state: sandbox.state, prefix: sandboxPrefix(sandbox), isBox: false, isRitualOff: false }) };
+    const prefix = sandboxPrefix(sandbox);
+    return { ran: await body({ state: sandbox.state, prefix, gatePrefix: prefix, isBox: false, isRitualOff: false }) };
   }
   // The operator's opt-out in the committed marker: this ritual runs as on an `off` host. The box keeps the marker read-only.
   if (request.ritual.sandbox === "off") {
     appendRunLog(request.run.dir, "box: off for this ritual by the marker");
-    return { ran: await body({ state: "off", prefix: undefined, isBox: false, isRitualOff: true }) };
+    return { ran: await body({ state: "off", prefix: undefined, gatePrefix: undefined, isBox: false, isRitualOff: true }) };
   }
   let box: OpenBox;
   try {
@@ -343,7 +394,7 @@ export async function withRunSandbox<T>(request: SandboxRequest, body: (sandbox:
     return { boxBroken: reason };
   }
   try {
-    return { ran: await body({ state: "box", prefix: box.prefix, isBox: true, isRitualOff: false }) };
+    return { ran: await body({ state: "box", prefix: box.prefix, gatePrefix: box.gatePrefix, isBox: true, isRitualOff: false }) };
   } finally {
     await box.close();
   }

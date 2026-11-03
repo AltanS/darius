@@ -46,6 +46,9 @@ export DARIUS_SYSTEMCTL="$SANDBOX/no-systemctl"
 # bubblewrap: a run in the suite starts unmasked. test/sandbox.test.ts proves the
 # mask on the real bwrap when the host has one; other tests use a fake.
 export DARIUS_BWRAP="$SANDBOX/no-bwrap"
+# systemd-run: `[box] slice` starts each boxed launch in a user scope. No test
+# may start a unit in the operator's user manager; tests that need it use a fake.
+export DARIUS_SYSTEMD_RUN="$SANDBOX/no-systemd-run"
 # The box broker (src/core/box-broker.ts): a suite run inside a box must not
 # forward run hold and run complete to the real broker socket.
 export DARIUS_BOX_BROKER="$SANDBOX/no-broker"

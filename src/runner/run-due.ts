@@ -893,7 +893,7 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
     const { harness } = target.resolution;
     // The one way to a launch: the preflight and the harness run in the same sandbox (src/runner/box-launch.ts).
     const sandboxed = await withRunSandbox(sandboxRequest(ctx, { ...target, run }, prepared), async (sandbox): Promise<{ entry: RitualEntry; isDiscarded?: true }> => {
-      const broken = preflightGate(prepared.gate, harness, prepared.env, sandbox.prefix);
+      const broken = preflightGate(prepared.gate, harness, prepared.env, sandbox.gatePrefix);
       if (broken !== undefined) return { entry: skipped(slug, "gate-broken", broken), isDiscarded: true };
       const started =
         resume === undefined

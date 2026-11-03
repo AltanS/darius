@@ -209,7 +209,7 @@ export async function runHarnessCheck(input: {
     };
     const sandboxed = await withRunSandbox(request, async (sandbox): Promise<{ broken: string } | { result: LaunchResult }> => {
       state = sandbox.state;
-      const broken = preflightGate(gate, harness, env, sandbox.prefix);
+      const broken = preflightGate(gate, harness, env, sandbox.gatePrefix);
       if (broken !== undefined) return { broken };
       return { result: await launchHeadless({ bin, argv: launch.headless, cwd, env, timeoutMs: input.timeoutMs ?? CHECK_TIMEOUT_MS, sandbox: sandbox.prefix }) };
     });

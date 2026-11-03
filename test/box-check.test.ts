@@ -21,7 +21,7 @@ import { delimiter, join } from "node:path";
 
 import type { Ritual } from "../src/core/model.ts";
 import type { Project } from "../src/core/store.ts";
-import type { BoxCheck, Observed, StepFacts } from "../src/runner/box-check.ts";
+import type { BoxCheck, Observed, ScopeSeen, StepFacts } from "../src/runner/box-check.ts";
 import { readTiocsti } from "../src/core/sandbox.ts";
 
 /** A real bwrap that runs the box's namespaces here, found without DARIUS_BWRAP, which the suite points at a missing file. */
@@ -92,8 +92,13 @@ function goodObserved(): Observed {
     ssh: [{ target: "192.0.2.10:22", status: 403, body: "darius box: refused 192.0.2.10:22 (this-host): an address of this host\n" }],
     public: { target: "api.example.com:443", status: 200, body: "" },
     broker: { exit: 0, stdout: "✓ completed run r1 (complete)\n", stderr: "" },
+    cgroup: `0::${SCOPE_CGROUP}\n`,
   };
 }
+
+/** The cgroup of a fake harness in its scope of agents.slice. */
+const SCOPE_CGROUP = "/user.slice/user-1000.slice/user@1000.service/agents.slice/darius-run-0000run1-a1b2c3.scope";
+const SCOPE_ON: ScopeSeen = { scope: { kind: "on", slice: "agents.slice", systemdRun: "/usr/bin/systemd-run" }, unit: "darius-run-0000run1-a1b2c3" };
 
 function facts(observed: Observed, extra: Partial<StepFacts> = {}): StepFacts {
   return {
@@ -102,6 +107,7 @@ function facts(observed: Observed, extra: Partial<StepFacts> = {}): StepFacts {
     tiocsti: { value: "0" },
     hostSockets: { "docker-socket": true, "tailscale-socket": false, "system-bus": true },
     brokerCompleted: true,
+    scope: SCOPE_ON,
     ...extra,
   };
 }
@@ -178,6 +184,25 @@ test("judgeSteps: a box that was not built fails `box` and skips the steps insid
   const silent = box.judgeSteps({ ...facts(goodObserved()), observed: { none: "the fake harness exited 1" } });
   assert.equal(silent[0]?.outcome, "fail");
   assert.match(silent[0]?.reason ?? "", /exited 1/u);
+});
+
+test("judgeSlice: no slice skips; the scope in the slice passes; a scope that did not start skips and never fails", () => {
+  const none = box.judgeSlice(undefined, "");
+  assert.deepEqual([none.outcome, none.reason], ["skip", "no [box] slice is set on this host"]);
+  assert.equal(box.judgeSlice({ scope: { kind: "none" } }, "").outcome, "skip");
+  const on = box.judgeSlice(SCOPE_ON, `0::${SCOPE_CGROUP}\n`);
+  assert.deepEqual([on.outcome, on.reason], ["pass", "the fake harness ran in darius-run-0000run1-a1b2c3.scope in agents.slice"]);
+  const skipped = box.judgeSlice({ scope: { kind: "skipped", slice: "agents.slice", reason: "systemd-run is not on PATH or in the NixOS profiles" } }, "");
+  assert.equal(skipped.outcome, "skip");
+  assert.match(skipped.reason, /no scope in agents\.slice, so boxed runs here go on without its limits: systemd-run is not on PATH/u);
+  for (const cgroup of ["0::/user.slice/user-1000.slice/session-2.scope\n", "0::/user.slice/agents.slice/darius-run-other-ffffff.scope\n", ""]) {
+    const elsewhere = box.judgeSlice(SCOPE_ON, cgroup);
+    assert.equal(elsewhere.outcome, "skip", cgroup);
+    assert.match(elsewhere.reason, /was not in darius-run-0000run1-a1b2c3\.scope in agents\.slice/u);
+  }
+  const steps = box.judgeSteps(facts(goodObserved(), { scope: undefined }));
+  assert.equal(steps.find((entry) => entry.name === "slice")?.outcome, "skip");
+  assert.equal(box.boxCheckOf({ host: "h", bwrap: "0.11.0", kernel: "6.1.0", run: "r1" }, steps).outcome, "pass", "a skipped slice never fails the check");
 });
 
 test("judgeSteps: no masked secret on the host skips that step", () => {

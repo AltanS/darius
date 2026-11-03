@@ -282,7 +282,15 @@ sandbox = "box"        # "off" (default), "mask" or "box"
 [box]
 ssh_agent = false      # true: every boxed run gets the ssh agent
 writable = []          # extra folders every boxed run may write; empty by default
+slice = "agents.slice" # optional: start each boxed run in a systemd user scope of this slice
 ```
+
+`[box] slice` keeps the resource limits of a slice for boxed runs. Inside the box there is no session
+bus, so a wrapper that puts each session in its own scope cannot do it there. With `slice` set, darius
+starts bwrap in a scope of that slice itself, outside the box (`systemd-run --user --scope`). The name
+must end in `.slice`. Resource limits are not a security boundary: when `systemd-run` is missing or the
+scope does not start, the run goes on without it, and its `run.log` says so. `darius box check` shows
+whether a run lands in the slice.
 
 `[box] writable` is empty on purpose: a shared cache holds code that later runs and shells load. Inside
 the box the cache is per run. To share one, name a folder, such as `["~/.cache/acme-tool"]`. Darius
