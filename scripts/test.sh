@@ -28,6 +28,10 @@ export TMPDIR="$SANDBOX/tmp"
 export DARIUS_STATE_DIR="$SANDBOX/state"
 export DARIUS_CONFIG_DIR="$SANDBOX/config"
 mkdir -p "$DARIUS_STATE_DIR" "$DARIUS_CONFIG_DIR"
+# Plain text from every spawned CLI. Some tests compare a message on stderr exactly, and
+# Bun 1.4.2 colours console.error (red, with reset codes) in the Nix build sandbox (TERM is
+# xterm-256color there, stderr a pipe). NO_COLOR is the standard switch; a test that needs colour passes its own env.
+export NO_COLOR=1
 # The operator's herdr is live: a test that reached it would open tabs there.
 # Tests that need herdr put a fake on DARIUS_HERDR themselves.
 export DARIUS_HERDR="$SANDBOX/no-herdr"

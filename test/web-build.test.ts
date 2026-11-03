@@ -25,7 +25,12 @@ function filesUnder(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesUnder(`${dir}${entry.name}/`) : [`${dir}${entry.name}`]));
 }
 
-test("every file of web/build is committed, none is git-ignored", () => {
+// `git check-ignore` needs a repository. The Nix build sandbox has a plain copy of the
+// tracked files and no .git; there the build is committed by construction, because a
+// flake source holds only files git tracks.
+const NO_GIT = existsSync(`${ROOT}.git`) ? false : "no .git here (a Nix build sandbox): a flake source holds only tracked files";
+
+test("every file of web/build is committed, none is git-ignored", { skip: NO_GIT }, () => {
   const paths = filesUnder(BUILD).map((path) => path.slice(ROOT.length));
   // `git check-ignore` exits 1 when no path is ignored.
   const run = spawnSync("git", ["check-ignore", "--stdin"], { cwd: ROOT, input: paths.join("\n"), encoding: "utf8" });

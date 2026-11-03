@@ -842,20 +842,33 @@ test("every socket the work dir scan found is masked behind /dev/null, after the
 test("scanSockets: lists bound sockets from /proc/net/unix, in node_modules and .git too, and leaves out pruned folders and tmpfs roots", async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-scan-")));
   const servers: Server[] = [];
+  // A folder under /tmp, a tmpfs root of the box, outside home. On a developer host the tmpdir
+  // is under /tmp already; in the Nix build sandbox it is not (TMPDIR is under /build, and there
+  // may be no /tmp to write), so the folder is made in /tmp itself. Without a writable /tmp the
+  // socket stays in the tmpdir, where the scan rightly lists it, and its check is left out.
+  const outside = (() => {
+    try {
+      return realpathSync(mkdtempSync("/tmp/darius-box-scan-out-"));
+    } catch {
+      return null;
+    }
+  })();
+  const elsewhere = outside ?? join(base, "elsewhere");
   try {
     const home = join(base, "h");
     for (const sub of ["a/b", "node_modules/x", ".git/y", ".local/state/z", "work/w", "rt"]) mkdirSync(join(home, sub), { recursive: true });
-    mkdirSync(join(base, "elsewhere"));
+    mkdirSync(elsewhere, { recursive: true });
     const want = [join(home, "a", "b", "one.sock"), join(home, "top.sock"), join(home, "node_modules", "x", "n.sock"), join(home, ".git", "y", "g.sock")];
-    for (const path of [...want, join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock"), join(base, "elsewhere", "e.sock")]) {
+    for (const path of [...want, join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock"), join(elsewhere, "e.sock")]) {
       servers.push(await listenOn(path));
     }
-    symlinkSync(join(base, "elsewhere"), join(home, "link"));
+    symlinkSync(elsewhere, join(home, "link"));
     const scan = scanSockets({ home, prune: [join(home, ".local", "state"), join(home, "work")], tmpfs: [join(home, "rt")], capMs: 30_000 });
     // The list is host-wide: it holds the sockets above and maybe others of this host.
     for (const path of want) assert.ok(scan.found.includes(path), path);
-    // elsewhere/ is under the tmpdir, a tmpfs root of the box, and outside home.
-    for (const path of [join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock"), join(base, "elsewhere", "e.sock")]) {
+    // elsewhere/ is under /tmp, a tmpfs root of the box, and outside home.
+    const left = [join(home, ".local", "state", "z", "s.sock"), join(home, "work", "w", "w.sock"), join(home, "rt", "r.sock")];
+    for (const path of outside === null ? left : [...left, join(elsewhere, "e.sock")]) {
       assert.equal(scan.found.includes(path), false, path);
     }
     assert.ok(scan.found.every((path) => !path.startsWith("/tmp/") || path.startsWith(`${home}/`)), "no socket under a tmpfs root outside home");
@@ -863,6 +876,7 @@ test("scanSockets: lists bound sockets from /proc/net/unix, in node_modules and 
   } finally {
     for (const server of servers) server.close();
     rmSync(base, { recursive: true, force: true });
+    if (outside !== null) rmSync(outside, { recursive: true, force: true });
   }
 });
 
