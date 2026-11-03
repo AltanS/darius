@@ -40,7 +40,6 @@ stdenvNoCC.mkDerivation {
       ../bin
       ../scripts/run.sh
       ../scripts/run-bunfig.toml
-      ../scripts/run-tsconfig.json
       ../skills
       ../src
       ../systemd

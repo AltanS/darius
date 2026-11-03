@@ -15,7 +15,7 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
 ### Fixed
 
-- Bun read `bunfig.toml`, `tsconfig.json` and `.env` from the folder darius started in. A boxed run could write them into its work dir, and the next darius call there ran its code outside the box, or turned the box off. `scripts/run.sh` now starts Bun with `--no-env-file` and a fixed, empty bunfig and tsconfig of its own.
+- Bun read `bunfig.toml` and `.env` from the folder darius started in. A boxed run could write them into its work dir, and the next darius call there ran its code outside the box, or turned the box off. `scripts/run.sh` now starts Bun with `--no-env-file` and a fixed, empty bunfig of its own.
 - A NUL byte in a box broker request made `spawn` throw, and the runner process died. The broker now refuses the word, turns a throw into an error reply, and keeps serving.
 - The box socket scan skipped the work dir, so a socket there (a devenv postgres socket, a `tmux -S` socket) connected from the box. The work dir is scanned now, outside `node_modules`, and its sockets are masked after the work dir bind.
 - Only the top `.git` of the work dir was read-only. Every `.git` in the work dir, a nested repo, a submodule or a worktree file, is now a read-only mount on its own path, and a `.git` link anywhere is refused.
