@@ -29,6 +29,9 @@ const MEMORY = `${PROJECT}/memory`;
 /** Claude Code's per-run folders, which the box covers with an empty tmpfs. */
 const SCRATCH = ["shell-snapshots", "session-env", "todos", "tasks", "debug", "statsig", "file-history"].map((name) => `${HOME}/.claude/${name}`);
 
+/** A work dir scan that found nothing. */
+const NO_WORK: WorkScan = { sockets: [], gits: [], gitLinks: [], claudes: [], claudeLinks: [], bares: [], isBareTop: false, timedOut: false, capMs: 30_000 };
+
 /** A fake filesystem: path to entry. A missing path has no entry. */
 type Tree = Map<string, BoxEntry>;
 
@@ -120,7 +123,7 @@ function input(overrides: Overrides = {}): BoxPlanInput {
         home: HOME,
       },
       sockets: overrides.sockets ?? { found: [], timedOut: false, capMs: 30_000 },
-      work: overrides.work ?? { sockets: [], gits: [], gitLinks: [], timedOut: false, capMs: 30_000 },
+      work: overrides.work ?? { ...NO_WORK },
       entry: (path) => tree.get(path),
     },
   };
@@ -217,11 +220,53 @@ test("a missing .claude or .git gets an empty read-only folder from the box dir;
 
 test("every .git below the work dir is bound read-only on itself, after the top guards; a .git link anywhere is refused", () => {
   const nested = [`${WORK}/vendor/lib/.git`, `${WORK}/sub/.git`];
-  const work: WorkScan = { sockets: [], gits: nested, gitLinks: [], timedOut: false, capMs: 30_000 };
+  const work: WorkScan = { ...NO_WORK, gits: nested };
   const { argv } = boxPlan(input({ work }));
   for (const path of nested) assert.ok(at(argv, "--ro-bind", path, path) > at(argv, "--ro-bind", `${WORK}/.git`, `${WORK}/.git`), path);
   const linked: WorkScan = { ...work, gitLinks: [`${WORK}/sub/deeper/.git`] };
   assert.throws(() => boxPlan(input({ work: linked })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith(`${WORK}/sub/deeper/.git is a link`));
+});
+
+test("every nested .claude and bare repo is bound read-only on itself like a nested .git; a .claude link anywhere is refused", () => {
+  const work: WorkScan = { ...NO_WORK, claudes: [`${WORK}/sub/.claude`], bares: [`${WORK}/fixtures/repo.git`] };
+  const { argv } = boxPlan(input({ work }));
+  for (const path of [...work.claudes, ...work.bares]) assert.ok(at(argv, "--ro-bind", path, path) > at(argv, "--bind", WORK, WORK), path);
+  const linked: WorkScan = { ...work, claudeLinks: [`${WORK}/sub/deeper/.claude`] };
+  assert.throws(() => boxPlan(input({ work: linked })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith(`${WORK}/sub/deeper/.claude is a link`));
+});
+
+test("scanWork: lists every nested .claude folder and .claude link, and every bare repo, but none inside one it found, in a .git or in node_modules", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "darius-box-guard-scan-")));
+  try {
+    const work = join(base, "w");
+    // The top's own .claude and .git are guarded by the plan; a bare repo inside the top .git is not listed.
+    for (const sub of [".claude", ".git/modules/m/objects", ".git/modules/m/refs", "sub/.claude/inner/.claude", "pkg/node_modules/x/.claude", "fixtures/repo.git/objects", "fixtures/repo.git/refs", "fixtures/repo.git/nested/.git", "wt/objects"]) {
+      mkdirSync(join(work, sub), { recursive: true });
+    }
+    writeFileSync(join(work, ".git", "modules", "m", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(work, "fixtures", "repo.git", "HEAD"), "ref: refs/heads/main\n");
+    // HEAD and commondir alone make a git dir: git reads objects, refs and config from the common dir.
+    writeFileSync(join(work, "wt", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(work, "wt", "commondir"), "../fixtures/repo.git\n");
+    // HEAD and objects without refs is not a repo.
+    mkdirSync(join(work, "half", "objects"), { recursive: true });
+    writeFileSync(join(work, "half", "HEAD"), "x\n");
+    mkdirSync(join(work, "notes"));
+    writeFileSync(join(work, "notes", ".claude"), "a file holds no settings\n");
+    mkdirSync(join(base, "elsewhere"));
+    mkdirSync(join(work, "odd"));
+    symlinkSync(join(base, "elsewhere"), join(work, "odd", ".claude"));
+    const scan = scanWork({ workDir: work, capMs: 30_000 });
+    assert.deepEqual(scan.claudes, [join(work, "sub", ".claude")], "the top .claude, a .claude inside one and node_modules are left out");
+    assert.deepEqual(scan.claudeLinks, [join(work, "odd", ".claude")]);
+    assert.deepEqual([...scan.bares].toSorted(), [join(work, "fixtures", "repo.git"), join(work, "wt")].toSorted());
+    assert.deepEqual(scan.gits, [], "no .git is listed inside a bare repo it found");
+    assert.equal(scan.isBareTop, false);
+    for (const name of ["HEAD", "objects", "refs"]) mkdirSync(join(work, name), { recursive: true });
+    assert.equal(scanWork({ workDir: work, capMs: 30_000 }).isBareTop, true, "the work dir itself looks like a bare repo");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("scanWork: finds the work dir's sockets, in .git too, never in node_modules; lists every .git below the top and each .git link", async () => {
@@ -720,7 +765,7 @@ test("every scanned socket is masked behind /dev/null, last; the bound agent is 
 
 test("a socket list that cannot be read, or a work dir scan that hit its cap, refuses the run: a socket it missed would connect", () => {
   assert.throws(() => boxPlan(input({ sockets: { found: [], timedOut: true, capMs: 30_000 } })), (cause: Error) => cause instanceof BoxError && cause.message.startsWith("the socket list /proc/net/unix cannot be read"));
-  const work: WorkScan = { sockets: [], gits: [], gitLinks: [], timedOut: true, capMs: 30_000 };
+  const work: WorkScan = { ...NO_WORK, timedOut: true };
   assert.throws(() => boxPlan(input({ work })), (cause: Error) => cause instanceof BoxError && /the socket scan of the work dir stopped/u.test(cause.message));
 });
 
@@ -728,7 +773,7 @@ test("every socket the work dir scan found is masked behind /dev/null, after the
   const tree = baseTree();
   const sockets = [`${WORK}/.devenv/state/postgres/.s.PGSQL.5432`, `${WORK}/sock`];
   for (const path of sockets) tree.set(path, { real: path, kind: "other" });
-  const { argv } = boxPlan(input({ tree, work: { sockets, gits: [], gitLinks: [], timedOut: false, capMs: 30_000 } }));
+  const { argv } = boxPlan(input({ tree, work: { ...NO_WORK, sockets } }));
   for (const path of sockets) assert.ok(at(argv, "--ro-bind", "/dev/null", path) > at(argv, "--bind", WORK, WORK), path);
 });
 

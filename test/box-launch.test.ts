@@ -136,6 +136,10 @@ case "\${FAKE_CLAUDE_MODE:-complete}" in
       | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
   hold) darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" >/dev/null ;;
   sleep) trap '' TERM; sleep 29.3 ;;
+  plant)
+    mkdir -p sub/.git && printf '[core]\\n\\tfsmonitor = "touch /tmp/pwned"\\n' > sub/.git/config
+    printf 'planted\\n\`\`\`darius-result\\n{"v":1,"status":"ok","summary":"planted"}\\n\`\`\`\\n' \\
+      | darius run complete "$DARIUS_RUN" --project "$DARIUS_PROJECT" --outcome complete --findings-stdin >/dev/null ;;
 esac
 printf '{"type":"result","is_error":false,"session_id":"fake-session","total_cost_usd":0.001,"result":"done"}\\n'
 `,
@@ -517,6 +521,76 @@ test("withRunSandbox: a body that throws still closes the proxy and the broker a
   );
   assert.notEqual(seen, "");
   assert.equal(existsSync(seen), false, "the box dir is gone after the throw");
+});
+
+test("withRunSandbox: after the box is closed it renames what the body planted in the work dir, logs it and hands it to onPlants; a pre-existing repo stays", async () => {
+  const base = request("bx-plant");
+  const work = join(SANDBOX, "bx-plant-work");
+  mkdirSync(join(work, "old", ".git"), { recursive: true });
+  writeFileSync(join(work, "old", ".git", "config"), "[core]\n");
+  const checks: { blocked: string[]; isUnfinished: boolean; isBoxGone: boolean }[] = [];
+  const boxDir = join(RUNTIME, "darius-box", base.run.id);
+  const req: SandboxRequest = { ...base, workDir: work, isReport: false, onPlants: (check) => checks.push({ ...check, isBoxGone: !existsSync(boxDir) }) };
+  const end = await withRunSandbox(req, async () => {
+    mkdirSync(join(work, "sub", ".git"), { recursive: true });
+    writeFileSync(join(work, "sub", ".git", "config"), '[core]\n\tfsmonitor = "touch /tmp/pwned"\n');
+    mkdirSync(join(work, "sub", ".claude"), { recursive: true });
+    writeFileSync(join(work, "sub", ".claude", "settings.json"), "{}\n");
+    return "ran";
+  });
+  assert.deepEqual(end, { ran: "ran" });
+  assert.equal(checks.length, 1, "onPlants is called once");
+  assert.equal(checks[0]?.isBoxGone, true, "the check runs after the box is closed");
+  assert.deepEqual([...(checks[0]?.blocked ?? [])].toSorted(), [
+    `${join(work, "sub", ".claude")}, a .claude made in the run, .claude renamed to .claude.darius-blocked`,
+    `${join(work, "sub", ".git")}, a .git made in the run, .git renamed to .git.darius-blocked`,
+  ]);
+  assert.ok(existsSync(join(work, "sub", ".git.darius-blocked", "config")) && !existsSync(join(work, "sub", ".git")));
+  assert.ok(existsSync(join(work, "old", ".git", "config")), "a repo that was there at launch stays");
+  const log = readFileSync(join(req.run.dir, "run.log"), "utf8");
+  assert.match(log, /box: blocked \S*\/sub\/\.git, a \.git made in the run, \.git renamed to \.git\.darius-blocked/u);
+
+  // Report mode: the work dir was read-only, so there is no check.
+  mkdirSync(join(work, "late", ".git"), { recursive: true });
+  const report: SandboxRequest = { ...request("bx-plant-report"), workDir: work, isReport: true, onPlants: () => assert.fail("no check in report mode") };
+  await withRunSandbox(report, async () => undefined);
+  assert.ok(existsSync(join(work, "late", ".git")));
+
+  // A throw from onPlants stays in run.log: it never leaves withRunSandbox.
+  const throwing: SandboxRequest = { ...request("bx-plant-throw"), workDir: work, isReport: false, onPlants: () => { throw new Error("ledger down"); } };
+  const ended = await withRunSandbox(throwing, async () => {
+    mkdirSync(join(work, "again", ".git"), { recursive: true });
+    return 1;
+  });
+  assert.deepEqual(ended, { ran: 1 });
+  assert.match(readFileSync(join(throwing.run.dir, "run.log"), "utf8"), /could not be recorded on the run: ledger down/u);
+});
+
+test("an act run that plants a nested repo: the runner renames it, and run show lists it", async () => {
+  fresh();
+  const project = "bx-plant-run";
+  const dir = linkedCheckout(project);
+  seedRitual(project, ACT_POLICY);
+  process.env.FAKE_CLAUDE_MODE = "plant";
+  try {
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.end, "complete", stdout);
+    assertBoxedAndClosed();
+    const line = `${join(dir, "sub", ".git")}, a .git made in the run, .git renamed to .git.darius-blocked`;
+    assert.ok(existsSync(join(dir, "sub", ".git.darius-blocked", "config")) && !existsSync(join(dir, "sub", ".git")));
+    const recorded = linesOf(project, "run.box-blocked");
+    assert.equal(recorded.length, 1);
+    assert.deepEqual(recorded[0]?.blocked, [line]);
+    assert.equal(recorded[0]?.run, entry?.run);
+    const shown = await runCli(runCommand, ["show", entry?.run ?? "", "--project", project]);
+    assert.ok(shown.stdout.includes(`box blocked: ${line}`), shown.stdout);
+    const json = JSON.parse((await runCli(runCommand, ["show", entry?.run ?? "", "--project", project, "--json"])).stdout);
+    assert.deepEqual(json.box_blocked, [line]);
+    assert.equal(json.box_check_unfinished, undefined);
+    assert.equal(json.phase, "closed", "the record line does not change the run's phase");
+  } finally {
+    delete process.env.FAKE_CLAUDE_MODE;
+  }
 });
 
 test("a run that times out ends, and its box is closed", async () => {

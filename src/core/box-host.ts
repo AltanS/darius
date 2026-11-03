@@ -4,11 +4,12 @@
  * The plan itself stays pure; this file is all of its filesystem access.
  */
 
-import { chmodSync, closeSync, constants, copyFileSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
 
 import { secretPaths } from "../harness/gate.ts";
+import { errorMessage } from "../runtime.ts";
 import { BoxError, hiddenHomeDirs, type BoxEntry, type BoxEnv, type BoxFacts, type BoxPlan, type SocketScan, type WorkScan } from "./box.ts";
 import { loadConfigIfPresent } from "./config.ts";
 import { appDir, configDir, stateDir } from "./paths.ts";
@@ -42,7 +43,7 @@ function plainEnv(): BoxEnv {
 
 /** How long the socket scan of home and the work dir may take, together (coordinator ruling 2026-11-02). */
 export const SOCKET_SCAN_CAP_MS = 30_000;
-/** Folders the work dir scan never enters, for speed: a package tree holds no live socket. */
+/** Folders the work dir scan never enters, for speed: a package tree holds no live socket. Its `.git` and `.claude` are not guarded (docs/concept.md, "What the box does not stop"). */
 const WORK_PRUNED_NAMES: ReadonlySet<string> = new Set(["node_modules"]);
 
 /** What the socket scan reads and skips. */
@@ -79,50 +80,92 @@ interface WalkInput {
   root: string;
   /** Folder names never entered. */
   prunedNames: ReadonlySet<string>;
-  /** Folders never entered, by path. */
-  prune: ReadonlySet<string>;
   deadline: number;
   now: () => number;
-  /** Called for each entry named `.git` below the root, with whether it is a link. */
-  onGit?: (path: string, isLink: boolean) => void;
+  /** Lists sockets too: the launch scan does, the post-run check does not. */
+  hasSockets: boolean;
 }
 
-/** The sockets one walk found, and whether it ran out of time first. */
+/** The guarded entries one walk found below the top. */
+interface WorkGuards {
+  gits: string[];
+  gitLinks: string[];
+  claudes: string[];
+  claudeLinks: string[];
+  bares: string[];
+  isBareTop: boolean;
+}
+
+/** What one walk found, and whether it ran out of time first. */
 interface Walked {
-  found: string[];
+  sockets: string[];
+  guards: WorkGuards;
   timedOut: boolean;
 }
 
+/** The top entries the box guards itself: one mount each, so the walk looks for no guard inside. */
+const TOP_GUARDS: ReadonlySet<string> = new Set([".git", ".claude"]);
+
 /**
- * Every Unix socket under `root`: `readdirSync` and `lstat`, no shell, no link
- * followed, one filesystem only (as `find -xdev`). `timedOut` when the walk
+ * True when git takes a folder with these entries for a bare repo: a `HEAD`
+ * entry, and `objects` and `refs`, or a `commondir` that points at them
+ * elsewhere. Each of any type: git asks `access`, which follows links.
+ */
+function looksBare(entries: readonly Dirent[]): boolean {
+  const names = new Set(entries.map((entry) => entry.name));
+  return names.has("HEAD") && (names.has("commondir") || (names.has("objects") && names.has("refs")));
+}
+
+/** The guard list a `.git` or `.claude` below the top goes in, or undefined. A `.claude` file holds no settings. */
+function guardKind(name: string, entry: { isLink: boolean; isDir: boolean }): keyof Omit<WorkGuards, "isBareTop"> | undefined {
+  if (name === ".git") return entry.isLink ? "gitLinks" : "gits";
+  if (name !== ".claude") return undefined;
+  if (entry.isLink) return "claudeLinks";
+  return entry.isDir ? "claudes" : undefined;
+}
+
+/**
+ * One walk of the work dir: `readdirSync` and `lstat`, no shell, no link
+ * followed, one filesystem only (as `find -xdev`). It finds the sockets (when
+ * asked) and the guards: every `.git`, `.claude` folder and bare repo below
+ * the top. It still enters a guard for sockets, but looks for no guard inside
+ * one, nor inside the top's own `.git` and `.claude`. `timedOut` when the walk
  * did not finish before the deadline.
  */
-function walkSockets(input: WalkInput): Walked {
+function walkWork(input: WalkInput): Walked {
   const root = normalize(input.root);
   const device = lstatOf(root)?.dev;
-  const found: string[] = [];
-  const pending = [root];
-  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    if (input.now() > input.deadline) return { found, timedOut: true };
-    for (const entry of entriesOf(dir)) {
+  const sockets: string[] = [];
+  const guards: WorkGuards = { gits: [], gitLinks: [], claudes: [], claudeLinks: [], bares: [], isBareTop: false };
+  const pending = [{ dir: root, isGuarded: false }];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    if (input.now() > input.deadline) return { sockets, guards, timedOut: true };
+    const { dir } = next;
+    const isTop = dir === root;
+    const entries = entriesOf(dir);
+    const isBare = !next.isGuarded && looksBare(entries);
+    if (isBare && isTop) guards.isBareTop = true;
+    if (isBare && !isTop) guards.bares.push(dir);
+    const isGuarded = next.isGuarded || (isBare && !isTop);
+    for (const entry of entries) {
       const path = join(dir, entry.name);
-      if (entry.name === ".git" && dir !== root) input.onGit?.(path, entry.isSymbolicLink());
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isSocket()) {
-        found.push(path);
+      const isLink = entry.isSymbolicLink();
+      // Some filesystems give no type in the listing; lstat says what it is.
+      const stat = isLink || entry.isDirectory() || entry.isFile() || entry.isSocket() ? undefined : lstatOf(path);
+      const isDir = entry.isDirectory() || stat?.isDirectory() === true;
+      const kind = isGuarded || isTop ? undefined : guardKind(entry.name, { isLink, isDir });
+      if (kind !== undefined) guards[kind].push(path);
+      if (isLink) continue;
+      if (entry.isSocket() || stat?.isSocket() === true) {
+        if (input.hasSockets) sockets.push(path);
         continue;
       }
-      // Some filesystems give no type in the listing; lstat says what it is.
-      const stat = entry.isDirectory() || entry.isFile() ? undefined : lstatOf(path);
-      if (stat?.isSocket() === true) found.push(path);
-      const isDir = entry.isDirectory() || stat?.isDirectory() === true;
-      if (!isDir || input.prunedNames.has(entry.name) || input.prune.has(path)) continue;
+      if (!isDir || input.prunedNames.has(entry.name)) continue;
       if (lstatOf(path)?.dev !== device) continue;
-      pending.push(path);
+      pending.push({ dir: path, isGuarded: isGuarded || kind !== undefined || (isTop && TOP_GUARDS.has(entry.name)) });
     }
   }
-  return { found, timedOut: false };
+  return { sockets, guards, timedOut: false };
 }
 
 /** The kernel's list of bound Unix sockets in this network namespace. */
@@ -186,25 +229,99 @@ export interface WorkScanInput {
 
 /**
  * The work dir's sockets (a devenv postgres socket, a `tmux -S` socket) and
- * every `.git` below its top, in one walk. It enters `.git` folders, but never
- * `node_modules`. A `.git` that is a link is listed in `gitLinks`.
+ * its guards in one walk: every `.git`, `.claude` folder and bare repo below
+ * its top. It enters `.git` folders for sockets, but never `node_modules`. A
+ * `.git` or `.claude` that is a link is listed apart.
  */
 export function scanWork(input: WorkScanInput): WorkScan {
   const now = input.now ?? Date.now;
-  const gits: string[] = [];
-  const gitLinks: string[] = [];
-  const walked = walkSockets({
-    root: input.workDir,
-    prunedNames: WORK_PRUNED_NAMES,
-    prune: new Set(),
-    deadline: now() + input.capMs,
-    now,
-    onGit: (path, isLink) => {
-      if (isLink) gitLinks.push(path);
-      else gits.push(path);
-    },
-  });
-  return { sockets: walked.found, gits, gitLinks, timedOut: walked.timedOut, capMs: input.capMs };
+  const walked = walkWork({ root: input.workDir, prunedNames: WORK_PRUNED_NAMES, deadline: now() + input.capMs, now, hasSockets: true });
+  return { sockets: walked.sockets, ...walked.guards, timedOut: walked.timedOut, capMs: input.capMs };
+}
+
+/** How long the post-run walk of the work dir may take. */
+export const PLANT_CHECK_CAP_MS = 30_000;
+/** What a neutralized plant's name gets. */
+export const BLOCKED_SUFFIX = ".darius-blocked";
+
+/** What the post-run check walks, and what the launch scan found there. */
+export interface PlantCheckInput {
+  /** The work dir as the run was given it. */
+  workDir: string;
+  /** The launch's scan: what is in it was there before the run. */
+  launch: WorkScan;
+  /** The run id, for a second name when the first is taken. */
+  run: string;
+  capMs: number;
+  now?: () => number;
+}
+
+/** What the post-run check did. */
+export interface PlantCheck {
+  /** One line per plant: its path, what it is, and what was done. */
+  blocked: string[];
+  /** The walk hit its cap: a plant it did not reach stays. */
+  isUnfinished: boolean;
+}
+
+type PlantKind = "git" | "claude" | "bare";
+
+const PLANT_WHAT = {
+  git: "a .git made in the run",
+  claude: "a .claude made in the run",
+  bare: "a bare repo made in the run",
+} as const satisfies Record<PlantKind, string>;
+
+/** The first free name for a blocked entry: `<name>.darius-blocked`, then with `-<run>`; undefined when both are taken. */
+function blockedName(path: string, run: string): string | undefined {
+  return [`${path}${BLOCKED_SUFFIX}`, `${path}${BLOCKED_SUFFIX}-${run}`].find((candidate) => lstatOf(candidate) === undefined);
+}
+
+/**
+ * Neutralizes one plant, reversibly: a `.git` or `.claude` is renamed, a bare
+ * repo's `HEAD` is renamed, so git no longer sees a repo there. `renameSync`
+ * moves the entry itself, a link too, and never follows it.
+ */
+function blockPlant(plant: { path: string; kind: PlantKind }, run: string): string {
+  const target = plant.kind === "bare" ? join(plant.path, "HEAD") : plant.path;
+  const head = `${plant.path}, ${PLANT_WHAT[plant.kind]}`;
+  const to = blockedName(target, run);
+  if (to === undefined) return `${head}, not renamed: ${basename(target)}${BLOCKED_SUFFIX} and ${basename(target)}${BLOCKED_SUFFIX}-${run} are both taken`;
+  try {
+    renameSync(target, to);
+  } catch (cause) {
+    return `${head}, not renamed: ${errorMessage(cause)}`;
+  }
+  return `${head}, ${basename(target)} renamed to ${basename(to)}`;
+}
+
+/** The guards of `after` that the launch scan did not find: each one was made in the run. */
+function newPlants(launch: WorkScan, after: WorkGuards, root: string): { path: string; kind: PlantKind }[] {
+  const known = new Set([...launch.gits, ...launch.gitLinks, ...launch.claudes, ...launch.claudeLinks, ...launch.bares]);
+  const found: { path: string; kind: PlantKind }[] = [
+    ...[...after.gits, ...after.gitLinks].map((path) => ({ path, kind: "git" as const })),
+    ...[...after.claudes, ...after.claudeLinks].map((path) => ({ path, kind: "claude" as const })),
+    ...after.bares.map((path) => ({ path, kind: "bare" as const })),
+  ];
+  // With an empty .git at the top, git takes the work dir itself for a bare repo when it looks like one.
+  if (after.isBareTop && !launch.isBareTop) found.push({ path: root, kind: "bare" });
+  return found.filter((plant) => !known.has(plant.path));
+}
+
+/**
+ * The post-run check (run after the box is closed, so no process of the run
+ * is left to race it). It walks the work dir again with the launch scan's
+ * rules and renames each `.git`, `.claude` folder or link, and bare repo that
+ * the launch scan did not find. A later unboxed git or Claude Code session
+ * would trust it. Never throws for one plant: a rename that fails is a line
+ * that says so.
+ */
+export function checkPlants(input: PlantCheckInput): PlantCheck {
+  const now = input.now ?? Date.now;
+  const root = normalize(realOr(input.workDir));
+  const walked = walkWork({ root, prunedNames: WORK_PRUNED_NAMES, deadline: now() + input.capMs, now, hasSockets: false });
+  const blocked = newPlants(input.launch, walked.guards, root).map((plant) => blockPlant(plant, input.run));
+  return { blocked, isUnfinished: walked.timedOut };
 }
 
 /** The real path of `path`, or `path` when it is not there. */

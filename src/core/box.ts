@@ -23,7 +23,7 @@
  *   --bind <agent socket>                   only with a reach entry on port 22, or ssh_agent
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
  *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
- *   --ro-bind <each .git below the work dir> on itself
+ *   --ro-bind <each .git, .claude and bare repo below the work dir> on itself
  *   --ro-bind <run dir>, --bind gate.jsonl, --bind scratch/
  *   --ro-bind ~/.claude, then the adapter's `boxWritable` (--bind, or
  *     --ro-bind over a writable one), a --tmpfs on each `boxScratch`, the per-run copies
@@ -40,11 +40,19 @@
  * `.git` is one read-only mount on its own path (a folder, or the file of a
  * linked worktree), so a run can neither write it nor rename or remove it: a
  * mount point cannot be moved. Every `.git` below the work dir (a nested
- * repo, a submodule, a worktree file) gets the same mount. A work dir with no
- * `.git` (a subfolder of a repo) gets an empty read-only one, so the run
- * cannot make one with its own config; git skips an empty `.git` and finds
- * the repo above. A run in the box cannot commit; that is the choice Codex's
- * workspace-write sandbox makes too.
+ * repo, a submodule, a worktree file) gets the same mount, and so does every
+ * `.claude` folder below it and every folder git takes for a bare repo
+ * (`HEAD`, and `objects` and `refs`, or `commondir`). The scan does not look
+ * for more of them inside one it found, nor in `node_modules`. A work dir
+ * with no `.git` (a subfolder of a repo) gets an empty read-only one, so the
+ * run cannot make one with its own config; git skips an empty `.git` and
+ * finds the repo above. A run in the box cannot commit; that is the choice
+ * Codex's workspace-write sandbox makes too.
+ *
+ * A run can still make a new one of those below the top. After the run,
+ * with the box closed, the runner walks the work dir again and renames each
+ * new one (`checkPlants` in src/core/box-host.ts): `.git` and `.claude` get
+ * `.darius-blocked` on their name, a bare repo's `HEAD` too.
  *
  * Refused, with an error that names the path: a writable extra inside or
  * holding the store, the darius config or app dir, `~/.claude`, `~/.ssh`,
@@ -54,7 +62,7 @@
  * `~/.cache` itself; a work dir that holds any of those. Each is checked as
  * written and with its symlinks resolved. A `.git`, `.claude` or
  * `.darius.toml` in the work dir that is a link is refused, and so is a `.git`
- * link anywhere below it: a link in a writable folder can be swapped, and
+ * or `.claude` link anywhere below it: a link in a writable folder can be swapped, and
  * bwrap mounts on its target. A socket scan that hit its time cap is refused
  * too: a socket it did not reach would connect.
  */
@@ -352,7 +360,7 @@ export interface BoxFacts {
   secrets: SecretPaths;
   /** The bound sockets (`scanSockets` in src/core/box-host.ts, from /proc/net/unix): each one outside the hidden folders is masked. */
   sockets: SocketScan;
-  /** The scan of the work dir (`scanWork` in src/core/box-host.ts): its sockets are masked, each `.git` below its top is bound read-only. */
+  /** The scan of the work dir (`scanWork` in src/core/box-host.ts): its sockets are masked, each `.git`, `.claude` and bare repo below its top is bound read-only. */
   work: WorkScan;
   entry(path: string): BoxEntry | undefined;
 }
@@ -373,6 +381,14 @@ export interface WorkScan {
   gits: readonly string[];
   /** Every `.git` below the work dir's top that is a link. */
   gitLinks: readonly string[];
+  /** Every `.claude` folder below the top: a later unboxed Claude Code session started there loads its settings and hooks. */
+  claudes: readonly string[];
+  /** Every `.claude` below the top that is a link. */
+  claudeLinks: readonly string[];
+  /** Every folder below the top that git takes for a bare repo: a `HEAD` entry, and `objects` and `refs`, or `commondir`. */
+  bares: readonly string[];
+  /** The work dir itself looks like a bare repo. It is not bound: it is the work dir. */
+  isBareTop: boolean;
   timedOut: boolean;
   capMs: number;
 }
@@ -469,6 +485,8 @@ export interface BoxPlan {
   creates: BoxCreate[];
   /** True when the ssh agent socket is bound in. */
   agent: boolean;
+  /** True when the box shows the work dir read-only: the run can plant nothing there. */
+  isWorkReadOnly: boolean;
 }
 
 /** A path with `~` expanded, normalized, and its facts. */
@@ -871,13 +889,16 @@ const WORK_GUARDS: readonly string[] = [".git", ".claude", ".darius.toml"];
  * empty `.git` when it looks for the repo. A read-only work dir needs none:
  * the run can make nothing there.
  *
- * Every `.git` below the top (the work dir scan finds them) is bound
- * read-only on itself too, after the top guards. A `.git` link anywhere is
- * refused.
+ * Every `.git`, `.claude` folder and bare repo below the top (the work dir
+ * scan finds them) is bound read-only on itself too, after the top guards. A
+ * `.git` or `.claude` link anywhere is refused. What a run makes there anew
+ * is renamed after the run (`checkPlants` in src/core/box-host.ts).
  */
 function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creates: BoxCreate[] }): string[] {
   const linked = facts.work.gitLinks[0];
   if (linked !== undefined) throw new BoxError(`${linked} is a link; the box keeps a .git read-only only as a plain folder or file, so this run does not start`);
+  const claudeLink = facts.work.claudeLinks[0];
+  if (claudeLink !== undefined) throw new BoxError(`${claudeLink} is a link; the box keeps a .claude read-only only as a plain folder, so this run does not start`);
   const top = WORK_GUARDS.flatMap((name) => {
     const path = join(work.real, name);
     const entry = facts.entry(path);
@@ -889,7 +910,7 @@ function workGuards(work: WorkBind, facts: BoxFacts, empty: { dir: string; creat
     if (entry.link !== undefined || normalize(entry.real) !== path) throw new BoxError(`${path} is a link; the box keeps it read-only only as a plain folder or file, so this run does not start`);
     return ["--ro-bind", path, path];
   });
-  const nested = facts.work.gits.flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
+  const nested = [...facts.work.gits, ...facts.work.claudes, ...facts.work.bares].flatMap((path) => ["--ro-bind", normalize(path), normalize(path)]);
   return [...top, ...nested];
 }
 
@@ -900,7 +921,7 @@ function seconds(capMs: number): string {
 /** A scan that hit its cap may have missed a socket, so the run does not start. */
 function checkScans(facts: BoxFacts): void {
   if (facts.sockets.timedOut) throw new BoxError("the socket list /proc/net/unix cannot be read; a socket the box does not mask would connect from the box, so this run does not start");
-  if (facts.work.timedOut) throw new BoxError(`the socket scan of the work dir stopped within the ${seconds(facts.work.capMs)} s cap; a socket or .git it did not reach would stay open in the box, so this run does not start`);
+  if (facts.work.timedOut) throw new BoxError(`the socket scan of the work dir stopped within the ${seconds(facts.work.capMs)} s cap; a socket, .git, .claude or bare repo it did not reach would stay open in the box, so this run does not start`);
 }
 
 function checkInput(input: BoxPlanInput): void {
@@ -958,5 +979,5 @@ export function boxPlan(input: BoxPlanInput): BoxPlan {
   if (!input.hasTty) args.push("--new-session");
   const env = boxEnv(input, agent);
   args.push("--clearenv", ...Object.entries(env).flatMap(([name, value]) => ["--setenv", name, value]));
-  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined };
+  return { argv: [input.bwrap, ...args, "--", ...input.command], env, boxDir, copies, creates, agent: agent !== undefined, isWorkReadOnly: work.isReadOnly };
 }

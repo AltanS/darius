@@ -30,6 +30,7 @@ import { ulid } from "../src/core/ulid.ts";
 import { dariusBin } from "../src/runner/launch.ts";
 import type { RitualEntry } from "../src/runner/report.ts";
 import { runDue } from "../src/runner/run-due.ts";
+import { withRunSandbox, type SandboxRequest } from "../src/runner/box-launch.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
 import { boxStack } from "../src/runner/box-check.ts";
 import { VERSION } from "../src/version.ts";
@@ -706,6 +707,62 @@ test("real bwrap: a work dir in a subfolder of a repo gets an empty read-only .g
   symlinkSync(join(nested, ".git"), join(sub, "odd", ".git"));
   assert.throws(() => boxPlan({ ...planInput, facts: hostBoxFacts({ workDir: sub }) }), /odd\/\.git is a link/u);
 });
+
+test("real bwrap: a run that makes a new nested repo with its own config gets it renamed after the launch; a nested repo from before stays and is read-only", { skip: SKIP, timeout: 120_000 }, async (t) => {
+  const tree = makeTree();
+  t.after(() => rmSync(tree.base, { recursive: true, force: true }));
+  if (git(tree.base, "--version").code !== 0) {
+    t.skip("git is not on PATH");
+    return;
+  }
+  boxedRunEnv(tree);
+  const repo = join(tree.home, "plant-repo");
+  assert.equal(git(tree.base, "init", "-q", repo).code, 0);
+  assert.equal(git(tree.base, "init", "-q", join(repo, "old")).code, 0);
+  const runDir = join(tree.store, "acme", "runs", "r-plant");
+  put(join(runDir, "policy.json"), '{"v":1}\n');
+  const request: SandboxRequest = {
+    run: { id: "r-plant", dir: runDir, policy: join(runDir, "policy.json"), project: "acme", who: "claude:r-plant" },
+    workDir: repo,
+    isReport: false,
+    hasTty: false,
+    ritual: {},
+    harness: claudeHarness,
+    envPass: [],
+  };
+  const script = [
+    "mkdir -p sub/.git/objects sub/.git/refs",
+    "printf 'ref: refs/heads/main\\n' > sub/.git/HEAD",
+    `printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = "touch ${join(tree.base, "pwned")}"\\n' > sub/.git/config`,
+    "if printf x >> old/.git/config 2>/dev/null; then echo old-writable; else echo old-refused; fi",
+  ].join("; ");
+  const end = await withRunSandbox(request, async (sandbox) => runPrefixed([...(sandbox.prefix ?? []), "/bin/sh", "-c", script], repo));
+  assert.ok("ran" in end, JSON.stringify(end));
+  if (!("ran" in end)) return;
+  assert.equal(end.ran.code, 0, end.ran.stderr);
+  assert.equal(end.ran.stdout.trim(), "old-refused", "a nested repo from before the launch is read-only in the box");
+  assert.equal(existsSync(join(repo, "sub", ".git")), false, "the planted .git is renamed after the launch");
+  assert.match(readFileSync(join(repo, "sub", ".git.darius-blocked", "config"), "utf8"), /fsmonitor/u);
+  assert.equal(existsSync(join(repo, "old", ".git", "HEAD")), true);
+  // git in sub now finds the outer repo, and the planted config never runs.
+  assert.equal(git(join(repo, "sub"), "rev-parse", "--show-toplevel").stdout.trim(), repo);
+  git(join(repo, "sub"), "status");
+  assert.equal(existsSync(join(tree.base, "pwned")), false);
+  assert.match(readFileSync(join(runDir, "run.log"), "utf8"), /box: blocked \S*\/sub\/\.git, a \.git made in the run/u);
+});
+
+/** Runs an argv without a shell from `cwd`, with only PATH set. */
+function runPrefixed(argv: readonly string[], cwd: string): Promise<Ran> {
+  const [bin = "", ...args] = argv;
+  return new Promise((done) => {
+    const child = spawn(bin, args, { cwd, env: { PATH: process.env.PATH ?? "" }, timeout: 60_000 });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.on("close", (code) => done({ code, stdout, stderr }));
+  });
+}
 
 // --- a ritual run in the box, end to end (spec 05) ---------------------------------
 

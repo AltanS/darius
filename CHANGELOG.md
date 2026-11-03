@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.124.0] - 2026-11-03
+
+### Added
+
+- `[box] slice = "<name>.slice"` starts each boxed run in a systemd user scope of that slice, outside the box. The run keeps the slice's resource limits. When `systemd-run` is missing, or the scope does not start, the run goes on without it, and its run.log says so.
+- `darius box check` has a new `slice` step. It passes when a run lands in the slice. It skips when no slice is set or the scope does not start.
+- `tools = ["aws"]` leaves `~/.aws/credentials` visible to that ritual's run in the box. The gate still refuses the run's own read of the file.
+- A ritual can say `sandbox = "off"` in the committed marker. On a host with `[run] sandbox = "box"`, it then runs with no box and no mask, and skips the box check gate. No other value is valid. `darius ritual list`, `darius run show` and the run.log show the opt-out.
+- The box guards nested `.claude` folders and bare git repos in the work dir, as it guards nested `.git` folders: each one is read-only in the box. A `.claude` link below the top stops the run as `box-broken`.
+- After a boxed run, with the box closed, the runner checks the work dir again. Each new `.git`, `.claude` or bare repo is renamed, so a later git or Claude Code session outside the box does not trust it: `.git` becomes `.git.darius-blocked`, `.claude` becomes `.claude.darius-blocked`, and a bare repo's `HEAD` becomes `HEAD.darius-blocked`. Each rename is a run.log line, a `run.box-blocked` ledger line, and a line in `darius run show`. A check that does not finish within 30 s says so. Report-mode runs skip the check. Not covered: `node_modules`, and a plant made in a herdr tab after the run ends.
+
+### Changed
+
+- A `reach` entry gives a boxed run the ssh agent only on port 22. Use `ssh_agent = true` for ssh on another port.
+- Every host must run 0.124.0 or later before a marker uses `"aws"` in `tools`, or `sandbox`.
+
 ## [0.123.1] - 2026-11-03
 
 ### Fixed
