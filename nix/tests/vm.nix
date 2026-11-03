@@ -230,6 +230,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    import re
     import shlex
 
     TIMERS = ["darius-sync", "darius-vigil-sweep", "darius-run-due", "darius-snapshot"]
@@ -323,11 +324,20 @@ pkgs.testers.runNixOSTest {
         check_selftest("alice", "darius")
 
     with subtest("alice: the web app renders the store, with a nonce CSP, from the packaged build"):
-        page = machine.succeed("curl -sf http://127.0.0.1:4747/")
+        # `/` is a 302 to the default workspace (0.63.0) and curl does not follow a
+        # redirect unless told to (-L), so a bare `curl -sf /` returns an empty body.
+        page = machine.succeed("curl -sfL http://127.0.0.1:4747/")
         assert "darius-selftest" in page, page[:2000]
-        ritual = machine.succeed("curl -sf http://127.0.0.1:4747/p/darius-selftest/rituals/heartbeat")
+        ritual = machine.succeed("curl -sf http://127.0.0.1:4747/w/darius-selftest/rituals/heartbeat")
         assert "heartbeat" in ritual, ritual[:2000]
-        machine.succeed("curl -sfI http://127.0.0.1:4747/ | grep -qi \"^content-security-policy: .*'nonce-\"")
+        # The old /p/ address is a 301 to the same page.
+        legacy = machine.succeed("curl -sfL http://127.0.0.1:4747/p/darius-selftest/rituals/heartbeat")
+        assert "heartbeat" in legacy, legacy[:2000]
+        # The headers of the page that is rendered, after the redirect.
+        # The headers go to a variable, not into `grep -q`: grep -q quits at the first match
+        # and curl then fails to write the rest (exit 23).
+        headers = machine.succeed("curl -sfL -D - -o /dev/null http://127.0.0.1:4747/")
+        assert re.search(r"^content-security-policy: .*'nonce-", headers, re.I | re.M), headers
 
     with subtest("alice: a fresh store pulls what the sync unit pushed"):
         as_user("alice", "DARIUS_STATE_DIR=/tmp/alice-pull darius sync --project darius-selftest --pull-only")

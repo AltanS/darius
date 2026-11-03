@@ -128,6 +128,12 @@ printf '{"type":"result","is_error":false,"session_id":"fake-session","total_cos
 `,
 );
 chmodSync(FAKE_CLAUDE, 0o755);
+// A program the follow_up_may test names in `may`. run-due skips a ritual as
+// tool-missing when a program in `may` is not on PATH, and the Nix build
+// sandbox has no pnpm. The test never runs it; the stub only has to be found.
+const FAKE_PNPM = join(BIN, "pnpm");
+writeFileSync(FAKE_PNPM, `#!${BASH}\nexit 0\n`);
+chmodSync(FAKE_PNPM, 0o755);
 process.env.DARIUS_CLAUDE = FAKE_CLAUDE;
 // The fake's default version has passed its gate check, so run-due starts it
 // at once; the gate check tests below give the fake a new version.
