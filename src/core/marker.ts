@@ -91,12 +91,13 @@
  * The box keys (0.117.0) say what a run of the ritual may do in the box
  * (`[run] sandbox = "box"`, src/core/box.ts): `net = "public" | "listed" |
  * "none"`, `reach = ["host:port", ...]`, `writable = ["~/path", ...]`,
- * `ssh_agent = true` and `tools = ["gh"]`. A profile's `env_pass = ["NAME"]`
- * passes those variables into the box. An unknown value, a `writable` path
- * in or holding a protected path, or an `env_pass` name the box sets itself
- * is an error with its line. Absent keys are stored as no key, so the hash
- * of a ritual without them does not change. A host older than 0.117.0
- * refuses the keys.
+ * `ssh_agent = true` and `tools = ["gh", "aws"]`. A profile's
+ * `env_pass = ["NAME"]` passes those variables into the box. An unknown
+ * value, a `writable` path in or holding a protected path, or an `env_pass`
+ * name the box sets itself is an error with its line. Absent keys are stored
+ * as no key, so the hash of a ritual without them does not change. A host
+ * older than 0.117.0 refuses the keys, and one older than 0.124.0 refuses
+ * `"aws"` in `tools`.
  *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
@@ -194,7 +195,7 @@ export interface RepoRitual {
   writable?: string[];
   /** `ssh_agent = true` (0.117.0): the run in the box gets the ssh agent. */
   sshAgent?: true;
-  /** `tools` (0.117.0): logins the box shows; `gh` unmasks `~/.config/gh/hosts.yml`. */
+  /** `tools` (0.117.0): logins the box shows; `gh` unmasks `~/.config/gh/hosts.yml`, `aws` (0.124.0) `~/.aws/credentials`. */
   tools?: BoxTool[];
   /** The `[policies.*]` name, for display. */
   policyName?: string;

@@ -75,9 +75,18 @@ export interface HostPort {
 export const BOX_NETS = ["public", "listed", "none"] as const;
 export type BoxNet = (typeof BOX_NETS)[number];
 
-/** The tools a ritual's `tools` may name. `gh` unmasks `~/.config/gh/hosts.yml` for that ritual. */
-export const BOX_TOOLS = ["gh"] as const;
+/**
+ * The tools a ritual's `tools` may name. `gh` unmasks `~/.config/gh/hosts.yml`
+ * for that ritual, `aws` (0.124.0) `~/.aws/credentials`. Only the mount changes:
+ * the gate's secret rule (`secretPaths` in src/harness/gate.ts) still refuses
+ * the run's own Read of the file, so only a child process (gh, the AWS SDK)
+ * sees it.
+ */
+export const BOX_TOOLS = ["gh", "aws"] as const;
 export type BoxTool = (typeof BOX_TOOLS)[number];
+
+/** The secret file each tool leaves visible, by the end of its listed path. */
+const TOOL_FILES: Readonly<Record<BoxTool, string>> = { gh: "/gh/hosts.yml", aws: "/.aws/credentials" };
 
 /** Where the box dir shows inside the box. */
 export const BOX_MOUNT = "/run/darius";
@@ -712,13 +721,14 @@ function socketMasks(facts: BoxFacts, keep: MaskKeep): string[] {
 function maskArgs(input: BoxPlanInput, keep: MaskKeep): string[] {
   const { facts } = input;
   const configReal = normalize(facts.entry(facts.config)?.real ?? facts.config);
-  const hasGh = (input.ritual.tools ?? []).includes("gh");
+  const shown = BOX_TOOLS.filter((tool) => (input.ritual.tools ?? []).includes(tool)).map((tool) => TOOL_FILES[tool]);
   const sshDir = normalize(facts.secrets.sshDir);
+  // A tool's file leaves the gate's list only: one the mask list also holds (darius's own key there) stays masked.
   const candidates = [
     ...facts.masked.dirs,
     ...facts.masked.files,
     ...facts.secrets.dirs,
-    ...facts.secrets.files.filter((path) => !(hasGh && normalize(path).endsWith("/gh/hosts.yml"))),
+    ...facts.secrets.files.filter((path) => !shown.some((end) => normalize(path).endsWith(end))),
     join(facts.home, ".npmrc"),
   ];
   const dirs = new Set<string>();

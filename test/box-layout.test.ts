@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { procUnixPaths, scanSockets, scanWork } from "../src/core/box-host.ts";
 import { BoxError, boxPlan, DEFAULT_BOX_WRITABLE, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxEntry, type BoxEnv, type BoxPlanInput, type HostBoxSettings, type RitualBoxKeys, type SocketScan, type WorkScan } from "../src/core/box.ts";
 import { claudeHarness, claudeProjectDirName } from "../src/harness/claude.ts";
+import { decide as gateDecide, type RunPolicy } from "../src/harness/gate.ts";
 
 const HOME = "/home/op";
 const STORE = `${HOME}/.local/share/darius`;
@@ -509,7 +510,35 @@ test("tools = [\"gh\"] leaves ~/.config/gh/hosts.yml visible", () => {
   const { argv } = boxPlan(input({ ritual: { tools: ["gh"] } }));
   assert.equal(has(argv, "--ro-bind", "/dev/null", `${HOME}/.config/gh/hosts.yml`), false);
   assert.ok(has(argv, "--ro-bind", "/dev/null", `${HOME}/.aws/credentials`));
-  assert.throws(() => boxPlan(input({ ritual: { tools: ["aws"] } })), /tools names "aws"/u);
+  assert.throws(() => boxPlan(input({ ritual: { tools: ["npm"] } })), /tools names "npm"; known: gh, aws/u);
+});
+
+test("tools = [\"aws\"] leaves ~/.aws/credentials visible, at its real path too; the gh login stays masked", () => {
+  const { argv } = boxPlan(input({ ritual: { tools: ["aws"] } }));
+  assert.equal(has(argv, "--ro-bind", "/dev/null", `${HOME}/.aws/credentials`), false);
+  assert.ok(has(argv, "--ro-bind", "/dev/null", `${HOME}/.config/gh/hosts.yml`));
+  const both = boxPlan(input({ ritual: { tools: ["gh", "aws"] } })).argv;
+  assert.equal(has(both, "--ro-bind", "/dev/null", `${HOME}/.aws/credentials`), false);
+  assert.equal(has(both, "--ro-bind", "/dev/null", `${HOME}/.config/gh/hosts.yml`), false);
+  const tree = baseTree();
+  tree.set(`${HOME}/.aws/credentials`, { real: "/srv/dotfiles/aws-credentials", kind: "file", link: "/srv/dotfiles/aws-credentials" });
+  const linked = boxPlan(input({ tree, ritual: { tools: ["aws"] } })).argv;
+  assert.equal(has(linked, "--ro-bind", "/dev/null", "/srv/dotfiles/aws-credentials"), false, "a symlinked file is shown at its real path");
+});
+
+test("tools never unmask darius's own key: a remote.credentials at ~/.aws/credentials stays masked", () => {
+  const base = input({ ritual: { tools: ["aws"] } });
+  const plan = boxPlan({ ...base, facts: { ...base.facts, masked: { files: [`${HOME}/.aws/credentials`], dirs: [] } } });
+  assert.ok(has(plan.argv, "--ro-bind", "/dev/null", `${HOME}/.aws/credentials`));
+});
+
+test("tools change the mount only: the gate still refuses a Read of the tool's file", () => {
+  const secrets = { dirs: [CONFIG], files: [`${HOME}/.aws/credentials`, `${HOME}/.config/gh/hosts.yml`], sshDir: `${HOME}/.ssh`, home: HOME };
+  const runPolicy: RunPolicy = { v: 1, project: "acme", run: "r1", ritual: "audit", mode: "act", may: ["Read", "Bash(*)"], hold: [], grants: [], cwd: WORK };
+  for (const path of [`${HOME}/.aws/credentials`, `${HOME}/.config/gh/hosts.yml`]) {
+    const verdict = gateDecide({ class: "read", name: "Read", path, cwd: WORK }, { policy: runPolicy, isHeld: false, secrets });
+    assert.equal(verdict.verdict, "deny", path);
+  }
 });
 
 test("a symlinked secret is masked at its real path; a secret dir is a tmpfs; another darius config dir is a tmpfs", () => {

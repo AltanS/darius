@@ -929,6 +929,13 @@ test("box keys: net, reach, writable, ssh_agent and tools read back; reach is lo
   for (const net of ["public", "none"]) assert.equal(firstRitual(`${RITUAL}mode = "report"\nnet = "${net}"\n`).net, net);
 });
 
+test("box keys: tools = [\"aws\"] reads back, alone and with gh, and changes the definition hash", () => {
+  assert.deepEqual(firstRitual(`${RITUAL}mode = "report"\ntools = ["aws"]\n`).tools, ["aws"]);
+  assert.deepEqual(firstRitual(`${RITUAL}mode = "report"\ntools = ["gh", "aws", "gh"]\n`).tools, ["gh", "aws"]);
+  const plain = firstRitual(`${RITUAL}mode = "report"\n`);
+  assert.notEqual(definitionHash(firstRitual(`${RITUAL}mode = "report"\ntools = ["aws"]\n`)), definitionHash(plain));
+});
+
 test("box keys: an unknown value is refused at load with its line", () => {
   const refused: [string, RegExp][] = [
     ['net = "open"', /:\d+: net must be "public", "listed" or "none", got "open"/u],
@@ -952,8 +959,8 @@ test("box keys: an unknown value is refused at load with its line", () => {
     ['writable = ["~/x/../.ssh"]', /must not contain \.\./u],
     ["ssh_agent = false", /:\d+: ssh_agent must be true; leave the key out for no agent/u],
     ['ssh_agent = "yes"', /ssh_agent must be true/u],
-    ['tools = ["aws"]', /:\d+: tools must be a list of gh, got "aws"/u],
-    ['tools = "gh"', /tools must be a list of gh/u],
+    ['tools = ["npm"]', /:\d+: tools must be a list of gh, aws, got "npm"/u],
+    ['tools = "gh"', /tools must be a list of gh, aws/u],
   ];
   for (const [line, why] of refused) assert.throws(() => firstRitual(`${RITUAL}mode = "report"\n${line}\n`), why, line);
 });
