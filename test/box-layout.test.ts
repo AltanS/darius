@@ -530,7 +530,7 @@ test("a symlinked secret is masked at its real path; a secret dir is a tmpfs; an
 
 // --- ssh agent ------------------------------------------------------------------------------
 
-test("the agent socket is bound only with SSH_AUTH_SOCK and a reach entry or ssh_agent; otherwise it is masked", () => {
+test("the agent socket is bound only with SSH_AUTH_SOCK and a reach entry on port 22 or ssh_agent; otherwise it is masked", () => {
   const none = boxPlan(input());
   assert.equal(none.agent, false);
   assert.equal(has(none.argv, "--bind", AGENT, AGENT), false);
@@ -543,6 +543,16 @@ test("the agent socket is bound only with SSH_AUTH_SOCK and a reach entry or ssh
     assert.equal(plan.env.SSH_AUTH_SOCK, AGENT);
     assert.equal(has(plan.argv, "--ro-bind", "/dev/null", AGENT), false);
   }
+  for (const reach of [["registry.example.com:443"], ["git.example.com:2222", "[2001:db8::1]:443"]]) {
+    const plan = boxPlan(input({ ritual: { reach } }));
+    assert.equal(plan.agent, false, `a reach entry on another port binds no agent: ${reach.join(", ")}`);
+    assert.ok(has(plan.argv, "--ro-bind", "/dev/null", AGENT), "the unbound agent is masked");
+    assert.equal(plan.env.SSH_AUTH_SOCK, undefined);
+  }
+  const mixed = boxPlan(input({ ritual: { reach: ["registry.example.com:443", "git.example.com:22"] } }));
+  assert.equal(mixed.agent, true, "one entry on port 22 is enough");
+  const otherPort = boxPlan(input({ ritual: { reach: ["git.example.com:2222"], sshAgent: true } }));
+  assert.equal(otherPort.agent, true, "ssh_agent = true binds it for ssh on another port");
   const { SSH_AUTH_SOCK: _sock, ...withoutAgent } = RUNNER_ENV;
   void _sock;
   const unset = boxPlan(input({ env: withoutAgent, ritual: { sshAgent: true } }));

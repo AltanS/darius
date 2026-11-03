@@ -20,7 +20,7 @@
  *   --ro-bind <store>, --ro-bind <config>   read-only even under /tmp or /run
  *   --bind <each writable extra>            host `[box] writable`, then ritual `writable`
  *   --tmpfs <each hidden home folder>       HIDDEN_HOME_DIRS: socket nests
- *   --bind <agent socket>                   only when the run may use ssh
+ *   --bind <agent socket>                   only with a reach entry on port 22, or ssh_agent
  *   --bind <work dir>                       --ro-bind in report mode, or in the store
  *   --ro-bind <work>/.git, <work>/.claude, <work>/.darius.toml on themselves
  *   --ro-bind <each .git below the work dir> on itself
@@ -758,13 +758,26 @@ function hiddenReal(facts: BoxFacts): string[] {
   }))];
 }
 
-/** The agent socket's real path when the run may use it: SSH_AUTH_SOCK is set, and the ritual has `reach` or someone set `ssh_agent`. */
+/** The ssh port: a `reach` entry on it binds the ssh agent. */
+const SSH_PORT = 22;
+
+/** True when one of the ritual's `reach` entries is on port 22. The marker checked each entry; one that does not parse throws, as in the proxy policy. */
+function reachesSsh(reach: readonly string[]): boolean {
+  return reach.some((entry) => parseHostPort(entry).port === SSH_PORT);
+}
+
+/**
+ * The agent socket's real path when the run may use it: SSH_AUTH_SOCK is set,
+ * and the ritual has a `reach` entry on port 22, or someone set `ssh_agent`
+ * (0.124.0; before, any `reach` entry bound it). `ssh_agent = true` is for ssh
+ * on another port.
+ */
 function agentSocket(input: BoxPlanInput): { real: string; wanted: boolean } | undefined {
   const sock = input.facts.env.SSH_AUTH_SOCK;
   if (sock === undefined || sock === "" || !sock.startsWith("/")) return undefined;
   const entry = input.facts.entry(normalize(sock));
   if (entry?.kind !== "other") return undefined;
-  const wanted = (input.ritual.reach ?? []).length > 0 || input.ritual.sshAgent === true || input.host.sshAgent;
+  const wanted = reachesSsh(input.ritual.reach ?? []) || input.ritual.sshAgent === true || input.host.sshAgent;
   return { real: normalize(entry.real), wanted };
 }
 
