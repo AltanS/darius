@@ -83,6 +83,12 @@ export interface Ritual extends ItemHeader {
    * of this ritual lights (`push`, `email`). `[]` is the app only. Absent: push.
    */
   candle_deliver?: string[];
+  /**
+   * `report_deliver` in the marker (0.127.0): the channels a complete run of
+   * this ritual sends its report on (`email`). Absent: no report. A host older
+   * than 0.127.0 refuses a ritual item that carries this key.
+   */
+  report_deliver?: string[];
   /** `definitionHash` of the mirrored definition. */
   def_hash?: string;
   /** The short commit of the checkout that reconcile read; absent outside git. */

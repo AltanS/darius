@@ -43,6 +43,18 @@
  * `email.json` or `push.json` counts as not set up with the reason added, so
  * it cannot stop the flush.
  *
+ * REPORTS (src/core/report-email.ts, 0.127.0). A `run.completed` line with
+ * outcome complete, of a ritual whose store item has `report_deliver` with
+ * `email`, gives one report mail with the key `report:<run>`. The ritual is
+ * read when the alert is built, as for `candle_deliver`, so a run cannot ask
+ * for its own report. Only the host that wrote the line sends, and only on
+ * email. A line older than the channel's `since`, or than a day, sends
+ * nothing: adding the key to a ritual does not mail its old runs. An imported
+ * line sends nothing. The mail is built again from the blobs at each try, so
+ * no ledger line holds its text: `alert.failed` for a report has the key, the
+ * channel and the error only, and `sendState` cannot rebuild it. A host
+ * without email sends no report and leaves no trace; `darius doctor` says so.
+ *
  * WHEN. `flushAlerts` runs after every run-due batch, `run now` and `run
  * resume`, and after `darius sync` (the sync timer, every 15 minutes), which
  * catches the lines a session writes by hand. A host without push keys sends
@@ -56,12 +68,13 @@ import { existsSync } from "node:fs";
 import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { RUN_BOX_BLOCKED } from "./box-work.ts";
-import { emailStatus, readEmailSettings, sendEmail, type EmailSettings } from "./email.ts";
+import { emailStatus, postEmail, readEmailSettings, sendEmail, type EmailMessage, type EmailSettings } from "./email.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { collectCandles, CANDLE_LIT, candleOpenings, type CandleOpened, type CandleOpening } from "./candle-index.ts";
 import type { JsonValue, LedgerLine, Ritual } from "./model.ts";
 import { projectDir } from "./paths.ts";
 import { activeDevices, broadcast, pushKeysProblem, readPushKeys, type Notice } from "./push.ts";
+import { isReportKey, reportFacts, reportKey, reportMessage, REPORT_MISSING, runPagePath, REPORT_UNRENDERED, type ReportFacts } from "./report-email.ts";
 import { parseResult, readSummary } from "./result.ts";
 import { getBlobText, GLOBAL_PROJECT, listProjects, openProject, type Project } from "./store.ts";
 
@@ -86,6 +99,8 @@ export interface Alert extends Notice {
   key: string;
   /** The channel it goes on. Absent means push. Every candle notice names it. */
   channel?: ChannelName;
+  /** A run report (0.127.0): the email channel builds the mail from these facts at each try. */
+  report?: ReportFacts;
 }
 
 function channelOf(alert: Alert): ChannelName {
@@ -127,9 +142,7 @@ function oneLine(text: string): string {
   return text.replaceAll(/\s+/gu, " ").trim();
 }
 
-function runPath(project: string, run: string): string {
-  return `/w/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}`;
-}
+const runPath = runPagePath;
 
 function heldAlert(project: string, line: LedgerLine, run: string): Alert {
   const questions = Array.isArray(line.questions) ? line.questions.filter((entry) => isText(entry)) : [];
@@ -371,6 +384,46 @@ export function candleAlerts(project: Project, ledger: readonly LedgerLine[], op
   return alerts;
 }
 
+// --- run reports ---------------------------------------------------------------------
+
+/** The ritual's title when its item asks for report mail; undefined when it does not, or cannot be read. */
+function reportTitle(project: Project, slug: string, titles: Map<string, string | null>): string | undefined {
+  if (!titles.has(slug)) {
+    let title: string | null = null;
+    try {
+      const header = project.readItem<Ritual>("ritual", slug)?.header;
+      if (header !== undefined && knownChannels(header.report_deliver)?.includes("email") === true) title = header.title;
+    } catch {
+      // One unreadable ritual item must not stop the flush. No report is the safe side.
+      title = null;
+    }
+    titles.set(slug, title);
+  }
+  return titles.get(slug) ?? undefined;
+}
+
+/**
+ * The report mails this host must send from `ledger`: one per `run.completed`
+ * line it wrote at or after `floor`, with outcome complete, of a ritual whose
+ * item asks for report mail on email. Not for an imported line.
+ */
+export function reportAlerts(project: Project, ledger: readonly LedgerLine[], options: { host: string; floor: string }): Alert[] {
+  if (project.name === GLOBAL_PROJECT) return [];
+  const titles = new Map<string, string | null>();
+  const alerts: Alert[] = [];
+  for (const line of ledger) {
+    if (line.type !== "run.completed" || line.outcome !== "complete" || line.host !== options.host || line.at < options.floor) continue;
+    if (line.imported_from !== undefined || !isText(line.run) || !isText(line.item) || !line.item.startsWith("ritual/")) continue;
+    const title = reportTitle(project, line.item.slice("ritual/".length), titles);
+    if (title === undefined) continue;
+    const facts = reportFacts(project, line, title);
+    if (facts === null) continue;
+    const key = reportKey(line.run);
+    alerts.push({ key, tag: key, channel: "email", title: `Report: ${title}`, body: `${project.name}: run ${line.run} complete`, url: facts.url, report: facts });
+  }
+  return alerts;
+}
+
 /** How one channel took the newest notice of a candle. */
 export interface ChannelDelivery {
   channel: ChannelName;
@@ -514,11 +567,23 @@ function openPush(): Opening {
   }
 }
 
+/** The mail of a report, or an error that quotes no text of it. */
+function reportMail(settings: EmailSettings, alert: Alert, facts: ReportFacts): EmailMessage {
+  if (facts.isMissing) throw new Error(REPORT_MISSING);
+  try {
+    return reportMessage(settings, facts, alert.key);
+  } catch {
+    // No cause and no message of it: it could quote the findings.
+    throw new Error(REPORT_UNRENDERED);
+  }
+}
+
 function emailChannel(settings: EmailSettings): OpenChannel {
   return {
     since: settings.since,
     async send(alert) {
-      await sendEmail(settings, alert);
+      if (alert.report === undefined) await sendEmail(settings, alert);
+      else await postEmail(settings, reportMail(settings, alert, alert.report));
       return { delivered: settings.to.length, error: "" };
     },
   };
@@ -594,8 +659,9 @@ function openCandleCheck(project: Project, ledger: readonly LedgerLine[]): (key:
   };
 }
 
-/** What a failed notice leaves in the ledger: enough to send it again. */
+/** What a failed notice leaves in the ledger: enough to send it again. A report leaves no text: the next flush builds it again from the blobs. */
 function failedLine(alert: Alert, error: string): LedgerLineInput {
+  if (alert.report !== undefined) return { who: WHO, type: "alert.failed", key: alert.key, channel: channelOf(alert), error };
   return { who: WHO, type: "alert.failed", key: alert.key, channel: channelOf(alert), error, title: alert.title, body: alert.body, url: alert.url };
 }
 
@@ -634,7 +700,7 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
   const isOpen = openCandleCheck(project, ledger);
   const retries = [...state.retries.values()].filter((retry) => !alerts.some((alert) => alert.key === retry.key) && !isHistoryOnEmail(retry, state, channels.email));
   const queue = [...alerts, ...retries];
-  if (channels.push === null && !queue.some((alert) => isCandleKey(alert.key))) return null;
+  if (channels.push === null && !queue.some((alert) => isCandleKey(alert.key) || isReportKey(alert.key))) return null;
   const delivery = emptyDelivery();
   for (const name of CHANNELS) {
     const channel = channels[name];
@@ -642,7 +708,9 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
       if (channelOf(alert) !== name || state.sent.has(alert.key) || (state.tries.get(alert.key) ?? 0) >= MAX_TRIES) continue;
       if (isCandleKey(alert.key) && !isOpen(alert.key)) continue;
       if (options.isDryRun === true) {
-        if (channel !== null) delivery.pending.push(alert);
+        // A dry run prints what would go; a report's facts hold the findings text, which stays out of that print.
+        const { report: _report, ...shown } = alert;
+        if (channel !== null) delivery.pending.push(shown);
         continue;
       }
       if (channel === null) {
@@ -697,7 +765,8 @@ export async function flushAlerts(options: { isDryRun?: boolean; projects?: read
       const project = openProject(name);
       const ledger = readLedger(project);
       const news = channels.push === null ? [] : ledgerAlerts(project, ledger, newsFloor(channels.push.since, now), host, now);
-      const delivery = await sendAlerts(project, [...news, ...candleAlerts(project, ledger, { host, since })], options);
+      const reports = channels.email === null ? [] : reportAlerts(project, ledger, { host, floor: newsFloor(channels.email.since, now) });
+      const delivery = await sendAlerts(project, [...news, ...candleAlerts(project, ledger, { host, since }), ...reports], options);
       if (delivery === null) continue;
       isActive = true;
       total.sent += delivery.sent;

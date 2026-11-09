@@ -25,11 +25,11 @@ function pathOf(url: string): string {
 }
 
 /**
- * One line of text for a ledger line: a URL in `hide` is cut to its host
- * name and its path is cut, whitespace is collapsed, and the length is capped. A ping URL or a
- * full endpoint must not reach the ledger through an error message.
+ * The text with each URL in `hide` cut to its host name, and its path cut to
+ * `/...` wherever it stands alone. Whitespace and length stay as they are, so a
+ * mail body keeps its lines (0.127.0).
  */
-export function scrubForLedger(text: string, hide: readonly string[] = []): string {
+export function hideUrls(text: string, hide: readonly string[]): string {
   let out = text;
   for (const url of hide) {
     if (url === "") continue;
@@ -39,7 +39,16 @@ export function scrubForLedger(text: string, hide: readonly string[] = []): stri
     const path = pathOf(url);
     if (path.length > 1) out = out.replaceAll(path, "/...");
   }
-  out = out.replaceAll(/\s+/gu, " ").trim();
+  return out;
+}
+
+/**
+ * One line of text for a ledger line: a URL in `hide` is cut to its host
+ * name and its path is cut, whitespace is collapsed, and the length is capped. A ping URL or a
+ * full endpoint must not reach the ledger through an error message.
+ */
+export function scrubForLedger(text: string, hide: readonly string[] = []): string {
+  const out = hideUrls(text, hide).replaceAll(/\s+/gu, " ").trim();
   return out.length > MAX_TEXT ? `${out.slice(0, MAX_TEXT - 3)}...` : out;
 }
 

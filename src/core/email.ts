@@ -1,9 +1,10 @@
 /**
- * The email channel of candle notices (docs/concept.md, "Candles"). One POST of
+ * The email channel of candle notices (docs/concept.md, "Candles") and of run
+ * reports (src/core/report-email.ts, 0.127.0). One POST of
  * JSON over `fetch` to an HTTP mail API, so no runtime dependency and no SMTP.
  *
  * SETTINGS. Per host, in `<config>/email.json`, read here and nowhere else:
- * `url`, `token`, `from`, `to[]`, `web_url?`, `since`. The file is refused when
+ * `url`, `token`, `from`, `to[]`, `web_url?`, `since`, `html?`. The file is refused when
  * its group or others have any access, as src/core/credentials.ts does, and it
  * is written with mode 0600 from the first byte. The config dir is never
  * synced and never archived (src/core/store-scan.ts).
@@ -34,7 +35,7 @@ import { endpointHost, scrubForLedger } from "./redact.ts";
 const FILE_NAME = "email.json";
 /** A hung provider must not hold the sweep or the sync. */
 const TIMEOUT_MS = 15_000;
-const KNOWN_KEYS: readonly string[] = ["url", "token", "from", "to", "web_url", "since"];
+const KNOWN_KEYS: readonly string[] = ["url", "token", "from", "to", "web_url", "since", "html"];
 /** One word of printable ASCII: anything else cannot go in a header, and `fetch` would quote it in its error. */
 const PRINTABLE_WORD = /^[!-~]+$/u;
 const BARE_ADDRESS = /^[^\s@<>]+@[^\s@<>]+$/u;
@@ -51,6 +52,11 @@ export interface EmailSettings {
   web_url?: string;
   /** Lines before this time are history, so setup does not email old candles. */
   since: string;
+  /**
+   * `false` (0.127.0): a report mail goes as text only, with no `html` field,
+   * for a provider that refuses a field it does not know. Absent: true.
+   */
+  html?: boolean;
 }
 
 /** What may be said about the channel: no token, no address, no path of the url. */
@@ -60,16 +66,39 @@ export interface EmailStatus {
   host: string | null;
   recipients: number;
   since: string | null;
+  /** Whether a report mail carries `html` (0.127.0). Null when the channel is not set up. */
+  html: boolean | null;
   /** Why the file is refused, in words that quote no value. Null when it is absent or good. */
   problem: string | null;
 }
 
-/** One message to send. `key` makes the send idempotent; `url` is a path of the web app. */
+/** One candle notice to send. `key` makes the send idempotent; `url` is a path of the web app. */
 export interface EmailNotice {
   key: string;
   title: string;
   body: string;
   url: string;
+}
+
+/**
+ * One mail as it goes out: what `postEmail` sends after `from` and `to`. The
+ * caller has already scrubbed it. `key` makes the send idempotent; `html` goes
+ * only when the settings allow it.
+ */
+export interface EmailMessage {
+  key: string;
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/** The JSON a provider gets, in this key order. */
+interface MailBody {
+  from: string;
+  to: string[];
+  subject: string;
+  text: string;
+  html?: string;
 }
 
 export function emailSettingsFile(): string {
@@ -136,7 +165,7 @@ function textsOf(list: readonly JsonValue[]): string[] {
 function checkedSettings(raw: JsonValue, where: string): EmailSettings {
   if (!isRecord(raw)) throw new Error(`${where} must be a JSON object`);
   if (Object.keys(raw).some((key) => !KNOWN_KEYS.includes(key))) throw new Error(`${where} has an unknown key; it takes only ${KNOWN_KEYS.join(", ")}`);
-  const { url, token, from, to, web_url: webUrl, since } = raw;
+  const { url, token, from, to, web_url: webUrl, since, html } = raw;
   checkProviderUrl(url, where);
   if (!isText(url)) throw new Error(`${where}: url must be a URL`);
   if (!isText(token) || !PRINTABLE_WORD.test(token)) throw new Error(`${where}: token must be one word of printable characters`);
@@ -145,7 +174,9 @@ function checkedSettings(raw: JsonValue, where: string): EmailSettings {
   const badEntry = to.findIndex((entry) => !isAddress(entry));
   if (badEntry !== -1) throw new Error(`${where}: to[${String(badEntry)}] must be an email address`);
   if (!isText(since) || Number.isNaN(Date.parse(since))) throw new Error(`${where}: since must be a date and time`);
+  if (html !== undefined && html !== true && html !== false) throw new Error(`${where}: html must be true or false`);
   const settings: EmailSettings = { url, token, from, to: textsOf(to), since: new Date(since).toISOString() };
+  if (html !== undefined) settings.html = html;
   if (webUrl === undefined) return settings;
   checkWebUrl(webUrl, where);
   if (!isText(webUrl)) throw new Error(`${where}: web_url must be a URL`);
@@ -215,10 +246,10 @@ export function writeEmailSettings(settings: EmailSettings): void {
 export function emailStatus(): EmailStatus {
   try {
     const settings = readEmailSettings();
-    if (settings === null) return { isSetUp: false, host: null, recipients: 0, since: null, problem: null };
-    return { isSetUp: true, host: endpointHost(settings.url), recipients: settings.to.length, since: settings.since, problem: null };
+    if (settings === null) return { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: null };
+    return { isSetUp: true, host: endpointHost(settings.url), recipients: settings.to.length, since: settings.since, html: settings.html !== false, problem: null };
   } catch (cause) {
-    return { isSetUp: false, host: null, recipients: 0, since: null, problem: errorMessage(cause) };
+    return { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: errorMessage(cause) };
   }
 }
 
@@ -241,20 +272,40 @@ function failureText(cause: unknown): string {
   return cause instanceof Error && cause.cause !== undefined ? `${first}: ${errorMessage(cause.cause)}` : first;
 }
 
-/** The JSON body. Title and every body line pass the redaction, and the link comes from this host's settings. */
-function messageOf(settings: EmailSettings, notice: EmailNotice): string {
+/** The address of a web app path on this host's `web_url`, or undefined without one. */
+export function webLink(settings: EmailSettings, path: string): string | undefined {
+  return settings.web_url === undefined ? undefined : `${settings.web_url.replace(/\/+$/u, "")}${path}`;
+}
+
+/** A candle notice as a mail. Title and every body line pass the redaction, and the link comes from this host's settings. */
+function messageOf(settings: EmailSettings, notice: EmailNotice): EmailMessage {
   const hide = [settings.url];
   const lines = notice.body.split("\n").map((line) => scrubForLedger(line, hide));
-  const link = settings.web_url === undefined ? [] : [`Link: ${settings.web_url.replace(/\/+$/u, "")}${notice.url}`];
-  return JSON.stringify({ from: settings.from, to: settings.to, subject: scrubForLedger(notice.title, hide), text: [...lines, ...link].join("\n") });
+  const link = webLink(settings, notice.url);
+  return { key: notice.key, subject: scrubForLedger(notice.title, hide), text: [...lines, ...(link === undefined ? [] : [`Link: ${link}`])].join("\n") };
 }
 
 /**
- * Sends one notice. A 2xx is success. Anything else throws an error that passed
+ * The JSON body: the same bytes for the same message and settings, so a retry
+ * with the same key sends the same body. `html` only when the settings allow it.
+ */
+export function emailBody(settings: EmailSettings, message: EmailMessage): string {
+  const body: MailBody = { from: settings.from, to: settings.to, subject: message.subject, text: message.text };
+  if (message.html !== undefined && settings.html !== false) body.html = message.html;
+  return JSON.stringify(body);
+}
+
+/** Sends one candle notice. See `postEmail`. */
+export async function sendEmail(settings: EmailSettings, notice: EmailNotice, options: { timeoutMs?: number } = {}): Promise<void> {
+  await postEmail(settings, messageOf(settings, notice), options);
+}
+
+/**
+ * Sends one mail. A 2xx is success. Anything else throws an error that passed
  * `scrubEmailError`. A redirect is a failure: it would carry the body with the
  * addresses to a place nobody chose.
  */
-export async function sendEmail(settings: EmailSettings, notice: EmailNotice, options: { timeoutMs?: number } = {}): Promise<void> {
+export async function postEmail(settings: EmailSettings, message: EmailMessage, options: { timeoutMs?: number } = {}): Promise<void> {
   const host = endpointHost(settings.url);
   let response: Response | undefined;
   let failure = "";
@@ -264,9 +315,9 @@ export async function sendEmail(settings: EmailSettings, notice: EmailNotice, op
       headers: {
         authorization: `Bearer ${settings.token}`,
         "content-type": "application/json",
-        "idempotency-key": createHash("sha256").update(notice.key).digest("hex"),
+        "idempotency-key": createHash("sha256").update(message.key).digest("hex"),
       },
-      body: messageOf(settings, notice),
+      body: emailBody(settings, message),
       redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
     });

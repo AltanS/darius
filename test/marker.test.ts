@@ -602,6 +602,25 @@ test("candle_deliver: the hash of a ritual without it is unchanged, and a ritual
   assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\ncandle_deliver = ["email"]\n`)));
 });
 
+// --- report_deliver (0.127.0) --------------------------------------------------------
+
+test("report_deliver: a list of email, deduped; [] and absent are both no key", () => {
+  assert.deepEqual(firstRitual(`${RITUAL}mode = "report"\nreport_deliver = ["email", "email"]\n`).reportDeliver, ["email"]);
+  assert.equal(firstRitual(`${RITUAL}mode = "report"\nreport_deliver = []\n`).reportDeliver, undefined, "an empty list means no report, as absent does");
+  assert.equal(firstRitual(`${RITUAL}mode = "report"\n`).reportDeliver, undefined);
+});
+
+test("report_deliver: anything but a list of email is refused with its line", () => {
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nreport_deliver = "email"\n`), /:\d+: report_deliver must be a list/u);
+  assert.throws(() => firstRitual(`${RITUAL}mode = "report"\nreport_deliver = ["push"]\n`), /:\d+: report_deliver must be a list of email, got "push"/u);
+});
+
+test("report_deliver: the hash of a ritual without it or with [] is unchanged, and a ritual with email differs", () => {
+  const plain = firstRitual(`${RITUAL}mode = "report"\n`);
+  assert.equal(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nreport_deliver = []\n`)));
+  assert.notEqual(definitionHash(plain), definitionHash(firstRitual(`${RITUAL}mode = "report"\nreport_deliver = ["email"]\n`)));
+});
+
 test("--resolved lists follow_up_may after hold, sorted, and nothing when there is none", () => {
   const ritual = firstRitual(`${RITUAL}mode = "report"\nhold = ['x']\nfollow_up_may = ["Bash(z *)", "Bash(a *)"]\n`);
   assert.deepEqual(resolvedLines(resolvedPolicy(ritual)), ["mode: report", "hold: x", "follow_up_may: Bash(a *)", "follow_up_may: Bash(z *)"]);

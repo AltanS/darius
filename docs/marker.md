@@ -129,6 +129,7 @@ host to 0.70.0 or later before you commit the first marker with `icon`.
 | `follow_up_may_extra` | no | Rules to add to the `follow_up_may` of the named policy, or of the ritual's own. |
 | `follow_up` | no | `attended` (default) or `headless` (0.69.0). How a follow-up of this ritual runs: in a herdr tab, or headless without herdr, from the CLI and from the web page. |
 | `candle_deliver` | no | The channels for the candles a run of this ritual lights (0.108.0): a list of `push` and `email`. `[]` means the app only. Absent means `["push"]`. A run cannot choose its own channel, so the marker does. `email` sends only on a host where `darius email set` has run. |
+| `report_deliver` | no | `["email"]` (0.127.0): a complete run of this ritual mails its findings as a report, from the host that ran it. `[]` or absent means no report. `email` is the only value. It sends only on a host where `darius email set` has run; elsewhere the run completes and sends nothing, and `darius doctor` says so. A run cannot choose its own report or its recipients. See "Ritual reports by email" in the README. |
 | `net` | no | `public` (default), `listed` or `none` (0.117.0). What a run in the box may reach on the network. See "Box keys". |
 | `reach` | no | A list of `"host:port"` pairs (0.117.0). The hosts a run in the box may reach, also on a private address, and port 22. |
 | `writable` | no | A list of paths (0.117.0), `~/...` or absolute. Extra folders a run in the box may write. |
@@ -172,10 +173,10 @@ one print the same lines. `darius link --list` adds `v3 (N rituals)` to a linked
 
 Every host must run 0.56.0 or later before a marker uses `may_extra` or `hold_extra`, and 0.57.0
 or later before it uses `args` or a `"""` string, 0.66.0 or later before it uses `on_hold`, and
-0.69.0 or later before it uses `follow_up_may`, `follow_up_may_extra` or `follow_up`, and 0.108.0
-or later before it uses `candle_deliver`:
+0.69.0 or later before it uses `follow_up_may`, `follow_up_may_extra` or `follow_up`, 0.108.0
+or later before it uses `candle_deliver`, and 0.127.0 or later before it uses `report_deliver`:
 an older host refuses an unknown ritual key, and it cannot read a mirrored item that has `args`,
-`on_hold`, `follow_up_may`, `follow_up`, `candle_deliver` or a note with a newline.
+`on_hold`, `follow_up_may`, `follow_up`, `candle_deliver`, `report_deliver` or a note with a newline.
 
 ## Box keys
 

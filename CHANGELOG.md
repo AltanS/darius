@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.127.0] - 2026-11-09
+
+### Added
+
+- Ritual reports by email. The new marker ritual key `report_deliver = ["email"]` makes each complete run of that ritual send one mail with its findings, from the host that ran it, after the run and outside the box, with the same timing as candle mail. `email` is the only value. Absent or `[]` means no report and leaves the definition hash unchanged. Update every host to 0.127.0 before you add the key: an older host refuses it in the marker and in the mirrored ritual item.
+- A report mail has the subject `[<project>] <ritual title>: <summary>` (the result block's summary, else `complete`), the findings text as written, and a footer with project, ritual, run id, finished time and the run page link when `web_url` is set. It also carries `html`: the same content rendered from the markdown, every text escaped, no images or scripts, links only for http and https.
+- No report for a held, failed, abandoned or dry run, for a run completed before the channel's `since` or more than a day before the send, or for an imported run. A run by hand of an opted-in ritual sends.
+- The `Idempotency-Key` of a report is the SHA-256 hex of `report:<run id>`, and every try sends the same bytes: the mail is built from the immutable blobs and the facts of the `run.completed` line only. `alert.sent` records the send. `alert.failed` for a report holds the key, the channel and the error, never its text.
+- The subject, the text and the HTML of a report pass a scrub: the settings' token and addresses, the provider's url, and obvious key shapes (`maskSecrets`). Other addresses and secrets in other shapes stay; the README says so.
+- `email.json` takes `"html": false`: reports go as text only, with no `html` field. `email status` shows it, and `--json` has `html`.
+- `darius email test --report` sends one sample report with text and HTML. A run cannot use it.
+- `darius doctor` says in one line when the marker at the cwd asks for report mail and this host has no email channel. The run never fails for it.
+
 ## [0.126.0] - 2026-11-09
 
 ### Added

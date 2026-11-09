@@ -722,7 +722,7 @@ curl -s http://host-a:4747/api/candle/light -H 'content-type: application/json' 
 
 ### Candles by email
 
-A host can email its candle notices through an HTTP mail API. There is no SMTP. Write the settings to a
+A host can email its candle notices and its ritual reports through an HTTP mail API. There is no SMTP. Write the settings to a
 file that only you can read (run `umask 077` first):
 
 ```json
@@ -741,6 +741,7 @@ Then feed the file to darius on stdin, and delete it:
 darius email set --stdin < email-settings.json && rm email-settings.json
 darius email status               # set up or not, the host of the url, the recipient count
 darius email test                 # sends one message
+darius email test --report        # sends one sample ritual report, with text and HTML
 ```
 
 - Each host has its own `<config>/email.json`. darius writes it with mode 0600, and refuses a file that
@@ -756,6 +757,58 @@ darius email test                 # sends one message
 - A run cannot use `email set` or `email test`. It can use `email status`.
 
 To use the channel, name it: `candle light --deliver email`, or `candle_deliver = ["email"]` on a ritual.
+
+### Ritual reports by email
+
+A ritual can mail its findings after each complete run. Turn it on for that ritual in `.darius.toml`, and
+commit it:
+
+```toml
+[rituals.daily-report]
+title = "Daily report"
+skill = "daily-report"
+report_deliver = ["email"]
+```
+
+- The host that ran the ritual sends one mail per complete run. It sends after the run, from outside the
+  run and the box, with the same timing as candle mail. A held, failed, abandoned or dry run sends nothing. A run
+  by hand of such a ritual sends too.
+- It uses the email channel above: `darius email set` must have run on that host. Without it the run completes
+  as usual and sends nothing, and `darius doctor` says so. The recipients are the host's `to` list. A run cannot
+  choose the channel or the recipients.
+- A run that completed before `since`, or more than a day before the send, sends nothing. So adding the key
+  does not mail old runs.
+- The subject is `[<project>] <ritual title>: <summary>`. The summary comes from the run's result block, or
+  is `complete`. The subject is one line of at most 200 characters.
+- The text is the findings as the run wrote them, then a footer: project, ritual, run id, finished time, and a
+  link to the run page when `web_url` is set. A run with no findings text says so in one line.
+- The HTML is the same content, rendered from the markdown: headings, lists, tables, code, bold and italic.
+  Every text is escaped. There are no images and no scripts. A `[label](url)` link stays a link only for an
+  http or https url.
+
+The provider receives:
+
+```json
+{
+  "from": "darius@example.com",
+  "to": ["you@example.com"],
+  "subject": "[acme-web] Daily report: 37 pages checked; 1 critical fixed.",
+  "text": "# Daily report\n\n37 pages checked.\n\n-- \nProject: acme-web\nRitual: Daily report (daily-report)\nRun: 01JZ8Q4V6T3M2K9X7B5N1R0WCE\nFinished: 2026-11-09T05:04:12.000Z\nLink: https://darius.example.com/w/acme-web/runs/01JZ8Q4V6T3M2K9X7B5N1R0WCE\n",
+  "html": "<!doctype html><html>...</html>"
+}
+```
+
+- The `Idempotency-Key` is the SHA-256 hex of `report:<run id>`. Each try sends the same bytes, so a provider
+  that refuses the same key with another body sees no change. darius tries a report at most three times.
+- Add `"html": false` to the settings to send the text only, with no `html` field, for a provider that refuses
+  a field it does not know. `email status` then says "reports as text only".
+- darius takes these out of the subject, the text and the HTML: the token (also URL-encoded), the `from` and `to`
+  addresses (in any case), the provider's url (cut to its host name), and obvious key shapes such as `sk-...`,
+  `ghp_...`, `AKIA...`, a `Bearer` value or `token=...`. It does not take out other addresses or a secret in
+  another shape. Do not turn reports on for a ritual whose findings may hold secrets.
+- No ledger line holds the mail's text. `alert.sent` and `alert.failed` hold the key, the channel, and a
+  recipient count or an error.
+- Update every host to 0.127.0 before you add the key: an older host refuses it.
 
 ## Cadence and the first due date
 

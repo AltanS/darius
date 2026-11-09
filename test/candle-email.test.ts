@@ -246,7 +246,7 @@ test("a hung provider cannot hold the send: the timeout ends it", async () => {
 
 test("without the file the channel is not set up, and that is no problem", () => {
   assert.equal(readEmailSettings(), null);
-  assert.deepEqual(emailStatus(), { isSetUp: false, host: null, recipients: 0, since: null, problem: null });
+  assert.deepEqual(emailStatus(), { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: null });
 });
 
 test("a file its group or others can read is refused, and an owner-only one passes", () => {
@@ -346,7 +346,7 @@ test("since is set to now when absent, kept when given, and made the form ledger
 test("the status holds no secret", () => {
   writeEmailSettings(settings({ web_url: "https://darius.example.com" }));
   const status = emailStatus();
-  assert.deepEqual(status, { isSetUp: true, host: "127.0.0.1", recipients: 2, since: settings().since, problem: null });
+  assert.deepEqual(status, { isSetUp: true, host: "127.0.0.1", recipients: 2, since: settings().since, html: true, problem: null });
   assertClean(JSON.stringify(status), "the status");
 });
 

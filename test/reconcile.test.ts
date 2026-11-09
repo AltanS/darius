@@ -451,6 +451,21 @@ test("candle_deliver mirrors into the store item, an empty list stays, and a rem
   assert.equal(ritual(project, "daily").candle_deliver, undefined, "a removed key leaves the mirror");
 });
 
+test("report_deliver mirrors into the store item, [] leaves no key, and a removed key leaves the mirror (0.127.0)", { skip: NO_GIT }, () => {
+  const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\nmax_mode = "act"\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\nmode = "report"\nreport_deliver = ["email"]\n[rituals.quiet]\ntitle = "Quiet"\nskill = "quiet"\nmode = "report"\nreport_deliver = []\n';
+  const { project, dir } = setup({ git: true, marker });
+  assert.equal(reconcileProject(project, dir, HOST, T1).ok, true);
+  assert.deepEqual(ritual(project, "daily").report_deliver, ["email"]);
+  assert.match(readItemText(project, "ritual", "daily") ?? "", /^report_deliver:\n  - email$/mu);
+  assert.equal(ritual(project, "quiet").report_deliver, undefined);
+  assert.doesNotMatch(readItemText(project, "ritual", "quiet") ?? "", /report_deliver/u);
+  assert.equal(reconcileProject(project, dir, HOST, T2).unchanged.includes("daily"), true, "a second reconcile finds nothing new");
+  writeFileSync(join(dir, ".darius.toml"), marker.replace('project = "acme-web"', `project = "${project.name}"`).replace('report_deliver = ["email"]\n', ""));
+  commitAll(dir, "drop");
+  assert.ok(reconcileProject(project, dir, HOST, T3).updated.includes("daily"));
+  assert.equal(ritual(project, "daily").report_deliver, undefined, "a removed key leaves the mirror");
+});
+
 test("follow_up_may and follow_up = headless mirror into the store item and read back; only a follow-up's run files merge it (0.69.0)", { skip: NO_GIT }, () => {
   const marker = 'v = 3\nproject = "acme-web"\ntz = "UTC"\nmax_mode = "act"\n[policies.guarded]\nmode = "act"\nmay = ["Bash(date)"]\nhold = [\'\\bpush\\b\']\nfollow_up_may = ["Bash(pnpm cli blocks update *)"]\n[rituals.daily]\ntitle = "Daily"\nskill = "daily"\npolicy = "guarded"\nfollow_up = "headless"\n';
   const { project, dir } = setup({ git: true, marker });

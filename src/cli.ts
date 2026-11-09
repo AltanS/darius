@@ -27,6 +27,7 @@ import { openProject, type Project } from "./core/store.ts";
 import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
 import { channelProblems } from "./core/alerts.ts";
+import { reportChannelNote } from "./core/report-email.ts";
 import { boxDoctorLines } from "./runner/box-check.ts";
 import { syncGuardLines, type SyncGuardLines } from "./core/host-versions.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
@@ -380,17 +381,22 @@ function isFullDoctor(argv: readonly string[]): boolean {
 
 /**
  * After a full `doctor`: a push or email file that cannot be read is a
- * problem. It names the file and the reason, and never a value. It is a
- * warning, as the tree conflicts are: the exit code stays the legacy one.
+ * problem. It names the file and the reason, and never a value. So is a
+ * marker that asks for report mail on a host with no email channel
+ * (0.127.0), in one line. It is a warning, as the tree conflicts are: the
+ * exit code stays the legacy one.
  */
 function printChannelProblems(argv: readonly string[]): void {
   const problems = channelProblems();
-  if (problems.length === 0) return;
+  const report = reportChannelNote(process.cwd());
+  if (problems.length === 0 && report === null) return;
   if (argv.includes("--json")) {
     for (const problem of problems) console.error(`darius: WARN: alert channel: ${problem}`);
+    if (report !== null) console.error(`darius: WARN: alert channel: ${report}`);
     return;
   }
   const lines = problems.map((problem) => `  WARN: ${problem}. Alerts on that channel wait until the file is fixed.`);
+  if (report !== null) lines.push(`  WARN: ${report}.`);
   process.stdout.write(`\n## Alert channels\n\n${lines.join("\n")}\n`);
 }
 

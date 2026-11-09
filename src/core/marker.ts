@@ -88,6 +88,12 @@
  * Absent means the default, push, and is stored as no key, so the hash of a
  * ritual without it does not change. A host older than 0.108.0 refuses the key.
  *
+ * `report_deliver = ["email"]` (0.127.0) is a ritual key: a complete run of the
+ * ritual sends its findings as a report mail (src/core/report-email.ts). `email`
+ * is the only channel. Absent and `[]` both mean no report mail and are stored
+ * as no key, so the hash of a ritual without it does not change. A host older
+ * than 0.127.0 refuses the key.
+ *
  * The box keys (0.117.0) say what a run of the ritual may do in the box
  * (`[run] sandbox = "box"`, src/core/box.ts): `net = "public" | "listed" |
  * "none"`, `reach = ["host:port", ...]`, `writable = ["~/path", ...]`,
@@ -193,6 +199,12 @@ export interface RepoRitual {
    * model cannot raise its own.
    */
   candleDeliver?: string[];
+  /**
+   * `report_deliver` (0.127.0): the channels a complete run of this ritual sends
+   * its report on, `["email"]`. Absent or `[]` in the file: no key, no report.
+   * The one place a report is asked for, so a run cannot ask for its own.
+   */
+  reportDeliver?: string[];
   /** `net` (0.117.0): what a run in the box may reach. Absent: "public". */
   net?: BoxNet;
   /** `reach` (0.117.0): `host:port` pairs a run in the box may reach, lower case, deduped. */
@@ -282,11 +294,13 @@ const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
-  "follow_up_may", "follow_up_may_extra", "follow_up", "candle_deliver",
+  "follow_up_may", "follow_up_may_extra", "follow_up", "candle_deliver", "report_deliver",
   "net", "reach", "writable", "ssh_agent", "tools", "sandbox",
 ]);
 /** The channels a candle notice can use. `src/core/alerts.ts` sends on them; `candle light --deliver` takes the same words. */
 const CANDLE_CHANNELS: readonly string[] = ["push", "email"];
+/** The channels a run report can use (0.127.0). `src/core/alerts.ts` sends on them. */
+const REPORT_CHANNELS: readonly string[] = ["email"];
 const POLICY_TABLE_KEYS: ReadonlySet<string> = new Set(["mode", "may", "hold", "notes", "on_hold", "follow_up_may"]);
 const PROFILE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 /** A repo ritual's slug. No dots: the TOML subset allows one dot in a header, the table separator. */
@@ -521,6 +535,21 @@ function decodeCandleDeliver(table: Table, at: { section: string; source: Source
     if (!channels.includes(entry)) channels.push(entry);
   }
   return channels;
+}
+
+/** A ritual's `report_deliver`: a list of `email`; undefined when the key is absent or the list is empty, both of which mean no report. */
+function decodeReportDeliver(table: Table, at: { section: string; source: Source }): string[] | undefined {
+  const value: unknown = table.report_deliver;
+  if (value === undefined) return undefined;
+  const line = at.source.lines[`${at.section}.report_deliver`];
+  const fail = (expected: string): Error => new Error(`${where(at.source.file, line)}: report_deliver must be ${expected}`);
+  if (!Array.isArray(value)) throw fail('a list: report_deliver = ["email"], or [] for no report');
+  const channels: string[] = [];
+  for (const entry of value) {
+    if (!isText(entry) || !REPORT_CHANNELS.includes(entry)) throw fail(`a list of ${REPORT_CHANNELS.join(" and ")}, got ${JSON.stringify(entry)}`);
+    if (!channels.includes(entry)) channels.push(entry);
+  }
+  return channels.length === 0 ? undefined : channels;
 }
 
 /** An env value, where an empty string counts as unset, as in src/core/paths.ts. */
@@ -767,6 +796,7 @@ function decodeRitual(
     throw new Error(`${where(source.file, source.lines[`${section}.follow_up`])}: follow_up must be "headless" or "attended"`);
   }
   const candleDeliver = decodeCandleDeliver(table, at);
+  const reportDeliver = decodeReportDeliver(table, at);
   const box = decodeBoxKeys(table, at);
   const { policy, policyName, policyExtra, ownNotes } = resolveRitualPolicy(table, { section, source, policies: context.policies });
   const ritual: RepoRitual = { slug, title, anchor: anchor === "completion" ? "completion" : "due", skill, policy, line: header ?? 0 };
@@ -781,6 +811,7 @@ function decodeRitual(
   if (maxTurns !== undefined) ritual.maxTurns = maxTurns;
   if (followUp === "headless") ritual.followUp = followUp;
   if (candleDeliver !== undefined) ritual.candleDeliver = candleDeliver;
+  if (reportDeliver !== undefined) ritual.reportDeliver = reportDeliver;
   Object.assign(ritual, box);
   if (policyName !== undefined) ritual.policyName = policyName;
   if (policyExtra !== undefined) ritual.policyExtra = policyExtra;

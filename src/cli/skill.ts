@@ -118,17 +118,17 @@ function trackerVerbs(): string {
 }
 
 const TAIL = `
-\`run now\` starts a ritual unattended and refuses mode off; for that, run \`run start\`, work, then \`run complete\`.
-\`run follow-up <run> --approve N|--item KEY\` (a new run of question N's lines, or of item KEY's proposal) and \`finding close|reopen|reset\` are for a person.
-A candle needs the operator to decide or follow up; a finding is for the record. More: \`/darius-candle\`. Delivery: \`candle_deliver\`, \`--deliver\`; \`none\` is the app only.
+\`run now\` starts a ritual unattended and refuses mode off; for that: \`run start\`, work, \`run complete\`.
+\`run follow-up <run> --approve N|--item KEY\` (a new run of question N's lines or item KEY's proposal) and \`finding close|reopen|reset\` are for a person.
+A candle needs the operator to decide or follow up; a finding is for the record. More: \`/darius-candle\`. Delivery: \`candle_deliver\`, \`--deliver\`; \`none\` is the app only. Reports: \`report_deliver\`.
 - Every 7 days: a ritual (\`cadence = "1w"\`); its skill ends with a result item \`"candle": true\`, a stable \`key\`, state \`needs-decision\`.
 - One check in 7 days: \`vigil add xyz --in 7d --candle high --stdin < body.md\`. A pass closes it, a fail lights the candle. Needs \`vigil\` in \`kinds\`.
 - A script: \`candle light <key> --title T --severity S\`. A run never lights, answers, accepts or blows out by command; it reports in the result block. \`candle list|show\` read.
-On the wrong host \`run now|resume|follow-up\` refuse and print an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
+On the wrong host \`run now|resume|follow-up\` refuse with an \`ssh <host> darius ...\` command; a person may add \`--on <host>\`, a run never does.
 
 ## Backups
 
-A snapshot is a dated tar.gz of this host's store, local, optionally in an S3 bucket.
+A snapshot is a dated tar.gz of this host's store, local and optionally in S3.
 
 - Read: \`snapshot status|config|credentials\`, \`snapshot list [--remote]\`. Act: \`snapshot create\` (now), \`snapshot check\` (the bucket).
 - Settings: \`snapshot config set|unset <key> [value]\`. Set \`endpoint\` and \`bucket\` together.

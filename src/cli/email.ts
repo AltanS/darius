@@ -1,6 +1,7 @@
 /**
  * `darius email status|set|test`: the email channel of candle notices
- * (src/core/email.ts; docs/concept.md, "Candles").
+ * (src/core/email.ts; docs/concept.md, "Candles") and of run reports
+ * (src/core/report-email.ts, 0.127.0).
  *
  *   email status       set up or not, the host of the url and the recipient
  *                      count. Never the token, never an address. Exit 1 when
@@ -12,6 +13,9 @@
  *                      when open candles asked for email and were not sent
  *                      (a count, and it writes nothing)
  *   email test         sends one test message, and writes no ledger line
+ *   email test --report
+ *                      sends one sample report, with text and html (only
+ *                      text when `html` is false), and writes no ledger line
  *
  * A run must not send mail or change the channel. Two walls hold that: `set` and
  * `test` refuse while DARIUS_RUN or DARIUS_RUN_POLICY is set, and
@@ -19,9 +23,10 @@
  */
 
 import { unsentEmailCandles } from "../core/alerts.ts";
-import { emailStatus, parseEmailInput, readEmailSettings, sendEmail, writeEmailSettings, type EmailSettings } from "../core/email.ts";
+import { emailStatus, parseEmailInput, postEmail, readEmailSettings, sendEmail, writeEmailSettings, type EmailSettings } from "../core/email.ts";
 import { hostId } from "../core/ledger.ts";
 import { endpointHost } from "../core/redact.ts";
+import { reportMessage, sampleReportFacts } from "../core/report-email.ts";
 import { errorMessage } from "../runtime.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
@@ -67,7 +72,7 @@ function status(args: ParsedArgs): number {
     console.log(`· email is not set up on ${hostId()}: darius email set --stdin`);
     return code;
   }
-  console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)}`);
+  console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)}${found.html === false ? ", reports as text only" : ""}`);
   return code;
 }
 
@@ -91,13 +96,23 @@ function set(args: ParsedArgs): number {
   return 0;
 }
 
+/** One sample report through the same build as a real one, so the operator sees what a provider does with it. */
+async function sendSampleReport(settings: EmailSettings): Promise<void> {
+  const now = new Date();
+  await postEmail(settings, reportMessage(settings, sampleReportFacts(hostId(), now), `email-test-report:${now.toISOString()}`));
+}
+
 async function sendTest(args: ParsedArgs): Promise<number> {
+  const isReport = args.flags.report === true;
   try {
     const settings = readEmailSettings();
     if (settings === null) return refuse(args, "email is not set up on this host: darius email set --stdin");
-    await sendEmail(settings, { key: `email-test:${new Date().toISOString()}`, title: "darius email test", body: `A test from ${hostId()}. Email works.`, url: "/" });
+    if (isReport) await sendSampleReport(settings);
+    else await sendEmail(settings, { key: `email-test:${new Date().toISOString()}`, title: "darius email test", body: `A test from ${hostId()}. Email works.`, url: "/" });
     const host = endpointHost(settings.url);
-    if (args.json) printJson({ ok: true, host, recipients: settings.to.length });
+    const html = isReport && settings.html !== false;
+    if (args.json) printJson(isReport ? { ok: true, host, recipients: settings.to.length, report: true, html } : { ok: true, host, recipients: settings.to.length });
+    else if (isReport) console.log(`✓ ${host} took a sample report for ${recipients(settings.to.length)}, ${html ? "text and html" : "text only"}`);
     else console.log(`✓ ${host} took a test for ${recipients(settings.to.length)}`);
     return 0;
   } catch (cause) {
@@ -107,8 +122,8 @@ async function sendTest(args: ParsedArgs): Promise<number> {
 
 export const emailCommand: Command = {
   name: "email",
-  flags: [],
-  summary: "the email channel of candle notices: status, set, test",
+  flags: ["report"],
+  summary: "the email channel of candle notices and run reports: status, set, test [--report]",
   usage: `email ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {
     const verb = args.positional[0];

@@ -280,7 +280,7 @@ export function withFileLock<R>(lockPath: string, fn: () => R, timing: LockTimin
 const RITUAL_KEYS: readonly string[] = [
   "id", "kind", "slug", "title", "created", "updated", "cadence", "anchor",
   "agent", "owner", "tags", "imported_from", "skill", "host", "policy",
-  "source", "at", "tz", "from", "args", "timeout", "follow_up", "candle_deliver", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
+  "source", "at", "tz", "from", "args", "timeout", "follow_up", "candle_deliver", "report_deliver", "def_hash", "def_commit", "def_dirty", "def_host", "def_at",
 ];
 const POLICY_KEYS: readonly string[] = ["mode", "may", "hold", "notes", "on_hold", "follow_up_may", "model", "max_turns", "profile"];
 const PROFILE_KEYS: readonly string[] = [
@@ -450,6 +450,8 @@ function decodeRepoFields(reader: FieldReader, ritual: Ritual, where: string): v
   }
   const candleDeliver = reader.optionalList("candle_deliver");
   if (candleDeliver !== undefined) ritual.candle_deliver = candleDeliver;
+  const reportDeliver = reader.optionalList("report_deliver");
+  if (reportDeliver !== undefined) ritual.report_deliver = reportDeliver;
 }
 
 function toCandleSeverity(value: string, where: string): Severity {
@@ -569,6 +571,7 @@ function encodeHeader(item: Item): FrontmatterHeader {
     putIfSet(entries, "source", item.source);
     for (const key of ["at", "tz", "from", "args", "timeout", "follow_up", "def_hash", "def_commit"] as const) putIfSet(entries, key, item[key]);
     if (item.candle_deliver !== undefined) entries.candle_deliver = [...item.candle_deliver];
+    if (item.report_deliver !== undefined) entries.report_deliver = [...item.report_deliver];
     putIfSet(entries, "def_dirty", item.def_dirty === undefined ? undefined : String(item.def_dirty));
     putIfSet(entries, "def_host", item.def_host);
     putIfSet(entries, "def_at", item.def_at);
