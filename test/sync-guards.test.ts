@@ -14,7 +14,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { behindDoctorLine, behindLine, checkBehind, readBehindRecord, writeBehindRecord } from "../src/core/checkout-behind.ts";
+import { behindDoctorLine, behindLine, checkBehind, fetchOutcome, readBehindRecord, writeBehindRecord } from "../src/core/checkout-behind.ts";
+import { stripUrlUserinfo } from "../src/core/redact.ts";
 import { loadConfig } from "../src/core/config.ts";
 import { compareHostVersions, hostVersionLines, RETIRED_AFTER_MS, syncGuardLines } from "../src/core/host-versions.ts";
 import { appendLine, hostId } from "../src/core/ledger.ts";
@@ -143,6 +144,21 @@ test("behind: a fetch that fails is unchecked and never counts the stale ref", {
   const failed = await checkBehind(clone);
   assert.equal(failed.state, "unchecked");
   assert.match(failed.state === "unchecked" ? failed.reason : "", /^the fetch of origin failed: /u);
+});
+
+test("behind: a failed fetch's reason never carries the userinfo of a URL git quotes", { skip: NO_GIT }, async () => {
+  const token = "placeholder-token-not-a-secret";
+  const stderr = `fatal: unable to access 'https://ci-user:${token}@git.example.com/acme.git/': Could not resolve host: git.example.com\n`;
+  const reason = fetchOutcome({ remote: "origin" }, { code: 128, timedOut: false, stderr, timeoutMs: 10_000 }) ?? "";
+  assert.equal(reason, "the fetch of origin failed: fatal: unable to access 'https://git.example.com/acme.git/': Could not resolve host: git.example.com");
+  assert.equal(stripUrlUserinfo(`ssh://deploy@host-a/x and https://${token}@host-b/y`), "ssh://host-a/x and https://host-b/y");
+  assert.equal(stripUrlUserinfo("no url, user@example.com stays"), "no url, user@example.com stays");
+
+  const { clone } = upstreamAndClone();
+  git(clone, ["remote", "set-url", "origin", `https://ci-user:${token}@127.0.0.1:1/acme.git`]);
+  const failed = await checkBehind(clone, { timeoutMs: 5_000 });
+  assert.equal(failed.state, "unchecked");
+  assert.ok(!(failed.state === "unchecked" ? failed.reason : token).includes(token), "a real failed fetch keeps the token out too");
 });
 
 test("behind: a fetch that hangs is stopped at the timeout, its process group is gone, and no lock is left", { skip: NO_GIT }, async () => {

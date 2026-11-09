@@ -36,6 +36,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JsonValue } from "./model.ts";
+import { stripUrlUserinfo } from "./redact.ts";
 import type { Project } from "./store.ts";
 
 /** The fetch's hard limit. */
@@ -91,11 +92,12 @@ function plainEnv(): Env {
   return { ...process.env, GIT_TERMINAL_PROMPT: "0" } satisfies Env;
 }
 
-/** How a fetch that exited ends: null when it worked, else the error text. */
-function fetchOutcome(target: { remote: string }, exit: { code: number | null; timedOut: boolean; stderr: string; timeoutMs: number }): string | null {
+/** How a fetch that exited ends: null when it worked, else the error text, with no URL userinfo in it. */
+export function fetchOutcome(target: { remote: string }, exit: { code: number | null; timedOut: boolean; stderr: string; timeoutMs: number }): string | null {
   if (exit.timedOut) return `the fetch of ${target.remote} timed out after ${String(Math.round(exit.timeoutMs / 100) / 10)} s`;
   if (exit.code === 0) return null;
-  return `the fetch of ${target.remote} failed: ${firstLine(exit.stderr) || `exit ${String(exit.code)}`}`;
+  // git's stderr can quote the remote URL, userinfo and all; the reason goes to behind.json, the report and doctor.
+  return `the fetch of ${target.remote} failed: ${stripUrlUserinfo(firstLine(exit.stderr)) || `exit ${String(exit.code)}`}`;
 }
 
 /** Sends `signal` to the fetch's whole process group (git and its ssh). */

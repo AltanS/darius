@@ -42,3 +42,12 @@ export function scrubForLedger(text: string, hide: readonly string[] = []): stri
   out = out.replaceAll(/\s+/gu, " ").trim();
   return out.length > MAX_TEXT ? `${out.slice(0, MAX_TEXT - 3)}...` : out;
 }
+
+/**
+ * The text with the userinfo of every URL in it removed: `https://user:token@host/x`
+ * becomes `https://host/x`. For tool output that may quote a URL with a
+ * secret in it, such as git's stderr (0.126.0).
+ */
+export function stripUrlUserinfo(text: string): string {
+  return text.replaceAll(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, "$1");
+}
