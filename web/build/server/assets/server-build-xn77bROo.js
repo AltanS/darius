@@ -10569,7 +10569,7 @@ function FinderDialog({ ws, rows, onClose }) {
 	let index = -1;
 	const listId = `${ids}-list`;
 	const inputId = `${ids}-input`;
-	const empty = rows.length === 0 ? "This workspace has no open milestones." : `No milestone matches “${query.trim()}”.`;
+	const empty = rows.length === 0 ? "This workspace has no milestones." : `No milestone matches “${query.trim()}”.`;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dialog", {
 		ref: dialog,
 		className: "finder",
@@ -24017,7 +24017,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DNRhKOey.js",
+			"module": "/assets/root-R7kV7pZN.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -25174,8 +25174,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-07a9e2de.js",
-	"version": "07a9e2de",
+	"url": "/assets/manifest-6d0b991b.js",
+	"version": "6d0b991b",
 	"sri": void 0
 };
 //#endregion

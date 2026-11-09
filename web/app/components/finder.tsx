@@ -152,7 +152,7 @@ export function FinderDialog({ ws, rows, onClose }: FinderDialogProps): React.Re
   let index = -1;
   const listId = `${ids}-list`;
   const inputId = `${ids}-input`;
-  const empty = rows.length === 0 ? "This workspace has no open milestones." : `No milestone matches “${query.trim()}”.`;
+  const empty = rows.length === 0 ? "This workspace has no milestones." : `No milestone matches “${query.trim()}”.`;
   return (
     <dialog
       ref={dialog}
