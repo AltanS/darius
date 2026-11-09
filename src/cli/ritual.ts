@@ -67,6 +67,9 @@ import { parseDate, ritualLifecycle, ritualState, rollCadence, type RitualState 
 import { handoffLines, lapsedAnswers, latestHandoff } from "../core/handoff.ts";
 import { findMarker, isAboveCap, MARKER_FILE, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
 import { reconcileProject, ritualWarnings, type ReconcileResult } from "../core/reconcile.ts";
+import { readStaleRecord } from "../core/reconcile-guard.ts";
+import { loadConfigIfPresent } from "../core/config.ts";
+import { lastSyncAt } from "../core/sync.ts";
 import type { Document, Policy, Ritual } from "../core/model.ts";
 import { resolveProject } from "../core/paths.ts";
 import { itemRef, openProject, type Project } from "../core/store.ts";
@@ -334,6 +337,7 @@ function listRituals(project: Project): ListedRitual[] {
   const ledger = readLedger(project);
   const now = new Date();
   const marker = v3Marker(project);
+  const isStale = readStaleRecord(project) !== null;
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
@@ -352,7 +356,7 @@ function listRituals(project: Project): ListedRitual[] {
     if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
     if (doc.header.args !== undefined) listed.args = doc.header.args;
     if (markerSandbox(slug, marker) === "off") listed.sandbox = "off";
-    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker);
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, isStale);
     if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
   });
@@ -380,12 +384,13 @@ function runList(args: ParsedArgs): number {
 }
 
 /** `repo (commit X, host Y, <date>)`, `unmanaged` (v3 project, not in the marker) or `store`. */
-function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, marker: Marker | null): string {
+function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, at: { marker: Marker | null; isStale: boolean }): string {
+  const { marker } = at;
   const { header } = doc;
   if (header.source === "repo") {
     const commit = header.def_commit === undefined ? "no commit" : `commit ${header.def_commit}`;
     const dirty = header.def_dirty === true ? ", uncommitted changes" : "";
-    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker).map((warning) => `\n  ! ${warning}`).join("");
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, at.isStale).map((warning) => `\n  ! ${warning}`).join("");
     return `repo (${commit}, host ${header.def_host ?? "?"}, ${header.def_at ?? "?"}${dirty})${warnings}`;
   }
   return marker !== null && !isRepoRitual(doc, header.slug, marker) ? "unmanaged (not in .darius.toml; it never runs unattended)" : "store";
@@ -413,7 +418,7 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.skill !== undefined) console.log(`skill: ${doc.header.skill}`);
   if (doc.header.args !== undefined) console.log(`args: ${doc.header.args}`);
   if (doc.header.timeout !== undefined) console.log(`timeout: ${doc.header.timeout}`);
-  console.log(`source: ${showSource(doc, ledger, v3Marker(project))}`);
+  console.log(`source: ${showSource(doc, ledger, { marker: v3Marker(project), isStale: readStaleRecord(project) !== null })}`);
   if (doc.header.host !== undefined) console.log(`host: ${doc.header.host} (other hosts skip it)`);
   if (markerSandbox(slug, v3Marker(project)) === "off") console.log('sandbox: off (the marker runs it outside the box on a host with [run] sandbox = "box")');
   console.log(`policy: ${formatPolicy(doc.header.policy)}`);
@@ -536,6 +541,21 @@ function staleLines(project: string, result: ReconcileResult): string[] {
   return [`! did not reconcile ${project}${where} on ${hostId()}: ${result.stale?.line ?? "the checkout is stale"}`];
 }
 
+const SYNC_STALE_MS = 60 * 60_000;
+
+/**
+ * With a remote, a reconcile by hand after no sync for an hour may miss
+ * another host's newer marker (0.129.0). One warning; the person decides.
+ * It reads sync.json only, never the bucket.
+ */
+function oldSyncWarning(project: Project, now: Date): string | null {
+  if (loadConfigIfPresent()?.remote === undefined) return null;
+  const last = lastSyncAt(project);
+  if (last !== undefined && now.getTime() - Date.parse(last) <= SYNC_STALE_MS) return null;
+  const when = last === undefined ? "has never synced on this host" : `last synced at ${last}`;
+  return `${project.name} ${when}: another host's newer marker may be missing; run darius sync first`;
+}
+
 function isSet(name: string): boolean {
   const value = process.env[name];
   return value !== undefined && value !== "";
@@ -557,7 +577,10 @@ function runReconcile(args: ParsedArgs): number {
     throw new UsageError(`no checkout of ${project.name} on this host: run darius link inside one`);
   }
   if (!existsSync(join(checkout, MARKER_FILE))) throw new UsageError(`not a v3 project: ${checkout} has no ${MARKER_FILE}`);
-  const result = reconcileProject(project, checkout, hostId(), new Date(), { dryRun: isDry, force: isForced });
+  const now = new Date();
+  const result = reconcileProject(project, checkout, hostId(), now, { dryRun: isDry, force: isForced });
+  const synced = oldSyncWarning(project, now);
+  if (synced !== null) result.warnings.unshift(synced);
   if (result.marker === "v2") throw new UsageError(`not a v3 project: ${join(checkout, MARKER_FILE)} is below v = 3`);
   if (args.json) printJson({ project: project.name, dryRun: isDry, ...result });
   else if (!result.ok) console.error(`! ${result.error ?? "the marker does not parse"}`);

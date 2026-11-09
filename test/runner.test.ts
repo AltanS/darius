@@ -55,6 +55,7 @@ import { latestHandoff } from "../src/core/handoff.ts";
 import { missingTools, namedTools } from "../src/runner/tools.ts";
 import { commitAll, dirty as dirtyFile, initRepo, NO_GIT } from "./helpers/git.ts";
 import { readBehindRecord } from "../src/core/checkout-behind.ts";
+import { ritualLifecycle } from "../src/core/due.ts";
 import { SETUP_UNITS, type Config } from "../src/core/config.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-runner-"));
@@ -1054,6 +1055,68 @@ test("a checkout behind its upstream: refuse skips as checkout-behind, warn runs
   assert.equal(warned.code, 0);
   assert.ok(formatReport(warned.report, "news").includes("! checkout of rd-behind is 1 commit behind origin/main"));
   assert.equal(existsSync(join(dir, "NEWS.md")), false, "darius never pulls: the upstream's file is not in the work tree");
+});
+
+// --- reconcile held while the sync pulled nothing (0.129.0) -----------------------------------
+
+/** A bucket whose list fails as a network error: the sync pulls nothing and ends "offline", while the ritual lease still works. */
+function listOfflineS3(): MemoryS3 {
+  return { ...memoryS3(), list: throwOffline };
+}
+
+const EXTRA_RITUAL = ["", "[rituals.extra]", 'title = "Extra"', 'cadence = "1d"', 'from = "2026-10-02"', 'at = "07:00"', 'skill = "daily"', 'mode = "report"', 'may = ["Bash(date)"]'].join("\n");
+
+test("an offline sync holds the reconcile: a store ritual the marker lacks is not retired and waits, the shared one runs; the next working sync reconciles", { skip: NO_GIT }, async () => {
+  const project = "rd-offline-hold";
+  const dir = v3Checkout(project, { git: true, extra: EXTRA_RITUAL });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const adopted = await batchAt(project, BEFORE_AT, { inject: { cfg: hostConfig("warn"), s3: memoryS3() } });
+  assert.equal(adopted.report.projects[0]?.syncBefore, "ok", JSON.stringify(adopted.report));
+  assert.deepEqual(openProject(project).listItems("ritual").toSorted(), ["daily", "extra"]);
+
+  writeFileSync(join(dir, ".darius.toml"), v3Marker(project, ""));
+  commitAll(dir, "drop extra");
+  const held = await batchAt(project, AFTER_AT, { inject: { cfg: hostConfig("warn"), s3: listOfflineS3() } });
+  const entry = held.report.projects[0];
+  assert.equal(entry?.syncBefore, "offline", JSON.stringify(held.report));
+  assert.equal(entry?.reconcile, "held");
+  assert.equal(ritualLifecycle(readLedger(openProject(project)), "extra"), "active", "not retired while another host's marker cannot be ruled out");
+  const bySlug = new Map((entry?.rituals ?? []).map((ritual) => [ritual.slug, ritual]));
+  assert.equal(bySlug.get("daily")?.end, "complete", JSON.stringify(entry));
+  assert.deepEqual([bySlug.get("extra")?.action, bySlug.get("extra")?.reason], ["skipped", "not-in-marker"], JSON.stringify(entry));
+  const line = "! rd-offline-hold: reconcile skipped: the bucket is unreachable, so another host's newer marker cannot be ruled out";
+  assert.ok(formatReport(held.report, "digest").includes(line), formatReport(held.report, "digest").join("\n"));
+  assert.equal(linesOf(project, "ritual.defined").filter((defined) => defined.at === AFTER_AT.toISOString()).length, 0, "nothing written");
+
+  const next = await batchAt(project, new Date("2026-10-02T07:20:00.000Z"), { inject: { cfg: hostConfig("warn"), s3: memoryS3() } });
+  assert.equal(next.report.projects[0]?.syncBefore, "ok");
+  assert.equal(next.report.projects[0]?.reconcile, undefined);
+  assert.equal(ritualLifecycle(readLedger(openProject(project)), "extra"), "retired", "a working sync reconciles as before");
+});
+
+test("a lease-held sync and no remote reconcile as before", { skip: NO_GIT }, async () => {
+  const project = "rd-offline-none";
+  const dir = v3Checkout(project, { git: true, extra: EXTRA_RITUAL });
+  await batchAt(project, BEFORE_AT);
+  writeFileSync(join(dir, ".darius.toml"), v3Marker(project, ""));
+  commitAll(dir, "drop extra");
+  // Another host holds the project lease: the chunks were pulled before the lease was tried.
+  const s3 = memoryS3();
+  s3.objects.set(`${project}/lease.json`, JSON.stringify({ holder: "host-z:9", host: "host-z", pid: 9, expires: "2999-01-01T00:00:00.000Z" }));
+  const leased = await batchAt(project, BEFORE_AT, { inject: { cfg: hostConfig("warn"), s3 } });
+  assert.equal(leased.report.projects[0]?.syncBefore, "lease-held", JSON.stringify(leased.report));
+  assert.equal(leased.report.projects[0]?.reconcile, undefined);
+  assert.equal(ritualLifecycle(readLedger(openProject(project)), "extra"), "retired");
+
+  const other = "rd-offline-none-2";
+  const otherDir = v3Checkout(other, { git: true, extra: EXTRA_RITUAL });
+  await batchAt(other, BEFORE_AT);
+  writeFileSync(join(otherDir, ".darius.toml"), v3Marker(other, ""));
+  commitAll(otherDir, "drop extra");
+  const { report } = await batchAt(other, BEFORE_AT);
+  assert.equal(report.projects[0]?.syncBefore, "no-remote");
+  assert.equal(report.projects[0]?.reconcile, undefined);
+  assert.equal(ritualLifecycle(readLedger(openProject(other)), "extra"), "retired");
 });
 
 test("a checkout with no upstream is recorded as unchecked and never blocks, also with refuse", { skip: NO_GIT }, async () => {

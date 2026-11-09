@@ -102,6 +102,8 @@ export interface ProjectEntry {
    * `checkout-stale`. `host` and `commit` name the newest reconcile.
    */
   stale?: { checkout: string; relation: "behind" | "unknown" | "diverged"; host: string; commit: string; line: string };
+  /** "held" (0.129.0): the sync before the batch pulled nothing, so reconcile wrote nothing; `warnings` says why. */
+  reconcile?: "held";
 }
 
 export interface BatchReport {

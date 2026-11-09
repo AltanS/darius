@@ -542,3 +542,28 @@ test("report: the stale line comes once, not in the news scope, and not next to 
   assert.equal(both.split(line).length - 1, 1, both);
   assert.match(both, /daily: skipped, checkout-stale, the checkout of acme-web is older/u);
 });
+
+test("ritual list advises a pull, not a reconcile, while the stale record is there", { skip: NO_GIT }, async () => {
+  const { project: name, a, b } = chain();
+  const project = openProject(name, { create: true });
+  reconcileProject(project, a, "host-a", T1);
+  const { writeLink } = await import("../src/core/links.ts");
+  writeLink(name, b);
+  const listed = async (): Promise<string[]> => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line: string): void => {
+      lines.push(line);
+    };
+    try {
+      await ritualCommand.run(parseArgs(["list", "--project", name]));
+    } finally {
+      console.log = original;
+    }
+    return lines.filter((line) => line.startsWith("! mirror is from"));
+  };
+  assert.ok((await listed()).every((line) => line.endsWith(": darius ritual reconcile")), "no stale record: the old advice");
+  reconcileProject(project, b, "host-b", T2);
+  const advice = await listed();
+  assert.ok(advice.length > 0 && advice.every((line) => line.endsWith(": pull the checkout")), advice.join("\n"));
+});

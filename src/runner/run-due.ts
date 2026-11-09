@@ -17,7 +17,13 @@
  *      nothing when this checkout is older than the commit of the newest
  *      reconcile from any host, or off its history; then each repo ritual
  *      of the project skips as `checkout-stale`, by hand too, and the
- *      project entry gets `stale` and the report one line.
+ *      project entry gets `stale` and the report one line. When the sync
+ *      before the batch pulled nothing (`offline`, `darius-outdated`), the
+ *      reconcile only classifies and writes nothing (`reconcile: "held"`, one
+ *      warning): the rituals run from the store as after a no-op reconcile,
+ *      and a repo ritual this checkout's marker lacks skips as
+ *      `not-in-marker` until a pass with a working sync. `lease-held` and
+ *      `no-remote` reconcile as before.
  *   2. For each ritual that is active and due, skip it when its policy mode
  *      is `off`, it is pinned to another host (`other-host`: its `host`
  *      field names a host other than `hostId()`), its latest run is held,
@@ -311,6 +317,8 @@ interface ProjectContext {
   batch: { readiness: Map<string, Readiness>; box?: BoxReadiness; behind: Map<string, BehindCheck>; report: BatchReport };
   /** The refusal line when the sync before the batch was refused for the compat floor (0.126.0). */
   outdated?: string;
+  /** How the sync before the batch ended: "ok", "offline", "lease-held", "no-remote", "darius-outdated"; absent in a dry run. */
+  syncBefore?: string;
   /** The behind check of this project's checkout, once a scheduled ritual asked for it (0.126.0). */
   behind?: { checkout: string; check: BehindCheck };
 }
@@ -328,6 +336,8 @@ interface RepoState {
   named: ReadonlySet<string>;
   /** The checkout is older than the marker the store holds (0.129.0): the report's line. Reconcile wrote nothing. */
   stale?: string;
+  /** The sync before the batch pulled nothing (offline, or refused for the compat floor), so reconcile wrote nothing (0.129.0). */
+  isHeld?: boolean;
 }
 
 function skipped(slug: string, reason: SkipReason, detail?: string | undefined): RitualEntry {
@@ -391,6 +401,10 @@ function repoBlocker(ctx: ProjectContext, doc: Document<Ritual>, isByHand: boole
   if (repo.version === undefined || repo.version < 3) return undefined;
   // 0.129.0: the store holds a newer marker than this checkout. A run would mix the store's definition with this checkout's skill, box keys and profiles, so no run starts, by hand neither.
   if (repo.stale !== undefined && doc.header.source === "repo") return skipped(slug, "checkout-stale", repo.stale);
+  // 0.129.0: reconcile was held for a sync that pulled nothing. A store ritual this checkout's marker lacks waits for a pass with a working sync; it is not retired.
+  if (repo.isHeld === true && doc.header.source === "repo" && !repo.named.has(slug)) {
+    return skipped(slug, "not-in-marker", `not in ${MARKER_FILE} of this checkout; reconcile waits for a sync that reaches the bucket`);
+  }
   if (doc.header.source !== "repo" && !repo.named.has(slug)) {
     return isByHand ? undefined : skipped(slug, "not-in-marker", `not in ${MARKER_FILE}; it never runs unattended`);
   }
@@ -1111,6 +1125,17 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
 // --- projects -------------------------------------------------------------------------
 
 /**
+ * The sync words after which reconcile writes nothing (0.129.0): the pull did
+ * not run, so another host's newest `ritual.defined` lines may be missing.
+ * "lease-held" is not one: the chunks are pulled before the lease is tried
+ * (src/core/sync.ts, runFull). "no-remote" has no other host to miss.
+ */
+const HELD_SYNCS: ReadonlyMap<string, string> = new Map([
+  ["offline", "the bucket is unreachable"],
+  ["darius-outdated", "this darius is too old to sync with the bucket"],
+]);
+
+/**
  * Reads the checkout's marker for this batch and mirrors a v3 marker into
  * the store before any ritual is judged (section 4.1). A dry run classifies
  * the same way and writes nothing. A store error is the project's error line.
@@ -1119,7 +1144,14 @@ function reconcileStep(ctx: ProjectContext, entry: ProjectEntry): void {
   const checkout = checkoutDir(ctx.project, readLedger(ctx.project));
   if (checkout === undefined) return;
   const repo: RepoState = { checkout, dirty: false, named: new Set() };
-  const result = reconcileProject(ctx.project, checkout, ctx.host, ctx.now, { dryRun: ctx.options.isDryRun });
+  const held = HELD_SYNCS.get(ctx.syncBefore ?? "");
+  // A held reconcile classifies as a dry run: the store keeps what it has, and nothing is retired.
+  const result = reconcileProject(ctx.project, checkout, ctx.host, ctx.now, { dryRun: ctx.options.isDryRun || held !== undefined });
+  if (held !== undefined) {
+    repo.isHeld = true;
+    entry.reconcile = "held";
+    entry.warnings = [`reconcile skipped: ${held}, so another host's newer marker cannot be ruled out`];
+  }
   repo.dirty = result.dirty;
   if (!result.ok) repo.error = result.error ?? `${checkout}: ${MARKER_FILE} does not parse`;
   else {
@@ -1131,7 +1163,7 @@ function reconcileStep(ctx: ProjectContext, entry: ProjectEntry): void {
     repo.stale = line;
     entry.stale = { checkout, relation, host, commit, line };
   }
-  if (result.warnings.length > 0) entry.warnings = result.warnings;
+  if (result.warnings.length > 0) entry.warnings = [...(entry.warnings ?? []), ...result.warnings];
   ctx.repo = repo;
 }
 
@@ -1141,6 +1173,7 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
   if (!ctx.options.isDryRun) {
     const synced = await syncStep(ctx.project, remote);
     entry.syncBefore = synced.word;
+    ctx.syncBefore = synced.word;
     if (synced.outdated !== undefined) ctx.outdated = synced.outdated;
     await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
   }

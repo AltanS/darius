@@ -411,13 +411,16 @@ function keepStaleRecord(project: Project, at: { checkout: string; now: Date }, 
   }
 }
 
-/** What `ritual list` and the web warn about: a retired slug named again, and a mirror this checkout differs from (section 4.3). */
-export function ritualWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null): string[] {
+/**
+ * What `ritual list` and the web warn about: a retired slug named again, and a mirror this checkout differs from (section 4.3).
+ * `isStale`: the last reconcile found this checkout older than the store's marker (`marker-stale.json`, 0.129.0), so the advice is a pull, not a reconcile.
+ */
+export function ritualWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null, isStale = false): string[] {
   const { header } = doc;
   const defined = marker?.rituals.find((ritual) => ritual.slug === header.slug);
   if (marker === null || defined === undefined || header.source !== "repo") return [];
   if (lifecycle === "retired") return [`${header.slug} was retired; use a new slug`];
   if (header.def_hash === mirrorHash(marker, defined)) return [];
   const commit = header.def_commit === undefined ? "" : ` (commit ${header.def_commit})`;
-  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: darius ritual reconcile`];
+  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: ${isStale ? "pull the checkout" : "darius ritual reconcile"}`];
 }

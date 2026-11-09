@@ -32,6 +32,11 @@
  * shallow repo that lacks R, or reads as diverged, cannot prove it, so it
  * reconciles too, with a note.
  *
+ * Known limit: "newest" is by ledger id, and an id carries its host's clock.
+ * Two hosts whose clocks differ by more than the time between their
+ * reconciles can pick the older line, and a host can then judge itself
+ * current against an older commit.
+ *
  * The stale finding is kept in `<store>/<project>/marker-stale.json` (local,
  * never synced) for `darius doctor`; the next reconcile that is not stale
  * removes it.

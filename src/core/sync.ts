@@ -417,6 +417,15 @@ function readSyncState(project: Project): SyncState {
   return decodeSyncState(readFileSync(path, "utf8"), path);
 }
 
+/** When the project last synced in full on this host (`sync.json` `last_sync`), or undefined: never, or the file does not read. */
+export function lastSyncAt(project: Project): string | undefined {
+  try {
+    return readSyncState(project).lastSync;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Writes sync.json under the project lock. `seen` is merged with the file, so a parallel pull loses nothing. */
 function saveSyncState(project: Project, state: SyncState): void {
   project.withLock(() => {
