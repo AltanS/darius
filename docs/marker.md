@@ -329,6 +329,30 @@ to edit. `ritual retire` is refused for a repo ritual: remove the table and comm
 reconcile retires it. A retired slug stays retired. Use a new slug if you want it back.
 A store ritual that the marker does not name is `unmanaged`: it never runs from the timer.
 
+### Two hosts
+
+Each host reconciles from its own checkout. A host reconciles only when its checkout is at or
+after the commit the store was last reconciled from, by any host. A host that has not pulled yet
+writes nothing: it does not adopt, change or retire a ritual. Its timer skips the project's
+rituals as `checkout-stale`, and the report and `darius doctor` say so:
+
+```text
+the checkout of acme-web is older than the marker the store holds (reconciled on host-a at 0123456789ab): pull it
+```
+
+Pull the checkout, and the next reconcile goes on. darius compares commits with local git only. It
+needs no network, and it never pulls for you. If git fails, or the checkout is not in git,
+reconcile works as before.
+
+If you rebased or force-pushed the commit the store was reconciled from, no checkout can catch
+up with it. Then reconcile from the checkout you trust:
+
+```bash
+darius ritual reconcile --force     # reconcile from this checkout anyway; it may retire rituals
+```
+
+A run cannot use `--force`. The timer never uses it.
+
 ## Move a project to v3
 
 `darius ritual export` builds a v3 marker from the store rituals of a v2 project. It never commits.

@@ -331,6 +331,14 @@ behind = "warn"     # default: the run goes ahead; "refuse" skips the ritual as 
 Every unclear case lets the run go ahead and is recorded: no git, no upstream, a detached HEAD, a
 fetch that fails or times out. A branch that is only ahead is not behind. Runs by hand do not check.
 
+A host also does not reconcile from a checkout that is older than the marker the store holds. The
+store remembers the commit of its last reconcile, from any host. If this checkout is behind that
+commit, lacks it, or is on another history, reconcile writes nothing, so it cannot retire a ritual
+the other host just added. The project's rituals skip as `checkout-stale` until you pull, and the
+report and `darius doctor` say `the checkout of <project> is older than the marker the store holds
+(reconciled on <host> at <commit>): pull it`. This check uses local git only. After a rebase or a
+force-push, `darius ritual reconcile --force` reconciles from this checkout anyway.
+
 ### Backups
 
 A darius host keeps one backup of its store: a daily `tar.gz` file, called a snapshot. It stays on
@@ -881,7 +889,7 @@ the full reference.
 
 - `darius setup [--systemd] [--remote]`: link the CLI, write the config, install the timers, create the bucket.
 - `darius update [vX.Y.Z] [--check] [--major] [--hosts h1,h2]`: move this host, or other hosts, to a release.
-- `darius ritual add|list|show|set|pause|resume|retire|reconcile|export`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store. `export [--write]` builds a v3 marker from a v2 project's rituals.
+- `darius ritual add|list|show|set|pause|resume|retire|reconcile|export`: recurring work with a cadence and a policy. In a v3 project the marker defines it, and `reconcile` mirrors it into the store (`--force` reconciles a checkout older than the store's marker, after a rebase). `export [--write]` builds a v3 marker from a v2 project's rituals.
 - `darius run start|hold|answer|complete|list`: one pass through a ritual.
 - `darius run ack <run> [--answer N=TEXT ...] [--note TEXT]`: answer a run's questions, one `--answer` per question, or dismiss a run with no answer. The answers reach the next run of the ritual and stay until a run that read them completes.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.

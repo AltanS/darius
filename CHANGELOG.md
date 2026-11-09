@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.129.0] - 2026-11-10
+
+### Fixed
+
+- A host with an older checkout no longer retires a ritual that a newer host adopted. The incident: host-a pulled a commit whose marker added a ritual and reconciled, so the store adopted it. Minutes later host-b ran run-due from its checkout at the parent commit. Its reconcile saw a store ritual its marker did not name and retired it, and a retired slug cannot come back. The two hosts also rewrote each other's definitions of the other rituals on every reconcile. The 0.126.0 behind check did not help: it runs after the reconcile, only for a due ritual, and warns by default.
+- Now a host reconciles a project's marker only when its checkout is not older than the marker the store was last reconciled from. The record is the newest `ritual.defined` line of the project, from any host, after the sync. When its commit is HEAD or an ancestor of HEAD, the reconcile runs as before. When HEAD is an ancestor of it, the checkout lacks it, or the histories diverged, the reconcile writes nothing: no adopt, no update, no retire. The check uses local git only, so it works offline, and each git call has a 5 s cap.
+- When the marker file is the same as the one the record was read from, a checkout on an older commit writes nothing either. Before, a host on another commit with the same marker rewrote `def_commit` of every ritual and added one ledger line per ritual on each reconcile.
+
+### Added
+
+- Each `ritual.defined` line carries `marker_hash`, the sha256 of the marker file, and `forced: true` after `--force`. An older darius keeps unknown fields of a line, so the lines sync as before.
+- A new failing skip, `checkout-stale`: run-due skips each repo ritual of a project whose checkout is stale, by hand too, because a run would mix the store's newer definition with this checkout's older skill, box keys and profiles. The report says it in one line, for example `the checkout of acme-web is older than the marker the store holds (reconciled on host-a at 0123456789ab): pull it`. The project entry of the JSON report gets `stale`. `darius doctor` repeats the line from `marker-stale.json` in the project's store dir, which is never synced, and the next reconcile that is not stale removes it.
+- `darius ritual reconcile` on a stale checkout writes nothing, prints the line and exits 1. `darius ritual reconcile --force` reconciles from this checkout anyway, for a history that was rebased or force-pushed; it may retire rituals. The CLI refuses `--force` inside a run, and the gate denies `ritual reconcile --force` in every run, whatever `may` says. run-due never forces.
+- No record, a record with no commit (from an older darius or a checkout outside git), a checkout that is no git work tree, and any git error reconcile as before. A git error adds a note to the result. A shallow clone that lacks the recorded commit cannot prove it is stale, so it reconciles too, with a note.
+
 ## [0.128.2] - 2026-11-10
 
 ### Fixed

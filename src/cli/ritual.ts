@@ -24,7 +24,7 @@
  *   other host skip it as `other-host` (docs/concept.md, "Host pin"). NAME is
  *   the host id, `host` in that host's config.toml. `--host ""` clears it.
  *   ritual pause|resume|retire <slug> [--who W]
- *   ritual reconcile [--project P] [--dry-run] [--json]
+ *   ritual reconcile [--project P] [--dry-run] [--force] [--json]
  *   ritual export [--project P] [--write] [--json]
  *
  * v3 projects (0.54.0; docs/architecture/marker-v3.md, section 2): a project
@@ -34,6 +34,11 @@
  * file and line for any other. `retire` is refused for a repo ritual: remove
  * the table and commit. `reconcile` mirrors the checkout's marker into the
  * store by hand (run-due does it on every batch); `--dry-run` writes nothing.
+ * A checkout older than the marker the store holds reconciles nothing and
+ * exits 1 (0.129.0, src/core/reconcile-guard.ts). `--force` reconciles from
+ * this checkout anyway, for a history that was rebased or force-pushed; it
+ * may retire rituals, and it is refused inside a run (DARIUS_RUN), with
+ * `forcesReconcile` in src/harness/gate.ts as the second wall.
  *
  * `export` (0.55.0, section 6) prints a v3 marker built from the project's
  * store rituals; `--write` writes `.darius.toml` and the skill files into the
@@ -525,20 +530,40 @@ function reconcileLines(project: string, result: ReconcileResult, isDry: boolean
   return lines;
 }
 
+/** What a stale checkout prints: nothing was written, and why. */
+function staleLines(project: string, result: ReconcileResult): string[] {
+  const where = result.commit === undefined ? "" : ` at commit ${result.commit}`;
+  return [`! did not reconcile ${project}${where} on ${hostId()}: ${result.stale?.line ?? "the checkout is stale"}`];
+}
+
+function isSet(name: string): boolean {
+  const value = process.env[name];
+  return value !== undefined && value !== "";
+}
+
 function runReconcile(args: ParsedArgs): number {
   const isDry = args.flags["dry-run"] === true;
+  const isForced = args.flags.force === true;
+  // The first wall: a run never forces a reconcile. The second is forcesReconcile in src/harness/gate.ts.
+  if (isForced && (isSet("DARIUS_RUN") || isSet("DARIUS_RUN_POLICY"))) {
+    const reason = "ritual reconcile --force is for a person; a run does not force a reconcile";
+    if (args.json) printJson({ ok: false, error: reason });
+    else console.error(`! ${reason}`);
+    return 1;
+  }
   const project = currentProject(args, { create: !isDry });
   const checkout = checkoutDir(project, readLedger(project));
   if (checkout === undefined) {
     throw new UsageError(`no checkout of ${project.name} on this host: run darius link inside one`);
   }
   if (!existsSync(join(checkout, MARKER_FILE))) throw new UsageError(`not a v3 project: ${checkout} has no ${MARKER_FILE}`);
-  const result = reconcileProject(project, checkout, hostId(), new Date(), { dryRun: isDry });
+  const result = reconcileProject(project, checkout, hostId(), new Date(), { dryRun: isDry, force: isForced });
   if (result.marker === "v2") throw new UsageError(`not a v3 project: ${join(checkout, MARKER_FILE)} is below v = 3`);
   if (args.json) printJson({ project: project.name, dryRun: isDry, ...result });
   else if (!result.ok) console.error(`! ${result.error ?? "the marker does not parse"}`);
+  else if (result.stale !== undefined) for (const line of staleLines(project.name, result)) console.error(line);
   else for (const line of reconcileLines(project.name, result, isDry)) console.log(line);
-  return result.ok ? 0 : 1;
+  return result.ok && result.stale === undefined ? 0 : 1;
 }
 
 // --- dispatch ---------------------------------------------------------------------

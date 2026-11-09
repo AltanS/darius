@@ -13,6 +13,11 @@
  *      check below; a run by hand goes on, with a warning.
  *      Then reconcile the checkout's v3 marker into the store
  *      (src/core/reconcile.ts; a dry run classifies and writes nothing).
+ *      The reconcile guard (0.129.0, src/core/reconcile-guard.ts) writes
+ *      nothing when this checkout is older than the commit of the newest
+ *      reconcile from any host, or off its history; then each repo ritual
+ *      of the project skips as `checkout-stale`, by hand too, and the
+ *      project entry gets `stale` and the report one line.
  *   2. For each ritual that is active and due, skip it when its policy mode
  *      is `off`, it is pinned to another host (`other-host`: its `host`
  *      field names a host other than `hostId()`), its latest run is held,
@@ -321,6 +326,8 @@ interface RepoState {
   dirty: boolean;
   /** The marker's own ritual names, when it is v3. */
   named: ReadonlySet<string>;
+  /** The checkout is older than the marker the store holds (0.129.0): the report's line. Reconcile wrote nothing. */
+  stale?: string;
 }
 
 function skipped(slug: string, reason: SkipReason, detail?: string | undefined): RitualEntry {
@@ -382,6 +389,8 @@ function repoBlocker(ctx: ProjectContext, doc: Document<Ritual>, isByHand: boole
   const { slug } = doc.header;
   if (repo.error !== undefined) return skipped(slug, "marker-invalid", repo.error);
   if (repo.version === undefined || repo.version < 3) return undefined;
+  // 0.129.0: the store holds a newer marker than this checkout. A run would mix the store's definition with this checkout's skill, box keys and profiles, so no run starts, by hand neither.
+  if (repo.stale !== undefined && doc.header.source === "repo") return skipped(slug, "checkout-stale", repo.stale);
   if (doc.header.source !== "repo" && !repo.named.has(slug)) {
     return isByHand ? undefined : skipped(slug, "not-in-marker", `not in ${MARKER_FILE}; it never runs unattended`);
   }
@@ -1116,6 +1125,11 @@ function reconcileStep(ctx: ProjectContext, entry: ProjectEntry): void {
   else {
     repo.version = result.marker === "v3" ? 3 : 2;
     repo.named = new Set([...result.adopted, ...result.updated, ...result.unchanged]);
+  }
+  if (result.stale !== undefined) {
+    const { relation, host, commit, line } = result.stale;
+    repo.stale = line;
+    entry.stale = { checkout, relation, host, commit, line };
   }
   if (result.warnings.length > 0) entry.warnings = result.warnings;
   ctx.repo = repo;

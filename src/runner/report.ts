@@ -49,6 +49,7 @@ export type SkipReason =
   | "not-followable"
   | "darius-outdated"
   | "checkout-behind"
+  | "checkout-stale"
   | "error";
 
 /** How a started run ended, read back from the ledger after `claude` exited. */
@@ -95,6 +96,12 @@ export interface ProjectEntry {
    * the check could not run.
    */
   behind?: { checkout: string; upstream: string; commits: number; ahead: number } | { checkout: string; unchecked: string };
+  /**
+   * The checkout is older than the marker the store holds, or off its
+   * history (0.129.0): reconcile wrote nothing, and the repo rituals skip as
+   * `checkout-stale`. `host` and `commit` name the newest reconcile.
+   */
+  stale?: { checkout: string; relation: "behind" | "unknown" | "diverged"; host: string; commit: string; line: string };
 }
 
 export interface BatchReport {
@@ -141,6 +148,7 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
   "skill-dirty",
   "darius-outdated",
   "checkout-behind",
+  "checkout-stale",
 ]);
 
 /**
@@ -159,6 +167,7 @@ const OWN_DETAILS: ReadonlySet<string> = new Set([
   "skill-dirty",
   "darius-outdated",
   "checkout-behind",
+  "checkout-stale",
 ]);
 
 /**
@@ -264,6 +273,13 @@ function describeBehind(project: ProjectEntry): string | null {
   return behindLine(project.project, { state: "checked", upstream: behind.upstream, behind: behind.commits, ahead: behind.ahead });
 }
 
+/** The stale checkout line (0.129.0), or null when the checkout is not stale or a `checkout-stale` skip already says it. */
+function describeStale(project: ProjectEntry): string | null {
+  if (project.stale === undefined) return null;
+  if (project.rituals.some((entry) => entry.reason === "checkout-stale")) return null;
+  return project.stale.line;
+}
+
 /** Plain-text lines for the webhook or the journal. Empty when nothing is worth saying (never for a digest). */
 export function formatReport(report: BatchReport, scope: ReportScope = "all"): string[] {
   const lines: string[] = [];
@@ -276,6 +292,8 @@ export function formatReport(report: BatchReport, scope: ReportScope = "all"): s
   // The same warning would come every 15 minutes, so the news scope leaves it out.
   for (const project of scope === "news" ? [] : report.projects) {
     for (const warning of project.warnings ?? []) lines.push(`! ${project.project}: ${warning}`);
+    const stale = describeStale(project);
+    if (stale !== null) lines.push(`! ${stale}`);
   }
   // Only a ritual that is about to run asks for the check, so this line comes with news of its own.
   for (const project of report.projects) {

@@ -16,6 +16,7 @@ import {
   callsWebWrite,
   clearsRunMarker,
   decide as gateDecide,
+  forcesReconcile,
   grantRefusal,
   holdView,
   mayAllowsShell,
@@ -1369,4 +1370,33 @@ test("a search with no path walks the cwd, so a cwd above a secret is refused", 
   assert.equal(secretVerdict(read("Grep", undefined, join(HOME, ".ssh")), policy()).verdict, "deny");
   assert.equal(secretVerdict(read("Grep", undefined, CWD), policy()).verdict, "allow");
   assert.equal(secretVerdict(read("Read", undefined, HOME), policy()).verdict, "allow", "a read with no path reads nothing");
+});
+
+test("the gate denies ritual reconcile --force in every form and mode, and leaves a plain reconcile to may (0.129.0)", () => {
+  const forced = [
+    "darius ritual reconcile --force",
+    "darius ritual reconcile --project acme-web --force",
+    "darius --project acme-web ritual reconcile --force --json",
+    "darius ritual --force reconcile",
+    "env -u FOO darius ritual reconcile --force",
+    "/home/u/.local/bin/darius ritual reconcile --force",
+    'bash -c "darius ritual reconcile --force"',
+    "cd /srv/checkout && darius ritual 'reconcile' --force",
+    "darius ritual reconcile --force=true",
+  ];
+  const scopes = [policy({ may: ["Bash(*)"] }), policy({ gate: "full", may: ["Bash(*)"] }), policy({ mode: "report", may: ["Bash(*)"] }), policy({ may: ["Bash(darius *)"] })];
+  for (const line of forced) {
+    assert.equal(forcesReconcile(line), true, line);
+    for (const scoped of scopes) assert.match(decide(shell(line), scoped) ?? "", /never forces a reconcile/u, line);
+  }
+  assert.match(decide(shell("darius ritual reconcile --force"), policy({ may: ["Bash(*)"], grants: ["darius ritual reconcile --force"] })) ?? "", /never forces a reconcile/u);
+  const plain = [
+    "darius ritual reconcile",
+    "darius ritual reconcile --dry-run --json",
+    "darius link --force && darius ritual list",
+    "git push --force; echo ritual reconcile",
+    'git commit -m "ritual reconcile" && git push --force-with-lease',
+  ];
+  for (const line of plain) assert.equal(forcesReconcile(line), false, line);
+  assert.equal(decide(shell("darius ritual reconcile --dry-run"), policy({ may: ["Bash(*)"] })), undefined);
 });

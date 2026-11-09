@@ -651,6 +651,21 @@ export function writesEmail(command: string): boolean {
   return false;
 }
 
+/**
+ * True when one command of the line forces a reconcile (`darius ritual
+ * reconcile --force`, 0.129.0), under any prefix, as startsFollowUp reads a
+ * line: the words `ritual`, `reconcile` and `--force` in one command, in any
+ * order. `--force` reconciles a stale checkout and may retire rituals, so it
+ * is a person's verb. Broad on purpose: a false match is only a deny. The
+ * CLI refuses inside a run as well (DARIUS_RUN), and the gate is the second
+ * wall.
+ */
+export function forcesReconcile(command: string): boolean {
+  return plainShell(command)
+    .split(SHELL_BREAK)
+    .some((part) => /\britual\b/u.test(part) && /\breconcile\b/u.test(part) && /(?:^|\s)--force(?=\s|=|$)/u.test(part));
+}
+
 /** True when the line forwards a run verb to another host (`darius run now X --on HOST`, 0.50.0): ssh drops DARIUS_RUN, so the gate stops it here. */
 export function forwardsRun(command: string): boolean {
   return /\brun (?:now|resume|follow-up)\b.*\s--on(?:[\s=]|$)/u.test(plainShell(command));
@@ -1146,6 +1161,7 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (namesSecretPath(command, secrets)) return deny(`a run does not read secret paths; use a darius verb, or report what is missing in the result block: ${clip(command)}`);
   if (callsWebWrite(command)) return deny(`a run never writes through the web API; report it in the result block: ${clip(command)}`);
   if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
+  if (forcesReconcile(command)) return deny(`a run never forces a reconcile; a person does, outside the run: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;
   const held = holdMatch(command, policy.hold);

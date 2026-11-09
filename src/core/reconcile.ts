@@ -19,11 +19,17 @@
  * `updated = now`, so the bucket's last-writer-wins sync keeps the newest
  * reconcile. An item is rewritten only when its hash, commit or dirty flag
  * differs from this checkout's, so two hosts on the same commit write once.
- * The run on a host always uses that host's own marker; a stale mirror only
- * changes what the web shows.
+ * Until 0.129.0 a host on an older commit wrote its older marker back, and
+ * retired what the newer host had adopted; the guard below stops that.
  *
- * It never decides whether a run may start. The caller judges `ok`, `marker`
- * and `dirty` (sections 4.4 to 4.6).
+ * It never decides whether a run may start. The caller judges `ok`, `marker`,
+ * `dirty` and `stale` (sections 4.4 to 4.6).
+ *
+ * The guard (0.129.0, src/core/reconcile-guard.ts) runs before step 3: a
+ * checkout older than the commit of the newest `ritual.defined` line, from
+ * any host, writes nothing and returns `stale`. Each line now also carries
+ * `marker_hash`, the sha256 of the marker file. `force` (only `darius ritual
+ * reconcile --force`, a person's verb) skips the guard.
  */
 
 import { spawnSync } from "node:child_process";
@@ -32,7 +38,8 @@ import { readFileSync } from "node:fs";
 import { ritualLifecycle } from "./due.ts";
 import { appendLines, defaultWho, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { definitionHash, MARKER_FILE, readMarker, type Marker, type RepoRitual } from "./marker.ts";
-import type { Document, Policy, Ritual } from "./model.ts";
+import type { Document, LedgerLine, Policy, Ritual } from "./model.ts";
+import { commitRelation, decideReconcile, headFacts, latestRecord, markerHash, staleLine, writeStaleRecord, type GuardDecision, type StaleMarker } from "./reconcile-guard.ts";
 import { itemRef, type Project } from "./store.ts";
 import { parseToml, type TomlValue } from "./toml.ts";
 import { ulid } from "./ulid.ts";
@@ -53,8 +60,13 @@ export interface ReconcileResult {
   unchanged: string[];
   retired: string[];
   unmanaged: string[];
-  /** Things the operator should know: a retired ritual named again in the marker. */
+  /** Things the operator should know: a retired ritual named again in the marker, a guard that could not judge the checkout. */
   warnings: string[];
+  /**
+   * The checkout is older than the marker the store holds, or off its
+   * history (0.129.0): nothing was written. `line` is what the report says.
+   */
+  stale?: StaleMarker & { line: string };
 }
 
 /** The `change` of a `ritual.defined` ledger line. */
@@ -161,6 +173,10 @@ interface Checkout {
   dirty: boolean;
   host: string;
   now: Date;
+  /** sha256 of the marker file (0.129.0): the guard's short cut on the next reconcile. */
+  markerHash: string;
+  /** `ritual reconcile --force` skipped the guard: the lines say so. */
+  isForced: boolean;
 }
 
 /** `base` with every git-owned field and `def_*` key replaced from `definition`. Store-owned fields are kept. */
@@ -209,7 +225,7 @@ function newItem(slug: string, now: Date): Ritual {
 }
 
 function definedLine(slug: string, change: DefinitionChange, fields: { hash: string | undefined; at: Checkout }): LedgerLineInput {
-  return {
+  const line: LedgerLineInput = {
     who: defaultWho(),
     type: RITUAL_DEFINED,
     item: itemRef("ritual", slug),
@@ -219,7 +235,11 @@ function definedLine(slug: string, change: DefinitionChange, fields: { hash: str
     commit: fields.at.commit,
     dirty: fields.at.dirty,
     change,
+    // 0.129.0: an older darius keeps unknown fields of a line, so these are safe to sync.
+    marker_hash: fields.at.markerHash,
   };
+  if (fields.at.isForced) line.forced = true;
+  return line;
 }
 
 function emptyResult(marker: ReconcileResult["marker"], at: { commit?: string; dirty: boolean }): ReconcileResult {
@@ -251,6 +271,12 @@ function readCheckoutMarker(checkout: string, project: Project): { marker: Marke
   }
 }
 
+/** The guard's decision, and the id of the record it was made against. */
+interface Judged {
+  decision: GuardDecision;
+  record: string | undefined;
+}
+
 /** What step 4 does with one marker ritual: the change and the item to write, or no change. */
 interface Step {
   change: "adopted" | "updated" | null;
@@ -274,14 +300,15 @@ function reconcileOne(existing: Document<Ritual> | null, definition: Definition,
  * `host` is the reconciling host (`hostId()` in production); `now` stamps
  * `updated`, `def_at` and the ledger lines. Store I/O errors throw.
  * `dryRun` classifies and reports the same way and writes nothing
- * (`darius ritual reconcile --dry-run`, run-due's dry run).
+ * (`darius ritual reconcile --dry-run`, run-due's dry run). `force` skips
+ * the guard (`darius ritual reconcile --force`; never run-due).
  */
 export function reconcileProject(
   project: Project,
   checkout: string,
   host: string,
   now: Date,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; force?: boolean } = {},
 ): ReconcileResult {
   const isDry = options.dryRun === true;
   const read = readCheckoutMarker(checkout, project);
@@ -292,7 +319,7 @@ export function reconcileProject(
   }
   const { marker } = read;
   if (marker.version < 3) return emptyResult("v2", { dirty: false });
-  const at: Checkout = { dirty: markerDirty(checkout), host, now };
+  const at: Checkout = { dirty: markerDirty(checkout), host, now, markerHash: markerHash(marker.file), isForced: options.force === true };
   const commit = checkoutCommit(checkout);
   if (commit !== undefined) at.commit = commit;
   const result = emptyResult("v3", at);
@@ -303,10 +330,29 @@ export function reconcileProject(
     if (ritual.timeoutMs !== undefined) definition.timeout = timeouts.get(ritual.slug) ?? timeoutText(ritual.timeoutMs);
     return definition;
   });
+  // The git calls run before the lock; under it the decision is made again only if a newer record came in between.
+  const head = headFacts(checkout);
+  const judge = (ledger: readonly LedgerLine[]): Judged => {
+    const record = latestRecord(ledger);
+    const decision = decideReconcile({ record, head, markerHash: at.markerHash, force: at.isForced, relation: (recorded, sha) => commitRelation(checkout, recorded, sha) });
+    return { decision, record: record?.id };
+  };
+  let judged = judge(readLedger(project));
   project.withLock(() => {
     const lines: LedgerLineInput[] = [];
     const named = new Set(definitions.map((definition) => definition.ritual.slug));
     const ledger = readLedger(project);
+    if (latestRecord(ledger)?.id !== judged.record) judged = judge(ledger);
+    const { decision } = judged;
+    if (decision.action === "reconcile" && decision.note !== undefined) result.warnings.push(decision.note);
+    if (decision.action === "stale") {
+      result.stale = { ...decision.stale, line: staleLine(project.name, decision.stale) };
+      return;
+    }
+    if (decision.action === "unchanged") {
+      listUnchanged(result, { definitions, ledger, project });
+      return;
+    }
     for (const definition of definitions) {
       const { slug } = definition.ritual;
       const existing = project.readItem<Ritual>("ritual", slug);
@@ -339,7 +385,30 @@ export function reconcileProject(
     }
     if (!isDry) appendLines(project, lines);
   });
+  if (!isDry) keepStaleRecord(project, { checkout, now }, result);
   return result;
+}
+
+/**
+ * The guard's "same marker" case: the store already holds this content from
+ * a commit this checkout is not on. Nothing is written; each named ritual
+ * reads as unchanged, and a retired one warns as in a reconcile.
+ */
+function listUnchanged(result: ReconcileResult, at: { definitions: readonly Definition[]; ledger: readonly LedgerLine[]; project: Project }): void {
+  for (const { ritual } of at.definitions) {
+    const isRetired = at.project.readItem<Ritual>("ritual", ritual.slug) !== null && ritualLifecycle(at.ledger, ritual.slug) === "retired";
+    if (isRetired) result.warnings.push(`${ritual.slug} was retired; use a new slug`);
+    else result.unchanged.push(ritual.slug);
+  }
+}
+
+/** Keeps `marker-stale.json` in step with this reconcile, for `darius doctor`. A write failure is a warning. */
+function keepStaleRecord(project: Project, at: { checkout: string; now: Date }, result: ReconcileResult): void {
+  try {
+    writeStaleRecord(project, result.stale === undefined ? null : { at: at.now.toISOString(), checkout: at.checkout, line: result.stale.line });
+  } catch (cause) {
+    result.warnings.push(`cannot record the stale checkout for darius doctor: ${errorMessage(cause)}`);
+  }
 }
 
 /** What `ritual list` and the web warn about: a retired slug named again, and a mirror this checkout differs from (section 4.3). */
