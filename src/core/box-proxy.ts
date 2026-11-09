@@ -694,7 +694,10 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
   const idleMs = options.idleMs ?? IDLE_MS;
   const maxTunnels = options.maxTunnels ?? MAX_TUNNELS;
   const open = new Set<Socket>();
-  let clients = 0;
+  // The tunnel limit counts the client connections in this set: taken at accept,
+  // given back once, when the request is refused or the connection closes. A
+  // Set cannot count a connection twice or go below zero.
+  const slots = new Set<Socket>();
 
   const record = ({ host, port, addresses, decision }: Logged): void => {
     log(JSON.stringify({ time: new Date().toISOString(), host, port, addresses, decision: decision.allow ? "allow" : "refuse", rule: decision.rule }));
@@ -707,11 +710,23 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
     socket.on("error", () => socket.destroy());
   };
 
+  /**
+   * The last answer on a client connection: its slot is free at once, the
+   * reply goes out, and what the client still sends is read and dropped, so the
+   * client's close is seen and the socket ends. A paused socket with unread
+   * bytes never sees that close, under node or bun.
+   */
+  const finish = (client: Socket, status: Status, line: string): void => {
+    slots.delete(client);
+    reply(client, status, line);
+    client.resume();
+  };
+
   const refuseRequest = (client: Socket, status: Status, logged: Logged): void => {
     record(logged);
     const target = logged.host === "" ? "" : ` ${logged.host}:${logged.port}`;
     const reason = logged.decision.allow ? "" : `: ${logged.decision.reason}`;
-    reply(client, status, `darius box: refused${target} (${logged.decision.rule})${reason}`);
+    finish(client, status, `darius box: refused${target} (${logged.decision.rule})${reason}`);
   };
 
   const serve = async (client: Socket, request: ProxyRequest): Promise<void> => {
@@ -734,7 +749,7 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
     try {
       upstream = await connectFirst(decision.addresses, request.port);
     } catch (cause) {
-      reply(client, 502, `darius box: ${request.host}:${request.port} did not connect: ${errorMessage(cause)}`);
+      finish(client, 502, `darius box: ${request.host}:${request.port} did not connect: ${errorMessage(cause)}`);
       return;
     }
     if (client.destroyed) {
@@ -758,13 +773,12 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
 
   const accept = (client: Socket): void => {
     track(client);
-    clients += 1;
-    client.once("close", () => {
-      clients -= 1;
-    });
-    if (clients > maxTunnels) {
-      refuseRequest(client, 503, { host: "", port: 0, addresses: [], decision: refuse("too-many-tunnels", `at most ${maxTunnels} open tunnels`) });
-      return;
+    // The limit is judged at accept, so a burst gets the free slots in order. A
+    // connection over it takes no slot, and is refused once its header names the target.
+    const hasSlot = slots.size < maxTunnels;
+    if (hasSlot) {
+      slots.add(client);
+      client.once("close", () => slots.delete(client));
     }
     let buffer = Buffer.alloc(0);
     const onData = (chunk: Buffer): void => {
@@ -785,8 +799,12 @@ export async function startBoxProxy(options: BoxProxyOptions): Promise<BoxProxy>
         refuseRequest(client, request.status, { host: "", port: 0, addresses: [], decision: refuse(rule, request.reason) });
         return;
       }
+      if (!hasSlot) {
+        refuseRequest(client, 503, { host: request.host, port: request.port, addresses: [], decision: refuse("too-many-tunnels", `at most ${maxTunnels} open tunnels`) });
+        return;
+      }
       serve(client, request).catch((cause) => {
-        reply(client, 502, `darius box: ${errorMessage(cause)}`);
+        finish(client, 502, `darius box: ${errorMessage(cause)}`);
       });
     };
     client.on("data", onData);

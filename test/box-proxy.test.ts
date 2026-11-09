@@ -751,3 +751,224 @@ test("a subnet that does not parse is refused at start; a subnet this host gets 
     await proxy.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// 0.128.2: the tunnel limit counts tunnels open now
+
+/** The real rule, plus every name under `.test` as the local test servers. */
+const allowTestNames: Decide = (target, rules) => (target.host.endsWith(".test") && target.addresses.join() === "127.0.0.1" ? { allow: true, rule: "reach", addresses: ["127.0.0.1"] } : decide(target, rules));
+
+/** Sends one request and resolves with the status code once the reply header is in, or "closed". The socket stays open. */
+function ask(path: string, text: string, options: { allowHalfOpen?: boolean } = {}): Promise<{ status: string; socket: Socket }> {
+  return new Promise((resolve) => {
+    const socket = connect({ path, allowHalfOpen: options.allowHalfOpen === true });
+    let got = "";
+    const settle = (): void => resolve({ status: got.includes("\r\n\r\n") ? (got.split(" ")[1] ?? "") : "closed", socket });
+    socket.on("data", (chunk) => {
+      got += chunk.toString("latin1");
+      if (got.includes("\r\n\r\n")) settle();
+    });
+    socket.on("error", settle);
+    socket.on("close", settle);
+    socket.write(text);
+  });
+}
+
+function connectTo(target: string): string {
+  return `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Opens `max` tunnels at once. The proxy sees a close a little after the
+ * client, so a full set is retried for up to 3 s; a leaked slot stays leaked
+ * for the idle time (10 min), so a leak still fails.
+ */
+async function openAll(path: string, target: string, max: number): Promise<Socket[]> {
+  let statuses: string[] = [];
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const opened = await Promise.all(Array.from({ length: max }, () => ask(path, connectTo(target))));
+    statuses = opened.map((entry) => entry.status);
+    if (statuses.every((status) => status === "200")) return opened.map((entry) => entry.socket);
+    for (const entry of opened) entry.socket.destroy();
+    await wait(50);
+  }
+  return assert.fail(`expected ${max} free slots, got ${statuses.join(",")}`);
+}
+
+/** Proves the limit is exactly `max` free slots: `max` tunnels open, the next is refused (no slot was released twice), then all close again. */
+async function assertAllSlotsFree(path: string, target: string, max: number): Promise<void> {
+  const opened = await openAll(path, target, max);
+  const extra = await ask(path, connectTo(target));
+  assert.equal(extra.status, "503", "one more than the limit is refused: no slot was released twice");
+  extra.socket.destroy();
+  for (const socket of opened) socket.destroy();
+  await Promise.all(opened.map((socket) => closed(socket)));
+}
+
+test("end to end: after a burst over the limit closes, every slot is free again, and a refused line names the target", async () => {
+  const echo = echoServer();
+  const port = await listen(echo);
+  const lines: string[] = [];
+  const path = socketPath();
+  const max = 4;
+  const extra = 6;
+  const target = `upstream.test:${port}`;
+  const proxy = await startBoxProxy({ socketPath: path, policy: policy(), log: (line) => lines.push(line), resolve: fakeResolver({ "upstream.test": ["127.0.0.1"] }), decide: allowTestNames, maxTunnels: max });
+  try {
+    // The burst: max + extra CONNECTs at once. The first max get a tunnel, the rest 503.
+    const burst = await Promise.all(Array.from({ length: max + extra }, () => ask(path, connectTo(target))));
+    const statuses = burst.map((entry) => entry.status);
+    assert.equal(statuses.filter((status) => status === "200").length, max, statuses.join(","));
+    assert.equal(statuses.filter((status) => status === "503").length, extra, statuses.join(","));
+    // The tool exits: every connection closes.
+    for (const entry of burst) entry.socket.destroy();
+    await Promise.all(burst.map((entry) => closed(entry.socket)));
+
+    // One more CONNECT later gets a tunnel, and so do max at once.
+    await assertAllSlotsFree(path, target, max);
+
+    const logged = lines.map((line) => JSON.parse(line));
+    const refused = logged.filter((entry) => entry.rule === "too-many-tunnels");
+    assert.ok(refused.length >= extra, JSON.stringify(logged));
+    for (const entry of refused) {
+      assert.equal(entry.host, "upstream.test", "a refused line names the host that was asked for");
+      assert.equal(entry.port, port);
+      assert.equal(entry.decision, "refuse");
+    }
+  } finally {
+    await proxy.close();
+    echo.close();
+  }
+});
+
+test("end to end: a refused request frees its slot at once, also when the client keeps its side open or sends more", async () => {
+  const echo = echoServer();
+  const port = await listen(echo);
+  const path = socketPath();
+  const max = 3;
+  const proxy = await startBoxProxy({ socketPath: path, policy: policy(), log: () => {}, resolve: fakeResolver({ "upstream.test": ["127.0.0.1"] }), decide: allowTestNames, maxTunnels: max });
+  const held: Socket[] = [];
+  try {
+    // Refused by rule (loopback, 403), by a bad request (400) and over the limit (503).
+    // The clients never close, and the first sends bytes after its header.
+    for (const request of [`${connectTo(`127.0.0.1:${port}`)}more bytes after the header`, "GARBAGE\r\n\r\n", connectTo(`127.0.0.1:${port}`)]) {
+      const refused = await ask(path, request, { allowHalfOpen: true });
+      assert.match(refused.status, /^40[03]$/u);
+      refused.socket.write("still talking");
+      held.push(refused.socket);
+    }
+    await assertAllSlotsFree(path, `upstream.test:${port}`, max);
+    // Over the limit while every slot is taken: the refused client keeps its side open.
+    const full = await openAll(path, `upstream.test:${port}`, max);
+    const over = await ask(path, connectTo(`upstream.test:${port}`), { allowHalfOpen: true });
+    assert.equal(over.status, "503");
+    held.push(over.socket);
+    for (const socket of full) socket.destroy();
+    await Promise.all(full.map((socket) => closed(socket)));
+    await assertAllSlotsFree(path, `upstream.test:${port}`, max);
+  } finally {
+    for (const socket of held) socket.destroy();
+    await proxy.close();
+    echo.close();
+  }
+});
+
+test("end to end: every way a tunnel ends frees its slot exactly once: upstream refuses, upstream resets, client aborts mid-decision, client half-closes, plain HTTP", async () => {
+  const echo = echoServer();
+  const port = await listen(echo);
+  // Accepts, then resets at once.
+  const resetter = createServer((socket) => socket.resetAndDestroy());
+  const resetPort = await listen(resetter);
+  // A port with nothing behind it: the upstream connect is refused.
+  const gone = createServer();
+  const deadPort = await listen(gone);
+  await new Promise<void>((resolve) => gone.close(() => resolve()));
+  const web = createHttpServer((_request, response) => response.end("hello"));
+  const webPort = await listen(web);
+
+  const max = 3;
+  const target = `upstream.test:${port}`;
+  const slow = (name: string): Promise<string[]> => (name === "slow.test" ? wait(150).then(() => ["127.0.0.1"]) : Promise.resolve(["127.0.0.1"]));
+  const cases: [string, (path: string) => Promise<void>][] = [
+    [
+      "upstream refuses (502)",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          const answer = await ask(path, connectTo(`upstream.test:${deadPort}`));
+          assert.equal(answer.status, "502");
+        }
+      },
+    ],
+    [
+      "upstream resets",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          const answer = await ask(path, connectTo(`upstream.test:${resetPort}`));
+          await closed(answer.socket);
+        }
+      },
+    ],
+    [
+      "client aborts while the decision is pending",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          const socket = connect(path);
+          socket.write(connectTo(`slow.test:${port}`));
+          await wait(20);
+          socket.destroy();
+        }
+        await wait(200);
+      },
+    ],
+    [
+      "client closes before the header is complete",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          const socket = connect(path);
+          socket.end(`CONNECT ${target}`);
+          await closed(socket);
+        }
+      },
+    ],
+    [
+      "client half-closes an open tunnel",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          const answer = await ask(path, connectTo(target));
+          answer.socket.end();
+          await closed(answer.socket);
+        }
+      },
+    ],
+    [
+      "plain HTTP",
+      async (path) => {
+        for (let index = 0; index < max + 1; index += 1) {
+          assert.match(await exchange(path, `GET http://web.test:${webPort}/ HTTP/1.1\r\nHost: web.test\r\n\r\n`), /hello$/u);
+        }
+      },
+    ],
+  ];
+  try {
+    for (const [name, run] of cases) {
+      const path = socketPath();
+      const proxy = await startBoxProxy({ socketPath: path, policy: policy(), log: () => {}, resolve: slow, decide: allowTestNames, maxTunnels: max });
+      try {
+        await run(path);
+        await assertAllSlotsFree(path, target, max);
+      } catch (cause) {
+        assert.fail(`${name}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        await proxy.close();
+      }
+    }
+  } finally {
+    echo.close();
+    resetter.close();
+    web.close();
+  }
+});
