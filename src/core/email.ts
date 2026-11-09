@@ -9,6 +9,12 @@
  * is written with mode 0600 from the first byte. The config dir is never
  * synced and never archived (src/core/store-scan.ts).
  *
+ * RECIPIENTS (0.128.0). `to` is the host's default list, and it may be empty
+ * or absent. A project's `.darius.toml` may name its own list in `[email] to`
+ * (src/core/email-recipients.ts resolves it at send time); that list replaces
+ * the default for the project's mail. So the send takes the list it goes to
+ * as an option, and the default applies only when none is given.
+ *
  * NO VALUE LEAVES. The token and the addresses never reach the store, the
  * ledger, a log, stdout or an error. So no message in this file quotes a value
  * of the settings or of the input, and it does not quote the JSON parser either,
@@ -29,6 +35,7 @@ import { errorMessage } from "../runtime.ts";
 import { isLoopbackOrTailnet } from "./config.ts";
 import { GROUP_OTHER_BITS, isMaskedFile } from "./credentials.ts";
 import type { JsonValue } from "./model.ts";
+import { isEmailAddress } from "./email-address.ts";
 import { configDir } from "./paths.ts";
 import { endpointHost, scrubForLedger } from "./redact.ts";
 
@@ -38,8 +45,6 @@ const TIMEOUT_MS = 15_000;
 const KNOWN_KEYS: readonly string[] = ["url", "token", "from", "to", "web_url", "since", "html"];
 /** One word of printable ASCII: anything else cannot go in a header, and `fetch` would quote it in its error. */
 const PRINTABLE_WORD = /^[!-~]+$/u;
-const BARE_ADDRESS = /^[^\s@<>]+@[^\s@<>]+$/u;
-const NAMED_ADDRESS = /^[^<>\r\n]*<[^\s@<>]+@[^\s@<>]+>$/u;
 /** Anything in an error that reads as an address, also URL-encoded and in another case than the settings have it. */
 const ADDRESS_IN_TEXT = /[^\s@<>"',;:()[\]{}]+(?:@|%40)[^\s@<>"',;:()[\]{}]+/giu;
 
@@ -47,6 +52,7 @@ export interface EmailSettings {
   url: string;
   token: string;
   from: string;
+  /** The host's default recipients (0.128.0: may be empty; then only a project whose marker names recipients gets mail). */
   to: string[];
   /** The address of the web app. With it, a notice carries a link. */
   web_url?: string;
@@ -64,6 +70,7 @@ export interface EmailStatus {
   isSetUp: boolean;
   /** The host name of the url. */
   host: string | null;
+  /** The host's default recipients (`to`). A project's marker may name its own. */
   recipients: number;
   since: string | null;
   /** Whether a report mail carries `html` (0.127.0). Null when the channel is not set up. */
@@ -113,10 +120,6 @@ function isRecord(value: JsonValue | undefined): value is { readonly [key: strin
 
 function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
-}
-
-function isAddress(value: JsonValue): boolean {
-  return isText(value) && (BARE_ADDRESS.test(value) || NAMED_ADDRESS.test(value));
 }
 
 function parseJson(text: string, where: string): JsonValue {
@@ -169,13 +172,15 @@ function checkedSettings(raw: JsonValue, where: string): EmailSettings {
   checkProviderUrl(url, where);
   if (!isText(url)) throw new Error(`${where}: url must be a URL`);
   if (!isText(token) || !PRINTABLE_WORD.test(token)) throw new Error(`${where}: token must be one word of printable characters`);
-  if (!isText(from) || !isAddress(from)) throw new Error(`${where}: from must be an email address`);
-  if (!Array.isArray(to) || to.length === 0) throw new Error(`${where}: to must be a list of at least one address`);
-  const badEntry = to.findIndex((entry) => !isAddress(entry));
+  if (!isText(from) || !isEmailAddress(from)) throw new Error(`${where}: from must be an email address`);
+  // Absent or [] (0.128.0): no default; only a project whose marker names recipients gets mail.
+  const list = to ?? [];
+  if (!Array.isArray(list)) throw new Error(`${where}: to must be a list of addresses, or [] when only projects that name their own get mail`);
+  const badEntry = list.findIndex((entry) => !isText(entry) || !isEmailAddress(entry));
   if (badEntry !== -1) throw new Error(`${where}: to[${String(badEntry)}] must be an email address`);
   if (!isText(since) || Number.isNaN(Date.parse(since))) throw new Error(`${where}: since must be a date and time`);
   if (html !== undefined && html !== true && html !== false) throw new Error(`${where}: html must be true or false`);
-  const settings: EmailSettings = { url, token, from, to: textsOf(to), since: new Date(since).toISOString() };
+  const settings: EmailSettings = { url, token, from, to: textsOf(list), since: new Date(since).toISOString() };
   if (html !== undefined) settings.html = html;
   if (webUrl === undefined) return settings;
   checkWebUrl(webUrl, where);
@@ -257,12 +262,14 @@ export function emailStatus(): EmailStatus {
 
 /**
  * An error, ready for a ledger line: no token, no address, and the url cut to
- * its host name. It is one line of bounded length.
+ * its host name. It is one line of bounded length. `recipients` are the
+ * addresses the mail went to, when they are not the settings' own (a project's
+ * marker list, 0.128.0).
  */
-export function scrubEmailError(text: string, settings: EmailSettings): string {
+export function scrubEmailError(text: string, settings: EmailSettings, recipients: readonly string[] = []): string {
   let out = text;
   for (const token of [settings.token, encodeURIComponent(settings.token)]) out = out.replaceAll(token, "[token]");
-  for (const address of [settings.from, ...settings.to]) out = out.replaceAll(address, "[address]");
+  for (const address of [settings.from, ...settings.to, ...recipients]) out = out.replaceAll(address, "[address]");
   return scrubForLedger(out.replaceAll(ADDRESS_IN_TEXT, "[address]"), [settings.url]);
 }
 
@@ -286,27 +293,37 @@ function messageOf(settings: EmailSettings, notice: EmailNotice): EmailMessage {
 }
 
 /**
- * The JSON body: the same bytes for the same message and settings, so a retry
- * with the same key sends the same body. `html` only when the settings allow it.
+ * The JSON body: the same bytes for the same message, settings and recipients,
+ * so a retry with the same key sends the same body. `html` only when the
+ * settings allow it. `to` is the resolved list; absent, the settings' default.
  */
-export function emailBody(settings: EmailSettings, message: EmailMessage): string {
-  const body: MailBody = { from: settings.from, to: settings.to, subject: message.subject, text: message.text };
+export function emailBody(settings: EmailSettings, message: EmailMessage, to: readonly string[] = settings.to): string {
+  const body: MailBody = { from: settings.from, to: [...to], subject: message.subject, text: message.text };
   if (message.html !== undefined && settings.html !== false) body.html = message.html;
   return JSON.stringify(body);
 }
 
+export interface SendOptions {
+  /** The resolved recipients (0.128.0). Absent: the settings' default `to`. */
+  to?: readonly string[];
+  timeoutMs?: number;
+}
+
 /** Sends one candle notice. See `postEmail`. */
-export async function sendEmail(settings: EmailSettings, notice: EmailNotice, options: { timeoutMs?: number } = {}): Promise<void> {
+export async function sendEmail(settings: EmailSettings, notice: EmailNotice, options: SendOptions = {}): Promise<void> {
   await postEmail(settings, messageOf(settings, notice), options);
 }
 
 /**
  * Sends one mail. A 2xx is success. Anything else throws an error that passed
  * `scrubEmailError`. A redirect is a failure: it would carry the body with the
- * addresses to a place nobody chose.
+ * addresses to a place nobody chose. An empty list is refused before any
+ * request: the callers check it first, and this is the last wall.
  */
-export async function postEmail(settings: EmailSettings, message: EmailMessage, options: { timeoutMs?: number } = {}): Promise<void> {
+export async function postEmail(settings: EmailSettings, message: EmailMessage, options: SendOptions = {}): Promise<void> {
   const host = endpointHost(settings.url);
+  const to = options.to ?? settings.to;
+  if (to.length === 0) throw new Error("the mail has no recipients");
   let response: Response | undefined;
   let failure = "";
   try {
@@ -317,15 +334,15 @@ export async function postEmail(settings: EmailSettings, message: EmailMessage, 
         "content-type": "application/json",
         "idempotency-key": createHash("sha256").update(message.key).digest("hex"),
       },
-      body: emailBody(settings, message),
+      body: emailBody(settings, message, to),
       redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
     });
   } catch (cause) {
     failure = failureText(cause);
   }
-  if (response === undefined) throw new Error(scrubEmailError(`${host} did not answer: ${failure}`, settings));
+  if (response === undefined) throw new Error(scrubEmailError(`${host} did not answer: ${failure}`, settings, to));
   // Released unread, so an open connection cannot hold the process.
   await response.body?.cancel().catch(() => undefined);
-  if (!response.ok) throw new Error(scrubEmailError(`${host} answered ${String(response.status)}`, settings));
+  if (!response.ok) throw new Error(scrubEmailError(`${host} answered ${String(response.status)}`, settings, to));
 }

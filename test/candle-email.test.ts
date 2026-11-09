@@ -306,7 +306,7 @@ test("every bad value is refused by name, and no message quotes a value", () => 
     [{ ...good, token: `${TOKEN}\nx` }, /token/u],
     [{ ...good, token: 12 }, /token/u],
     [{ ...good, from: TOKEN }, /from/u],
-    [{ ...good, to: [] }, /to must/u],
+    [{ ...good, to: {} }, /to must/u],
     [{ ...good, to: FROM }, /to must/u],
     [{ ...good, to: [FROM, TOKEN] }, /to\[1\]/u],
     [{ ...good, since: TOKEN }, /since/u],

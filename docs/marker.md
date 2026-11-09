@@ -74,7 +74,7 @@ Root keys:
 
 | Key | Rule |
 |---|---|
-| `v` | 1, 2 or 3. `tz`, `kinds`, `icon`, `[rituals.*]` and `[policies.*]` need 3. `[profiles.*]` and `[defaults]` need 2 or 3. |
+| `v` | 1, 2 or 3. `tz`, `kinds`, `icon`, `[rituals.*]`, `[policies.*]` and `[email]` need 3. `[profiles.*]` and `[defaults]` need 2 or 3. |
 | `project` | The project name. |
 | `max_mode` | `off`, `report` or `act`. The ceiling for every ritual. A ritual with `mode = "act"` needs `max_mode = "act"`. |
 | `tz` | Required when `v = 3`. An IANA zone name, such as `Europe/Berlin`. |
@@ -102,6 +102,30 @@ first bytes must be a PNG, a WebP or an SVG that matches the extension. An SVG m
 an XML prolog and comments, but not a DOCTYPE. An image that fails a check shows no icon, and
 `darius marker check` warns about it. An older darius refuses the unknown key `icon`. Update every
 host to 0.70.0 or later before you commit the first marker with `icon`.
+
+`[email]` (0.128.0, needs `v = 3`) names who gets this project's mail: its candle mails and its ritual
+reports. It takes one key, `to`:
+
+```toml
+[email]
+to = ["ops@example.com", "Web Team <web@example.com>"]
+```
+
+- `to` is a list of addresses, in the same form as `to` in `email.json`: `name@host`, or
+  `Display Name <name@host>`. A repeated address counts once.
+- The list replaces the host's default `to` for this project. `to = []` means no mail for this project.
+  Without `[email]`, the project gets the host's default.
+- The sending host reads the marker of its own checkout when it sends. It ignores the list while the
+  marker has uncommitted changes, and then sends no mail for the project. The box mounts `.darius.toml`
+  read-only, so a boxed run cannot choose its recipients.
+- The list is never copied into the store. `darius marker check` prints `email: N recipients` (and
+  `email_recipients` in the JSON), never an address. An error names the entry by its index, never by its text.
+- **An address in the marker of a public repo is public.** For a public repo, keep the recipients in each
+  host's `email.json`.
+- An older darius refuses the unknown section `[email]`. Update every host to 0.128.0 or later before you
+  commit the first marker with `[email]`.
+
+See "Mail recipients per project" in the README.
 
 `[rituals.<slug>]` takes a slug of lowercase letters, digits, `-` and `_` (at most 64, no dots):
 

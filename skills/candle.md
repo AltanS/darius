@@ -78,7 +78,7 @@ darius candle light dep/cve-1 --title "Vulnerable dependency" --severity high --
 
 - A ritual: `candle_deliver` in `.darius.toml`. A vigil: `--candle-deliver`. The CLI: `--deliver`. Each takes `push`, `email`, or `none`.
 - `none` means the app only. Default is `push`.
-- Email needs `darius email set` on each host that sends. Without it darius notes "not set up on host" once per notice, and the candle still shows in the app. `darius email set` says how many open candles it could not send.
+- Email needs `darius email set` on each host that sends. Without it darius notes "not set up on host" once per notice, and the candle still shows in the app. `darius email set` says how many open candles it could not send. The mail goes to the host's `to`, or to the project's `[email] to` in `.darius.toml` when it has one (`to = []`: no mail).
 - A run cannot choose a channel. Only the marker can. Every host must run the same version first.
 
 ## What a run never does

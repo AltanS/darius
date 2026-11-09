@@ -55,6 +55,18 @@
  * channel and the error only, and `sendState` cannot rebuild it. A host
  * without email sends no report and leaves no trace; `darius doctor` says so.
  *
+ * RECIPIENTS (0.128.0; src/core/email-recipients.ts). Each mail goes to its
+ * project's list: the `[email] to` of the project's marker in this host's
+ * checkout, else the host's default `to`. It is resolved once per project and
+ * flush, at send time. A project whose list is empty, or whose marker cannot
+ * be trusted, has the email channel closed, exactly as a host without
+ * `email.json`: a candle notice writes one trace (reason "not set up on host
+ * for this project: ..."), which is not a try and is not sent again; a report
+ * sends nothing and leaves no line. When the list is fixed, a candle notice
+ * whose candle is still lit, and a report under a day old, go at the next
+ * flush. `alert.sent` counts the list's length in `devices`. No address goes
+ * into a line.
+ *
  * WHEN. `flushAlerts` runs after every run-due batch, `run now` and `run
  * resume`, and after `darius sync` (the sync timer, every 15 minutes), which
  * catches the lines a session writes by hand. A host without push keys sends
@@ -69,6 +81,7 @@ import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { RUN_BOX_BLOCKED } from "./box-work.ts";
 import { emailStatus, postEmail, readEmailSettings, sendEmail, type EmailMessage, type EmailSettings } from "./email.ts";
+import { noRecipientsReason, projectRecipients } from "./email-recipients.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { collectCandles, CANDLE_LIT, candleOpenings, type CandleOpened, type CandleOpening } from "./candle-index.ts";
 import type { JsonValue, LedgerLine, Ritual } from "./model.ts";
@@ -93,6 +106,12 @@ const DEFAULT_DELIVER: readonly ChannelName[] = ["push"];
 
 /** Why a candle notice was not sent on a channel this host has not set up. */
 export const NOT_SET_UP = "not set up on host";
+/**
+ * Why a candle notice was not sent on email for one project (0.128.0). It
+ * starts with NOT_SET_UP, so a darius of any version reads its line as a trace
+ * and never as a try to repeat.
+ */
+const NOT_SET_UP_FOR_PROJECT = `${NOT_SET_UP} for this project`;
 
 /** One notice to send, with the key that keeps it from going out twice. */
 export interface Alert extends Notice {
@@ -578,31 +597,38 @@ function reportMail(settings: EmailSettings, alert: Alert, facts: ReportFacts): 
   }
 }
 
-function emailChannel(settings: EmailSettings): OpenChannel {
+/** The email channel of one project: its resolved list, never empty. `delivered` is the list's length. */
+function emailChannel(settings: EmailSettings, to: readonly string[]): OpenChannel {
   return {
     since: settings.since,
     async send(alert) {
-      if (alert.report === undefined) await sendEmail(settings, alert);
-      else await postEmail(settings, reportMail(settings, alert, alert.report));
-      return { delivered: settings.to.length, error: "" };
+      if (alert.report === undefined) await sendEmail(settings, alert, { to });
+      else await postEmail(settings, reportMail(settings, alert, alert.report), { to });
+      return { delivered: to.length, error: "" };
     },
   };
 }
 
+/** The host's email settings, or null with the reason a candle notice records. */
+interface EmailOpening {
+  settings: EmailSettings | null;
+  reason: string;
+}
+
 /** A bad file is a reason and not a throw, so the other alerts still go. The reason quotes no value. */
-function openEmail(): Opening {
+function openEmail(): EmailOpening {
   try {
-    const settings = readEmailSettings();
-    return { channel: settings === null ? null : emailChannel(settings), reason: NOT_SET_UP };
+    return { settings: readEmailSettings(), reason: NOT_SET_UP };
   } catch (cause) {
-    return { channel: null, reason: `${NOT_SET_UP}: ${errorMessage(cause)}` };
+    return { settings: null, reason: `${NOT_SET_UP}: ${errorMessage(cause)}` };
   }
 }
 
 /** Each channel as this host has it: open, or null when it is not set up here. */
 interface Channels {
   push: OpenChannel | null;
-  email: OpenChannel | null;
+  /** The host's email settings. Each project opens its own email channel from them (`projectEmail`). */
+  email: EmailSettings | null;
   /** What a candle notice records on a closed channel. */
   closedReason: Readonly<Record<ChannelName, string>>;
 }
@@ -611,7 +637,22 @@ interface Channels {
 function openChannels(): Channels {
   const push = openPush();
   const email = openEmail();
-  return { push: push.channel, email: email.channel, closedReason: { push: push.reason, email: email.reason } };
+  return { push: push.channel, email: email.settings, closedReason: { push: push.reason, email: email.reason } };
+}
+
+/**
+ * The email channel of `project`: open with its resolved recipients, or closed
+ * with the reason a candle notice records. An empty list or a marker that
+ * cannot be trusted closes it for this project only, as a host without
+ * `email.json` closes it for all.
+ */
+function projectEmail(project: Project, ledger: readonly LedgerLine[], channels: Channels): Opening {
+  const settings = channels.email;
+  if (settings === null) return { channel: null, reason: channels.closedReason.email };
+  const found = projectRecipients(project, settings, ledger);
+  if ("problem" in found) return { channel: null, reason: `${NOT_SET_UP_FOR_PROJECT}: ${found.problem}` };
+  if (found.to.length === 0) return { channel: null, reason: `${NOT_SET_UP_FOR_PROJECT}: ${noRecipientsReason(found.source)}` };
+  return { channel: emailChannel(settings, found.to), reason: NOT_SET_UP };
 }
 
 /** One line per alert channel file that cannot be read, with the reason and no value. Empty when all is well. For `darius doctor`. */
@@ -625,7 +666,7 @@ export function channelProblems(): string[] {
 }
 
 /** A notice that failed before email was set up is history: its line is older than `since`, and setup must not send it. */
-function isHistoryOnEmail(retry: Alert, state: SendState, email: OpenChannel | null): boolean {
+function isHistoryOnEmail(retry: Alert, state: SendState, email: EmailSettings | null): boolean {
   if (email === null || channelOf(retry) !== "email") return false;
   return (state.lastFailed.get(retry.key) ?? "") < email.since;
 }
@@ -702,11 +743,18 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
   const queue = [...alerts, ...retries];
   if (channels.push === null && !queue.some((alert) => isCandleKey(alert.key) || isReportKey(alert.key))) return null;
   const delivery = emptyDelivery();
+  // Email resolves the project's recipients on the first mail that would go, so a flush with no mail reads no marker.
+  let email: Opening | undefined;
+  const opened = (name: ChannelName): Opening => {
+    if (name === "push") return { channel: channels.push, reason: channels.closedReason.push };
+    email ??= projectEmail(project, ledger, channels);
+    return email;
+  };
   for (const name of CHANNELS) {
-    const channel = channels[name];
     for (const alert of queue) {
       if (channelOf(alert) !== name || state.sent.has(alert.key) || (state.tries.get(alert.key) ?? 0) >= MAX_TRIES) continue;
       if (isCandleKey(alert.key) && !isOpen(alert.key)) continue;
+      const { channel, reason } = opened(name);
       if (options.isDryRun === true) {
         // A dry run prints what would go; a report's facts hold the findings text, which stays out of that print.
         const { report: _report, ...shown } = alert;
@@ -714,7 +762,7 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
         continue;
       }
       if (channel === null) {
-        if (isCandleKey(alert.key)) trace(project, alert, channels.closedReason[name], state, delivery);
+        if (isCandleKey(alert.key)) trace(project, alert, reason, state, delivery);
         continue;
       }
       const outcome = await sendOn(channel, alert);

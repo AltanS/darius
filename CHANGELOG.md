@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.128.0] - 2026-11-09
+
+### Added
+
+- Mail recipients per project. A project's `.darius.toml` takes an optional v3 section `[email]` with `to = ["ops@example.com"]`, in the address form of `email.json`. That list replaces the host's `to` for the project's candle mails and report mails; `to = []` means no mail for the project. Without the key, or on a host with no checkout of the project, the host's `to` applies. The channel (`url`, `token`, `from`, `web_url`, `since`, `html`) stays per host. No marker `v` bump. Every host that reads the marker must run 0.128.0 before a marker gets `[email]`: an older darius refuses the section.
+- The sending host reads the marker of its own checkout when it sends. A marker that does not parse, names another project, or has `[email] to` and uncommitted changes sends no mail for that project. A dirty marker without the key changes nothing.
+- A mail whose list is empty is not sent. A candle notice leaves one `alert.failed` trace, `not set up on host for this project: <why>`, which is not a try and is not sent again, as on a host without `email.json`. A report leaves no line. `alert.sent` counts the resolved list in `devices`.
+- `darius email test --project <name>`, with or without `--report`, sends the sample to that project's list, and exits 1 with "no recipients for <name>" when it is empty.
+- `darius email status` inside a project folder adds how many recipients the marker names (`project` in `--json`). `darius marker check` prints `email: N recipients` (`email_recipients` in `--json`). Neither prints an address.
+
+### Changed
+
+- `to` in `email.json` may be empty or absent: then only a project whose marker names recipients gets mail. A plain `darius email test` with an empty `to` exits 1. A host must run 0.128.0 before its `email.json` gets an empty or absent `to`: an older darius refuses the file. The file is per host and never synced, so there is no order between hosts.
+- `email status` and `email set` say "N recipients by default" for the host's list.
+
 ## [0.127.0] - 2026-11-09
 
 ### Added

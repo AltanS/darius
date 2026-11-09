@@ -447,7 +447,7 @@ test("email test --report sends one sample with text and html; html false sends 
 test("email status says when reports go as text only", async () => {
   writeEmailSettings(settings({ html: false }));
   const human = await cli(emailCommand, ["status"]);
-  assert.match(human.stdout, /2 recipients, reports as text only/u);
+  assert.match(human.stdout, /2 recipients by default, reports as text only/u);
   const json = JSON.parse((await cli(emailCommand, ["status", "--json"])).stdout);
   assert.equal(json.html, false);
 });

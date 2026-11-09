@@ -111,6 +111,16 @@
  * mounts `.darius.toml` read-only, so a boxed run cannot add it for a later
  * run. A host older than 0.124.0 refuses the key.
  *
+ * `[email] to = ["ops@example.com"]` (v = 3 only, 0.128.0) is a project key:
+ * the recipients of this project's candle and report mail, in the address
+ * grammar of `email.json` (src/core/email-address.ts). It replaces the host's
+ * default `to` for this project; `to = []` means no mail for it. Absent: the
+ * host's default. The sending host reads it at send time from its own
+ * checkout (src/core/email-recipients.ts); it is never mirrored into the
+ * store. No error here quotes an address. The box mounts `.darius.toml`
+ * read-only, so a boxed run cannot choose its recipients. A host older than
+ * 0.128.0 refuses the section, so update every host first.
+ *
  * `notes` is advice for the prompt, not a gate, so a ritual that names a
  * `policy` may carry its own `notes` (0.58.0). The effective notes are the
  * policy's notes, a blank line, then the ritual's. `mode`, `may` and `hold`
@@ -136,6 +146,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { isEmailAddress } from "./email-address.ts";
 import { BOX_NETS, BOX_TOOLS, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxNet, type BoxTool, type ProtectedDirs } from "./box.ts";
 import type { OwnedKind } from "./kinds.ts";
 import type { Policy, ProfileFields } from "./model.ts";
@@ -270,6 +281,11 @@ export interface Marker {
   defaultRitual?: string;
   /** `[defaults] follow_up`: the profile a follow-up run uses, over the ritual's. */
   defaultFollowUp?: string;
+  /**
+   * `[email] to` (v3 only, 0.128.0): this project's mail recipients, deduped.
+   * `[]` means no mail. Absent when the key is: the host's default applies.
+   */
+  emailTo?: string[];
 }
 
 const KEYS: ReadonlySet<string> = new Set(["v", "project", "max_mode", "tz", "kinds", "icon"]);
@@ -291,6 +307,8 @@ const VALID_KINDS: readonly (readonly OwnedKind[])[] = [["ritual"], ["ritual", "
 const ABSENT_KINDS: readonly OwnedKind[] = ["ritual"];
 const PROFILE_KEYS: ReadonlySet<string> = new Set(["harness", "model", "effort", "permissions", "surface", "max_turns", "args", "env_pass"]);
 const DEFAULTS_KEYS: ReadonlySet<string> = new Set(["ritual", "follow_up"]);
+const EMAIL_KEYS: ReadonlySet<string> = new Set(["to"]);
+const EMAIL_SECTION = "email";
 const RITUAL_KEYS: ReadonlySet<string> = new Set([
   "title", "cadence", "anchor", "at", "tz", "from", "skill", "args", "timeout", "profile", "model", "max_turns",
   "policy", "mode", "may", "hold", "notes", "on_hold", "may_extra", "hold_extra",
@@ -831,10 +849,15 @@ function decodeSections(document: TomlDocument, file: string, marker: Marker): v
     const isProfile = section.startsWith("profiles.");
     const isPolicy = section.startsWith("policies.");
     const isRitual = section.startsWith("rituals.");
-    if (!isProfile && !isPolicy && !isRitual && section !== "defaults") {
+    if (!isProfile && !isPolicy && !isRitual && section !== "defaults" && section !== EMAIL_SECTION) {
       throw new Error(
-        `${where(file, firstLine)}: [${section}] is not a ${MARKER_FILE} section (known: [profiles.<name>], [defaults], [rituals.<slug>], [policies.<name>])`,
+        `${where(file, firstLine)}: [${section}] is not a ${MARKER_FILE} section (known: [profiles.<name>], [defaults], [rituals.<slug>], [policies.<name>], [email])`,
       );
+    }
+    if (section === EMAIL_SECTION) {
+      if (marker.version !== REPO_VERSION) throw new Error(`${where(file, firstLine)}: [email] needs v = ${String(REPO_VERSION)} at the top of ${MARKER_FILE}`);
+      marker.emailTo = decodeEmailTo(table, source);
+      continue;
     }
     if (isPolicy || isRitual) {
       if (marker.version !== REPO_VERSION) {
@@ -860,6 +883,26 @@ function decodeSections(document: TomlDocument, file: string, marker: Marker): v
   for (const [slug, table] of rituals) {
     marker.rituals.push(decodeRitual(slug, table, { source, policies: marker.policies, maxMode: marker.maxMode }));
   }
+}
+
+/**
+ * `[email] to`: a list of addresses, deduped, first place kept; `[]` is
+ * allowed and means no mail. An error names the entry by its index and never
+ * quotes it: an address must not reach a log or a ledger line.
+ */
+function decodeEmailTo(table: Table, source: Source): string[] {
+  checkKeys(table, EMAIL_KEYS, { file: source.file, lines: source.lines, prefix: EMAIL_SECTION });
+  const line = source.lines[`${EMAIL_SECTION}.to`] ?? source.sectionLines[EMAIL_SECTION];
+  const fail = (what: string): Error => new Error(`${where(source.file, line)}: ${what}`);
+  const value: unknown = table.to;
+  if (value === undefined) throw fail('[email] needs to = ["name@example.com"], or to = [] for no mail');
+  if (!Array.isArray(value)) throw fail('[email] to must be a list of addresses: to = ["name@example.com"], or [] for no mail');
+  const list: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (!isText(entry) || !isEmailAddress(entry)) throw fail(`[email] to[${String(index)}] must be an email address`);
+    if (!list.includes(entry)) list.push(entry);
+  }
+  return list;
 }
 
 /** The name after `prefix` in `section`, which must follow the profile-name rule. */

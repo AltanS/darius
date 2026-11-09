@@ -15,7 +15,9 @@
  * characters (procedure belongs in the skill, rules in `hold`). A root
  * `icon` prints an `icon:` line (`icon` in the JSON); an image `icon` whose
  * file is missing here or is not a valid image is a warning, because the web
- * then shows no icon (src/web/workspace-icon.ts holds the file rules).
+ * then shows no icon (src/web/workspace-icon.ts holds the file rules). An
+ * `[email] to` (0.128.0) prints an `email: N recipients` line
+ * (`email_recipients` in the JSON): the count, never an address.
  *
  * The parser never touches the file system; the skill-file and icon-file
  * checks live here (and in run-due's preflight and the web).
@@ -58,6 +60,8 @@ interface CheckReport {
   kinds?: readonly string[];
   /** The root `icon` as parsed, when the marker has one. */
   icon?: MarkerIcon;
+  /** The count in `[email] to` (0.128.0), when the marker has the key. Never the addresses. */
+  email_recipients?: number;
   rituals?: number;
   policies?: number;
   errors: string[];
@@ -182,6 +186,7 @@ function check(dir: string | undefined): CheckReport {
   report.version = marker.version;
   report.kinds = marker.kinds;
   if (marker.icon !== undefined) report.icon = marker.icon;
+  if (marker.emailTo !== undefined) report.email_recipients = marker.emailTo.length;
   report.rituals = marker.rituals.length;
   report.policies = Object.keys(marker.policies).length;
   report.errors = skillErrorsFor(marker);
@@ -198,6 +203,10 @@ function printReport(report: CheckReport): void {
   console.log(`ok: v${String(report.version)}${counts}`);
   if (report.kinds !== undefined) console.log(`kinds: ${report.kinds.join(", ")}`);
   if (report.icon !== undefined) console.log(`icon: ${report.icon.kind === "emoji" ? report.icon.text : `${report.icon.path} (image)`}`);
+  if (report.email_recipients !== undefined) {
+    const count = report.email_recipients;
+    console.log(count === 0 ? "email: no mail ([email] to = [])" : `email: ${String(count)} recipient${count === 1 ? "" : "s"}`);
+  }
 }
 
 /** What `--resolved <slug> --json` prints. */

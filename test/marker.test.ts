@@ -356,7 +356,7 @@ const V3_ERRORS: readonly (readonly [string, string, RegExp])[] = [
   ["tz below v3", 'v = 2\nproject = "ws"\ntz = "UTC"\n', /:3: tz needs v = 3/u],
   ["rituals below v3", `v = 2\nproject = "ws"\n${RITUAL}`, /:4: \[rituals\.daily\] needs v = 3/u],
   ["policies below v3", 'v = 2\nproject = "ws"\n[policies.p]\nmode = "off"\n', /:4: \[policies\.p\] needs v = 3/u],
-  ["unknown section", v3("[runner]\nx = \"y\"\n"), /:6: \[runner\] is not a \.darius\.toml section \(known: \[profiles\.<name>\], \[defaults\], \[rituals\.<slug>\], \[policies\.<name>\]\)/u],
+  ["unknown section", v3("[runner]\nx = \"y\"\n"), /:6: \[runner\] is not a \.darius\.toml section \(known: \[profiles\.<name>\], \[defaults\], \[rituals\.<slug>\], \[policies\.<name>\], \[email\]\)/u],
   ["unknown ritual key", v3(`${RITUAL}dir = "x"\n`), /:9: unknown key "dir"/u],
   ["unknown policy key", v3('[policies.p]\nmode = "off"\nfoo = 1\n'), /:7: unknown key "foo"/u],
   ["uppercase slug", v3(RITUAL.replace("daily", "Daily")), /:5: \[rituals\.Daily\]: a ritual slug is/u],

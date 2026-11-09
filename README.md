@@ -739,9 +739,10 @@ Then feed the file to darius on stdin, and delete it:
 
 ```bash
 darius email set --stdin < email-settings.json && rm email-settings.json
-darius email status               # set up or not, the host of the url, the recipient count
-darius email test                 # sends one message
+darius email status               # set up or not, the host of the url, the recipient counts
+darius email test                 # sends one message to the host's to list
 darius email test --report        # sends one sample ritual report, with text and HTML
+darius email test --project acme-web   # sends to that project's recipients (with or without --report)
 ```
 
 - Each host has its own `<config>/email.json`. darius writes it with mode 0600, and refuses a file that
@@ -755,8 +756,45 @@ darius email test --report        # sends one sample ritual report, with text an
 - Candles from before `set` send no mail. Add `since` to the JSON to choose another start.
 - The token and the addresses stay in that file: not in the store, the ledger, a log or an error.
 - A run cannot use `email set` or `email test`. It can use `email status`.
+- `to` is the host's default list. It may be empty or absent: then only a project whose `.darius.toml`
+  names recipients gets mail (see below). Before a host's file gets an empty or absent `to`, that host must
+  run darius 0.128.0: an older one refuses the file.
 
 To use the channel, name it: `candle light --deliver email`, or `candle_deliver = ["email"]` on a ritual.
+
+### Mail recipients per project
+
+The channel belongs to the host: `url`, `token`, `from`, `web_url`, `since` and `html` stay in its
+`email.json`. Who gets a project's mail belongs to the project. Name the recipients in its `.darius.toml`, and
+commit it:
+
+```toml
+[email]
+to = ["ops@example.com", "Web Team <web@example.com>"]
+```
+
+- That list replaces the host's `to` for this project's candle mails and report mails. It does not add to it.
+- `to = []` means no mail for this project, also when the host has a `to` list.
+- Without the key, or on a host with no checkout of the project, the project gets the host's `to` list.
+- The sending host reads the marker of its own checkout (`darius link`) when it sends, not when the run
+  starts. A change goes with the next mail after the commit. A marker with uncommitted changes, a marker that
+  does not parse, or one that names another project sends nothing, because it may be the one that says
+  `to = []`.
+- A mail with no recipients is not sent. A candle notice leaves one `alert.failed` line with the reason "not set
+  up on host for this project: ..." and no address. That line is not a try, and darius does not send it again.
+  A report leaves no line. When the list is fixed, a notice whose candle is still lit, and a report under a day
+  old, go out with the next flush.
+- `darius email status` inside a project folder adds how many recipients the project's marker names, as a
+  number. `darius marker check` prints the same count. Neither prints an address.
+- `_global` and a plain `darius email test` use the host's `to` list. A plain test with an empty `to` exits 1.
+  `darius email test --project <name>` exits 1 with "no recipients for <name>" when that project's list is empty.
+- The addresses in the marker are in git. **An address in the marker of a public repo is public.** Keep it in
+  the host's `email.json` instead, or use a list address.
+- darius does not write these addresses to the store, the ledger, a log or an error. It takes the host's `from`
+  and `to` out of report text as before; the marker's addresses are not secret and are not taken out.
+- The recipient list is part of the request body. If you change the recipients while darius retries one mail,
+  a strict provider may answer 409 for that mail, because the same `Idempotency-Key` now comes with another body.
+- An older darius refuses the `[email]` section. Every host that reads the marker must run 0.128.0 first.
 
 ### Ritual reports by email
 
@@ -774,8 +812,9 @@ report_deliver = ["email"]
   run and the box, with the same timing as candle mail. A held, failed, abandoned or dry run sends nothing. A run
   by hand of such a ritual sends too.
 - It uses the email channel above: `darius email set` must have run on that host. Without it the run completes
-  as usual and sends nothing, and `darius doctor` says so. The recipients are the host's `to` list. A run cannot
-  choose the channel or the recipients.
+  as usual and sends nothing, and `darius doctor` says so. The recipients are the project's `[email] to`, else
+  the host's `to` list (see [Mail recipients per project](#mail-recipients-per-project)). A run cannot choose
+  the channel or the recipients.
 - A run that completed before `since`, or more than a day before the send, sends nothing. So adding the key
   does not mail old runs.
 - The subject is `[<project>] <ritual title>: <summary>`. The summary comes from the run's result block, or
@@ -847,7 +886,8 @@ the full reference.
 - `darius run ack <run> [--answer N=TEXT ...] [--note TEXT]`: answer a run's questions, one `--answer` per question, or dismiss a run with no answer. The answers reach the next run of the ritual and stay until a run that read them completes.
 - `darius run ack-earlier <run>`: dismiss every older open ask of the same ritual in one call.
 - `darius candle light|list|show|answer|accept|blow-out|relight`: problems that need you, kept by key. See [Candles](#candles).
-- `darius email status|set|test`: the email channel of candle notices. See [Candles by email](#candles-by-email).
+- `darius email status|set|test [--report] [--project <name>]`: the email channel of candle notices and ritual
+  reports. See [Candles by email](#candles-by-email) and [Mail recipients per project](#mail-recipients-per-project).
 - `darius box check [--json] | status [--json] | clear <work dir>`: prove the run sandbox on this host with a fake harness and no paid call, list the newest box check per host and darius version and this host's tainted work dirs, or remove a work dir's taint. A work dir is tainted when the box could not settle what a run left there; every run there skips as `box-broken` until you clear it. See [Unattended runs: the box](#unattended-runs-the-box).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.

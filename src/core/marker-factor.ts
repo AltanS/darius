@@ -342,6 +342,8 @@ export function proofDifference(before: Marker, after: Marker, groups: readonly 
   for (const [field, was, now] of root) {
     if (was !== now) return `${field}: was ${was}, proposed ${now}`;
   }
+  // Compared, never printed: an address must not reach the output (0.128.0).
+  if (JSON.stringify(before.emailTo) !== JSON.stringify(after.emailTo)) return "[email] to changed";
   for (const [name, policy] of Object.entries(before.policies)) {
     if (policyText(policy) !== policyText(after.policies[name])) return `[policies.${name}] changed`;
   }
