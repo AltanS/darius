@@ -41,6 +41,7 @@ export default function Milestone({ loaderData }: Route.ComponentProps): React.R
           <span className="ms-id msd-id">{head.id}</span>
           <TitleText text={head.title} />
         </h1>
+        {view.summary === null ? null : <p className="msd-summary">{view.summary}</p>}
         <p className="ms-meta msd-meta">
           <StateWord state={view.status} />
           <span>{head.started === null ? "not started" : `started ${head.started}`}</span>

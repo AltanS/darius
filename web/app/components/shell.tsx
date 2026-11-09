@@ -6,7 +6,9 @@
  * and wider) has neither: a fixed sidebar takes their place. Both are in the
  * page always; CSS decides which one shows. The third part is Places (the
  * tree, `places.tsx`), the fourth is `<main>`. Over them floats the connection
- * strip (`connection-strip.tsx`) when the host is away.
+ * strip (`connection-strip.tsx`) when the host is away. On a page of a
+ * workspace, the milestone finder (`finder.tsx`) has a button in the phone top
+ * bar and a row in the desktop sidebar.
  *
  * The scope is one workspace or all of them. A host page (Status, Profiles,
  * Settings) is in no scope, so the tabs and Places point at the last scope you
@@ -19,6 +21,7 @@ import { Link, useLocation, useNavigation, useRouteLoaderData } from "react-rout
 import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
 import { ConnectionStrip } from "./connection-strip.tsx";
+import { FinderButton, FinderDialog, useFinder } from "./finder.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
 import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
@@ -98,6 +101,8 @@ interface ShellProps {
 
 export function Shell({ data, children }: ShellProps): React.ReactNode {
   useMenuDismiss();
+  // The milestone finder (0.125.0): on every page of a workspace, from a button, `/` or Ctrl+K.
+  const finder = useFinder(data.finder !== null);
   // The gems of the bar and of Places blink while the router navigates for over 300 ms. The minute refresh, the poll of a start and the load after an action do not count.
   const navigation = useNavigation();
   const busy = useAfter(isLoading(navigation.state), BUSY_AFTER_MS);
@@ -122,10 +127,11 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
     if (remembered !== undefined) document.cookie = scopeCookieText(remembered);
   }, [remembered]);
   return (
-    <div className="app">
+    <div className={data.finder === null ? "app" : "app has-finder"}>
       <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} />
+      {data.finder === null ? null : <FinderButton finder={finder} className="finder-btn finder-btn-bar" />}
       <ConnectionStrip generatedAt={data.generatedAt} />
-      <Places data={data} scope={scope} lit={lit} busy={busy} />
+      <Places data={data} scope={scope} lit={lit} busy={busy} finder={data.finder === null ? null : finder} />
       <main className="wa page-main">{children}</main>
       <nav aria-label="Tabs" className="tabbar">
         <Link to={href({ to: "overview", ws: scope })} className={lit === "overview" ? "tab on" : "tab"} aria-current={lit === "overview" ? "page" : undefined}>
@@ -144,6 +150,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
           </Link>
         ))}
       </nav>
+      {finder.open && data.finder !== null ? <FinderDialog ws={data.finder.ws} rows={data.finder.rows} onClose={finder.hide} /> : null}
     </div>
   );
 }

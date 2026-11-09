@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -580,6 +580,7 @@ test("status: a linked checkout's legacy milestones reach the project, an unlink
     [["legacy", "M7", "M7", "Shop", "In Progress", 1, 2]],
   );
   assert.deepEqual(tracked?.milestones[0]?.specs.map((row) => [row.source, row.slug, row.label, row.done, row.total]), [["legacy", "m7-01-cart", "M7/01", 1, 2]]);
+  assert.equal(tracked?.milestones[0]?.lastActivity, statSync(join(spec, "01-cart.md")).mtime.toISOString(), "the last change of its spec file");
   const untracked = projects.find((entry) => entry.name === "web-untracked");
   assert.deepEqual([untracked?.milestones, untracked?.milestonesArchived], [[], 0]);
 });
@@ -644,6 +645,8 @@ test("milestone detail through the WebContext: README, spec texts and worklogs a
   assert.deepEqual([detail.project, detail.dir, detail.row.id, detail.row.title, detail.row.target, detail.row.done, detail.row.total], ["web-detail", "M8-mail", "M8", "Mail", "2026-10-01", 1, 2]);
   assert.deepEqual(detail.readme?.body?.[1], { kind: "paragraph", lines: [[span("text", "Send <script>alert(1)</script> once.")]] }, "untrusted text stays text");
   assert.equal(detail.readme?.path, "00-README.md");
+  assert.equal(detail.summary, "Send <script>alert(1)</script> once.", "the first prose paragraph, as plain text");
+  assert.equal(detail.row.lastActivity, [detail.specs[0]?.file.modifiedAt, detail.worklogs[0]?.modifiedAt].toSorted().at(-1));
   const [sender] = detail.specs;
   assert.deepEqual([sender?.row.label, sender?.row.source, sender?.file.path, sender?.file.lines], ["M8/01", "legacy", "01-sender.md", 6]);
   assert.deepEqual(sender?.file.body?.[1], { kind: "list", ordered: false, start: 1, items: [[span("text", "one")], [span("text", "two")]], checks: ["done", "open"] });

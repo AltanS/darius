@@ -13,7 +13,7 @@ import { collectFindings, findingCounts } from "../core/finding-index.ts";
 import { collectCandles } from "../core/candle-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
 import { hostId, linesFor, readLedger } from "../core/ledger.ts";
-import { readLegacyMilestoneDetailAt, type LegacyFile } from "../core/legacy-milestone-detail.ts";
+import { detailActivity, milestoneActivityAt, readLegacyMilestoneDetailAt, type LegacyFile } from "../core/legacy-milestone-detail.ts";
 import { readLegacyMilestonesAt, type LegacyMilestone } from "../core/legacy-milestones.ts";
 import { readLegacyVigilsAt } from "../core/legacy-vigils.ts";
 import { linkedDir } from "../core/links.ts";
@@ -52,6 +52,7 @@ import type {
 import { ackKindOf, activityOf, startedByOf } from "./activity.ts";
 import { hostBackupEntries } from "./backups.ts";
 import { parseMarkdown } from "./markdown.ts";
+import { milestoneSummary } from "./milestone-summary.ts";
 import { originOf, readersOf } from "./run-origin.ts";
 import { workspaceIconOf } from "./workspace-icon.ts";
 
@@ -270,7 +271,7 @@ export function trackerDirOf(project: string, checkout: string | null): string |
   return checkout === null ? null : join(checkout, ".tracker");
 }
 
-function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
+function milestoneRow(milestone: LegacyMilestone, lastActivity: string | null): MilestoneRow {
   return {
     source: "legacy",
     id: milestone.id,
@@ -283,6 +284,7 @@ function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
     done: milestone.done,
     total: milestone.total,
     specs: milestone.specs.map((spec) => ({ source: "legacy", ...spec })),
+    lastActivity,
   };
 }
 
@@ -290,7 +292,8 @@ function milestoneRow(milestone: LegacyMilestone): MilestoneRow {
 function legacyMilestones(trackerDir: string | null): Pick<ProjectStatus, "milestones" | "milestonesArchived"> {
   if (trackerDir === null) return { milestones: [], milestonesArchived: 0 };
   const { milestones, archived } = readLegacyMilestonesAt(trackerDir);
-  return { milestones: milestones.map(milestoneRow), milestonesArchived: archived };
+  const activity = milestoneActivityAt(trackerDir, milestones);
+  return { milestones: milestones.map((milestone) => milestoneRow(milestone, activity.get(`${milestone.id}-${milestone.slug}`) ?? null)), milestonesArchived: archived };
 }
 
 /** A file's text for the page: markdown as blocks, any other text as one code block. */
@@ -307,7 +310,7 @@ export function milestoneDetail(projectName: string, ref: string): MilestoneDeta
   if (trackerDir === null) return null;
   const detail = readLegacyMilestoneDetailAt(trackerDir, ref);
   if (detail === null) return null;
-  const row = milestoneRow(detail.milestone);
+  const row = milestoneRow(detail.milestone, detailActivity(detail));
   return {
     project: projectName,
     row,
@@ -316,6 +319,7 @@ export function milestoneDetail(projectName: string, ref: string): MilestoneDeta
     specs: detail.specs.map(({ spec, file }) => ({ row: { source: "legacy", ...spec }, file: milestoneFile(file) })),
     others: detail.others.map(milestoneFile),
     worklogs: detail.worklogs.map((worklog) => Object.assign(milestoneFile(worklog), { link: worklog.link, distilledAt: worklog.distilledAt })),
+    summary: milestoneSummary(detail.readme?.text ?? null),
   };
 }
 

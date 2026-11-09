@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.125.0] - 2026-11-09
+
+### Added
+
+- The web app has a milestone finder on every page of a workspace. Open it with the search button (the top bar on a phone, the sidebar on a desktop), with `/`, or with Ctrl+K or Cmd+K. An empty query lists the five milestones worked on last and the five newest. A query matches the id, the title and the slug; every word must match. An exact id comes first, then hits at the start of the id or title, then the newest work. Each row shows the id, the title, the status and when it was last worked on. The arrows move, Enter opens, Escape closes.
+- A milestone page shows a short summary under its title: the first paragraph under the README's `## Goal`, or else its first prose paragraph. It is plain text, at most about 280 characters. A template placeholder does not count.
+- Each milestone row of `/api/status.json` has `lastActivity`: the newest change among its spec files and worklogs, by the rules of the detail page, or null. A worklog is read again only when its size or time changes. The milestone detail has `summary`.
+
 ## [0.124.1] - 2026-11-03
 
 ### Fixed

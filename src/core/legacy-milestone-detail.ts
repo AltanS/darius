@@ -209,6 +209,109 @@ function worklogsOf(root: string, milestone: LegacyMilestone, dir: string, track
   return out.toSorted((left, right) => right.modifiedAt.localeCompare(left.modifiedAt) || left.path.localeCompare(right.path));
 }
 
+/** The spec markers of one worklog, kept while its size and time stay the same. */
+interface MarkerEntry {
+  mtimeMs: number;
+  size: number;
+  modifiedAt: string;
+  markers: string[];
+}
+
+/** Per tracker directory, the worklogs seen in the last pass. The status is read often, and a worklog changes rarely. */
+const markerCache = new Map<string, Map<string, MarkerEntry>>();
+
+function markersOf(text: string): string[] {
+  return text.split("\n").flatMap((line) => {
+    const marker = SPEC_MARKER.exec(line.trim())?.[1];
+    return marker === undefined ? [] : [marker];
+  });
+}
+
+/** The worklogs of a tracker tree with their times and spec markers; a file whose size and time did not change is not read again. */
+function worklogEntries(root: string): Map<string, MarkerEntry> {
+  const worklogDir = join(root, "worklog");
+  const before = markerCache.get(root) ?? new Map<string, MarkerEntry>();
+  const now = new Map<string, MarkerEntry>();
+  let names: string[] = [];
+  try {
+    names = guarded(root, worklogDir) === null ? [] : readdirSync(worklogDir);
+  } catch {
+    names = [];
+  }
+  for (const name of names.filter((candidate) => candidate.endsWith(".md") && !candidate.startsWith("00-") && !candidate.startsWith("."))) {
+    const real = guarded(root, join(worklogDir, name));
+    if (real === null) continue;
+    let stats: Stats;
+    try {
+      stats = statSync(real);
+    } catch {
+      continue;
+    }
+    if (!stats.isFile()) continue;
+    const known = before.get(name);
+    if (known !== undefined && known.mtimeMs === stats.mtimeMs && known.size === stats.size) {
+      now.set(name, known);
+      continue;
+    }
+    const file = readFile(real, name, stats);
+    now.set(name, { mtimeMs: stats.mtimeMs, size: stats.size, modifiedAt: file.modifiedAt, markers: markersOf(file.text ?? "") });
+  }
+  markerCache.set(root, now);
+  return now;
+}
+
+/** The newer of two ISO times; null counts as older than any time. */
+function newer(left: string | null, right: string | null): string | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return right > left ? right : left;
+}
+
+/**
+ * The last change of each milestone (0.125.0): the newest modification time
+ * among its spec files and its worklogs, by the same rules as the detail page.
+ * Keyed by directory name (`M12-cart`); null for a milestone with neither.
+ * Stats files only, except a worklog that is new or changed since the last
+ * call, which is read once for its spec markers.
+ */
+export function milestoneActivityAt(trackerDir: string, milestones: readonly LegacyMilestone[]): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  let root: string;
+  try {
+    root = realpathSync(trackerDir);
+  } catch {
+    for (const milestone of milestones) out.set(`${milestone.id}-${milestone.slug}`, null);
+    return out;
+  }
+  const worklogs = worklogEntries(root);
+  const roots = [...new Set([trackerDir, root])];
+  for (const milestone of milestones) {
+    const dir = `${milestone.id}-${milestone.slug}`;
+    let latest: string | null = null;
+    for (const spec of milestone.specs) {
+      const real = guarded(root, join(root, dir, `${spec.slug.slice(milestone.id.length + 1)}.md`));
+      if (real === null) continue;
+      try {
+        latest = newer(latest, statSync(real).mtime.toISOString());
+      } catch {
+        // A spec file that went away has no time.
+      }
+    }
+    for (const [name, entry] of worklogs) {
+      const belongs = worklogMilestone(name) === milestone.number || entry.markers.some((marker) => specPointsInto(marker, dir, roots));
+      if (belongs) latest = newer(latest, entry.modifiedAt);
+    }
+    out.set(dir, latest);
+  }
+  return out;
+}
+
+/** The newest change among the spec files and worklogs of a milestone's detail: what `milestoneActivityAt` gives for it. */
+export function detailActivity(detail: Pick<LegacyMilestoneDetail, "specs" | "worklogs">): string | null {
+  const times = [...detail.specs.map(({ file }) => file.modifiedAt), ...detail.worklogs.map((worklog) => worklog.modifiedAt)];
+  return times.reduce<string | null>((latest, time) => newer(latest, time), null);
+}
+
 /**
  * Which milestone a URL names: its id (`M12`, any case) when only one directory
  * has that id, else the directory name (`M12-cart`). Null when none or several match.

@@ -9,6 +9,7 @@ import { Shell } from "./components/shell.tsx";
 import { ClockProvider } from "./lib/clock.tsx";
 import { connectionNow, isFreshAdvance, isNetworkError, markFresh, markStale, PROBE_MS, probeHost, useConnection } from "./lib/connection.ts";
 import { NonceContext } from "./lib/nonce.ts";
+import { finderOf } from "./lib/finder.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { SPLASH_SIZES, splashFile, splashMedia } from "./lib/splash.ts";
@@ -33,6 +34,8 @@ export function loader({ context, request }: Route.LoaderArgs) {
     utcOffset: status.utcOffset,
     // The workspaces, the tab badges, the last scope and the host line: what Places and the tabs show (lib/scope.ts).
     ...shellData(status, request),
+    // The milestones of the workspace the page is in, for the finder (0.125.0); null outside a workspace.
+    finder: finderOf(status.projects, new URL(request.url).pathname),
   };
 }
 

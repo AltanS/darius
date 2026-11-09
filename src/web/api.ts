@@ -509,6 +509,8 @@ export interface MilestoneRow {
   done: number;
   total: number;
   specs: SpecRow[];
+  /** The newest change among its spec files and worklogs, an ISO time (0.125.0); null when it has neither. */
+  lastActivity: string | null;
 }
 
 /**
@@ -1016,6 +1018,8 @@ export interface MilestoneDetail {
   others: MilestoneFile[];
   /** The worklogs that belong to it, the latest change first. */
   worklogs: MilestoneWorklog[];
+  /** One plain paragraph from the README (0.125.0): its Goal, else its first prose paragraph, at most about 280 characters; null when it has none. */
+  summary: string | null;
 }
 
 // --- activity (0.88.0) ---------------------------------------------------------------------

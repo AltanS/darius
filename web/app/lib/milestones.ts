@@ -123,7 +123,7 @@ export interface WorkspaceMilestones {
 }
 
 /** `M77` to 77, for ordering; 0 for an id without a number. */
-function idNumber(id: string): number {
+export function idNumber(id: string): number {
   const match = /(\d+)/u.exec(id);
   return match === null ? 0 : Number.parseInt(match[1] ?? "0", 10);
 }
@@ -262,6 +262,8 @@ export interface MilestoneDetailView {
   head: MilestoneView;
   status: Badge;
   readme: MilestoneFile | null;
+  /** One plain paragraph from the README for the top of the page (0.125.0); null when it has none. */
+  summary: string | null;
   specs: SpecDetailView[];
   counts: DetailCounts;
   worklogs: MilestoneWorklog[];
@@ -290,6 +292,7 @@ export function milestoneDetailView(detail: MilestoneDetail, rows: readonly Mile
     head: milestoneView(detail.row, today, labels),
     status: milestoneStatusWord(detail.row.status),
     readme: detail.readme,
+    summary: detail.summary,
     specs,
     counts,
     worklogs: detail.worklogs,

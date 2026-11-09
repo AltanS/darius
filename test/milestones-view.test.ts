@@ -16,7 +16,7 @@ function spec(extra: Partial<SpecRow> = {}): SpecRow {
 }
 
 function milestone(id: string, extra: Partial<MilestoneRow> = {}): MilestoneRow {
-  return { source: "legacy", id, label: id, slug: id.toLowerCase(), title: `Title ${id}`, started: null, target: null, status: "In Progress", done: 0, total: 0, specs: [], ...extra };
+  return { source: "legacy", id, label: id, slug: id.toLowerCase(), title: `Title ${id}`, started: null, target: null, status: "In Progress", done: 0, total: 0, specs: [], lastActivity: null, ...extra };
 }
 
 test("a spec is ticked when all its checks are done and it has some, whatever the verified flag says", () => {

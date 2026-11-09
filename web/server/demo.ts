@@ -14,6 +14,7 @@ import type { JsonValue } from "../../src/core/model.ts";
 import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
+import { milestoneSummary } from "../../src/web/milestone-summary.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -111,18 +112,19 @@ function milestoneRow(id: string, title: string, status: string, specs: SpecRow[
   const slug = title.toLowerCase().replaceAll(" ", "-");
   const done = specs.reduce((sum, row) => sum + row.done, 0);
   const total = specs.reduce((sum, row) => sum + row.total, 0);
-  return { source: "legacy", id, label: id, slug, title, started: "2026-09-01", target: null, status, done, total, specs, ...extra };
+  return { source: "legacy", id, label: id, slug, title, started: "2026-09-01", target: null, status, done, total, specs, lastActivity: null, ...extra };
 }
 
 /** Milestones in every state: in progress with a waiting spec, not started, complete, and one the owner closed. */
-function milestones(): MilestoneRow[] {
+function milestones(now: number): MilestoneRow[] {
   const cart = spec("M12", 2, "Cart totals use the shop tax rules", 0, 4, { dependsOn: ["m12-01-cart-keeps-items-between-visits"], status: "Waiting" });
   return [
     milestoneRow("M12", "Cart survives a page reload", "In Progress", [spec("M12", 1, "Cart keeps items between visits", 6, 6), cart, spec("M12", 3, "Cart shows the free shipping bar", 1, 5)], {
       target: "2026-10-15",
+      lastActivity: ago(now, 2 * 60 * MINUTE),
     }),
-    milestoneRow("M14", "Product search finds typos", "Not Started", [spec("M14", 1, "Search ignores one typo", 0, 3), spec("M14", 2, "Search explains an empty result", 0, 2)]),
-    milestoneRow("M9", "Checkout mail is reliable", "Complete", [spec("M9", 1, "Order mail has one sender", 4, 4), spec("M9", 2, "Order mail retries on error", 5, 5)], { started: "2026-08-10", target: "2026-09-10" }),
+    milestoneRow("M14", "Product search finds typos", "Not Started", [spec("M14", 1, "Search ignores one typo", 0, 3), spec("M14", 2, "Search explains an empty result", 0, 2)], { lastActivity: ago(now, 4 * DAY) }),
+    milestoneRow("M9", "Checkout mail is reliable", "Complete", [spec("M9", 1, "Order mail has one sender", 4, 4), spec("M9", 2, "Order mail retries on error", 5, 5)], { started: "2026-08-10", target: "2026-09-10", lastActivity: ago(now, 20 * DAY) }),
     milestoneRow("M11", "Old theme cleanup", "Closed", [spec("M11", 1, "Remove the old theme files", 1, 3)], { started: "2026-07-01" }),
   ].toSorted((left, right) => Number.parseInt(left.id.slice(1), 10) - Number.parseInt(right.id.slice(1), 10));
 }
@@ -353,7 +355,7 @@ function project(now: number): ProjectStatus {
       vigil("checkout-copy", "Checkout copy review", { paused: true, pausedUntil: day(now, 0, 7), until: "the copy review" }),
       vigil("old-soak", "Search index soak", { state: "closed", verdict: "held", lastOutcome: "held" }),
     ],
-    milestones: milestones(),
+    milestones: milestones(now),
     milestonesArchived: 41,
     findings: findingCounts(demoFindings(now).filter((row) => row.project === "demo-shop")),
     candles: litCandles(now, "demo-shop"),
@@ -496,7 +498,7 @@ Depends on the cart load from M12/01.
 
 /** M12 of demo-shop in full: README, three specs, two worklogs (one distilled), a note and an image. */
 function demoMilestone(now: number): MilestoneDetail {
-  const row = milestones().find((candidate) => candidate.id === "M12");
+  const row = milestones(now).find((candidate) => candidate.id === "M12");
   if (row === undefined) throw new Error("demo: M12 is missing");
   const files = ["01-cart-keeps-items-between-visits.md", "02-cart-totals-use-the-shop-tax-rules.md", "03-cart-shows-the-free-shipping-bar.md"];
   return {
@@ -521,6 +523,7 @@ function demoMilestone(now: number): MilestoneDetail {
         distilledAt: "2026-09-15T08:00:00Z",
       },
     ],
+    summary: milestoneSummary(M12_README),
   };
 }
 

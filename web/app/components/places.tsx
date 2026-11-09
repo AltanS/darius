@@ -13,6 +13,7 @@ import { Link } from "react-router";
 
 import type { WorkspaceIcon } from "../../../src/web/api.ts";
 import type { RootData } from "../root.tsx";
+import { FinderButton, type FinderState } from "./finder.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Gem, NavIcon, type NavIconName } from "./nav-icons.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
@@ -169,6 +170,8 @@ interface PlacesProps {
   lit: LitRow | null;
   /** The page is loading and has taken more than 300 ms: the brand gem blinks. */
   busy: boolean;
+  /** The milestone finder of the workspace, for its row under the head (desktop only); null outside a workspace. */
+  finder: FinderState | null;
 }
 
 const HOST_ROWS: readonly { page: "status" | "profiles" | "settings"; label: string; icon: NavIconName }[] = [
@@ -205,7 +208,7 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
   );
 }
 
-export function Places({ data, scope, lit, busy }: PlacesProps): React.ReactNode {
+export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
   const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: NO_TABS, icon: null }];
@@ -219,6 +222,11 @@ export function Places({ data, scope, lit, busy }: PlacesProps): React.ReactNode
         </Link>
         <span className="places-hostname">{data.host}</span>
       </div>
+      {finder === null ? null : (
+        <div className="places-find">
+          <FinderButton finder={finder} className="finder-btn finder-btn-side" label="Find a milestone" />
+        </div>
+      )}
       <p className="places-group">Workspaces</p>
       {data.workspaces.length === 0 ? (
         <p className="places-empty">

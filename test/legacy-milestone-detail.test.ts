@@ -8,11 +8,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MAX_TEXT_BYTES, pickMilestone, readLegacyMilestoneDetail, specPointsInto, worklogMilestone } from "../src/core/legacy-milestone-detail.ts";
+import { detailActivity, MAX_TEXT_BYTES, milestoneActivityAt, pickMilestone, readLegacyMilestoneDetail, specPointsInto, worklogMilestone } from "../src/core/legacy-milestone-detail.ts";
 import { readLegacyMilestones } from "../src/core/legacy-milestones.ts";
 
 /** A checkout with `.tracker/`; `files` maps a path below `.tracker/` to its text. */
@@ -179,4 +179,43 @@ test("a file over the size limit is listed, not read; reading writes nothing", (
   const big = readLegacyMilestoneDetail(root, "M12")?.others.find((file) => file.path === "_big.md");
   assert.deepEqual([big?.text, big?.omitted, big?.size], [null, "too-large", MAX_TEXT_BYTES + 1]);
   assert.deepEqual(snapshot(join(root, ".tracker")), before);
+});
+
+// --- the last change of each milestone, for the status rows (0.125.0) ---------------------------
+
+/** Set the time of a file below `.tracker/`. */
+function touch(root: string, name: string, iso: string): void {
+  const at = new Date(iso);
+  utimesSync(join(root, ".tracker", name), at, at);
+}
+
+test("last activity: the newest spec file or worklog of each milestone, the same as its detail page", () => {
+  const root = checkout(FIXTURE);
+  const tracker = join(root, ".tracker");
+  for (const name of Object.keys(FIXTURE)) if (!name.includes(".objects") && !name.endsWith("/inside.md")) touch(root, name, "2026-09-01T00:00:00.000Z");
+  touch(root, "M12-cart/01-keeps.md", "2026-09-05T10:00:00.000Z");
+  touch(root, "worklog/2026-09-02-spike.md", "2026-09-08T10:00:00.000Z");
+  // The README and the other files do not count.
+  touch(root, "M12-cart/00-README.md", "2026-10-01T00:00:00.000Z");
+  touch(root, "M12-cart/notes.txt", "2026-10-01T00:00:00.000Z");
+  touch(root, "M9-mail/01-sender.md", "2026-09-03T00:00:00.000Z");
+  const { milestones } = readLegacyMilestones(root);
+  const activity = milestoneActivityAt(tracker, milestones);
+  assert.equal(activity.get("M12-cart"), "2026-09-08T10:00:00.000Z", "a worklog tied by its spec marker");
+  assert.equal(activity.get("M9-mail"), "2026-09-03T00:00:00.000Z");
+  const detail = readLegacyMilestoneDetail(root, "M12");
+  assert.ok(detail !== null);
+  assert.equal(detailActivity(detail), activity.get("M12-cart"), "the list and the detail agree");
+
+  // A changed worklog is read again: its new marker ties it to M9 now.
+  writeFileSync(join(tracker, "worklog/2026-09-03-other.md"), "## Other\n\n<!-- spec: .tracker/M9-mail/01-sender.md -->\n");
+  touch(root, "worklog/2026-09-03-other.md", "2026-09-09T00:00:00.000Z");
+  assert.equal(milestoneActivityAt(tracker, milestones).get("M9-mail"), "2026-09-09T00:00:00.000Z");
+});
+
+test("last activity: null for a milestone with no spec file and no worklog, and for a missing tree", () => {
+  const root = checkout({ "M4-empty/00-README.md": "---\nname: Empty\n---\n" });
+  const { milestones } = readLegacyMilestones(root);
+  assert.deepEqual([...milestoneActivityAt(join(root, ".tracker"), milestones)], [["M4-empty", null]]);
+  assert.deepEqual([...milestoneActivityAt(join(root, "missing"), milestones)], [["M4-empty", null]]);
 });
