@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.128.2] - 2026-11-10
+
+### Fixed
+
+- The box proxy's tunnel limit (64) counts tunnels open now. A connection over the limit kept its slot until the idle timeout (10 min), so after a burst over the limit every later request of the run was refused `too-many-tunnels`. A refused request now gives its slot back at once, and every close gives it back exactly once.
+- A `too-many-tunnels` line in `net.jsonl` names the host and port that were asked for. It had an empty host.
+
 ## [0.128.0] - 2026-11-09
 
 ### Added
