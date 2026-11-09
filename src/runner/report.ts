@@ -14,6 +14,7 @@
 
 import { errorMessage } from "../runtime.ts";
 import type { Alert } from "../core/alerts.ts";
+import { behindLine } from "../core/checkout-behind.ts";
 import type { ResultSummary } from "../core/result.ts";
 import type { BoxCheck } from "./box-check.ts";
 import type { HarnessCheck } from "./harness-check.ts";
@@ -46,6 +47,8 @@ export type SkipReason =
   | "not-active"
   | "not-resumable"
   | "not-followable"
+  | "darius-outdated"
+  | "checkout-behind"
   | "error";
 
 /** How a started run ended, read back from the ledger after `claude` exited. */
@@ -86,6 +89,12 @@ export interface ProjectEntry {
   rituals: RitualEntry[];
   /** What reconcile says about the marker: a retired repo ritual named again (0.54.0). */
   warnings?: string[];
+  /**
+   * The behind check of the project's checkout (0.126.0), when a scheduled
+   * ritual asked for it: how many commits HEAD lacks from `upstream`, or why
+   * the check could not run.
+   */
+  behind?: { checkout: string; upstream: string; commits: number; ahead: number } | { checkout: string; unchecked: string };
 }
 
 export interface BatchReport {
@@ -130,6 +139,8 @@ export const FAILING_SKIPS: ReadonlySet<string> = new Set([
   "marker-dirty",
   "skill-missing",
   "skill-dirty",
+  "darius-outdated",
+  "checkout-behind",
 ]);
 
 /**
@@ -146,6 +157,8 @@ const OWN_DETAILS: ReadonlySet<string> = new Set([
   "marker-dirty",
   "skill-missing",
   "skill-dirty",
+  "darius-outdated",
+  "checkout-behind",
 ]);
 
 /**
@@ -240,6 +253,17 @@ function describeBoxCheck(check: BoxCheck): string {
   return `${mark} box check ${check.outcome} on ${check.host}: darius ${check.darius}, bwrap ${check.bwrap}, kernel ${check.kernel}${failed}${skipped}`;
 }
 
+/**
+ * `checkout of acme is 3 commits behind origin/main`, or null when it is not
+ * behind, was not checked, or a `checkout-behind` skip already says it.
+ */
+function describeBehind(project: ProjectEntry): string | null {
+  const behind = project.behind;
+  if (behind === undefined || !("commits" in behind)) return null;
+  if (project.rituals.some((entry) => entry.reason === "checkout-behind")) return null;
+  return behindLine(project.project, { state: "checked", upstream: behind.upstream, behind: behind.commits, ahead: behind.ahead });
+}
+
 /** Plain-text lines for the webhook or the journal. Empty when nothing is worth saying (never for a digest). */
 export function formatReport(report: BatchReport, scope: ReportScope = "all"): string[] {
   const lines: string[] = [];
@@ -252,6 +276,11 @@ export function formatReport(report: BatchReport, scope: ReportScope = "all"): s
   // The same warning would come every 15 minutes, so the news scope leaves it out.
   for (const project of scope === "news" ? [] : report.projects) {
     for (const warning of project.warnings ?? []) lines.push(`! ${project.project}: ${warning}`);
+  }
+  // Only a ritual that is about to run asks for the check, so this line comes with news of its own.
+  for (const project of report.projects) {
+    const line = describeBehind(project);
+    if (line !== null) lines.push(`! ${line}`);
   }
   for (const check of report.boxChecks ?? []) lines.push(describeBoxCheck(check));
   for (const check of report.harnessChecks ?? []) lines.push(describeCheck(check, report.host));

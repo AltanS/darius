@@ -54,6 +54,8 @@ import { readSummary, type RunResult } from "../src/core/result.ts";
 import { latestHandoff } from "../src/core/handoff.ts";
 import { missingTools, namedTools } from "../src/runner/tools.ts";
 import { commitAll, dirty as dirtyFile, initRepo, NO_GIT } from "./helpers/git.ts";
+import { readBehindRecord } from "../src/core/checkout-behind.ts";
+import { SETUP_UNITS, type Config } from "../src/core/config.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-runner-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -967,6 +969,101 @@ test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch;
   const ran = ritualsOf(hand.report)[0];
   assert.equal(ran?.end, "complete", JSON.stringify(hand.report));
   assert.ok((ran?.warnings ?? []).some((warning) => /\.darius\.toml has uncommitted changes; this run uses them/u.test(warning)));
+});
+
+// --- cross-host guards (0.126.0) ---------------------------------------------------------------
+
+/** A host config for an injected batch: this host's id, no remote, `[run] behind` as given. */
+function hostConfig(behind: Config["run"]["behind"]): Config {
+  return { host: hostId(), notify: { webhook: "" }, runner: { claude: "" }, setup: { units: SETUP_UNITS }, run: { sandbox: "off", behind }, box: { sshAgent: false } };
+}
+
+function gitIn(dir: string, args: readonly string[]): void {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const result = spawnSync("git", ["-c", "user.name=darius-test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: dir, env, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+}
+
+/** Gives the v3 checkout `dir` an upstream, then puts one commit there that `dir` does not have. */
+function behindByOne(dir: string, project: string): void {
+  const bare = join(SANDBOX, `${project}-upstream.git`);
+  const other = join(SANDBOX, `${project}-other`);
+  gitIn(SANDBOX, ["init", "--quiet", "--bare", "--initial-branch=main", bare]);
+  gitIn(dir, ["remote", "add", "origin", bare]);
+  gitIn(dir, ["push", "--quiet", "--set-upstream", "origin", "main"]);
+  gitIn(SANDBOX, ["clone", "--quiet", bare, other]);
+  writeFileSync(join(other, "NEWS.md"), "upstream moved\n");
+  gitIn(other, ["add", "--all"]);
+  gitIn(other, ["commit", "--quiet", "--message", "upstream moved"]);
+  gitIn(other, ["push", "--quiet", "origin", "main"]);
+}
+
+test("a sync refused for the compat floor skips the timer's due rituals as darius-outdated; by hand the run goes on with a warning", async () => {
+  const project = "rd-outdated";
+  seedRitual(project);
+  const s3 = memoryS3();
+  s3.objects.set(`${project}/compat.json`, JSON.stringify({ v: 1, compat: 99, min_version: "9.0.0", host: "host-z", at: "2026-11-09T00:00:00.000Z" }));
+  const inject = { cfg: hostConfig("warn"), s3 };
+  const { report } = await runDue({ projects: [project], isDryRun: false, who: "timer", timeoutMs: 20 * 60_000, inject });
+  const entry = report.projects[0]?.rituals[0];
+  assert.equal(report.projects[0]?.syncBefore, "darius-outdated", JSON.stringify(report));
+  assert.deepEqual([entry?.action, entry?.reason], ["skipped", "darius-outdated"]);
+  assert.match(entry?.detail ?? "", /needs darius 9\.0\.0 or newer .*Update it: darius update$/u);
+  assert.equal(runDueExitCode(report), 1, "a failing skip: the host must update");
+  assert.equal(linesOf(project, "run.started").length, 0);
+  assert.equal([...s3.objects.keys()].filter((key) => key !== `${project}/compat.json` && !key.startsWith("_global/")).length, 0, "nothing reached the bucket");
+  assert.match(formatReport(report).join("\n"), /heartbeat: skipped, darius-outdated, rd-outdated: the bucket needs darius 9\.0\.0/u);
+  const projectEntry = report.projects[0];
+  assert.ok(projectEntry !== undefined);
+  assert.equal(skipAlerts(projectEntry, report)[0]?.body.includes("9.0.0"), true, "the alert carries darius's own line");
+
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const hand = await runDue({ projects: [project], only: "heartbeat", now: {}, isDryRun: false, who: "op", timeoutMs: 20 * 60_000, inject });
+  const ran = hand.report.projects[0]?.rituals[0];
+  assert.equal(ran?.end, "complete", JSON.stringify(hand.report));
+  assert.ok((ran?.warnings ?? []).some((warning) => /does not sync.*this run's lines stay on this host/u.test(warning)), JSON.stringify(ran));
+  assert.equal(hand.report.projects[0]?.syncAfter, "darius-outdated");
+});
+
+test("a checkout behind its upstream: refuse skips as checkout-behind, warn runs and says so; a dry run never fetches", { skip: NO_GIT }, async () => {
+  const project = "rd-behind";
+  const dir = v3Checkout(project, { git: true });
+  behindByOne(dir, project);
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  // Reconcile first; nothing is due before `at`, so nothing asks for the check.
+  const early = await batchAt(project, BEFORE_AT, { inject: { cfg: hostConfig("refuse"), s3: null } });
+  assert.equal(early.report.projects[0]?.behind, undefined, "no due ritual: no fetch");
+
+  const dry = await batchAt(project, AFTER_AT, { isDryRun: true, inject: { cfg: hostConfig("refuse"), s3: null } });
+  assert.equal(ritualsOf(dry.report)[0]?.action, "would-start");
+  assert.equal(dry.report.projects[0]?.behind, undefined, "a dry run writes nothing, a fetch included");
+
+  const refused = await batchAt(project, AFTER_AT, { inject: { cfg: hostConfig("refuse"), s3: null } });
+  const entry = ritualsOf(refused.report)[0];
+  assert.deepEqual([entry?.action, entry?.reason], ["skipped", "checkout-behind"], JSON.stringify(refused.report));
+  assert.match(entry?.detail ?? "", /^checkout of rd-behind is 1 commit behind origin\/main: pull it, or set \[run\] behind = "warn"$/u);
+  assert.equal(refused.code, 1);
+  assert.equal(linesOf(project, "run.started").length, 0);
+  assert.deepEqual(refused.report.projects[0]?.behind, { checkout: dir, upstream: "origin/main", commits: 1, ahead: 0 });
+  const text = formatReport(refused.report).join("\n");
+  assert.equal(text.match(/1 commit behind/gu)?.length, 1, `one line, not two: ${text}`);
+  assert.deepEqual(readBehindRecord(openProject(project))?.check, { state: "checked", upstream: "origin/main", behind: 1, ahead: 0 });
+
+  const warned = await batchAt(project, AFTER_AT, { inject: { cfg: hostConfig("warn"), s3: null } });
+  assert.equal(ritualsOf(warned.report)[0]?.end, "complete", JSON.stringify(warned.report));
+  assert.equal(warned.code, 0);
+  assert.ok(formatReport(warned.report, "news").includes("! checkout of rd-behind is 1 commit behind origin/main"));
+  assert.equal(existsSync(join(dir, "NEWS.md")), false, "darius never pulls: the upstream's file is not in the work tree");
+});
+
+test("a checkout with no upstream is recorded as unchecked and never blocks, also with refuse", { skip: NO_GIT }, async () => {
+  const project = "rd-behind-none";
+  v3Checkout(project, { git: true });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, report } = await batchAt(project, AFTER_AT, { inject: { cfg: hostConfig("refuse"), s3: null } });
+  assert.equal(ritualsOf(report)[0]?.end, "complete", JSON.stringify(report));
+  assert.equal(code, 0);
+  assert.deepEqual(report.projects[0]?.behind, { checkout: join(SANDBOX, `${project}-checkout`), unchecked: "branch main has no upstream" });
 });
 
 test("a marker that does not parse skips every ritual as marker-invalid, with file:line, and fails the batch", async () => {

@@ -7,6 +7,10 @@
  *
  *   1. Sync when `[remote]` is configured. Offline or a held project lease is
  *      not an error: the pull half already ran or the local state is used.
+ *      A sync the bucket's compat floor refuses (`darius-outdated`, 0.126.0;
+ *      src/core/sync.ts) skips each due ritual of the project that would
+ *      run on this host as `darius-outdated`, right after the `no-workdir`
+ *      check below; a run by hand goes on, with a warning.
  *      Then reconcile the checkout's v3 marker into the store
  *      (src/core/reconcile.ts; a dry run classifies and writes nothing).
  *   2. For each ritual that is active and due, skip it when its policy mode
@@ -31,6 +35,14 @@
  *      modified or untracked file in `.claude/skills/<skill>/`; by hand it is
  *      a warning). The two skill checks apply to any ritual with a skill
  *      that runs in a checkout, v2 included.
+ *      Last before the lease, for a scheduled run in a checkout (not by hand,
+ *      not a dry run), the behind check (src/core/checkout-behind.ts,
+ *      0.126.0): once per checkout per batch, a bounded `git fetch` of the
+ *      branch's upstream and a count of the commits HEAD lacks. Behind with
+ *      `[run] behind = "refuse"` skips as `checkout-behind`; with "warn"
+ *      (the default) the run goes ahead. Either way the project entry gets `behind` and the
+ *      report one line, and `<store>/<project>/behind.json` keeps the result
+ *      for `darius doctor`. A check that cannot run never blocks.
  *   3. Take the ritual lease (src/core/lease.ts): S3
  *      `<project>/leases/ritual-<slug>.json` when a remote is configured, else
  *      an O_EXCL file `<store>/<project>/leases/ritual-<slug>.lock`. A lease
@@ -62,6 +74,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { behindLine, checkBehind, writeBehindRecord, type BehindCheck } from "../core/checkout-behind.ts";
 import { loadConfigIfPresent, type Config } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
 import { followUpRuns, ritualState } from "../core/due.ts";
@@ -81,7 +94,7 @@ import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
 import { localToday } from "../core/sweep.ts";
-import { syncProject } from "../core/sync.ts";
+import { outdatedLine, syncProject } from "../core/sync.ts";
 import { ulid } from "../core/ulid.ts";
 import { checkoutDir, projectWorkdir } from "../core/workdir.ts";
 import type { HarnessAdapter, HarnessLaunch, ResolvedProfile, ResultFacts, RunFiles } from "../harness/contract.ts";
@@ -139,6 +152,8 @@ export interface RunDueOptions {
    * run id without waiting for the run to end.
    */
   onStarted?: (run: string) => void;
+  /** The config and the bucket this batch uses; tests inject them. Absent means config.toml and its `[remote]`. */
+  inject?: { cfg: Config | null; s3: S3 | null };
 }
 
 // --- run view: what the ledger says about one run -----------------------------
@@ -241,11 +256,12 @@ function remoteClient(cfg: Config | null): S3 | null {
   return createS3(cfg.remote, loadCredentials(cfg.remote.credentials));
 }
 
-/** One sync, as a report word. Offline and a held project lease are not errors. */
-async function syncStep(project: Project, remote: { s3: S3 | null; cfg: Config | null }): Promise<string> {
-  if (remote.s3 === null || remote.cfg === null) return "no-remote";
+/** One sync, as a report word, and the refusal's line when the compat floor refused it. Offline and a held project lease are not errors. */
+async function syncStep(project: Project, remote: { s3: S3 | null; cfg: Config | null }): Promise<{ word: string; outdated?: string }> {
+  if (remote.s3 === null || remote.cfg === null) return { word: "no-remote" };
   const report = await syncProject(project, remote.s3, remote.cfg);
-  return report.skipped ?? "ok";
+  if (report.outdated !== undefined) return { word: "darius-outdated", outdated: outdatedLine(project.name, report.outdated) };
+  return { word: report.skipped ?? "ok" };
 }
 
 // --- ritual lease -----------------------------------------------------------------
@@ -286,8 +302,12 @@ interface ProjectContext {
   options: RunDueOptions;
   /** What the checkout's marker said at the start of this project's batch. Absent without a checkout here. */
   repo?: RepoState;
-  /** Shared by every project of the batch: one version check per harness, one box gate, and the report that lists the checks. */
-  batch: { readiness: Map<string, Readiness>; box?: BoxReadiness; report: BatchReport };
+  /** Shared by every project of the batch: one version check per harness, one box gate, one behind check per checkout, and the report that lists the checks. */
+  batch: { readiness: Map<string, Readiness>; box?: BoxReadiness; behind: Map<string, BehindCheck>; report: BatchReport };
+  /** The refusal line when the sync before the batch was refused for the compat floor (0.126.0). */
+  outdated?: string;
+  /** The behind check of this project's checkout, once a scheduled ritual asked for it (0.126.0). */
+  behind?: { checkout: string; check: BehindCheck };
 }
 
 /** The checkout's marker as this batch sees it. */
@@ -982,6 +1002,19 @@ function discardButLog(dir: string): void {
   }
 }
 
+/**
+ * The behind check of checkout `dir` (src/core/checkout-behind.ts), run at
+ * most once per checkout per batch: the first due ritual there asks, the
+ * others reuse it. It never throws and never blocks.
+ */
+async function behindOf(ctx: ProjectContext, dir: string): Promise<BehindCheck> {
+  const known = ctx.batch.behind.get(dir);
+  const check = known ?? (await checkBehind(dir));
+  ctx.batch.behind.set(dir, check);
+  ctx.behind = { checkout: dir, check };
+  return check;
+}
+
 async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEntry | null> {
   const stored = ctx.project.readItem<Ritual>("ritual", slug);
   if (stored === null) return null;
@@ -998,12 +1031,15 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
   try {
     const where = projectWorkdir(ctx.project, ledger);
     if ("missing" in where) return skipped(slug, "no-workdir", where.detail);
+    // 0.126.0: an outdated host's lines cannot sync, so the timer does not run there. A person may.
+    if (ctx.outdated !== undefined && !isByHand) return skipped(slug, "darius-outdated", ctx.outdated);
     const { skill } = doc.header;
     const skillCheck = skill === undefined || where.from === "store" ? { warnings: [] } : skillPreflight(slug, skill, { dir: where.dir, isByHand });
     if ("skip" in skillCheck) return skillCheck.skip;
     const repoRitual = where.marker?.rituals.find((ritual) => ritual.slug === slug);
     const timeoutMs = repoRitual?.timeoutMs ?? ctx.options.timeoutMs;
-    const markerWarnings = [...dirtyWarnings(ctx, isByHand), ...skillCheck.warnings];
+    const outdatedWarnings = ctx.outdated === undefined ? [] : [`${ctx.outdated}; this run's lines stay on this host until it syncs again`];
+    const markerWarnings = [...dirtyWarnings(ctx, isByHand), ...skillCheck.warnings, ...outdatedWarnings];
     if (followUp !== undefined && where.from === "store") {
       return skipped(slug, "no-workdir", `a follow-up runs in a checkout of ${ctx.project.name}, and none is linked on this host: run darius link inside one`);
     }
@@ -1047,6 +1083,11 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       }
       return entry;
     }
+    // Last, so the fetch runs only for a run that would start now (0.126.0).
+    if (!isByHand && where.from !== "store") {
+      const line = behindLine(ctx.project.name, await behindOf(ctx, where.dir));
+      if (line !== null && ctx.cfg?.run.behind === "refuse") return skipped(slug, "checkout-behind", `${line}: pull it, or set [run] behind = "warn"`);
+    }
     const proven = withSubagentProof(doc, ready, resolution.harness);
     if (proven === null) {
       const retry = `darius harness check ${resolution.harness.id}`;
@@ -1084,7 +1125,9 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
   const remote = { s3: ctx.s3, cfg };
   const entry: ProjectEntry = { project: ctx.project.name, syncBefore: "skipped", syncAfter: "skipped", rituals: [] };
   if (!ctx.options.isDryRun) {
-    entry.syncBefore = await syncStep(ctx.project, remote);
+    const synced = await syncStep(ctx.project, remote);
+    entry.syncBefore = synced.word;
+    if (synced.outdated !== undefined) ctx.outdated = synced.outdated;
     await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
   }
   reconcileStep(ctx, entry);
@@ -1095,22 +1138,35 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
   }
   // A ritual that ran just now has a newer run: its older tab can go (0.52.0).
   if (!ctx.options.isDryRun) await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
+  recordBehind(ctx, entry);
   const didStart = entry.rituals.some((ritual) => ritual.action === "started");
-  if (didStart) entry.syncAfter = await syncStep(ctx.project, remote);
+  if (didStart) entry.syncAfter = (await syncStep(ctx.project, remote)).word;
   return entry;
+}
+
+/** Puts this batch's behind check on the project entry and in `behind.json` for `darius doctor`. A write failure is a warning. */
+function recordBehind(ctx: ProjectContext, entry: ProjectEntry): void {
+  if (ctx.behind === undefined) return;
+  const { checkout, check } = ctx.behind;
+  entry.behind = check.state === "checked" ? { checkout, upstream: check.upstream, commits: check.behind, ahead: check.ahead } : { checkout, unchecked: check.reason };
+  try {
+    writeBehindRecord(ctx.project, { at: ctx.now.toISOString(), checkout, check });
+  } catch (cause) {
+    entry.warnings = [...(entry.warnings ?? []), `cannot record the behind check: ${errorMessage(cause)}`];
+  }
 }
 
 /** Runs every due ritual in the selected projects and returns the batch report (not yet delivered). */
 export async function runDue(options: RunDueOptions): Promise<{ report: BatchReport; cfg: Config | null }> {
-  const cfg = loadConfigIfPresent();
-  const s3 = remoteClient(cfg);
+  const cfg = options.inject === undefined ? loadConfigIfPresent() : options.inject.cfg;
+  const s3 = options.inject === undefined ? remoteClient(cfg) : options.inject.s3;
   const host = hostId();
   const now = options.clock ?? new Date();
   const today = localToday(now);
   const report: BatchReport = { ok: true, date: today, host, dryRun: options.isDryRun, projects: [], errors: [] };
   const global = await openGlobal({ s3, cfg }, options.isDryRun, report);
   const names = options.projects.length > 0 ? options.projects : listProjects();
-  const batch = { readiness: new Map<string, Readiness>(), report };
+  const batch = { readiness: new Map<string, Readiness>(), behind: new Map<string, BehindCheck>(), report };
   for (const name of names) {
     try {
       const project = openProject(name);
@@ -1156,7 +1212,7 @@ async function openGlobal(
   try {
     if (remote.s3 !== null && !isDryRun) {
       const global = openProject(GLOBAL_PROJECT, { create: true });
-      report.globalSync = await syncStep(global, remote);
+      report.globalSync = (await syncStep(global, remote)).word;
       return global;
     }
     return existsSync(projectDir(GLOBAL_PROJECT)) ? openProject(GLOBAL_PROJECT) : null;

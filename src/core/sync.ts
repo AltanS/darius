@@ -12,9 +12,16 @@
  *   manifest.json                {v:1, items:{"ritual/<slug>":{sha,updated}}},
  *                                PUT under the lease, always after the items
  *   lease.json                   {holder,host,pid,expires}, 60 s, If-None-Match:*
+ *   compat.json                  {v:1,compat,min_version,host,at}, the floor
+ *                                (0.126.0), PUT under the lease
  *
  * One sync, in order:
  *
+ *   0. Read the compat floor (see "Compat floor"). A floor above this
+ *      binary's `SYNC_COMPAT` ends the sync with `skipped:
+ *      "darius-outdated"` before anything is pulled or pushed. Otherwise,
+ *      for a sync that pushes, this host's `host.version` line is appended
+ *      when its newest one is missing or names another version.
  *   1. Pull chunks. Every listed chunk not in `sync.json.seen` is fetched and
  *      stored under `ledger/<its host>/`. Blobs its lines reference are
  *      fetched EAGERLY (see "Blob references"), then the chunk is marked seen.
@@ -39,6 +46,8 @@
  *   5. Push the ledger again, so the conflict and `item.changed` lines of
  *      step 4 and the blobs they name land before the manifest does.
  *   6. PUT changed items, then `manifest.json`. Only then is `base` advanced.
+ *      Then, when the floor read under the lease is below `SYNC_COMPAT`,
+ *      raise it to `SYNC_COMPAT`.
  *   7. Release the lease.
  *
  * Steps 1 and 2 run without the lease: chunks and blobs never overwrite, so
@@ -65,6 +74,25 @@
  * Offline. An `S3NetworkError` anywhere ends the sync with `skipped:
  * "offline"`. Whatever was already done stays done and is recorded.
  *
+ * Compat floor (0.126.0). `SYNC_COMPAT` is the bucket format this binary
+ * reads and writes. It is not the darius version: it is raised by hand only
+ * in a release whose writes an older binary would misread. `compat.json`
+ * holds the highest compat that synced the project. Absent means 0. It is
+ * read twice: before step 1, where a higher floor refuses the whole sync,
+ * and under the lease before step 4, where a higher floor (raised by a host
+ * that synced in between) skips the items, and a lower one is raised at the
+ * end of step 6. So only a host that completed a full sync raises the floor,
+ * and a floor never goes down. A read that fails is handled like any other
+ * bucket read: a network error is "offline", any other error throws. Neither
+ * counts as compat 0. A pull-only sync is refused like a full one and never
+ * raises. Binaries from before 0.126.0 do not know the object and ignore it.
+ *
+ * Host version (0.126.0). A sync that pushes appends one `host.version` line
+ * `{version, compat}` when this host's newest own one is missing or names
+ * another version: one line per version change, never one per sync.
+ * `darius doctor` compares the newest line per host
+ * (src/core/host-versions.ts).
+ *
  * Reseed (`opts.reseed`) refills a bucket that lost its objects, from the one
  * host that holds a full local copy. It is a full sync whose push step is
  * complete instead of incremental: after step 1, every local blob and every
@@ -88,14 +116,66 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { VERSION } from "../version.ts";
 import type { Config } from "./config.ts";
 import { takeOverBucketLease } from "./lease.ts";
-import { appendLine, closeOpenChunk, hostId, listChunks, parseLedgerText, writeRemoteChunk } from "./ledger.ts";
+import { appendLine, closeOpenChunk, hostId, listChunks, parseLedgerText, readHostLines, writeRemoteChunk } from "./ledger.ts";
 import type { JsonValue, Kind } from "./model.ts";
 import { S3NetworkError } from "./s3.ts";
 import type { S3 } from "./s3.ts";
 import { decodeItem, getBlob, itemRef, listBlobs, putBlob, readItemText, sha256Hex, writeItemText } from "./store.ts";
 import type { Project } from "./store.ts";
+
+/**
+ * The bucket format this binary reads and writes (file header, "Compat
+ * floor"). Raise it by hand, and set `SYNC_COMPAT_SINCE` to that release,
+ * only in a release whose bucket writes an older binary would misread. Two
+ * hosts with the same compat sync normally whatever their versions.
+ */
+export const SYNC_COMPAT = 1;
+/** The first darius release with `SYNC_COMPAT`: `min_version` of a floor this binary raises. */
+export const SYNC_COMPAT_SINCE = "0.126.0";
+/** The ledger line a sync appends when this host's darius version changed. */
+export const HOST_VERSION_TYPE = "host.version";
+
+/** A binary's compat and the release that brought it. Tests inject a lower one. */
+export interface SyncCompat {
+  readonly compat: number;
+  readonly minVersion: string;
+}
+
+/** What `compat.json` says. Absent in the bucket reads as compat 0. */
+export interface CompatFloor {
+  compat: number;
+  minVersion?: string;
+  host?: string;
+  at?: string;
+}
+
+/** Why a sync refused: the bucket's floor is above this binary's compat. */
+export interface OutdatedFloor {
+  bucketCompat: number;
+  ownCompat: number;
+  /** The release to update to; absent when the floor did not say. */
+  minVersion?: string;
+  /** The host that raised the floor, when it said. */
+  raisedBy?: string;
+}
+
+export type CompatDecision = "refuse" | "raise" | "same";
+
+/** What a sync does about the bucket's floor. Pure. Absent is compat 0. */
+export function decideCompat(bucket: number, own: number): CompatDecision {
+  if (bucket > own) return "refuse";
+  return bucket < own ? "raise" : "same";
+}
+
+/** The one line `darius sync` and run-due print for a refused sync. */
+export function outdatedLine(project: string, outdated: OutdatedFloor): string {
+  const needs = outdated.minVersion === undefined ? `a darius with sync compat ${String(outdated.bucketCompat)}` : `darius ${outdated.minVersion} or newer`;
+  const by = outdated.raisedBy === undefined ? "" : `, raised by ${outdated.raisedBy}`;
+  return `${project}: the bucket needs ${needs} (sync compat ${String(outdated.bucketCompat)}${by}); this host runs ${VERSION} (compat ${String(outdated.ownCompat)}) and does not sync. Update it: darius update`;
+}
 
 export interface SyncReport {
   project: string;
@@ -104,7 +184,13 @@ export interface SyncReport {
   itemsPulled: number;
   itemsPushed: number;
   conflicts: string[];
-  skipped?: "offline" | "lease-held";
+  skipped?: "offline" | "lease-held" | "darius-outdated";
+  /** Why the sync refused, when `skipped` is "darius-outdated" (0.126.0). */
+  outdated?: OutdatedFloor;
+  /** The compat this sync raised the bucket's floor to (0.126.0). */
+  compatRaised?: number;
+  /** True when this sync appended this host's `host.version` line (0.126.0). */
+  hostVersionNoted?: boolean;
   /** Blobs fetched from the bucket. Beyond the plan's contract. */
   blobsPulled: number;
   /** Blobs this sync created in the bucket (a 412 is not counted). Beyond the plan's contract. */
@@ -120,6 +206,8 @@ export interface SyncOptions {
   pullOnly?: boolean;
   /** Push every local chunk of every host and every local blob, If-None-Match, then sync as usual. Not with `pullOnly`. */
   reseed?: boolean;
+  /** This binary's compat; tests inject a lower one. Absent means `SYNC_COMPAT` since `SYNC_COMPAT_SINCE`. */
+  compat?: SyncCompat;
 }
 
 /** The `who` of every line sync appends (pulled item versions, conflicts). */
@@ -166,6 +254,7 @@ interface SyncContext {
   readonly prefix: string;
   readonly state: SyncState;
   readonly report: SyncReport;
+  readonly compat: SyncCompat;
 }
 
 interface ItemAddress {
@@ -280,6 +369,10 @@ function manifestKey(ctx: SyncContext): string {
 
 function leaseKey(ctx: SyncContext): string {
   return `${ctx.prefix}lease.json`;
+}
+
+function compatKey(ctx: SyncContext): string {
+  return `${ctx.prefix}compat.json`;
 }
 
 function parseRef(ref: string): ItemAddress {
@@ -530,6 +623,72 @@ async function readManifest(ctx: SyncContext): Promise<Manifest> {
   return decodeManifest(textOf(got.body, manifestKey(ctx)), manifestKey(ctx));
 }
 
+// --- compat floor ------------------------------------------------------------
+
+/**
+ * Decodes `compat.json`. Only `compat` must be readable, so a later version
+ * of the object with more fields still refuses an old binary. An object
+ * whose `compat` cannot be read throws: guessing 0 could let an old binary
+ * sync over a newer format.
+ */
+export function decodeCompatFloor(text: string, where: string): CompatFloor {
+  const parsed = parseJson(text, where);
+  if (!isJsonRecord(parsed) || !isJsonInteger(parsed.compat) || parsed.compat < 0) {
+    throw new Error(`${where}: no readable "compat"; sync refuses until the object is fixed by a host on the newest darius`);
+  }
+  const floor: CompatFloor = { compat: parsed.compat };
+  if (isJsonText(parsed.min_version)) floor.minVersion = parsed.min_version;
+  if (isJsonText(parsed.host)) floor.host = parsed.host;
+  if (isJsonText(parsed.at)) floor.at = parsed.at;
+  return floor;
+}
+
+/** The bucket's floor; compat 0 when the object is absent. A failed read throws, as every bucket read does. */
+async function readCompatFloor(ctx: SyncContext): Promise<CompatFloor> {
+  const got = await ctx.s3.get(compatKey(ctx));
+  if (got === null) return { compat: 0 };
+  return decodeCompatFloor(textOf(got.body, compatKey(ctx)), compatKey(ctx));
+}
+
+/** Marks the report refused when the floor is above this binary's compat. True when it refused. */
+function refusedBy(ctx: SyncContext, floor: CompatFloor): boolean {
+  if (decideCompat(floor.compat, ctx.compat.compat) !== "refuse") return false;
+  const outdated: OutdatedFloor = { bucketCompat: floor.compat, ownCompat: ctx.compat.compat };
+  if (floor.minVersion !== undefined) outdated.minVersion = floor.minVersion;
+  if (floor.host !== undefined) outdated.raisedBy = floor.host;
+  ctx.report.skipped = "darius-outdated";
+  ctx.report.outdated = outdated;
+  return true;
+}
+
+/** Raises the floor to this binary's compat. Called under the lease, after the items and the manifest went out. */
+async function raiseCompatFloor(ctx: SyncContext): Promise<void> {
+  const document = { v: 1, compat: ctx.compat.compat, min_version: ctx.compat.minVersion, host: ctx.host, at: new Date().toISOString() };
+  await ctx.s3.put(compatKey(ctx), `${JSON.stringify(document)}\n`, { contentType: JSON_CONTENT });
+  ctx.report.compatRaised = ctx.compat.compat;
+}
+
+// --- host version ------------------------------------------------------------
+
+/** True when this host's newest own `host.version` line is missing or names another version. Pure. */
+export function needsHostVersion(ownLines: readonly { type: string; id: string; version?: JsonValue }[], version: string): boolean {
+  let newest: { id: string; version?: JsonValue } | undefined;
+  for (const line of ownLines) {
+    if (line.type !== HOST_VERSION_TYPE) continue;
+    if (newest === undefined || line.id > newest.id) newest = line;
+  }
+  return newest?.version !== version;
+}
+
+/** Appends `host.version {version, compat}` when this host's newest one names another version. Local only: the push carries it. */
+function noteHostVersion(ctx: SyncContext): void {
+  ctx.project.withLock(() => {
+    if (!needsHostVersion(readHostLines(ctx.project, ctx.host), VERSION)) return;
+    appendLine(ctx.project, { who: SYNC_WHO, type: HOST_VERSION_TYPE, version: VERSION, compat: ctx.compat.compat });
+    ctx.report.hostVersionNoted = true;
+  });
+}
+
 // --- items -------------------------------------------------------------------
 
 /** What to do with one item, from three shas. Pure. */
@@ -672,12 +831,20 @@ async function runPullOnly(ctx: SyncContext): Promise<void> {
   recordAgreed(ctx, plans);
 }
 
+/**
+ * Steps 4 to 6. The floor is read again first: a host that raised it since
+ * step 0 may have written items this binary would misread, so a higher floor
+ * skips the items. A lower one is raised once the manifest is out.
+ */
 async function runUnderLease(ctx: SyncContext): Promise<void> {
+  const floor = await readCompatFloor(ctx);
+  if (refusedBy(ctx, floor)) return;
   const manifest = await readManifest(ctx);
   const plans = await reconcileItems(ctx, manifest, false);
   await pushChunks(ctx);
   await pushItems(ctx, plans, manifest);
   recordAgreed(ctx, plans);
+  if (decideCompat(floor.compat, ctx.compat.compat) === "raise") await raiseCompatFloor(ctx);
 }
 
 async function runFull(ctx: SyncContext): Promise<void> {
@@ -707,10 +874,22 @@ async function runReseed(ctx: SyncContext): Promise<void> {
   await runFull(ctx);
 }
 
+/** Step 0, then the sync `opts` asks for. Nothing is pulled or pushed when the floor refuses. */
+async function runChecked(ctx: SyncContext, opts: SyncOptions): Promise<void> {
+  if (refusedBy(ctx, await readCompatFloor(ctx))) return;
+  if (opts.pullOnly === true) {
+    await runPullOnly(ctx);
+    return;
+  }
+  noteHostVersion(ctx);
+  if (opts.reseed === true) await runReseed(ctx);
+  else await runFull(ctx);
+}
+
 /**
  * Syncs `project` with the bucket behind `s3`. Returns a report; `skipped`
- * is set when the network is down or another process holds the lease. Any
- * other failure throws.
+ * is set when the network is down, another process holds the lease, or the
+ * bucket's compat floor is above this binary's. Any other failure throws.
  */
 export async function syncProject(project: Project, s3: S3, cfg: Config, opts: SyncOptions = {}): Promise<SyncReport> {
   if (opts.reseed === true && opts.pullOnly === true) throw new Error("reseed pushes to the bucket, so it cannot be pull-only");
@@ -727,14 +906,14 @@ export async function syncProject(project: Project, s3: S3, cfg: Config, opts: S
     blobsPushed: 0,
   };
   if (opts.reseed === true) report.reseed = true;
-  const ctx: SyncContext = { project, s3, host, prefix: `${project.name}/`, state: readSyncState(project), report };
+  const compat = opts.compat ?? { compat: SYNC_COMPAT, minVersion: SYNC_COMPAT_SINCE };
+  const ctx: SyncContext = { project, s3, host, prefix: `${project.name}/`, state: readSyncState(project), report, compat };
   try {
-    if (opts.pullOnly === true) await runPullOnly(ctx);
-    else if (opts.reseed === true) await runReseed(ctx);
-    else await runFull(ctx);
+    await runChecked(ctx, opts);
   } catch (cause) {
     if (!(cause instanceof S3NetworkError)) throw cause;
-    report.skipped = "offline";
+    // A refusal stays the answer when the lease release after it failed.
+    report.skipped ??= "offline";
   }
   if (report.skipped === undefined) ctx.state.lastSync = new Date().toISOString();
   saveSyncState(project, ctx.state);

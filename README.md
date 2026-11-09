@@ -316,6 +316,21 @@ warns when the box is set and bwrap fails its probe. The box does not stop publi
 the default `net = "public"`, a host you list in `reach`, or files in the work dir that you run later.
 See "The box" and "What the box does not stop" in `docs/concept.md`.
 
+### Unattended runs: a checkout behind its upstream
+
+A host with a stale checkout would run old ritual definitions from an old `.darius.toml`. Before the
+first due ritual of a checkout starts, `run-due` fetches the branch's upstream once (10 s at most, no
+prompt, never a pull or merge) and counts the commits the checkout lacks. The report then says
+`checkout of <project> is N commits behind <upstream>`, and `darius doctor` repeats the last result.
+
+```toml
+[run]
+behind = "warn"     # default: the run goes ahead; "refuse" skips the ritual as checkout-behind
+```
+
+Every unclear case lets the run go ahead and is recorded: no git, no upstream, a detached HEAD, a
+fetch that fails or times out. A branch that is only ahead is not behind. Runs by hand do not check.
+
 ### Backups
 
 A darius host keeps one backup of its store: a daily `tar.gz` file, called a snapshot. It stays on
@@ -359,6 +374,15 @@ on disk; pruning removes the rest.
 install runs its own `darius update`. A host without one runs `scripts/install.sh` over SSH.
 Hosts running darius from the Nix store are rejected: remove the home-manager module there first.
 Exit codes: 0 for success, 1 if a host failed, 3 when the only failures were unreachable hosts.
+
+Hosts on different darius versions sync as long as they share the same sync compat, a number that
+goes up only in a release whose bucket writes an older darius would misread. The first sync of such
+a release raises the project's floor in the bucket. From then on an older host (0.126.0 or later)
+refuses to sync that project: `darius sync` exits 1 with one line that names the release to update
+to, and `run-due` skips its scheduled rituals as `darius-outdated`. Local verbs keep working. Hosts
+from before 0.126.0 do not know the floor. `darius doctor` lists the version each host last synced
+with, warns when the versions differ, and marks a problem when the compat differs. A host that has
+not synced for 30 days is left out.
 
 A host from before 0.17.0 has a full clone at `~/.local/opt/darius`. Run `install.sh` there once:
 it moves the old clone to `~/.local/opt/darius.legacy-<time>`, deletes nothing, and installs the
@@ -776,7 +800,7 @@ the full reference.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.
 - `darius run-due --unattended`: start each due ritual in a headless `claude -p` session.
-- `darius sync [--all-projects]`: pull from and push to the bucket.
+- `darius sync [--all-projects]`: pull from and push to the bucket. It exits 1 and writes nothing when the bucket needs a newer darius (see [Update](#update)).
 - `darius snapshot create|list|status|check|fetch|delete|config|credentials`: dated archives of this host's store, local and in an S3 bucket, and their settings and key pair. `fetch <name>` copies one from the bucket.
 - `darius root [--json]`: print the tracker tree path; `--json` reports the mode (`store`, `git`, `none`).
 - `darius restore <name> [--runs-only] [--from-host <host>] [--dry-run] [--yes]`: bring this host's store back from a snapshot. It checks the SHA-256, refuses while a darius unit runs, and moves the old store aside. `--runs-only` adds only the missing run folders.

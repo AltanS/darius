@@ -25,6 +25,8 @@
  *       file name, or null when there is nothing to close.
  *   listChunks(project: Project): LedgerChunk[]
  *       Every closed chunk, all hosts, sorted by host then name.
+ *   readHostLines(project: Project, host: string): LedgerLine[]
+ *       The lines of one host dir, for sync's `host.version` rule.
  *   writeRemoteChunk(project: Project, chunk: RemoteChunk): "written" | "exists"
  *       Stores a pulled chunk under `ledger/<chunk.host>/<chunk.name>`.
  *       Validates every line first. Identical content already there is
@@ -275,6 +277,18 @@ export function readLedger(project: Project): LedgerLine[] {
     }
   }
   return [...byId.values()].map((entry) => entry.line).toSorted(compareById);
+}
+
+/**
+ * The lines in one host's dir, open file and closed chunks, unsorted and not
+ * deduped. Cheaper than `readLedger` when only that host's own lines matter
+ * (sync's `host.version` rule): a host's lines live in its own dir only.
+ */
+export function readHostLines(project: Project, host: string): LedgerLine[] {
+  assertHost(host, "readHostLines");
+  const dir = join(ledgerRoot(project), host);
+  if (!existsSync(dir)) return [];
+  return ledgerFiles(dir).flatMap((file) => parseLedgerText(readFileSync(join(dir, file), "utf8"), join(dir, file)));
 }
 
 function compareById(a: LedgerLine, b: LedgerLine): number {

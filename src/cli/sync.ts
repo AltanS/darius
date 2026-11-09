@@ -4,10 +4,12 @@
  * Syncs one project, or every project in the local state dir, with the
  * bucket in config.toml `[remote]` (src/core/sync.ts does the work).
  *
- * Exit codes (probe contract): 0 every project synced; 3 at least one was
- * skipped because the bucket was unreachable or another process held the
- * lease; 1 a real error in any project (the others still run) or no
- * `[remote]` configured; 2 usage.
+ * Exit codes (probe contract): 0 every project synced, or skipped because
+ * another process held the lease; 3 at least one was skipped because the
+ * bucket was unreachable; 1 a real error in any project (the others still
+ * run), no `[remote]` configured, or a project whose bucket compat floor is
+ * above this binary's (`skipped: "darius-outdated"`, 0.126.0: this host
+ * must update, and it wrote nothing to that project's bucket); 2 usage.
  *
  * `--reseed` refills a bucket that lost its objects, from the one host that
  * holds a full local copy (docs/backups.md, "When the sync bucket is lost").
@@ -40,7 +42,7 @@ import type { S3 } from "../core/s3.ts";
 import { isInsideMask } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, listProjects, openProject, type Project } from "../core/store.ts";
 import { flushAlerts } from "../core/alerts.ts";
-import { syncProject } from "../core/sync.ts";
+import { outdatedLine, syncProject } from "../core/sync.ts";
 import type { SyncReport } from "../core/sync.ts";
 import { rebuildTrackerIndex } from "../core/legacy-entry.ts";
 import { applyTree, captureTree, hasTree, isIndexMissing, treeDir } from "../core/tree.ts";
@@ -183,6 +185,7 @@ function describeTree(report: ProjectSyncReport): string[] {
 
 function describe(report: SyncReport): string {
   if (report.skipped === "offline") return `· ${report.project}: skipped, the bucket is unreachable`;
+  if (report.outdated !== undefined) return `! ${outdatedLine(report.project, report.outdated)}`;
   if (report.skipped === "lease-held") {
     return `· ${report.project}: skipped, lease held by ${report.leaseHolder ?? "another host"}; retry in a minute`;
   }
@@ -198,10 +201,13 @@ function describe(report: SyncReport): string {
  * A lease held by another host is a normal skip, exit 0, as in `vigil sweep`:
  * that host is syncing now, and the next timer run catches up. Both hosts'
  * timers fire on the same quarter hour, so exit 3 failed the unit several
- * times a day (0.41.1). An unreachable bucket stays exit 3.
+ * times a day (0.41.1). An unreachable bucket stays exit 3. A bucket whose
+ * compat floor is above this binary's is exit 1 (0.126.0): it does not pass
+ * by itself, the host must update.
  */
 function exitCode(run: SyncRun): number {
   if (run.errors.length > 0) return EXIT_FAILED;
+  if (run.reports.some((report) => report.skipped === "darius-outdated")) return EXIT_FAILED;
   if (run.reports.some((report) => report.skipped === "offline")) return EXIT_INCONCLUSIVE;
   return EXIT_OK;
 }
@@ -232,6 +238,7 @@ export const syncCommand: Command = {
     if (args.json) {
       console.log(JSON.stringify({ ok: code === EXIT_OK, projects: run.reports, errors: run.errors }));
       for (const failure of run.errors) console.error(`darius sync: ${failure.project}: ${failure.error}`);
+      for (const report of run.reports) if (report.outdated !== undefined) console.error(`darius sync: ${outdatedLine(report.project, report.outdated)}`);
       return code;
     }
     for (const report of run.reports) console.log([describe(report), ...describeTree(report)].join("\n"));

@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 
 import { errorMessage } from "../runtime.ts";
 import { writableProblem, type ProtectedDirs } from "./box.ts";
+import { RUN_BEHIND, type RunBehind } from "./checkout-behind.ts";
 import { sliceProblem } from "./box-scope.ts";
 import { appDir, configDir, stateDir } from "./paths.ts";
 import { parseToml, type TomlValue } from "./toml.ts";
@@ -76,8 +77,11 @@ export interface Config {
    * run's process tree (src/core/sandbox.ts). `off` (default): without bubblewrap. Inside
    * the mask, no_new_privs is on, so sudo and rootless podman fail. `box` (0.117.0): the run's
    * own sandbox (src/core/box.ts). Every launch uses it since 0.120.0 (src/runner/box-launch.ts).
+   * `[run] behind` (0.126.0): what run-due does with a due ritual whose checkout is behind its
+   * upstream (src/core/checkout-behind.ts). `warn` (default): the run goes ahead and the report
+   * says so. `refuse`: the ritual skips as `checkout-behind`.
    */
-  run: { sandbox: RunSandbox };
+  run: { sandbox: RunSandbox; behind: RunBehind };
   /**
    * `[box]` (0.117.0): what a run in the box may write besides its work dir,
    * and whether it gets the ssh agent. `writable` undefined means the default,
@@ -189,6 +193,13 @@ function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox 
   const name = optionalString(table, "sandbox", "off", "run", file);
   const known = RUN_SANDBOXES.find((value) => value === name);
   if (known === undefined) throw new Error(`${file}: [run] sandbox must be "off", "mask" or "box", found "${name}"`);
+  return known;
+}
+
+function runBehind(table: Record<string, TomlValue>, file: string): RunBehind {
+  const name = optionalString(table, "behind", "warn", "run", file);
+  const known = RUN_BEHIND.find((value) => value === name);
+  if (known === undefined) throw new Error(`${file}: [run] behind must be "warn" or "refuse", found "${name}"`);
   return known;
 }
 
@@ -321,11 +332,12 @@ export function loadConfig(): Config {
   const units = setupUnits(document.sections.setup ?? {}, file);
 
   const sandbox = runSandbox(document.sections.run ?? {}, file);
+  const behind = runBehind(document.sections.run ?? {}, file);
   const box = boxSettings(document.sections.box ?? {}, file);
 
   const snapshot = document.sections.snapshot;
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox }, box, snapshot };
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox, behind }, box, snapshot };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

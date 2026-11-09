@@ -28,6 +28,7 @@ import { closestNames } from "./core/suggest.ts";
 import { captureTree, ensureTreeDir, isIndexMissing, syncTree, TREE_INDEX_FILE, treeDir } from "./core/tree.ts";
 import { channelProblems } from "./core/alerts.ts";
 import { boxDoctorLines } from "./runner/box-check.ts";
+import { syncGuardLines, type SyncGuardLines } from "./core/host-versions.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
@@ -409,9 +410,31 @@ function printBoxState(argv: readonly string[]): void {
   process.stdout.write(`\n## Box\n\n${lines.map((line) => `  ${line}`).join("\n")}\n`);
 }
 
+/**
+ * After a full `doctor`: which darius each host synced with, and how far
+ * this project's checkout was behind at the last run-due (0.126.0). A
+ * problem is printed, never an exit code: the exit code stays the legacy one.
+ */
+function printSyncGuards(argv: readonly string[]): void {
+  let found: SyncGuardLines;
+  try {
+    found = syncGuardLines(process.cwd());
+  } catch (cause) {
+    found = { hosts: [`WARN: cannot read the host versions: ${errorMessage(cause)}`], checkout: [] };
+  }
+  if (argv.includes("--json")) {
+    for (const line of found.hosts) console.error(`darius: hosts: ${line}`);
+    for (const line of found.checkout) console.error(`darius: checkout: ${line}`);
+    return;
+  }
+  if (found.hosts.length > 0) process.stdout.write(`\n## Hosts\n\n${found.hosts.map((line) => `  ${line}`).join("\n")}\n`);
+  if (found.checkout.length > 0) process.stdout.write(`\n## Checkout\n\n${found.checkout.map((line) => `  ${line}`).join("\n")}\n`);
+}
+
 function printDoctorNotes(argv: readonly string[]): void {
   printChannelProblems(argv);
   printBoxState(argv);
+  printSyncGuards(argv);
   const notes = doctorNotes(process.cwd());
   if (notes.length === 0) return;
   if (argv.includes("--json")) {

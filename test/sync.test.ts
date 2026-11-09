@@ -24,14 +24,15 @@ import { syncCommand } from "../src/cli/sync.ts";
 import { loadConfig } from "../src/core/config.ts";
 import { appendLine, closeOpenChunk, listChunks, parseLedgerText, readLedger } from "../src/core/ledger.ts";
 import type { Document, Profile, Ritual } from "../src/core/model.ts";
-import { createS3 } from "../src/core/s3.ts";
+import { createS3, S3Error, S3NetworkError } from "../src/core/s3.ts";
 import type { ListedObject, S3 } from "../src/core/s3.ts";
 import { decodeItem, encodeItem, getBlobText, GLOBAL_PROJECT, listBlobs, openProject, putBlob, readItemText, sha256Hex } from "../src/core/store.ts";
 import type { Project } from "../src/core/store.ts";
-import { decideItem, isLocalNewer, syncProject } from "../src/core/sync.ts";
-import type { SyncOptions, SyncReport } from "../src/core/sync.ts";
+import { decideCompat, decodeCompatFloor, decideItem, HOST_VERSION_TYPE, isLocalNewer, needsHostVersion, SYNC_COMPAT, SYNC_COMPAT_SINCE, syncProject } from "../src/core/sync.ts";
+import type { CompatFloor, SyncOptions, SyncReport } from "../src/core/sync.ts";
 import { seaweedfsUnavailable, startSeaweedFs, TEST_CREDENTIALS } from "./helpers/seaweedfs.ts";
 import type { SeaweedFs } from "./helpers/seaweedfs.ts";
+import { VERSION } from "../src/version.ts";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const sandbox = mkdtempSync(join(tmpdir(), "darius-sync-test-"));
@@ -113,18 +114,24 @@ function uniqueProject(label: string): string {
 }
 
 /** Runs `syncCommand` in-process and returns its exit code and the one JSON object it printed. */
-async function runSyncCli(host: Host, flags: Record<string, string | boolean>): Promise<{ code: number; output: string }> {
+async function runSyncCli(host: Host, flags: Record<string, string | boolean>): Promise<{ code: number; output: string; errors: string[] }> {
   useHost(host);
   const printed: string[] = [];
+  const errors: string[] = [];
   const original = console.log;
+  const originalError = console.error;
   console.log = (line: string) => {
     printed.push(line);
   };
+  console.error = (line: string) => {
+    errors.push(line);
+  };
   try {
     const code = await syncCommand.run({ positional: [], flags, json: true, repeated: {} });
-    return { code, output: printed.join("\n") };
+    return { code, output: printed.join("\n"), errors };
   } finally {
     console.log = original;
+    console.error = originalError;
   }
 }
 
@@ -291,6 +298,171 @@ describe("reseed push selection (in-memory S3)", () => {
   });
 });
 
+
+type MemoryS3 = ReturnType<typeof memoryS3>;
+
+/** The S3 with its GET of `key` replaced by a throw. */
+function failingGet(s3: MemoryS3, key: string, error: Error): MemoryS3 {
+  return {
+    ...s3,
+    get(asked) {
+      return asked === key ? Promise.reject(error) : s3.get(asked);
+    },
+  };
+}
+
+/** The bucket's `compat.json`, decoded, or null when absent. */
+function floorOf(s3: MemoryS3, name: string): CompatFloor | null {
+  const body = s3.objects.get(`${name}/compat.json`);
+  return body === undefined ? null : decodeCompatFloor(new TextDecoder().decode(body), "compat.json");
+}
+
+function versionLines(project: Project): number {
+  return readLedger(project).filter((line) => line.type === HOST_VERSION_TYPE).length;
+}
+
+/** A `host.version` line as `needsHostVersion` reads it. */
+interface VersionLine {
+  type: string;
+  id: string;
+  version: string;
+}
+
+function versionLine(id: string, version: string): VersionLine {
+  return { type: HOST_VERSION_TYPE, id, version };
+}
+
+describe("compat floor and host version (in-memory S3)", () => {
+  const hostA = makeHost("hosta", "http://127.0.0.1:1");
+
+  test("decideCompat: absent and lower raise, equal does nothing, higher refuses", () => {
+    assert.equal(decideCompat(0, 1), "raise", "absent reads as 0");
+    assert.equal(decideCompat(1, 2), "raise");
+    assert.equal(decideCompat(2, 2), "same");
+    assert.equal(decideCompat(3, 2), "refuse");
+  });
+
+  test("decodeCompatFloor needs a readable compat and keeps the rest when present", () => {
+    assert.deepEqual(decodeCompatFloor('{"v":1,"compat":2,"min_version":"0.130.0","host":"host-a","at":"2026-11-09T00:00:00.000Z"}', "f"), {
+      compat: 2,
+      minVersion: "0.130.0",
+      host: "host-a",
+      at: "2026-11-09T00:00:00.000Z",
+    });
+    assert.deepEqual(decodeCompatFloor('{"v":2,"compat":5,"more":true}', "f"), { compat: 5 }, "a later object version still refuses by compat");
+    assert.throws(() => decodeCompatFloor('{"v":1}', "f"), /no readable "compat"/u);
+    assert.throws(() => decodeCompatFloor('{"compat":"2"}', "f"), /no readable "compat"/u);
+    assert.throws(() => decodeCompatFloor("not json", "f"), /not valid JSON/u);
+  });
+
+  test("absent: a full sync raises the floor to this binary's compat, under the lease, after the manifest", async () => {
+    const name = uniqueProject("compatabsent");
+    const a = projectOf(hostA, name);
+    a.writeItem(ritual({}), { who: "test" });
+    const s3 = memoryS3();
+    const report = await syncProject(a, s3, loadConfig());
+    assert.equal(report.skipped, undefined);
+    assert.equal(report.compatRaised, SYNC_COMPAT);
+    const floor = floorOf(s3, name);
+    assert.deepEqual({ ...floor, at: "x" }, { compat: SYNC_COMPAT, minVersion: SYNC_COMPAT_SINCE, host: "hosta", at: "x" });
+    assert.match(new TextDecoder().decode(s3.objects.get(`${name}/compat.json`)), /^\{"v":1,"compat":\d+,"min_version":"[^"]+","host":"hosta","at":"[^"]+"\}\n$/u);
+    assert.ok(s3.stored.indexOf(`${name}/compat.json`) > s3.stored.indexOf(`${name}/manifest.json`), "the floor goes up after the items");
+    assert.equal(s3.objects.has(`${name}/lease.json`), false, "the lease is released");
+    const again = await syncProject(a, s3, loadConfig());
+    assert.equal(again.compatRaised, undefined, "an equal floor is left alone");
+  });
+
+  test("lower: raised; equal: not written; higher: refused with nothing pulled or pushed", async () => {
+    const name = uniqueProject("compatfloor");
+    const a = projectOf(hostA, name);
+    appendLine(a, { who: "test", type: "note" });
+    const s3 = memoryS3();
+    s3.objects.set(`${name}/compat.json`, new TextEncoder().encode('{"v":1,"compat":0}'));
+    assert.equal((await syncProject(a, s3, loadConfig())).compatRaised, SYNC_COMPAT);
+
+    s3.objects.set(`${name}/compat.json`, new TextEncoder().encode(`{"v":1,"compat":${String(SYNC_COMPAT)},"host":"elsewhere"}`));
+    s3.stored.length = 0;
+    const equal = await syncProject(a, s3, loadConfig());
+    assert.equal(equal.compatRaised, undefined);
+    assert.equal(floorOf(s3, name)?.host, "elsewhere", "an equal floor is never rewritten");
+    assert.ok(!s3.stored.includes(`${name}/compat.json`));
+
+    const higher = `{"v":1,"compat":${String(SYNC_COMPAT + 1)},"min_version":"9.0.0","host":"host-z","at":"2026-11-09T00:00:00.000Z"}`;
+    s3.objects.set(`${name}/compat.json`, new TextEncoder().encode(higher));
+    s3.objects.set(`${name}/ledger/host-z/01K5Z8QK5Q9S1N1B5N9S1N1B5N.jsonl`, new TextEncoder().encode(""));
+    appendLine(a, { who: "test", type: "note" });
+    const linesBefore = readLedger(a).length;
+    const syncBefore = readFileSync(join(a.root, "sync.json"), "utf8");
+    s3.stored.length = 0;
+    const refused = await syncProject(a, s3, loadConfig());
+    assert.equal(refused.skipped, "darius-outdated");
+    assert.deepEqual(refused.outdated, { bucketCompat: SYNC_COMPAT + 1, ownCompat: SYNC_COMPAT, minVersion: "9.0.0", raisedBy: "host-z" });
+    assert.deepEqual(s3.stored, [], "nothing was written to the bucket");
+    assert.equal(refused.pulledChunks + refused.pushedChunks, 0);
+    assert.equal(readLedger(a).length, linesBefore, "no chunk pulled, no host.version line added");
+    assert.equal(readFileSync(join(a.root, "sync.json"), "utf8"), syncBefore, "last_sync stays: the sync did not happen");
+    assert.equal(new TextDecoder().decode(s3.objects.get(`${name}/compat.json`)), higher, "the floor is never lowered");
+
+    const pullOnly = await syncProject(a, s3, loadConfig(), { pullOnly: true });
+    assert.equal(pullOnly.skipped, "darius-outdated", "pull-only refuses too: it would misread what it pulls");
+    await assert.rejects(syncProject(a, failingGet(s3, `${name}/compat.json`, new Error("boom")), loadConfig()), /boom/u);
+  });
+
+  test("a failed read of compat.json is not compat 0: offline skips, a server error throws, and nothing is written", async () => {
+    const name = uniqueProject("compatread");
+    const a = projectOf(hostA, name);
+    a.writeItem(ritual({}), { who: "test" });
+    const base = memoryS3();
+    const offline = await syncProject(a, failingGet(base, `${name}/compat.json`, new S3NetworkError("connection refused", {})), loadConfig());
+    assert.equal(offline.skipped, "offline");
+    assert.equal(offline.compatRaised, undefined);
+    assert.deepEqual(base.stored, []);
+    assert.equal(versionLines(a), 0, "a sync that never read the floor notes no version");
+
+    await assert.rejects(syncProject(a, failingGet(base, `${name}/compat.json`, new S3Error("S3 GET: 503", 503)), loadConfig()), /503/u);
+    assert.deepEqual(base.stored, []);
+  });
+
+  test("a pull-only sync never raises the floor", async () => {
+    const name = uniqueProject("compatpull");
+    const a = projectOf(hostA, name);
+    const s3 = memoryS3();
+    const report = await syncProject(a, s3, loadConfig(), { pullOnly: true });
+    assert.equal(report.compatRaised, undefined);
+    assert.deepEqual(s3.stored, []);
+    assert.equal(versionLines(a), 0, "pull-only appends nothing either");
+  });
+
+  test("needsHostVersion: first, same, changed, and the newest line wins", () => {
+    assert.equal(needsHostVersion([], "0.126.0"), true, "first");
+    assert.equal(needsHostVersion([{ type: "note", id: "01A" }], "0.126.0"), true, "other lines do not count");
+    assert.equal(needsHostVersion([versionLine("01A", "0.126.0")], "0.126.0"), false, "same");
+    assert.equal(needsHostVersion([versionLine("01A", "0.126.0")], "0.127.0"), true, "changed");
+    assert.equal(needsHostVersion([versionLine("01B", "0.127.0"), versionLine("01A", "0.126.0")], "0.126.0"), true, "the newest names 0.127.0: a rollback is a change too");
+    assert.equal(needsHostVersion([versionLine("01A", "0.125.9"), versionLine("01B", "0.126.0")], "0.126.0"), false);
+  });
+
+  test("a sync appends one host.version line per version change, never one per sync", async () => {
+    const name = uniqueProject("hostversion");
+    const a = projectOf(hostA, name);
+    const s3 = memoryS3();
+    const first = await syncProject(a, s3, loadConfig());
+    assert.equal(first.hostVersionNoted, true);
+    assert.equal(first.pushedChunks, 1, "the line goes out with the same sync");
+    const noted = readLedger(a).find((line) => line.type === HOST_VERSION_TYPE);
+    assert.equal(noted?.version, VERSION);
+    assert.equal(noted?.compat, SYNC_COMPAT);
+    assert.equal(noted?.host, "hosta");
+    await syncProject(a, s3, loadConfig());
+    await syncProject(a, s3, loadConfig());
+    assert.equal(versionLines(a), 1, "same version: no new line");
+    appendLine(a, { who: "test", type: HOST_VERSION_TYPE, version: "0.0.1", compat: 0 });
+    const changed = await syncProject(a, s3, loadConfig());
+    assert.equal(changed.hostVersionNoted, true);
+    assert.equal(versionLines(a), 3);
+  });
+});
+
 const unavailable = await seaweedfsUnavailable();
 if (unavailable !== null) console.error(`\n!!! SKIPPED: sync tests against SeaweedFS: ${unavailable}\n`);
 
@@ -338,7 +510,9 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     assert.equal(pulled.pulledChunks, 1);
     assert.equal(pulled.blobsPulled, 1);
     const b = projectOf(hostB, name);
-    assert.deepEqual(readLedger(b).map((line) => line.id), [written.id]);
+    // 0.126.0: each host's first sync also writes its host.version line.
+    assert.deepEqual(readLedger(b).filter((line) => line.type !== HOST_VERSION_TYPE).map((line) => line.id), [written.id]);
+    assert.deepEqual(readLedger(b).filter((line) => line.type === HOST_VERSION_TYPE).map((line) => line.host).toSorted(), ["hosta", "hostb"]);
     assert.equal(getBlobText(b, findingsSha), "all green\n");
 
     const again = await syncAs(hostB, name, server);
@@ -570,5 +744,41 @@ describe("two hosts on one bucket", { skip: unavailable ?? false }, () => {
     assert.equal(again.pushedChunks, 0);
     assert.equal(again.blobsPushed, 0);
     assert.equal(again.itemsPushed, 0);
+  });
+  test("a host with a lower compat refuses once another host raised the floor, writes nothing, and darius sync exits 1 with one line", async () => {
+    const name = uniqueProject("compattwo");
+    const a = projectOf(hostA, name);
+    a.writeItem(ritual({}), { who: "test" });
+    appendLine(a, { who: "test", type: "note" });
+    const raised = await syncAs(hostA, name, server);
+    assert.equal(raised.compatRaised, SYNC_COMPAT);
+
+    const b = projectOf(hostB, name);
+    appendLine(b, { who: "test", type: "note", item: "ritual/heartbeat" });
+    const objectsBefore = (await server.s3.list(`${name}/`)).map((object) => `${object.key} ${object.etag}`).toSorted();
+    const older = { compat: SYNC_COMPAT - 1, minVersion: "0.125.0" };
+    const refused = await syncAs(hostB, name, server, { compat: older });
+    assert.equal(refused.skipped, "darius-outdated");
+    assert.deepEqual(refused.outdated, { bucketCompat: SYNC_COMPAT, ownCompat: SYNC_COMPAT - 1, minVersion: SYNC_COMPAT_SINCE, raisedBy: "hosta" });
+    assert.equal(refused.pulledChunks + refused.pushedChunks + refused.itemsPulled + refused.itemsPushed, 0);
+    assert.deepEqual((await server.s3.list(`${name}/`)).map((object) => `${object.key} ${object.etag}`).toSorted(), objectsBefore, "not one object added or changed");
+    assert.equal(readItemText(b, "ritual", "heartbeat"), null, "nothing was pulled");
+    assert.deepEqual(readLedger(b).map((line) => line.type), ["note"], "only its own line, and no host.version");
+
+    // The same host updated: it syncs, and its waiting line goes out.
+    const updated = await syncAs(hostB, name, server);
+    assert.equal(updated.skipped, undefined);
+    assert.equal(updated.itemsPulled, 1);
+    assert.equal(updated.compatRaised, undefined, "an equal floor stays");
+
+    // The CLI: one clear line with min_version and the update command, exit 1.
+    await server.s3.put(`${name}/compat.json`, JSON.stringify({ v: 1, compat: SYNC_COMPAT + 1, min_version: "9.9.0", host: "hosta", at: new Date().toISOString() }));
+    const cli = await runSyncCli(hostB, { project: name });
+    assert.equal(cli.code, 1);
+    assert.equal(JSON.parse(cli.output).ok, false);
+    assert.equal(JSON.parse(cli.output).projects[0].skipped, "darius-outdated");
+    const lines = cli.errors.filter((line) => line.includes(name));
+    assert.equal(lines.length, 1, cli.errors.join("\n"));
+    assert.match(lines[0] ?? "", /needs darius 9\.9\.0 or newer .*Update it: darius update$/u);
   });
 });
