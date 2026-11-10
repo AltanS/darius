@@ -40,6 +40,7 @@ import {
   pushExitCode,
   runPush,
   runUpdate,
+  setupNotes,
   updateLines,
   webHealthUrl,
   type HostReport,
@@ -95,7 +96,8 @@ case "\${1:-}" in
     app="\${DARIUS_APP_DIR:-$HOME/.local/opt/darius}"
     mkdir -p "$HOME/.local/bin"
     ln -sfn "$app/current/bin/darius" "$HOME/.local/bin/darius"
-    echo "✓ cli  linked" ;;
+    echo "✓ cli  linked"
+    if [ -n "\${FAKE_SETUP_SANDBOX:-}" ]; then echo "· sandbox  $FAKE_SETUP_SANDBOX"; fi ;;
   update)
     to="\${2#v}"
     if [ "$to" = "$version" ]; then outcome=up-to-date; else outcome=updated; fi
@@ -278,6 +280,21 @@ test("runUpdate refuses from a checkout, naming install.sh, and from the Nix sto
 });
 
 // --- darius update -------------------------------------------------------------------
+
+test("update passes the new setup's sandbox line on (0.132.0): a host with no [run] sandbox key reads it after the update", async () => {
+  const h = host(MINORS, "v0.1.0");
+  const line = 'no [run] sandbox key: since darius 0.132.0 unattended runs on host-b run in the box by default. Box gate: no box check yet. Install or fix bubblewrap, then run darius box check; or set [run] sandbox = "off" in config.toml.';
+  process.env.FAKE_SETUP_SANDBOX = line;
+  try {
+    const done = await runUpdate(request(), deps(h));
+    assert.equal(done.code, 0, done.report.detail);
+    assert.deepEqual(done.report.notes, [`sandbox: ${line}`]);
+    assert.deepEqual(updateLines(done.report), ["✓ updated 0.1.0 -> 0.2.0", `· sandbox: ${line}`]);
+  } finally {
+    delete process.env.FAKE_SETUP_SANDBOX;
+  }
+  assert.deepEqual(setupNotes("✓ cli     linked\n· skill   up to date\n· systemd  skipped"), [], "a host with the key: no sandbox step, no note");
+});
 
 test("update takes the newest release: stage, preflight, flip, the new setup, a web restart, health, a record", async () => {
   const h = host(MINORS, "v0.1.0");

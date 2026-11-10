@@ -127,6 +127,12 @@ The `/darius-*` skills and the `darius` command do the work that the old `tracke
 You need darius installed (step 1 of [Install](#install)) and a git repo. Sync needs a bucket, but
 everything below works without one.
 
+Runs start in the box by default: darius's own sandbox, built on bubblewrap (`bwrap`). Install
+bubblewrap first, and allow unprivileged user namespaces. Then run `darius box check` once. On a host
+where the box cannot work, every run skips as `box-broken` and never starts unboxed. To run without
+the box on a host, set `[run] sandbox = "off"` in `~/.config/darius/config.toml`. See
+[Unattended runs: the box](#unattended-runs-the-box).
+
 ```bash
 cd ~/projects/acme-web
 darius init                 # writes .darius.toml, links this checkout, makes the tracker tree in the store
@@ -171,6 +177,10 @@ store between hosts (steps 2 and 3 of [Install](#install)).
 
 Node 22.6+ or [Bun](https://bun.sh), and git. No build step and no runtime dependencies. On Nix,
 the flake supplies its own runtime (see [NixOS and Nix](#nixos-and-nix)).
+
+Runs need bubblewrap (`bwrap`) and unprivileged user namespaces, because they run in the box by
+default (0.132.0). Without them, set `[run] sandbox = "off"` on the host (see
+[Unattended runs: the box](#unattended-runs-the-box)).
 
 ## Install
 
@@ -251,14 +261,14 @@ touches only the unit files it wrote. `darius update` reruns it, preserving your
 
 ### Unattended runs: the mask
 
-A host starts each unattended run through bubblewrap, which hides darius secret files from the run's
-whole process tree: every file directly in the config dir but `config.toml` and `links.toml`, `keys/`,
-and `remote.credentials`. Without bwrap a run still starts, unmasked, and `darius doctor` warns. To turn
-it off on a host:
+The mask is the older, weaker sandbox. A host with `sandbox = "mask"` starts each unattended run through
+bubblewrap, which hides darius secret files from the run's whole process tree: every file directly in
+the config dir but `config.toml` and `links.toml`, `keys/`, and `remote.credentials`. Without bwrap a run
+still starts, unmasked, and `darius doctor` warns. To turn it on for a host:
 
 ```toml
 [run]
-sandbox = "mask"   # "off" is the default; the mask breaks ssh in a run
+sandbox = "mask"   # "box" is the default; the mask breaks ssh in a run
 ```
 
 Inside the mask no_new_privs is on, so `sudo` and rootless podman fail. `darius sync` fails there too,
@@ -268,7 +278,8 @@ stop" in `docs/concept.md`.
 
 ### Unattended runs: the box
 
-The box is a stronger sandbox for unattended runs, built on bubblewrap. It is off by default. A run in
+The box is a stronger sandbox for unattended runs, built on bubblewrap. It is on by default since
+0.132.0: a host with no `[run] sandbox` key runs in the box. A run in
 the box has a read-only store and config, no host sockets, and no network of its own: its only way out
 is a proxy that darius runs outside, and it finishes or holds itself through a small broker. The
 work dir's `.git`, `.claude` and `.darius.toml` are read-only, so a run in the box cannot commit.
@@ -277,7 +288,7 @@ It is not tied to one harness. Claude Code is the first adapter.
 
 ```toml
 [run]
-sandbox = "box"        # "off" (default), "mask" or "box"
+sandbox = "box"        # "box" (default), "off" or "mask"
 
 [box]
 ssh_agent = false      # true: every boxed run gets the ssh agent
@@ -303,16 +314,29 @@ that cannot run in the box at all opts out with `sandbox = "off"` in the committ
 it then runs with no box and no mask.
 
 Before the first boxed run of a darius version, `darius box check` must pass on the host. It proves the
-box with a fake harness and no paid call. `run-due` runs it by itself when there is no passing check.
+box with a fake harness and no paid call. `run-due`, `run now`, `run resume` and `run follow-up` run it
+by themselves when there is no passing check. When the check fails, or bwrap fails its probe, every
+boxed run on the host skips as `box-broken`. It never starts unboxed.
+
+To run a host without the box, set the key:
+
+```toml
+[run]
+sandbox = "off"        # no box and no mask for every run on this host
+```
+
+On a host with no key, `darius setup` (which `darius update` runs), `darius doctor` and
+`darius box status` print one line: the box is on by default, the result of the box check here, and
+the two ways out (fix bubblewrap and run `darius box check`, or set `sandbox = "off"`).
 
 ```bash
 darius box check [--json]    # prove the box on this host; exit 0 pass, 1 fail
-darius box status [--json]   # the newest check per host and darius version, and tainted work dirs
+darius box status [--json]   # box on by default or by key, the newest check per host and version, tainted work dirs
 darius box clear <work dir>  # remove a work dir's taint after you looked at it
 ```
 
 The box needs bwrap and a kernel with `dev.tty.legacy_tiocsti = 0` (for a herdr tab). `darius doctor`
-warns when the box is set and bwrap fails its probe. The box does not stop public exfiltration under
+warns when the box is on, by default or by the key, and bwrap fails its probe. The box does not stop public exfiltration under
 the default `net = "public"`, a host you list in `reach`, or files in the work dir that you run later.
 See "The box" and "What the box does not stop" in `docs/concept.md`.
 
@@ -557,6 +581,10 @@ inputs.darius = {
   `config.toml` unmanaged. `package = darius.packages.${system}.darius-node` selects Node instead
   of Bun. `settings.runner.claude` sets a Claude Code wrapper for run-due, and `runDue.slice`
   assigns the process to a systemd slice.
+- `settings.run.sandbox` writes `[run] sandbox` (0.132.0). The default `null` writes no key, so runs
+  start in the box: add `pkgs.bubblewrap` to the system packages and run `darius box check`. Set
+  `"off"` to run without the box. The module writes `config.toml` into the Nix store, so this option
+  is the only way to set the key there.
 - The run-due timer fires every 15 minutes by default (`runDue.onCalendar = "*:05/15"`: :05, :20, :35, :50),
   offset from the sync timer. Set `runDue.onCalendar` to change it.
 - `services.darius.skills.enable` (default true) installs and refreshes the Claude Code skills and
@@ -925,7 +953,7 @@ the full reference.
 - `darius candle light|list|show|answer|accept|blow-out|relight`: problems that need you, kept by key. See [Candles](#candles).
 - `darius email status|set|test [--report] [--project <name>]`: the email channel of candle notices and ritual
   reports. See [Candles by email](#candles-by-email) and [Mail recipients per project](#mail-recipients-per-project).
-- `darius box check [--json] | status [--json] | clear <work dir>`: prove the run sandbox on this host with a fake harness and no paid call, list the newest box check per host and darius version and this host's tainted work dirs, or remove a work dir's taint. A work dir is tainted when the box could not settle what a run left there; every run there skips as `box-broken` until you clear it. See [Unattended runs: the box](#unattended-runs-the-box).
+- `darius box check [--json] | status [--json] | clear <work dir>`: prove the run sandbox on this host with a fake harness and no paid call, say whether the box is on here by default or by `[run] sandbox` and list the newest box check per host and darius version and this host's tainted work dirs, or remove a work dir's taint. A work dir is tainted when the box could not settle what a run left there; every run there skips as `box-broken` until you clear it. See [Unattended runs: the box](#unattended-runs-the-box).
 - `darius due [--all-projects] [--brief]`: what is due now: rituals, and the vigils of a project with `vigil` in `kinds`. `--brief` prints one line or nothing, for a session start hook.
 - `darius skill [install|uninstall|status|hook]`: print, install or remove the Claude Code skill for darius, say where sessions learn it, check whether the three hooks are in `settings.json`, or print the hooks to paste. darius only reads `settings.json`; it never writes it. When the skill is installed and stamped, `darius setup` refreshes its files and also installs any file a new release adds. With no skill installed, setup installs nothing. Setup also says which hooks are missing.
 - `darius vigil add|set-body|set|list|show|close|pause|resume|sweep`: one-shot checks that wait for a date or an event. With `vigil` in `kinds` they are store items, and the daily sweep runs the Commands of one whose date is due. It skips a heavy vigil; an imported open vigil is heavy until `vigil set <slug> --no-heavy`.

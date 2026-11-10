@@ -1121,6 +1121,104 @@ test("sandbox = \"off\" has no effect on a mask or off host: the run gets the ho
   }
 });
 
+// --- no [run] sandbox key: the box is the default (0.132.0) ----------------------------
+
+/** Runs `fn` on a host with no DARIUS_RUN_SANDBOX and the given config.toml (none for undefined), then puts the file's setup back. */
+async function onHost<T>(configText: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const config = join(process.env.DARIUS_CONFIG_DIR ?? "", "config.toml");
+  delete process.env.DARIUS_RUN_SANDBOX;
+  if (configText !== undefined) writeFileSync(config, configText);
+  try {
+    return await fn();
+  } finally {
+    rmSync(config, { force: true });
+    process.env.DARIUS_RUN_SANDBOX = "box";
+  }
+}
+
+test("no [run] sandbox key: a host with a passed box check launches run-due and run now in the box", async () => {
+  for (const configText of [undefined, 'host = "box-default"\n', 'host = "box-default"\n\n[run]\nbehind = "warn"\n']) {
+    await onHost(configText, async () => {
+      fresh();
+      const project = `bx-default-${String(configText?.length ?? 0)}`;
+      seedRitual(project);
+      process.env.FAKE_CLAUDE_MODE = "complete";
+      const { entry, stdout } = await runDueJson(project);
+      assert.equal(entry?.end, "complete", `${String(configText)}: ${stdout}`);
+      assert.ok(launches().some((launch) => launch.command.startsWith(`${FAKE_CLAUDE} -p `)), "the harness ran in the box");
+      assertBoxedAndClosed();
+      fresh();
+      const now = await runCli(runCommand, ["now", "heartbeat", "--project", project, "--json"]);
+      assert.equal(entryOf(now.stdout)?.end, "complete", now.stdout + now.stderr);
+      assertBoxedAndClosed();
+    });
+  }
+});
+
+test("no [run] sandbox key: fail closed. No bwrap, a failed probe or a failed box check skips as box-broken and names both ways out", async () => {
+  const bothWays = /then run darius box check; or set \[run\] sandbox = "off" in config\.toml/u;
+  await onHost('host = "box-default"\n', async () => {
+    process.env.DARIUS_BWRAP = join(SANDBOX, "no-bwrap");
+    try {
+      await assertBoxBroken("bx-default-no-bwrap", /bwrap is not on PATH/u);
+      await assertBoxBroken("bx-default-no-bwrap-2", bothWays);
+    } finally {
+      process.env.DARIUS_BWRAP = FAKE_BWRAP;
+    }
+    process.env.FAKE_BWRAP_FAIL = "probe";
+    try {
+      await assertBoxBroken("bx-default-probe", /No permissions to create a new namespace.*then run darius box check; or set \[run\] sandbox = "off"/u);
+    } finally {
+      delete process.env.FAKE_BWRAP_FAIL;
+    }
+    appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "fail", failed: ["store-write"], skipped: [] });
+    try {
+      fresh();
+      const project = "bx-default-check-failed";
+      seedRitual(project);
+      const { code, entry, stdout } = await runDueJson(project);
+      assert.equal(code, 1, stdout);
+      assert.deepEqual([entry?.action, entry?.reason], ["skipped", "box-broken"], stdout);
+      assert.match(entry?.detail ?? "", /box check of darius .+ failed today: store-write\. /u);
+      assert.match(entry?.detail ?? "", bothWays);
+      assert.equal(launches().length, 0, "nothing launched, boxed or not");
+      assert.equal(linesOf(project, "run.started").length, 0);
+    } finally {
+      appendLine(openProject("_global"), { who: "test", type: "box.checked", darius: VERSION, ...boxStack(), outcome: "pass", failed: [], skipped: [] });
+    }
+  });
+});
+
+test("no [run] sandbox key: sandbox = \"off\" in config.toml runs unboxed as before; the marker's per-ritual opt-out still works on a default host", async () => {
+  await onHost('host = "box-default"\n\n[run]\nsandbox = "off"\n', async () => {
+    fresh();
+    const project = "bx-default-off";
+    seedRitual(project);
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const { entry, stdout } = await runDueJson(project);
+    assert.equal(entry?.end, "complete", stdout);
+    assert.deepEqual(bwrapLines(), [], "an off host never calls bwrap");
+  });
+  await onHost(undefined, async () => {
+    const project = "bx-default-optout";
+    optOutCheckout(project);
+    fresh();
+    process.env.FAKE_CLAUDE_MODE = "complete";
+    const due = await runDueJson(project);
+    // SAFETY: run-due --json prints the batch report.
+    const rituals = (JSON.parse(due.stdout) as { projects: { rituals: Entry[] }[] }).projects[0]?.rituals ?? [];
+    const unboxed = rituals.find((entry) => entry.slug === "unboxed");
+    const boxed = rituals.find((entry) => entry.slug === "boxed");
+    assert.equal(unboxed?.end, "complete", due.stdout);
+    assert.equal(boxed?.end, "complete", due.stdout);
+    assert.match(runLog(project, unboxed?.run ?? ""), /box: off for this ritual by the marker/u);
+    assert.equal(linesOf(project, "run.started").find((line) => line.run === unboxed?.run)?.sandbox, "off");
+    assert.equal(linesOf(project, "run.started").find((line) => line.run === boxed?.run)?.sandbox, undefined);
+    assert.ok(launches().some((launch) => launch.command.startsWith(`${FAKE_CLAUDE} -p `) && launch.command.includes("boxed")), "the other ritual ran in the box");
+    assertBoxedAndClosed();
+  });
+});
+
 // --- [box] slice: a systemd user scope per launch (0.124.0) -----------------------------
 
 const SCOPE_LOG = join(LOGS, "systemd-run");

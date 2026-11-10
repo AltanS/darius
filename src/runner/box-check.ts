@@ -57,7 +57,7 @@ import { boxPathProblem } from "../core/box-files.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { projectDir, stateDir } from "../core/paths.ts";
-import { isBoxChosen, probeBwrap, readTiocsti, TIOCSTI_KNOB, type TiocstiRead } from "../core/sandbox.ts";
+import { BOX_FIX, isBoxChosen, probeBwrap, readTiocsti, sandboxSource, TIOCSTI_KNOB, type TiocstiRead } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, itemRef, openProject, type Project } from "../core/store.ts";
 import { localToday } from "../core/sweep.ts";
 import { ulid } from "../core/ulid.ts";
@@ -838,13 +838,13 @@ export async function boxReadiness(input: {
   const latest = global === null ? undefined : latestBoxCheck(readLedger(global), { host, darius: VERSION, ...stack });
   if (latest?.outcome === "pass") return { ready: true };
   if (latest !== undefined && localToday(new Date(latest.at)) === input.today) {
-    return { ready: false, detail: `the box check of darius ${VERSION} on ${host} failed today${failedText(textList(latest.failed))}; run darius box check` };
+    return { ready: false, detail: `the box check of darius ${VERSION} on ${host} failed today${failedText(textList(latest.failed))}. ${BOX_FIX}` };
   }
   if (input.isDryRun || global === null) return { ready: true, pending: `would run darius box check for darius ${VERSION}, kernel ${stack.kernel}, bwrap ${stack.bwrap} first` };
   const check = await (input.runCheck ?? ((project, who) => runBoxCheck({ global: project, who })))(global, input.who);
   input.onCheck(check);
   if (check.outcome === "pass") return { ready: true };
-  return { ready: false, detail: `the box check of darius ${VERSION} on ${host} failed${failedText(check.failed)}; run darius box check` };
+  return { ready: false, detail: `the box check of darius ${VERSION} on ${host} failed${failedText(check.failed)}. ${BOX_FIX}` };
 }
 
 // --- doctor and status --------------------------------------------------------------
@@ -908,15 +908,44 @@ export function globalLedger(): LedgerLine[] {
 }
 
 /**
+ * The box gate of this host as one phrase: bwrap fails its probe, or the
+ * newest check of this darius, kernel and bwrap passed, failed, or is not
+ * there yet. `stack` and `probe` are for tests.
+ */
+export function boxGateText(input: { ledger?: readonly LedgerLine[]; stack?: BoxStack; probe?: { bin: string } | { problem: string } } = {}): string {
+  const host = hostId();
+  const probe = input.probe ?? probeBwrap("");
+  if ("problem" in probe) return `bwrap fails its probe (${probe.problem.trim().replace(/\.$/u, "")}), so every boxed run here skips as box-broken`;
+  const stack = input.stack ?? boxStack();
+  const latest = latestBoxCheck(input.ledger ?? globalLedger(), { host, darius: VERSION, ...stack });
+  if (latest === undefined) return `no box check of darius ${VERSION} on ${host} yet; run-due runs one before the first boxed run`;
+  if (latest.outcome === "pass") return `the box check of darius ${VERSION} on ${host} passed at ${latest.at}`;
+  return `the box check of darius ${VERSION} on ${host} failed at ${latest.at}${failedText(textList(latest.failed))}, so every boxed run here skips as box-broken`;
+}
+
+/**
+ * The one line for a host with no `[run] sandbox` key (0.132.0): the box is
+ * the default now, the box gate here, and the two ways out. Undefined when
+ * the key is set, or DARIUS_RUN_SANDBOX chooses for this process.
+ * `darius setup` (which `darius update` runs), `darius doctor` and `darius box
+ * status` print it.
+ */
+export function boxDefaultLine(input: { source?: "env" | "key" | "default"; ledger?: readonly LedgerLine[]; stack?: BoxStack; probe?: { bin: string } | { problem: string } } = {}): string | undefined {
+  if ((input.source ?? sandboxSource()) !== "default") return undefined;
+  return `no [run] sandbox key: since darius 0.132.0 unattended runs on ${hostId()} run in the box by default. Box gate: ${boxGateText(input)}. ${BOX_FIX}`;
+}
+
+/**
  * What `darius doctor` says about the box: the sandbox choice and the newest
  * check on this host. Empty when the host does not use the box and has never
- * checked it.
+ * checked it. With no `[run] sandbox` key the first line is `boxDefaultLine`.
  */
-export function boxDoctorLines(ledger: readonly LedgerLine[] = globalLedger(), isBox: boolean = isBoxChosen()): string[] {
+export function boxDoctorLines(ledger: readonly LedgerLine[] = globalLedger(), isBox: boolean = isBoxChosen(), source: "env" | "key" | "default" = sandboxSource()): string[] {
   const host = hostId();
   const mine = newestBoxChecks(ledger).filter((entry) => entry.host === host);
   if (!isBox && mine.length === 0) return [];
-  const lines = [isBox ? `[run] sandbox = "box": rituals on ${host} run in the box.` : `[run] sandbox is not "box" on ${host}: rituals do not run in the box.`];
+  const byDefault = isBox && source === "default" ? boxDefaultLine({ source, ledger }) : undefined;
+  const lines = [byDefault ?? (isBox ? `[run] sandbox = "box": rituals on ${host} run in the box.` : `[run] sandbox is not "box" on ${host}: rituals do not run in the box.`)];
   const current = mine.find((entry) => entry.darius === VERSION);
   const newest = current ?? mine[0];
   if (newest === undefined) lines.push(`WARN: no box check on ${host} yet. run-due runs one before the first boxed run, or run darius box check.`);

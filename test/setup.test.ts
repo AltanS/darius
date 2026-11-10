@@ -34,6 +34,7 @@ import {
   type SystemctlRunner,
 } from "../src/cli/setup.ts";
 import type { UnitHost } from "../src/core/unit-path.ts";
+import { setupNotes } from "../src/cli/update.ts";
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -878,7 +879,13 @@ test("setupCommand --json prints exactly one JSON object with the expected steps
         const parsed = JSON.parse(lines[0] ?? "");
         assert.equal(parsed.ok, true);
         const whats = parsed.steps.map((step: Step) => step.what);
-        assert.deepEqual(whats, ["cli", "config", "state dir", "skill", "systemd", "remote"]);
+        // A fresh config.toml has no [run] sandbox key, so the box-by-default note is a step (0.132.0).
+        assert.deepEqual(whats, ["cli", "config", "state dir", "skill", "sandbox", "systemd", "remote"]);
+        const sandbox = parsed.steps.find((step: Step) => step.what === "sandbox");
+        assert.equal(sandbox.ok, true, "a note never fails setup, so update never rolls back over it");
+        assert.equal(sandbox.skipped, true);
+        assert.match(sandbox.detail, /^no \[run\] sandbox key: since darius 0\.132\.0 unattended runs on \S+ run in the box by default\. Box gate: bwrap fails its probe/u);
+        assert.match(sandbox.detail, /then run darius box check; or set \[run\] sandbox = "off" in config\.toml/u);
         assert.equal(parsed.steps.find((step: Step) => step.what === "systemd").skipped, true);
         assert.equal(parsed.steps.find((step: Step) => step.what === "remote").skipped, true);
       });
@@ -904,11 +911,30 @@ test("setupCommand without --json prints one ✓/·/! line per step", async () =
           console.log = originalLog;
         }
         assert.equal(exitCode, 0);
-        assert.equal(lines.length, 6);
+        assert.equal(lines.length, 7);
         assert.ok(lines.every((line) => /^[✓·!] /.test(line)));
+        assert.ok(lines.some((line) => /^· sandbox +no \[run\] sandbox key: /u.test(line)), lines.join("\n"));
+        assert.deepEqual(setupNotes(lines.join("\n")).map((note) => note.slice(0, 32)), ["sandbox: no [run] sandbox key: s"], "update reads the line back");
       });
     });
   });
+});
+
+test("setup prints no sandbox line when config.toml sets [run] sandbox, whatever the value", async () => {
+  for (const mode of ["box", "off", "mask"]) {
+    const fakeHome = tempDir("darius-setup-cmd-home-");
+    const configDir = tempDir("darius-setup-cmd-config-");
+    writeFileSync(join(configDir, "config.toml"), `host = "host-b"\n\n[run]\nsandbox = "${mode}"\n`);
+    await withEnvAsync("HOME", fakeHome, async () => {
+      await withEnvAsync("DARIUS_CONFIG_DIR", configDir, async () => {
+        await withEnvAsync("DARIUS_STATE_DIR", join(tempDir("darius-setup-cmd-state-"), "darius"), async () => {
+          const steps = await runSetup({ systemd: false, remote: false });
+          assert.deepEqual(steps.filter((step) => step.what === "sandbox"), [], mode);
+          assert.ok(steps.every((step) => step.ok));
+        });
+      });
+    });
+  }
 });
 
 // --- the snapshot timer and the retired export timer -----------------------------------

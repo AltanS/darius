@@ -62,8 +62,9 @@
  *      process on this host is stale at once. When the lease cannot be taken
  *      the ritual is skipped (`lease-held`, quiet, exit 0) and the report says so.
  *   4. Write the run files, let the harness adapter (src/harness/) wire the
- *      gate, and open the run's sandbox (src/runner/box-launch.ts): with
- *      `[run] sandbox = "box"`, a box that cannot be built skips the ritual
+ *      gate, and open the run's sandbox (src/runner/box-launch.ts): on a box
+ *      host (`[run] sandbox = "box"`, or no key since 0.132.0), a box that
+ *      cannot be built skips the ritual
  *      as `box-broken` before any run exists. In that sandbox, run the gate
  *      preflight: a gate that does not deny a synthetic call skips the ritual
  *      as `gate-broken` before any run exists. Then append `run.started`
@@ -729,8 +730,8 @@ async function readiness(ctx: ProjectContext, harness: HarnessAdapter): Promise<
 
 /**
  * The box gate (src/runner/box-check.ts), asked once per batch, before the
- * gate check of a harness, which runs in the box too. With `[run] sandbox =
- * "box"` a boxed run needs a passing `box.checked` of this host and darius
+ * gate check of a harness, which runs in the box too. On a box host (`[run]
+ * sandbox = "box"`, or no key since 0.132.0) a boxed run needs a passing `box.checked` of this host and darius
  * version; without one the box check runs here, outside dry runs. run-due,
  * `run now`, `run resume` and `run follow-up` all come through here.
  */

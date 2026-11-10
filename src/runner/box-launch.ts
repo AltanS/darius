@@ -64,7 +64,7 @@ import { startBroker, type Broker } from "../core/box-broker.ts";
 import { hostAddresses, hostSubnets, startBoxProxy, withWebAddresses, type BoxPolicy, type BoxProxy, type Resolver } from "../core/box-proxy.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { configDir } from "../core/paths.ts";
-import { appendRunLog, noteSandbox, probeBwrap, readTiocsti, resolveSandbox, sandboxPrefix, TIOCSTI_KNOB, type Sandbox } from "../core/sandbox.ts";
+import { appendRunLog, BOX_FIX, noteSandbox, probeBwrap, readTiocsti, resolveSandbox, sandboxPrefix, TIOCSTI_KNOB, type Sandbox } from "../core/sandbox.ts";
 import type { HarnessAdapter } from "../harness/contract.ts";
 import { errorMessage } from "../runtime.ts";
 import { TAB_TERM } from "../surface/herdr.ts";
@@ -302,7 +302,7 @@ function netLog(runDir: string): (line: string) => void {
  */
 export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   if (request.hasTty) checkTiocsti();
-  const probe = probeBwrap();
+  const probe = probeBwrap(BOX_FIX);
   if ("problem" in probe) throw new BoxError(probe.problem);
   const cfg = loadConfigIfPresent();
   const facts = hostBoxFacts({ workDir: request.workDir });

@@ -73,15 +73,17 @@ export interface Config {
   setup: { units: readonly SetupUnit[] };
   /**
    * `[run] sandbox`: how this host launches an unattended run (0.114.0).
-   * `mask` (opt-in since 0.114.1): in bubblewrap, with darius secret files hidden from the
-   * run's process tree (src/core/sandbox.ts). `off` (default): without bubblewrap. Inside
-   * the mask, no_new_privs is on, so sudo and rootless podman fail. `box` (0.117.0): the run's
-   * own sandbox (src/core/box.ts). Every launch uses it since 0.120.0 (src/runner/box-launch.ts).
+   * `box` (0.117.0, the default since 0.132.0): the run's own sandbox (src/core/box.ts).
+   * Every launch uses it since 0.120.0 (src/runner/box-launch.ts). `off`: without
+   * bubblewrap, the way out of the box for a host. `mask` (opt-in since 0.114.1): in
+   * bubblewrap, with darius secret files hidden from the run's process tree
+   * (src/core/sandbox.ts). Inside the mask, no_new_privs is on, so sudo and rootless podman
+   * fail. `sandboxFrom` says whether the key was set (`key`) or absent (`default`).
    * `[run] behind` (0.126.0): what run-due does with a due ritual whose checkout is behind its
    * upstream (src/core/checkout-behind.ts). `warn` (default): the run goes ahead and the report
    * says so. `refuse`: the ritual skips as `checkout-behind`.
    */
-  run: { sandbox: RunSandbox; behind: RunBehind };
+  run: { sandbox: RunSandbox; sandboxFrom: SandboxFrom; behind: RunBehind };
   /**
    * `[box]` (0.117.0): what a run in the box may write besides its work dir,
    * and whether it gets the ssh agent. `writable` undefined means the default,
@@ -117,6 +119,12 @@ function isSetupUnit(name: string): name is SetupUnit {
 export const RUN_SANDBOXES = ["mask", "off", "box"] as const;
 
 export type RunSandbox = (typeof RUN_SANDBOXES)[number];
+
+/** What an absent `[run] sandbox` means (0.132.0; `off` before). */
+export const DEFAULT_RUN_SANDBOX: RunSandbox = "box";
+
+/** Where `[run] sandbox` came from: the key in config.toml, or its absence. */
+export type SandboxFrom = "key" | "default";
 
 // --- typed field access -------------------------------------------------------
 
@@ -189,11 +197,15 @@ function setupUnits(table: Record<string, TomlValue>, file: string): readonly Se
   return SETUP_UNITS.filter((unit) => units.includes(unit));
 }
 
-function runSandbox(table: Record<string, TomlValue>, file: string): RunSandbox {
-  const name = optionalString(table, "sandbox", "off", "run", file);
+/** `[run] sandbox` as read: the mode, and whether the key chose it. */
+type SandboxSetting = Pick<Config["run"], "sandbox" | "sandboxFrom">;
+
+function runSandbox(table: Record<string, TomlValue>, file: string): SandboxSetting {
+  if (table.sandbox === undefined) return { sandbox: DEFAULT_RUN_SANDBOX, sandboxFrom: "default" };
+  const name = optionalString(table, "sandbox", DEFAULT_RUN_SANDBOX, "run", file);
   const known = RUN_SANDBOXES.find((value) => value === name);
   if (known === undefined) throw new Error(`${file}: [run] sandbox must be "off", "mask" or "box", found "${name}"`);
-  return known;
+  return { sandbox: known, sandboxFrom: "key" };
 }
 
 function runBehind(table: Record<string, TomlValue>, file: string): RunBehind {
@@ -331,13 +343,13 @@ export function loadConfig(): Config {
 
   const units = setupUnits(document.sections.setup ?? {}, file);
 
-  const sandbox = runSandbox(document.sections.run ?? {}, file);
+  const { sandbox, sandboxFrom } = runSandbox(document.sections.run ?? {}, file);
   const behind = runBehind(document.sections.run ?? {}, file);
   const box = boxSettings(document.sections.box ?? {}, file);
 
   const snapshot = document.sections.snapshot;
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox, behind }, box, snapshot };
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox, sandboxFrom, behind }, box, snapshot };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

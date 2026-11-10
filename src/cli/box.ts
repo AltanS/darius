@@ -15,7 +15,9 @@
  *       call (src/runner/box-check.ts), and appends `box.checked` to
  *       `_global`. Exit 0 pass, 1 fail.
  *   box status [--json]
- *       The newest box check per host and darius version, newest first, and
+ *       Whether this host runs in the box, and why: by default (no `[run]
+ *       sandbox` key, 0.132.0), by the key, or by DARIUS_RUN_SANDBOX. Then
+ *       the newest box check per host and darius version, newest first, and
  *       the tainted work dirs of this host.
  *   box clear <work dir>
  *       Removes the taint of a work dir (src/core/box-taint.ts) and prints
@@ -34,9 +36,12 @@ import { BOX_PROXY_SOCKET } from "../core/box.ts";
 import { boxMarkerPath, connectTunnel, enterBox } from "../core/box-inside.ts";
 import { clearTaint, readTaints, taintDir, type Taint } from "../core/box-taint.ts";
 import { realOr } from "../core/box-work.ts";
-import { defaultWho } from "../core/ledger.ts";
+import { loadConfigIfPresent } from "../core/config.ts";
+import { defaultWho, hostId } from "../core/ledger.ts";
+import type { LedgerLine } from "../core/model.ts";
+import { isBoxChosen, sandboxSource } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, openProject } from "../core/store.ts";
-import { describeListed, globalLedger, newestBoxChecks, runBoxCheck, type BoxCheck, type BoxStep } from "../runner/box-check.ts";
+import { boxDefaultLine, describeListed, globalLedger, newestBoxChecks, runBoxCheck, type BoxCheck, type BoxStep } from "../runner/box-check.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 
 const HELP = [
@@ -49,7 +54,7 @@ const HELP = [
   "enter    inside the box: start the relay on 127.0.0.1:N to the proxy socket, run the command, pass its exit code and signals",
   "connect  the ssh ProxyCommand in the box: a tunnel through the proxy on stdin and stdout",
   "check    prove the box on this host with a fake harness (no paid call) and record box.checked; exit 0 pass, 1 fail",
-  "status   the newest box check per host and darius version, and this host's tainted work dirs",
+  "status   whether the box is on here (by default or by [run] sandbox), the newest box check per host and darius version, and this host's tainted work dirs",
   "clear    remove the taint of a work dir after you looked at it; later runs there start again",
   "",
   `--proxy defaults to ${BOX_PROXY_SOCKET}. The runner starts enter and connect; you do not run them by hand.`,
@@ -120,14 +125,40 @@ function describeTaint(taint: Taint): string {
   return `! tainted ${taint.workDir}: run ${taint.run} (${taint.project}) at ${taint.at}: ${taint.reasons.join("; ")}. Runs there skip as box-broken. After you looked: darius box clear ${taint.workDir}`;
 }
 
+/** This host's sandbox choice: the mode, whether it is the box, and where it comes from. */
+interface SandboxState {
+  mode: string;
+  box: boolean;
+  from: "env" | "key" | "default";
+}
+
+function sandboxState(): SandboxState {
+  const cfg = loadConfigIfPresent();
+  const from = sandboxSource(cfg);
+  const env = process.env.DARIUS_RUN_SANDBOX?.trim() ?? "";
+  const mode = from === "env" ? env : (cfg?.run.sandbox ?? "box");
+  return { mode, box: isBoxChosen(cfg), from };
+}
+
+/** The first line of `box status`: on by default, on or off by the key, or chosen by the environment. */
+function describeState(state: SandboxState, ledger: readonly LedgerLine[]): string {
+  const host = hostId();
+  if (state.from === "default") return `· ${boxDefaultLine({ source: "default", ledger }) ?? ""}`;
+  if (state.from === "env") return `· DARIUS_RUN_SANDBOX=${state.mode} chooses the sandbox of this process on ${host}: ${state.box ? "in the box" : "not in the box"}`;
+  return state.box ? `· [run] sandbox = "box" on ${host}: the box is on by the key` : `· [run] sandbox = "${state.mode}" on ${host}: rituals do not run in the box`;
+}
+
 function runStatus(args: ParsedArgs): number {
   if (args.positional.length > 1) throw new UsageError("usage: darius box status [--json]");
-  const checks = newestBoxChecks(globalLedger());
+  const ledger = globalLedger();
+  const checks = newestBoxChecks(ledger);
   const tainted = readTaints();
+  const sandbox = sandboxState();
   if (args.json) {
-    console.log(JSON.stringify({ checks, tainted }));
+    console.log(JSON.stringify({ sandbox, checks, tainted }));
     return 0;
   }
+  console.log(describeState(sandbox, ledger));
   if (checks.length === 0) console.log("· no box checks yet; run darius box check, or run-due runs one before the first boxed run");
   for (const entry of checks) console.log(describeListed(entry));
   for (const taint of tainted) console.log(describeTaint(taint));

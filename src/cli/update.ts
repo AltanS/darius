@@ -158,6 +158,12 @@ export interface UpdateReport {
   pruned: string[];
   /** Timers that were stopped before the update and stay stopped (0.42.3). */
   leftStopped: string[];
+  /**
+   * What the new version's setup says the operator must know (0.132.0): its
+   * `sandbox` step on a host with no `[run] sandbox` key, where the box is
+   * now the default.
+   */
+  notes: string[];
 }
 
 export interface UpdateResult {
@@ -170,7 +176,7 @@ function versionOf(tag: string | undefined): string | null {
 }
 
 function result(code: number, outcome: ReportOutcome, from: string | undefined, to: string | undefined, detail: string): UpdateResult {
-  return { code, report: { ok: code === 0, outcome, from: versionOf(from), to: versionOf(to), detail, pruned: [], leftStopped: [] } };
+  return { code, report: { ok: code === 0, outcome, from: versionOf(from), to: versionOf(to), detail, pruned: [], leftStopped: [], notes: [] } };
 }
 
 /** The lines a person reads for one report. */
@@ -183,6 +189,7 @@ export function updateLines(report: UpdateReport): string[] {
       if (report.detail !== "") lines.push(`· ${report.detail}`);
       if (report.pruned.length > 0) lines.push(`· removed old versions: ${report.pruned.join(", ")}`);
       for (const unit of report.leftStopped) lines.push(`· left stopped: ${unit}`);
+      for (const note of report.notes) lines.push(`· ${note}`);
       return lines;
     }
     case "up-to-date":
@@ -324,10 +331,24 @@ function keepTimerStates(plan: TimerPlan, deps: UpdateDeps): { leftStopped: stri
   return { leftStopped: keepStopped };
 }
 
-/** What `activate` found: why it failed (undefined when it did not), and the timers it left stopped. */
+/** What `activate` found: why it failed (undefined when it did not), the timers it left stopped, and the setup's notes. */
 interface Activation {
   failure: string | undefined;
   leftStopped: string[];
+  notes: string[];
+}
+
+/** The setup steps whose line an update passes on (0.132.0): `sandbox`, on a host where the box is on by default. */
+const NOTED_STEPS: ReadonlySet<string> = new Set(["sandbox"]);
+
+/** The detail of each noted step in setup's output (`<mark> <what>  <detail>`, src/cli/setup.ts). */
+export function setupNotes(stdout: string): string[] {
+  const notes: string[] = [];
+  for (const line of stdout.split("\n")) {
+    const match = /^[·✓!] (\S+) +(\S.*)$/u.exec(line.trim());
+    if (match?.[1] !== undefined && match[2] !== undefined && NOTED_STEPS.has(match[1])) notes.push(`${match[1]}: ${match[2]}`);
+  }
+  return notes;
 }
 
 /**
@@ -337,10 +358,10 @@ interface Activation {
 async function activate(tag: string, deps: UpdateDeps): Promise<Activation> {
   const plan = timerPlan(timerStates(deps.systemctl, userUnitDir(deps.home)));
   const setup = runDarius(join(versionDir(deps.app, tag), "bin", "darius"), ["setup", "--systemd", "--keep-stopped"], deps);
-  if (setup.status !== 0) return { failure: `setup --systemd of ${tagVersion(tag)} failed: ${said(setup)}`, leftStopped: [] };
+  if (setup.status !== 0) return { failure: `setup --systemd of ${tagVersion(tag)} failed: ${said(setup)}`, leftStopped: [], notes: [] };
   const kept = keepTimerStates(plan, deps);
-  if ("failure" in kept) return { failure: kept.failure, leftStopped: [] };
-  return { failure: await checkLive(tag, deps), leftStopped: kept.leftStopped };
+  if ("failure" in kept) return { failure: kept.failure, leftStopped: [], notes: [] };
+  return { failure: await checkLive(tag, deps), leftStopped: kept.leftStopped, notes: setupNotes(setup.stdout) };
 }
 
 /** The web restart and the health checks of `activate`. Returns why it failed, or undefined. */
@@ -402,12 +423,13 @@ async function updateLocked(request: UpdateRequest, from: string, source: string
   }
 
   flipCurrent(deps.app, to);
-  const { failure, leftStopped } = await activate(to, deps);
+  const { failure, leftStopped, notes } = await activate(to, deps);
   if (failure === undefined) {
     record(deps, from, to, "updated", older);
     const outcome = result(0, "updated", from, to, older);
     outcome.report.pruned = pruneVersions(deps.app, to, from);
     outcome.report.leftStopped = leftStopped;
+    outcome.report.notes = notes;
     return outcome;
   }
 

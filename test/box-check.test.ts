@@ -324,7 +324,7 @@ test("the gate: a failed check skips as box-broken, and one from today is not ru
   const ran: string[] = [];
   const first = await gate(global, ran, { outcome: "fail" });
   assert.equal(first.result.ready, false);
-  assert.match(first.result.ready ? "" : first.result.detail, /failed: tiocsti; run darius box check$/u);
+  assert.match(first.result.ready ? "" : first.result.detail, /failed: tiocsti\. Install or fix bubblewrap .*then run darius box check; or set \[run\] sandbox = "off" in config\.toml to run without the box\.$/u, "both ways out");
   const today = await gate(global, ran, { outcome: "pass" });
   assert.equal(today.result.ready, false, "failed today: no second check this day");
   assert.match(today.result.ready ? "" : today.result.detail, /failed today: tiocsti/u);
@@ -359,6 +359,17 @@ test("the gate: a new kernel release or bwrap version needs a new check", async 
   assert.equal(ran.length, 1, "a kernel update runs the check");
   await gate(global, ran, { stack: { ...STACK, bwrap: "0.12.0" } });
   assert.equal(ran.length, 2, "a bwrap update runs the check");
+});
+
+test("the gate: with no [run] sandbox key (0.132.0) it is on: no check runs one first, as with the key", async () => {
+  // This file's config.toml has no [run] table, and DARIUS_RUN_SANDBOX is unset: the default.
+  const ran: string[] = [];
+  const global = openProject("gate-default", { create: true });
+  const heard: BoxCheck[] = [];
+  const first = await box.boxReadiness({ today: localToday(), isDryRun: false, who: "gate-test", openGlobal: () => global, onCheck: (check) => heard.push(check), runCheck: fakeCheck("fail", ran), stack: STACK });
+  assert.equal(first.ready, false, "the default host is gated: a failed check skips");
+  assert.deepEqual(ran, ["gate-test"], "the check ran first, as on a host with sandbox = \"box\"");
+  assert.equal(heard.length, 1);
 });
 
 test("the gate: a dry run with no check says it would check first, and runs nothing", async () => {
@@ -447,18 +458,87 @@ test("cli: box enter and box connect read no marker, link or store; box status t
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stderr, /removed the old \.tracker link/u, "status runs on the normal path");
   assert.match(status.stdout, /darius /u);
+  assert.match(status.stdout.split("\n")[0] ?? "", /^· no \[run\] sandbox key: since darius 0\.132\.0 unattended runs on box-check-test run in the box by default\. Box gate: /u, "on by default");
   const json = cli(["box", "status", "--json"], checkout);
-  const parsed: { checks: { host: string; darius: string; outcome: string }[] } = JSON.parse(json.stdout);
+  const parsed: { sandbox: { mode: string; box: boolean; from: string }; checks: { host: string; darius: string; outcome: string }[] } = JSON.parse(json.stdout);
   assert.ok(parsed.checks.some((entry) => entry.host === HOST && entry.darius === VERSION && entry.outcome === "pass"), json.stdout);
+  assert.deepEqual(parsed.sandbox, { mode: "box", box: true, from: "default" });
+
+  const keyed = join(BASE, "config-keyed");
+  mkdirSync(keyed, { recursive: true });
+  for (const [mode, line] of [["box", /^· \[run\] sandbox = "box" on box-check-test: the box is on by the key$/u], ["off", /^· \[run\] sandbox = "off" on box-check-test: rituals do not run in the box$/u]] as const) {
+    writeFileSync(join(keyed, "config.toml"), `host = "box-check-test"\n\n[run]\nsandbox = "${mode}"\n`);
+    const env = { ...process.env, DARIUS_BOX_MARKER: join(BASE, "no-box-marker"), DARIUS_CONFIG_DIR: keyed };
+    const text = spawnSync(BIN, ["box", "status"], { cwd: checkout, env, encoding: "utf8", timeout: 60_000 });
+    assert.match(text.stdout.split("\n")[0] ?? "", line, text.stdout + text.stderr);
+    const keyedJson = spawnSync(BIN, ["box", "status", "--json"], { cwd: checkout, env, encoding: "utf8", timeout: 60_000 });
+    assert.deepEqual(JSON.parse(keyedJson.stdout).sandbox, { mode, box: mode === "box", from: "key" });
+  }
 });
 
 test("doctor lines: the box state and the newest check of this host", () => {
   const ledger = readLedger(openProject("_global"));
-  const lines = box.boxDoctorLines(ledger, true);
+  const lines = box.boxDoctorLines(ledger, true, "key");
   assert.match(lines[0] ?? "", /sandbox = "box"/u);
   assert.match(lines[1] ?? "", new RegExp(`newest box check: ✓ ${HOST}, darius ${VERSION.replaceAll(".", "\\.")}: pass`, "u"));
   assert.deepEqual(box.boxDoctorLines([], false), [], "no box and no check: nothing to say");
-  assert.match(box.boxDoctorLines([], true).join("\n"), /WARN: no box check on box-check-test yet/u);
+  assert.match(box.boxDoctorLines([], true, "key").join("\n"), /WARN: no box check on box-check-test yet/u);
+});
+
+test("the box by default (0.132.0): one line with the default, the gate here and both ways out; none with the key", () => {
+  const ledger = readLedger(openProject("_global"));
+  const bothWays = /then run darius box check; or set \[run\] sandbox = "off" in config\.toml/u;
+  const noBwrap = { problem: "bwrap is not on PATH or in the NixOS profiles. " };
+  const fakeBin = { bin: "/fake/bwrap" };
+  const other = { kernel: "0.0.0-none", bwrap: "0.0.0" };
+
+  const missing = box.boxDefaultLine({ source: "default", ledger, probe: noBwrap }) ?? "";
+  assert.match(missing, /^no \[run\] sandbox key: since darius 0\.132\.0 unattended runs on box-check-test run in the box by default\. /u);
+  assert.match(missing, /Box gate: bwrap fails its probe \(bwrap is not on PATH or in the NixOS profiles\), so every boxed run here skips as box-broken\. /u);
+  assert.match(missing, bothWays);
+  assert.match(box.boxDefaultLine({ source: "default", ledger: [], probe: fakeBin, stack: other }) ?? "", /Box gate: no box check of darius .+ on box-check-test yet; run-due runs one before the first boxed run\. /u);
+  const global = openProject("default-line", { create: true });
+  seedCheck(global, { darius: VERSION, outcome: "pass" });
+  assert.match(box.boxDefaultLine({ source: "default", ledger: readLedger(global), probe: fakeBin, stack: STACK }) ?? "", /Box gate: the box check of darius .+ on box-check-test passed at /u);
+  seedCheck(global, { darius: VERSION, outcome: "fail" });
+  assert.match(box.boxDefaultLine({ source: "default", ledger: readLedger(global), probe: fakeBin, stack: STACK }) ?? "", /Box gate: the box check of darius .+ failed at \S+: tiocsti, so every boxed run here skips as box-broken\. /u);
+
+  assert.equal(box.boxDefaultLine({ source: "key", ledger }), undefined, "the key set: no line");
+  assert.equal(box.boxDefaultLine({ source: "env", ledger }), undefined, "DARIUS_RUN_SANDBOX: no line");
+  // No source given: this file's config.toml has no key, so the line is there.
+  assert.match(box.boxDefaultLine({ ledger, probe: noBwrap }) ?? "", /^no \[run\] sandbox key/u);
+
+  const doctor = box.boxDoctorLines(ledger, true, "default");
+  assert.match(doctor[0] ?? "", /^no \[run\] sandbox key: since darius 0\.132\.0 unattended runs on box-check-test run in the box by default\. Box gate: /u);
+  assert.match(doctor[0] ?? "", bothWays);
+  assert.doesNotMatch(doctor.join("\n"), /\[run\] sandbox = "box": rituals/u);
+  const keyed = box.boxDoctorLines(ledger, true, "key");
+  assert.match(keyed[0] ?? "", /^\[run\] sandbox = "box": rituals on box-check-test run in the box\.$/u);
+  assert.doesNotMatch(keyed.join("\n"), /no \[run\] sandbox key/u, "with the key: no default line");
+});
+
+/** The `## Box` section of a full doctor's stdout. */
+function boxSection(stdout: string): string {
+  return stdout.split("## Box\n")[1]?.split("\n## ")[0] ?? "";
+}
+
+test("darius doctor: the default line in its Box section without the key, the key's line with it (0.132.0)", () => {
+  const checkout = join(BASE, "doctor-co");
+  mkdirSync(checkout, { recursive: true });
+  spawnSync("git", ["init", "-q"], { cwd: checkout });
+  const init = cli(["init", "--project", "doctor-box"], checkout);
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const plain = cli(["doctor"], checkout);
+  assert.match(boxSection(plain.stdout), /^\s+no \[run\] sandbox key: since darius 0\.132\.0 unattended runs on box-check-test run in the box by default\. Box gate: .+then run darius box check; or set \[run\] sandbox = "off" in config\.toml/mu, plain.stdout);
+
+  const keyed = join(BASE, "config-doctor");
+  mkdirSync(keyed, { recursive: true });
+  writeFileSync(join(keyed, "config.toml"), 'host = "box-check-test"\n\n[run]\nsandbox = "box"\n');
+  const env = { ...process.env, DARIUS_BOX_MARKER: join(BASE, "no-box-marker"), DARIUS_CONFIG_DIR: keyed };
+  const withKey = spawnSync(BIN, ["doctor"], { cwd: checkout, env, encoding: "utf8", timeout: 60_000 });
+  assert.match(boxSection(withKey.stdout), /^\s+\[run\] sandbox = "box": rituals on box-check-test run in the box\.$/mu, withKey.stdout);
+  assert.doesNotMatch(withKey.stdout, /no \[run\] sandbox key/u, "with the key: no default line");
 });
 
 // --- the real box -------------------------------------------------------------------

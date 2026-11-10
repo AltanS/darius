@@ -15,7 +15,7 @@ import { delimiter, join } from "node:path";
 
 import { loadConfig, loadConfigIfPresent } from "../src/core/config.ts";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
-import { isInsideMask, maskedPaths, noteSandbox, probeBwrap, resolveSandbox, sandboxPrefix, sandboxWarning } from "../src/core/sandbox.ts";
+import { isBoxChosen, isInsideMask, maskedPaths, noteSandbox, probeBwrap, resolveSandbox, sandboxPrefix, sandboxSource, sandboxWarning } from "../src/core/sandbox.ts";
 import { openProject } from "../src/core/store.ts";
 import { launchHeadless } from "../src/surface/headless.ts";
 import { maskLine } from "../src/surface/herdr.ts";
@@ -88,16 +88,34 @@ function isolatedConfig(text: string, run: () => void): void {
   }
 }
 
-test("[run] sandbox: off by default, mask with one line, an unknown value refused", () => {
+test("[run] sandbox: box by default (0.132.0), the explicit values keep their meaning, an unknown value refused", () => {
   delete process.env.DARIUS_RUN_SANDBOX;
   try {
   isolatedConfig('host = "a"\n', () => {
-    assert.equal(loadConfig().run.sandbox, "off");
-    assert.deepEqual(resolveSandbox(), { state: "off" }, "the default never looks for bwrap");
+    assert.equal(loadConfig().run.sandbox, "box", "no key is the box since 0.132.0");
+    assert.equal(loadConfig().run.sandboxFrom, "default");
+    assert.equal(sandboxSource(), "default");
+    assert.equal(isBoxChosen(), true);
+    assert.deepEqual(resolveSandbox(), { state: "box" }, "the default box is not probed here: the launch probes it and fails closed");
   });
-  isolatedConfig('host = "a"\n\n[run]\nsandbox = "mask"\n', () => assert.equal(loadConfig().run.sandbox, "mask"));
+  isolatedConfig('host = "a"\n\n[run]\nbehind = "refuse"\n', () => {
+    assert.equal(loadConfig().run.sandbox, "box", "a [run] table without the sandbox key is the default too");
+    assert.equal(loadConfig().run.sandboxFrom, "default");
+  });
+  isolatedConfig('host = "a"\n\n[run]\nsandbox = "box"\n', () => {
+    assert.equal(loadConfig().run.sandbox, "box");
+    assert.equal(loadConfig().run.sandboxFrom, "key");
+    assert.equal(sandboxSource(), "key");
+  });
+  isolatedConfig('host = "a"\n\n[run]\nsandbox = "mask"\n', () => {
+    assert.equal(loadConfig().run.sandbox, "mask");
+    assert.equal(loadConfig().run.sandboxFrom, "key");
+    assert.equal(isBoxChosen(), false);
+  });
   isolatedConfig('host = "a"\n\n[run]\nsandbox = "off"\n', () => {
     assert.equal(loadConfig().run.sandbox, "off");
+    assert.equal(loadConfig().run.sandboxFrom, "key");
+    assert.equal(isBoxChosen(), false, "off is the way out of the default box");
     assert.deepEqual(resolveSandbox(), { state: "off" }, "off never looks for bwrap");
     assert.equal(sandboxWarning(), undefined);
   });
@@ -121,6 +139,47 @@ test("[run] sandbox = \"box\": the launch builds the box; doctor warns when bwra
         assert.match(sandboxWarning() ?? "", /^WARN: \[run\] sandbox = "box", and every unattended run on this host is skipped as box-broken\. bwrap is not on PATH/u);
       });
       withBwrap(FAKE_BWRAP, () => assert.equal(sandboxWarning(), undefined));
+    });
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "mask";
+  }
+});
+
+test("no [run] sandbox key (0.132.0): no config.toml at all is the box too; doctor's bwrap warning says it is the default and names both ways out", () => {
+  delete process.env.DARIUS_RUN_SANDBOX;
+  const empty = mkdtempSync(join(SANDBOX, "no-cfg-"));
+  const previous = process.env.DARIUS_CONFIG_DIR;
+  process.env.DARIUS_CONFIG_DIR = empty;
+  try {
+    assert.equal(loadConfigIfPresent(), null);
+    assert.equal(sandboxSource(), "default");
+    assert.deepEqual(resolveSandbox(), { state: "box" }, "a host with no config.toml is not a way out of the box");
+  } finally {
+    process.env.DARIUS_CONFIG_DIR = previous;
+  }
+  try {
+    isolatedConfig('host = "a"\n', () => {
+      withBwrap(join(SANDBOX, "no-bwrap"), () => {
+        const warning = sandboxWarning() ?? "";
+        assert.match(warning, /^WARN: no \[run\] sandbox key, so the box is on by default, and every unattended run on this host is skipped as box-broken\. bwrap is not on PATH/u);
+        assert.match(warning, /then run darius box check; or set \[run\] sandbox = "off" in config\.toml/u, "both ways out");
+      });
+      withBwrap(FAKE_BWRAP, () => assert.equal(sandboxWarning(), undefined));
+    });
+  } finally {
+    process.env.DARIUS_RUN_SANDBOX = "mask";
+  }
+});
+
+test("DARIUS_RUN_SANDBOX chooses for the process, over the key and over the default", () => {
+  try {
+    isolatedConfig('host = "a"\n', () => {
+      process.env.DARIUS_RUN_SANDBOX = "off";
+      assert.equal(sandboxSource(), "env");
+      assert.equal(isBoxChosen(), false);
+      delete process.env.DARIUS_RUN_SANDBOX;
+      assert.equal(sandboxSource(), "default");
+      assert.equal(isBoxChosen(), true);
     });
   } finally {
     process.env.DARIUS_RUN_SANDBOX = "mask";

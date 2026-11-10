@@ -61,6 +61,11 @@ import { SETUP_UNITS, type Config } from "../src/core/config.ts";
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-runner-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
+// Since 0.132.0 no `[run] sandbox` key means the box, and the suite has no bwrap (DARIUS_BWRAP
+// points at a missing file), so every run here would skip as box-broken. These runs are about
+// the runner, not the box: the host says "off", the documented way out.
+mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
+writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), '[run]\nsandbox = "off"\n');
 delete process.env.DARIUS_PROJECT;
 // Where the Claude adapter looks for a session to resume; never the operator's ~/.claude.
 const CLAUDE_HOME = join(SANDBOX, "claude-home");
@@ -976,7 +981,7 @@ test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch;
 
 /** A host config for an injected batch: this host's id, no remote, `[run] behind` as given. */
 function hostConfig(behind: Config["run"]["behind"]): Config {
-  return { host: hostId(), notify: { webhook: "" }, runner: { claude: "" }, setup: { units: SETUP_UNITS }, run: { sandbox: "off", behind }, box: { sshAgent: false } };
+  return { host: hostId(), notify: { webhook: "" }, runner: { claude: "" }, setup: { units: SETUP_UNITS }, run: { sandbox: "off", sandboxFrom: "key", behind }, box: { sshAgent: false } };
 }
 
 function gitIn(dir: string, args: readonly string[]): void {

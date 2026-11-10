@@ -29,6 +29,11 @@ import { ulid } from "../src/core/ulid.ts";
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-handoff-answers-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
+// Since 0.132.0 no `[run] sandbox` key means the box, and the suite has no bwrap (DARIUS_BWRAP
+// points at a missing file), so every run here would skip as box-broken. These runs are about
+// the runner, not the box: the host says "off", the documented way out.
+mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
+writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), '[run]\nsandbox = "off"\n');
 delete process.env.DARIUS_PROJECT;
 // Where the Claude adapter looks for a session to resume; never the operator's ~/.claude.
 const CLAUDE_HOME = join(SANDBOX, "claude-home");

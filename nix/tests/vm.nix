@@ -91,6 +91,11 @@ let
     allow_http = true
     sse = true
     credentials = "~/.config/darius/credentials"
+
+    # Since 0.132.0 no key means the box. This test proves the timer units,
+    # not the box (the suite does): the VM has no box check, so say "off".
+    [run]
+    sandbox = "off"
   '';
 
   # What `git clone` gives bob: the repo files, shebangs untouched.
@@ -216,6 +221,9 @@ pkgs.testers.runNixOSTest {
           web.enable = true;
           settings = {
             host = "vm-alice";
+            # Since 0.132.0 no key means the box. This test proves the timer units,
+            # not the box (the suite does): the VM has no box check, so say "off".
+            run.sandbox = "off";
             remote = {
               endpoint = "http://127.0.0.1:${toString s3Port}";
               bucket = "darius-alice";

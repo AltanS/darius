@@ -30,7 +30,7 @@ import { userInfo } from "node:os";
 import { delimiter, join } from "node:path";
 
 import { boxMarkerPath } from "./box-inside.ts";
-import { loadConfigIfPresent, type Config } from "./config.ts";
+import { DEFAULT_RUN_SANDBOX, loadConfigIfPresent, type Config } from "./config.ts";
 import { isMaskedFile } from "./credentials.ts";
 import { configDir } from "./paths.ts";
 import { errorMessage } from "../runtime.ts";
@@ -57,6 +57,8 @@ const KEYS_DIR = "keys";
 /** Where a run's launcher writes what the report does not need. */
 const RUN_LOG = "run.log";
 const FIX = 'Install bubblewrap and allow unprivileged user namespaces, or set [run] sandbox = "off" in config.toml.';
+/** The two ways out of a box that cannot work on this host (0.132.0): fix it and prove it, or turn it off for the host. */
+export const BOX_FIX = 'Install or fix bubblewrap (and allow unprivileged user namespaces), then run darius box check; or set [run] sandbox = "off" in config.toml to run without the box.';
 
 function isExecutable(path: string): boolean {
   try {
@@ -78,18 +80,19 @@ function runsTrue(bin: string, args: readonly string[]): string | undefined {
  * The bwrap program of this host, proved to work, or what is wrong: PATH
  * first, then the NixOS profiles, which a systemd unit's PATH may leave out.
  * `$DARIUS_BWRAP` replaces the search; the test suite points it at a missing
- * file or a fake.
+ * file or a fake. `fix` ends the problem text: the mask's by default, `BOX_FIX`
+ * for the box.
  */
-export function probeBwrap(): { bin: string } | { problem: string } {
+export function probeBwrap(fix: string = FIX): { bin: string } | { problem: string } {
   const override = process.env.DARIUS_BWRAP;
   const isOverridden = override !== undefined && override !== "";
   const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.startsWith("/"));
   const user = process.env.USER ?? userInfo().username;
   const candidates = isOverridden ? [override] : [...dirs, `/etc/profiles/per-user/${user}/bin`, "/run/current-system/sw/bin"].map((dir) => join(dir, "bwrap"));
   const bin = candidates.find((candidate) => isExecutable(candidate));
-  if (bin === undefined) return { problem: `bwrap is not on PATH or in the NixOS profiles. ${FIX}` };
+  if (bin === undefined) return { problem: `bwrap is not on PATH or in the NixOS profiles. ${fix}` };
   const failed = runsTrue(bin, BASE_ARGS);
-  return failed === undefined ? { bin } : { problem: `${failed}. ${FIX}` };
+  return failed === undefined ? { bin } : { problem: `${failed}. ${fix}` };
 }
 
 /** The target of a path with symlinks resolved, and its type; undefined when nothing is there. */
@@ -130,14 +133,32 @@ export function maskedPaths(cfg: Config | null): MaskedPaths {
   return { files: [...files], dirs: [...dirs] };
 }
 
-/** `DARIUS_RUN_SANDBOX` (`mask`, `off` or `box`) overrides `[run] sandbox` for one process, as the suite does. Any other value is ignored. */
-function sandboxChoice(cfg: Config | null | undefined): string {
+/** The `DARIUS_RUN_SANDBOX` override, when it names a mode. */
+function envSandbox(): string | undefined {
   const env = process.env.DARIUS_RUN_SANDBOX?.trim();
-  if (env === "mask" || env === "off" || env === "box") return env;
-  return cfg?.run.sandbox ?? "off";
+  return env === "mask" || env === "off" || env === "box" ? env : undefined;
 }
 
-/** True when this host runs its rituals in the box (`[run] sandbox = "box"` or `DARIUS_RUN_SANDBOX=box`). Probes nothing. */
+/**
+ * `DARIUS_RUN_SANDBOX` (`mask`, `off` or `box`) overrides `[run] sandbox` for
+ * one process, as the suite does. Any other value is ignored. With no key, and
+ * with no config.toml at all, the host runs in the box (0.132.0).
+ */
+function sandboxChoice(cfg: Config | null | undefined): string {
+  return envSandbox() ?? cfg?.run.sandbox ?? DEFAULT_RUN_SANDBOX;
+}
+
+/**
+ * Where this process's sandbox choice comes from: `env` (DARIUS_RUN_SANDBOX),
+ * `key` (`[run] sandbox` in config.toml), or `default` (no key, or no
+ * config.toml: the box since 0.132.0).
+ */
+export function sandboxSource(cfg: Config | null = loadConfigIfPresent()): "env" | "key" | "default" {
+  if (envSandbox() !== undefined) return "env";
+  return cfg?.run.sandboxFrom ?? "default";
+}
+
+/** True when this host runs its rituals in the box (`[run] sandbox = "box"`, no key, or `DARIUS_RUN_SANDBOX=box`). Probes nothing. */
 export function isBoxChosen(cfg: Config | null = loadConfigIfPresent()): boolean {
   return sandboxChoice(cfg) === "box";
 }
@@ -188,8 +209,9 @@ export function sandboxWarning(): string | undefined {
   try {
     const sandbox = resolveSandbox();
     if (sandbox.state === "box") {
-      const probe = probeBwrap();
-      return "problem" in probe ? `WARN: [run] sandbox = "box", and every unattended run on this host is skipped as box-broken. ${probe.problem}` : undefined;
+      const probe = probeBwrap(BOX_FIX);
+      const chosen = sandboxSource() === "default" ? 'no [run] sandbox key, so the box is on by default' : '[run] sandbox = "box"';
+      return "problem" in probe ? `WARN: ${chosen}, and every unattended run on this host is skipped as box-broken. ${probe.problem}` : undefined;
     }
     return sandbox.state === "unmasked" ? `WARN: unattended runs on this host start unmasked and can read darius secret files. ${sandbox.problem}` : undefined;
   } catch (cause) {

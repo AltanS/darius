@@ -75,6 +75,11 @@ let
         "[runner]"
         "claude = ${tomlString s.runner.claude}"
       ]
+      ++ lib.optionals (s.run.sandbox != null) [
+        ""
+        "[run]"
+        "sandbox = ${tomlString s.run.sandbox}"
+      ]
       ++ lib.optionals (s.remote != null) [
         ""
         "[remote]"
@@ -220,6 +225,22 @@ in
               type = types.str;
               default = "";
               description = "Claude Code executable for run-due. Empty: `claude` on the unit PATH.";
+            };
+            run.sandbox = mkOption {
+              type = types.nullOr (
+                types.enum [
+                  "box"
+                  "off"
+                  "mask"
+                ]
+              );
+              default = null;
+              description = ''
+                `[run] sandbox`: how unattended runs start. null writes no key, and
+                no key means the box since darius 0.132.0: the host then needs
+                bubblewrap and a passing `darius box check`. "off" runs without
+                the box.
+              '';
             };
             remote = mkOption {
               type = types.nullOr (types.submodule { options = remoteOptions; });

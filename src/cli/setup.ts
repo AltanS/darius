@@ -20,6 +20,11 @@
  *      (src/cli/skill.ts); it never installs one. With no user-level file,
  *      it says `darius skill install`, unless an installed plugin ships a
  *      stamped darius skill: then the plugin teaches and nothing is needed.
+ *   5. on a host with no `[run] sandbox` key (0.132.0), one `sandbox` line:
+ *      the box is the default now, the box gate here, and the two ways out
+ *      (`boxDefaultLine` in src/runner/box-check.ts). It is a note, never a
+ *      `!`: setup's exit code would make `darius update` roll back. The new
+ *      version's update passes the line on (`setupNotes` in src/cli/update.ts).
  *
  * `--systemd`: renders the units that config.toml's `[setup] units` lists
  * (sync, vigil-sweep, run-due, web and snapshot; all of them when the key is
@@ -71,6 +76,7 @@ import type { UnitHost } from "../core/unit-path.ts";
 import { errorMessage } from "../runtime.ts";
 import { listCommands } from "./registry.ts";
 import { findPluginSkill, hookNote, managedFiles, refreshSkillFiles, removeRetiredAgent, retiredAgentPath, skillSource } from "./skill.ts";
+import { boxDefaultLine } from "../runner/box-check.ts";
 
 // --- reporting ----------------------------------------------------------------
 
@@ -619,8 +625,20 @@ function refreshSkillStep(home: string): Step {
   }
 }
 
+// --- step: the box by default ---------------------------------------------------------------
+
+/** The `sandbox` note on a host with no `[run] sandbox` key; none with the key. Never fails setup. */
+function sandboxDefaultStep(): Step[] {
+  try {
+    const line = boxDefaultLine();
+    return line === undefined ? [] : [{ ok: true, skipped: true, what: "sandbox", detail: line }];
+  } catch (cause) {
+    return [{ ok: true, skipped: true, what: "sandbox", detail: `cannot read the sandbox setting: ${errorMessage(cause)}` }];
+  }
+}
+
 export async function runSetup(flags: SetupFlags, deps: SetupDeps = defaultDeps()): Promise<Step[]> {
-  const steps: Step[] = [installCliSymlink(deps.root, deps.app, deps.home), installConfigSkeleton(), ensureStateDir(), refreshSkillStep(deps.home)];
+  const steps: Step[] = [installCliSymlink(deps.root, deps.app, deps.home), installConfigSkeleton(), ensureStateDir(), refreshSkillStep(deps.home), ...sandboxDefaultStep()];
 
   if (flags.systemd) {
     steps.push(...installSystemdUnits(deps, flags.keepStopped === true));

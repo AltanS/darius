@@ -2,6 +2,23 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.132.0] - 2026-11-10
+
+### Changed
+
+- **The box is the default sandbox of unattended runs.** A host with no `[run] sandbox` key in `config.toml`, or with no `config.toml`, now runs every launch in the box: run-due, `run now`, `run resume`, `run follow-up`, the gate check per harness version and the gate preflight. Before, no key meant `off`. The operator decided this after a one-week trial on two hosts with no `box-broken` skip. The explicit values keep their meaning, and which launches a box host boxes did not change.
+- Migration: a host without `[run] sandbox` now runs boxed. To keep the old behaviour, set `[run] sandbox = "off"` in `~/.config/darius/config.toml`. Otherwise install bubblewrap, allow unprivileged user namespaces, and run `darius box check`. A boxed run cannot commit (`.git` is read-only), reaches the network only through the proxy, and sees no host sockets; a ritual that cannot live with that opts out with `sandbox = "off"` in the marker.
+- Fail closed, as with `sandbox = "box"` before: on a host where bwrap is missing or fails its probe (user namespaces off), or where the box check fails, every boxed run skips as `box-broken` and never starts unboxed. With no passing check for this darius version, kernel and bwrap, the first unattended pass runs `darius box check` itself, as before.
+- Each `box-broken` reason from the host's setup (bwrap missing or failing its probe, a failed box check) names both ways out: fix bubblewrap and run `darius box check`, or set `[run] sandbox = "off"`. The mask's fix text did not change.
+- `darius doctor` on a host with no key says that the box is on by default, the result of the box gate here and the two ways out, in place of the `[run] sandbox = "box"` line. Its bwrap warning says "no [run] sandbox key, so the box is on by default".
+- `darius box status` starts with one line: the box is on by default (with the gate and the ways out), on or off by the key, or chosen by `DARIUS_RUN_SANDBOX`. `--json` adds `sandbox: {mode, box, from}`, where `from` is `default`, `key` or `env`.
+
+### Added
+
+- `darius setup` prints a `sandbox` line on a host with no `[run] sandbox` key: the box is on by default, the gate result and the two ways out. It is a note: setup's exit code does not change, so `darius update` never rolls back over it. A host with the key gets no line.
+- `darius update` passes that line on as `· sandbox: ...` after `✓ updated`, and `--json` adds `notes`. The update that brings a host to 0.132.0 runs the older version's update code, which does not print it; `darius doctor` and `darius box status` show it there.
+- The home-manager module has `settings.run.sandbox` (`"box"`, `"off"`, `"mask"` or `null`, the default, which writes no key). It writes `config.toml` into the Nix store, so this is the only way to set the key there. The NixOS VM test sets `"off"` for both of its users: it proves the timer units, not the box.
+
 ## [0.131.0] - 2026-11-10
 
 ### Changed
