@@ -21,7 +21,14 @@ import { launchHerdr, type HerdrPlan } from "../src/surface/herdr.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "darius-herdr-prompt-"));
 
-const FAKE = `#!/usr/bin/env bash
+/** bash by full path. The Nix build sandbox has no /usr/bin/env for a shebang to use. */
+const BASH =
+  (process.env.PATH ?? "")
+    .split(":")
+    .map((dir) => join(dir, "bash"))
+    .find((candidate) => candidate.startsWith("/") && existsSync(candidate)) ?? "/bin/bash";
+
+const FAKE = `#!${BASH}
 set -euo pipefail
 dir="$FAKE_HERDR_DIR"
 printf '%s\\n' "$*" >> "$dir/calls"

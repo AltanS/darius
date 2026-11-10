@@ -59,6 +59,9 @@ stdenvNoCC.mkDerivation {
   src = lib.fileset.toSource {
     root = src;
     fileset = lib.fileset.unions [
+      # The mail logo: test/mail-shell.test.ts reads the PNG. The installed darius
+      # does not: a mail only names its URL on GitHub, so nix/package.nix leaves it out.
+      (src + "/assets/email")
       (src + "/bin")
       (src + "/scripts")
       # The static skill text: test/skill*.test.ts install it.

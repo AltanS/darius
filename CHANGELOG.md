@@ -19,6 +19,11 @@ All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 - `darius update` passes that line on as `· sandbox: ...` after `✓ updated`, and `--json` adds `notes`. The update that brings a host to 0.132.0 runs the older version's update code, which does not print it; `darius doctor` and `darius box status` show it there.
 - The home-manager module has `settings.run.sandbox` (`"box"`, `"off"`, `"mask"` or `null`, the default, which writes no key). It writes `config.toml` into the Nix store, so this is the only way to set the key there. The NixOS VM test sets `"off"` for both of its users: it proves the timer units, not the box.
 
+### Fixed
+
+- `nix flake check`: the test suite's Nix source now includes `assets/email`, so the mail logo test finds `gem-96.png`. The installed package still leaves it out, because a mail only names the logo's URL on GitHub.
+- `nix flake check`: the fake herdr of `test/herdr-prompt.test.ts` starts with bash by its full path, not `#!/usr/bin/env bash`. The Nix build sandbox has no `/usr/bin/env`, so the fake never started and all six herdr resend tests failed there.
+
 ## [0.131.0] - 2026-11-10
 
 ### Changed
