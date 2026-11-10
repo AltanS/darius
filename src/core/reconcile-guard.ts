@@ -21,6 +21,9 @@
  *     Reconcile.
  *   - Else, when the marker file hashes the same as the record's
  *     `marker_hash`: the store already holds this content. Write nothing.
+ *   - Else, when this host wrote the record itself (0.129.1): its own
+ *     checkout moved (a rebase, an amend, a branch switch, a checkout of an
+ *     older commit). Reconcile as before 0.129.0, with a note.
  *   - Else (H is an ancestor of R, R is not in this repo, or the histories
  *     diverged): the checkout is stale. Write nothing: no adopt, no update,
  *     no retire. run-due skips the project's repo rituals as
@@ -31,6 +34,11 @@
  * before, with a note: only a proven stale checkout stops a reconcile. A
  * shallow repo that lacks R, or reads as diverged, cannot prove it, so it
  * reconciles too, with a note.
+ *
+ * Own-host limit: a host that checks out an older commit retires what the
+ * newer commit added, as before 0.129.0, and the retire is final. A rule
+ * "an own record never retires while the checkout is older" would hold for
+ * one pass only: that pass records the older commit.
  *
  * Known limit: "newest" is by ledger id, and an id carries its host's clock.
  * Two hosts whose clocks differ by more than the time between their
@@ -176,7 +184,7 @@ export interface StaleMarker {
 }
 
 export type GuardDecision =
-  | { action: "reconcile"; why: "force" | "no-record" | "no-commit" | "no-git" | "same" | "newer" | "git-error" | "shallow"; note?: string }
+  | { action: "reconcile"; why: "force" | "no-record" | "no-commit" | "no-git" | "same" | "newer" | "git-error" | "shallow" | "own-host"; note?: string }
   | { action: "unchanged"; why: "same-marker" }
   | { action: "stale"; stale: StaleMarker };
 
@@ -187,6 +195,10 @@ export interface GuardInput {
   force: boolean;
   /** Asked only when the record and the checkout both have a commit. */
   relation: (recorded: string, head: string) => RelationResult;
+  /** This host's ledger id (`hostId()`): a record it wrote itself never makes its checkout stale (0.129.1). */
+  thisHost: string;
+  /** The project's name, for the note. */
+  project: string;
 }
 
 function shortCommit(commit: string): string {
@@ -212,6 +224,14 @@ export function decideReconcile(input: GuardInput): GuardDecision {
   const { relation } = found;
   if (relation === "same" || relation === "newer") return { action: "reconcile", why: relation };
   if (record.markerHash !== undefined && record.markerHash === input.markerHash) return { action: "unchanged", why: "same-marker" };
+  // 0.129.1: this host wrote the record, so its own checkout moved (a rebase, an amend, a branch switch). That is the operator's act here, and it reconciles as before 0.129.0.
+  if (record.host === input.thisHost) {
+    return {
+      action: "reconcile",
+      why: "own-host",
+      note: `the checkout of ${input.project} moved off the commit this host last reconciled (${shortCommit(recorded)}); reconciling from the checkout`,
+    };
+  }
   if (found.shallow && relation !== "behind") {
     return {
       action: "reconcile",

@@ -332,7 +332,8 @@ A store ritual that the marker does not name is `unmanaged`: it never runs from 
 ### Two hosts
 
 Each host reconciles from its own checkout. A host reconciles only when its checkout is at or
-after the commit the store was last reconciled from, by any host. A host that has not pulled yet
+after the commit the store was last reconciled from, by another host. A host that moved its own
+checkout (a rebase, an amend, another branch) reconciles as before, and says so once. A host that has not pulled yet
 writes nothing: it does not adopt, change or retire a ritual. Its timer skips the project's
 rituals as `checkout-stale`, and the report and `darius doctor` say so:
 

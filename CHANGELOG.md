@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.129.1] - 2026-11-10
+
+### Fixed
+
+- A host no longer blocks its own rituals after it moved its own checkout. 0.129.0 judged a checkout stale also against a reconcile record the same host had written, so a rebase, an amend, a branch switch or a checkout of an older commit in a host's own linked checkout skipped all its repo rituals as `checkout-stale` until a person ran `darius ritual reconcile --force`. Now a record this host wrote reconciles as before 0.129.0, for an older, a missing or a diverged commit alike. The result and the run-due report say once: `the checkout of <project> moved off the commit this host last reconciled (<commit>); reconciling from the checkout`. There is no skip, no stale record and no alert. A record from another host is judged as in 0.129.0.
+
 ## [0.129.0] - 2026-11-10
 
 ### Fixed

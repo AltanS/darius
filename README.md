@@ -336,8 +336,10 @@ store remembers the commit of its last reconcile, from any host. If this checkou
 commit, lacks it, or is on another history, reconcile writes nothing, so it cannot retire a ritual
 the other host just added. The project's rituals skip as `checkout-stale` until you pull, and the
 report and `darius doctor` say `the checkout of <project> is older than the marker the store holds
-(reconciled on <host> at <commit>): pull it`. This check uses local git only. After a rebase or a
-force-push, `darius ritual reconcile --force` reconciles from this checkout anyway.
+(reconciled on <host> at <commit>): pull it`. This check uses local git only. A host that moved its own
+checkout after its own last reconcile is not blocked: it reconciles and says so once. After a
+rebase or a force-push on another host, `darius ritual reconcile --force` reconciles from this
+checkout anyway.
 
 ### Backups
 

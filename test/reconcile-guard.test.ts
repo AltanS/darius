@@ -338,14 +338,16 @@ function record(commit: string | undefined, hash?: string): ReconcileRecord {
   return found;
 }
 
-/** The decision for `checkout` against `found`, with the real git calls. */
-function judge(checkout: string, found: ReconcileRecord | null, opts: { force?: boolean; hash?: string } = {}): GuardDecision {
+/** The decision for `checkout` against `found`, as host-b unless `thisHost` says otherwise (the records are host-a's). */
+function judge(checkout: string, found: ReconcileRecord | null, opts: { force?: boolean; hash?: string; thisHost?: string } = {}): GuardDecision {
   return decideReconcile({
     record: found,
     head: headFacts(checkout),
     markerHash: opts.hash ?? markerHash(join(checkout, ".darius.toml")),
     force: opts.force === true,
     relation: (recorded, head) => commitRelation(checkout, recorded, head),
+    thisHost: opts.thisHost ?? "host-b",
+    project: "acme-web",
   });
 }
 
@@ -432,6 +434,23 @@ const T1 = new Date("2026-11-09T06:00:00.000Z");
 const T2 = new Date("2026-11-09T06:05:00.000Z");
 const T3 = new Date("2026-11-09T06:10:00.000Z");
 
+/**
+ * A reconcile as host `host`: its own ledger id (config.toml) over the one
+ * shared store, as two hosts see the store after a sync.
+ */
+function reconcileAs(host: string, project: Project, checkout: string, now: Date, options: { dryRun?: boolean; force?: boolean } = {}): ReturnType<typeof reconcileProject> {
+  const config = join(SANDBOX, "unit", `config-${host}`);
+  mkdirSync(config, { recursive: true });
+  writeFileSync(join(config, "config.toml"), `host = "${host}"\n`);
+  const saved = process.env.DARIUS_CONFIG_DIR;
+  process.env.DARIUS_CONFIG_DIR = config;
+  try {
+    return reconcileProject(project, checkout, host, now, options);
+  } finally {
+    process.env.DARIUS_CONFIG_DIR = saved;
+  }
+}
+
 function definedLines(project: Project): LedgerLine[] {
   return readLedger(project).filter((line) => line.type === RITUAL_DEFINED);
 }
@@ -439,20 +458,20 @@ function definedLines(project: Project): LedgerLine[] {
 test("reconcile: a stale checkout writes nothing and returns stale; a dry run does not record it for doctor", { skip: NO_GIT }, () => {
   const { project: name, a, b, c2 } = chain();
   const project = openProject(name, { create: true });
-  const adopted = reconcileProject(project, a, "host-a", T1);
+  const adopted = reconcileAs("host-a", project, a, T1);
   assert.deepEqual(adopted.adopted, ["daily", "weekly", "extra"]);
   const lines = definedLines(project);
   assert.ok(lines.every((line) => line.commit === c2 && line.marker_hash === markerHash(join(a, ".darius.toml"))), JSON.stringify(lines));
   assert.equal(latestRecord(readLedger(project))?.commit, c2);
 
-  const dry = reconcileProject(project, b, "host-b", T2, { dryRun: true });
+  const dry = reconcileAs("host-b", project, b, T2, { dryRun: true });
   assert.equal(dry.stale?.relation, "unknown");
   assert.equal(readStaleRecord(project), null, "a dry run writes nothing, the doctor record included");
 
-  const stale = reconcileProject(project, b, "host-b", T2);
+  const stale = reconcileAs("host-b", project, b, T2);
   assert.equal(stale.ok, true);
   assert.deepEqual([stale.adopted, stale.updated, stale.unchanged, stale.retired], [[], [], [], []]);
-  assert.match(stale.stale?.line ?? "", /^the checkout of acme-unit-\d+ lacks the commit of the marker the store holds \(reconciled on host-u at [0-9a-f]{12}\): pull it/u);
+  assert.match(stale.stale?.line ?? "", /^the checkout of acme-unit-\d+ lacks the commit of the marker the store holds \(reconciled on host-a at [0-9a-f]{12}\): pull it/u);
   assert.equal(definedLines(project).length, lines.length, "no ritual.defined line");
   assert.equal(ritualLifecycle(readLedger(project), "extra"), "active");
   assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.def_commit, c2);
@@ -462,7 +481,7 @@ test("reconcile: a stale checkout writes nothing and returns stale; a dry run do
   assert.match(staleDoctorLine(kept) ?? "", /^WARN: the checkout of .* \(reconcile, 2026-11-09T06:05:00\.000Z\)\. Until then/u);
 
   git(b, ["pull", "--quiet", "--ff-only"]);
-  const pulled = reconcileProject(project, b, "host-b", T3);
+  const pulled = reconcileAs("host-b", project, b, T3);
   assert.equal(pulled.stale, undefined);
   assert.deepEqual(pulled.unchanged, ["daily", "weekly", "extra"], "the same commit and hash: nothing to write");
   assert.equal(definedLines(project).length, lines.length);
@@ -472,9 +491,9 @@ test("reconcile: a stale checkout writes nothing and returns stale; a dry run do
 test("reconcile: the same marker from an older commit writes nothing and lists the rituals as unchanged", { skip: NO_GIT }, () => {
   const { project: name, a, b, c2 } = chain({ c2Marker: false });
   const project = openProject(name, { create: true });
-  reconcileProject(project, a, "host-a", T1);
+  reconcileAs("host-a", project, a, T1);
   const linesBefore = definedLines(project).length;
-  const result = reconcileProject(project, b, "host-b", T2);
+  const result = reconcileAs("host-b", project, b, T2);
   assert.equal(result.stale, undefined);
   assert.deepEqual(result.unchanged, ["daily", "weekly"]);
   assert.deepEqual([result.adopted, result.updated, result.retired], [[], [], []]);
@@ -485,9 +504,9 @@ test("reconcile: the same marker from an older commit writes nothing and lists t
 test("reconcile: a record written by an older darius (no commit, no marker_hash) does not stop a reconcile", { skip: NO_GIT }, () => {
   const { project: name, a, b } = chain();
   const project = openProject(name, { create: true });
-  reconcileProject(project, a, "host-a", T1);
+  reconcileAs("host-a", project, a, T1);
   appendLine(project, { who: "old", type: RITUAL_DEFINED, item: "ritual/daily", slug: "daily", change: "updated", dirty: false });
-  const result = reconcileProject(project, b, "host-b", T2);
+  const result = reconcileAs("host-b", project, b, T2);
   assert.equal(result.stale, undefined);
   assert.deepEqual(result.retired, ["extra"], "as before 0.129.0: the guard has nothing to compare with");
 });
@@ -495,15 +514,15 @@ test("reconcile: a record written by an older darius (no commit, no marker_hash)
 test("reconcile --force: a person reconciles a stale checkout, the lines say forced, and the newer checkout follows it again", { skip: NO_GIT }, () => {
   const { project: name, a, b, c1, c2 } = chain();
   const project = openProject(name, { create: true });
-  reconcileProject(project, a, "host-a", T1);
-  const forced = reconcileProject(project, b, "host-b", T2, { force: true });
+  reconcileAs("host-a", project, a, T1);
+  const forced = reconcileAs("host-b", project, b, T2, { force: true });
   assert.equal(forced.stale, undefined);
   assert.deepEqual(forced.retired, ["extra"], "force reconciles from this checkout, retire included");
   const written = definedLines(project).filter((line) => line.at === T2.toISOString());
   assert.ok(written.length > 0 && written.every((line) => line.forced === true && line.commit === c1), JSON.stringify(written));
   assert.equal(latestRecord(readLedger(project))?.commit, c1, "the record is this checkout's commit now");
 
-  const back = reconcileProject(project, a, "host-a", T3);
+  const back = reconcileAs("host-a", project, a, T3);
   assert.equal(back.stale, undefined, "C1 is an ancestor of C2: the newer checkout reconciles");
   assert.deepEqual(back.warnings, ["extra was retired; use a new slug"]);
   assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.def_commit, c2);
@@ -546,7 +565,7 @@ test("report: the stale line comes once, not in the news scope, and not next to 
 test("ritual list advises a pull, not a reconcile, while the stale record is there", { skip: NO_GIT }, async () => {
   const { project: name, a, b } = chain();
   const project = openProject(name, { create: true });
-  reconcileProject(project, a, "host-a", T1);
+  reconcileAs("host-a", project, a, T1);
   const { writeLink } = await import("../src/core/links.ts");
   writeLink(name, b);
   const listed = async (): Promise<string[]> => {
@@ -563,7 +582,72 @@ test("ritual list advises a pull, not a reconcile, while the stale record is the
     return lines.filter((line) => line.startsWith("! mirror is from"));
   };
   assert.ok((await listed()).every((line) => line.endsWith(": darius ritual reconcile")), "no stale record: the old advice");
-  reconcileProject(project, b, "host-b", T2);
+  reconcileAs("host-b", project, b, T2);
   const advice = await listed();
   assert.ok(advice.length > 0 && advice.every((line) => line.endsWith(": pull the checkout")), advice.join("\n"));
+});
+
+// --- own-host records (0.129.1) ------------------------------------------------------------
+
+test("decide: a record this host wrote itself never makes its own checkout stale; it reconciles with a note", { skip: NO_GIT }, () => {
+  const { b, c2 } = chain();
+  const note = `the checkout of acme-web moved off the commit this host last reconciled (${c2}); reconciling from the checkout`;
+  assert.deepEqual(judge(b, record(c2), { thisHost: "host-a" }), { action: "reconcile", why: "own-host", note }, "lacks the commit");
+  git(b, ["fetch", "--quiet"]);
+  assert.deepEqual(judge(b, record(c2), { thisHost: "host-a" }), { action: "reconcile", why: "own-host", note }, "older");
+  writeFileSync(join(b, "LOCAL.md"), "local\n");
+  git(b, ["add", "--all"]);
+  git(b, ["commit", "--quiet", "--message", "local"]);
+  assert.deepEqual(judge(b, record(c2), { thisHost: "host-a" }), { action: "reconcile", why: "own-host", note }, "diverged");
+  assert.equal(judge(b, record(c2)).action, "stale", "the same checkout against another host's record stays stale");
+});
+
+test("own host: a host that moves its own checkout to an older commit reconciles, with one note, no stale result and no stale record", { skip: NO_GIT }, () => {
+  const { project: name, a, c1, c2 } = chain();
+  const project = openProject(name, { create: true });
+  reconcileAs("host-a", project, a, T1);
+  git(a, ["checkout", "--quiet", c1]);
+  const moved = reconcileAs("host-a", project, a, T2);
+  assert.equal(moved.stale, undefined);
+  assert.deepEqual(moved.warnings, [`the checkout of ${name} moved off the commit this host last reconciled (${c2}); reconciling from the checkout`]);
+  assert.equal(readStaleRecord(project), null);
+  assert.equal(latestRecord(readLedger(project))?.commit, c1, "the record follows the checkout");
+  const again = reconcileAs("host-a", project, a, T3);
+  assert.deepEqual(again.warnings, [], "the note comes once: the next reconcile is at the recorded commit");
+});
+
+test("case b: host-a reconciles from a branch; host-b on main without that commit is blocked, fetched or not", { skip: NO_GIT }, () => {
+  const { project: name, a, b, c1 } = chain();
+  const project = openProject(name, { create: true });
+  git(a, ["checkout", "--quiet", "-b", "x", c1]);
+  const cx = commitMarker(a, twoHostMarker(name, { dailyTitle: "Daily, branch x", withExtra: true }), "Cx");
+  assert.deepEqual(reconcileAs("host-a", project, a, T1).adopted, ["daily", "weekly", "extra"]);
+  const blocked = reconcileAs("host-b", project, b, T2);
+  assert.deepEqual([blocked.stale?.relation, blocked.stale?.commit], ["unknown", cx]);
+  git(b, ["fetch", "--quiet"]);
+  assert.equal(reconcileAs("host-b", project, b, T3).stale?.relation, "unknown", "main does not carry branch x");
+  assert.equal(ritualLifecycle(readLedger(project), "extra"), "active");
+  assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.title, "Daily, branch x");
+});
+
+test("case c: host-a moves back to C1 and retires what C2 added; host-b at C2 does not revive it, and host-a is then blocked: no flip-flop", { skip: NO_GIT }, () => {
+  const { project: name, a, b, c1, c2 } = chain();
+  const project = openProject(name, { create: true });
+  reconcileAs("host-a", project, a, T1);
+  git(a, ["checkout", "--quiet", c1]);
+  const back = reconcileAs("host-a", project, a, T2);
+  assert.deepEqual(back.retired, ["extra"], "the operator's own checkout move retires, as before 0.129.0");
+  assert.equal(latestRecord(readLedger(project))?.commit, c1);
+
+  git(b, ["pull", "--quiet", "--ff-only"]);
+  const forward = reconcileAs("host-b", project, b, T3);
+  assert.equal(forward.stale, undefined, "C1 is an ancestor of C2: host-b reconciles");
+  assert.deepEqual(forward.warnings, ["extra was retired; use a new slug"], "a retired slug stays retired");
+  assert.equal(ritualLifecycle(readLedger(project), "extra"), "retired");
+  assert.deepEqual(forward.updated.toSorted(), ["daily", "weekly"]);
+  assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.def_commit, c2);
+
+  const blocked = reconcileAs("host-a", project, a, new Date("2026-11-09T06:15:00.000Z"));
+  assert.deepEqual([blocked.stale?.relation, blocked.stale?.host], ["behind", "host-b"], "host-a at C1 is older than host-b's record now");
+  assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.def_commit, c2, "no flip-flop back to C1");
 });

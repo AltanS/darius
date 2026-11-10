@@ -36,7 +36,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { ritualLifecycle } from "./due.ts";
-import { appendLines, defaultWho, readLedger, type LedgerLineInput } from "./ledger.ts";
+import { appendLines, defaultWho, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { definitionHash, MARKER_FILE, readMarker, type Marker, type RepoRitual } from "./marker.ts";
 import type { Document, LedgerLine, Policy, Ritual } from "./model.ts";
 import { commitRelation, decideReconcile, headFacts, latestRecord, markerHash, staleLine, writeStaleRecord, type GuardDecision, type StaleMarker } from "./reconcile-guard.ts";
@@ -334,7 +334,16 @@ export function reconcileProject(
   const head = headFacts(checkout);
   const judge = (ledger: readonly LedgerLine[]): Judged => {
     const record = latestRecord(ledger);
-    const decision = decideReconcile({ record, head, markerHash: at.markerHash, force: at.isForced, relation: (recorded, sha) => commitRelation(checkout, recorded, sha) });
+    const decision = decideReconcile({
+      record,
+      head,
+      markerHash: at.markerHash,
+      force: at.isForced,
+      relation: (recorded, sha) => commitRelation(checkout, recorded, sha),
+      // The ledger id, as the record's `host` carries it; `host` is only what def_host says.
+      thisHost: hostId(),
+      project: project.name,
+    });
     return { decision, record: record?.id };
   };
   let judged = judge(readLedger(project));
