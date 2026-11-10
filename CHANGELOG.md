@@ -2,6 +2,19 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.131.0] - 2026-11-10
+
+### Changed
+
+- Every mail subject starts with `[darius] `: `[darius] <project>, <source>: 12 candles, 3 critical`, `[darius] <project>, <severity>: <title>`, `[darius] <project>, <ritual>: <outcome>`, and the test mails. A retry from a stored line gets the prefix once.
+- Candle mails and report mails share one HTML frame in the web app's dark theme: the night page, the surface card, parchment text, gold for the wordmark, headings and links, and the app's severity tones. A header holds the logo, the DARIUS wordmark and the project, over a gold hairline. The footer has an outlined button to the candle list or the run. Square corners, tables, inline styles and an explicit colour on every text, so Gmail and Apple Mail keep the look. The text bodies did not change.
+- The report mail's headings, tables, code and links use the theme colours.
+
+### Added
+
+- The darius logo in the HTML mail: the app's emblem as a PNG in `assets/email/`, rendered from `web/public/favicon.svg` by `web/scripts/mail-logo.ts`. The mail loads it from raw.githubusercontent.com, pinned to the release tag, so the bytes of a mail stay the same for one darius version. Opening a mail makes the mail client, or its image proxy, fetch that one PNG from GitHub.
+- `"logo": false` in `email.json` sends no image at all: only the text wordmark, and no request when a mail is opened. `email status` says "no logo", and its JSON has `logo`.
+
 ## [0.130.0] - 2026-11-10
 
 ### Changed

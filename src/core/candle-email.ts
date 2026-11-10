@@ -26,13 +26,14 @@
  * case, also with `%40`) and the provider's url. Then it is one line of at most
  * LINE_MAX characters, the cut the old text mail had.
  *
- * THE HTML. Inline styles only. No image, no script, no web font, no remote
- * resource. Square corners everywhere, and no left accent border. Every text
- * is escaped, and an href is built only from `web_url` and an encoded path.
+ * THE HTML sits in the shared shell (src/core/mail-shell.ts, 0.131.0): the
+ * app's dark theme, the logo and the wordmark. Every text is escaped, and an
+ * href is built only from `web_url` and an encoded path.
  */
 
 import { webLink, type EmailMessage, type EmailSettings } from "./email.ts";
-import { escapeHtml, scrubReportText } from "./report-email.ts";
+import { anchor, buttonLink, escapeHtml, FONT, mailHtml, prefixedSubject, SEVERITY_COLOR, SHELL_STYLE, THEME } from "./mail-shell.ts";
+import { scrubReportText } from "./report-email.ts";
 import { SEVERITIES, type Severity } from "./result.ts";
 
 /** Most candles a mail lists; the rest is a count. A digest of a big scan stays readable and bounded. */
@@ -135,15 +136,15 @@ function worstText(items: readonly CandleMailItem[]): string {
 }
 
 /**
- * The subject before the scrub: `[<project>] <source>: 12 candles, 3 critical`,
- * or for one candle `[<project>] <severity>: <title>` (`, raised` after the
- * severity when it was raised). Also the title of the alert, so a failed line
- * names the mail.
+ * The subject before the scrub: `[darius] <project>, <source>: 12 candles, 3
+ * critical`, or for one candle `[darius] <project>, <severity>: <title>`
+ * (`, raised` after the severity when it was raised). Also the title of the
+ * alert, so a failed line names the mail.
  */
 export function candleMailSubject(facts: CandleMailFacts): string {
   const [only] = facts.items;
-  if (facts.items.length === 1 && only !== undefined) return `[${facts.project}] ${only.severity}${only.isRaised ? ", raised" : ""}: ${only.title}`;
-  return `[${facts.project}] ${facts.source}: ${plural(facts.items.length, "candle")}, ${worstText(facts.items)}`;
+  if (facts.items.length === 1 && only !== undefined) return prefixedSubject(`${facts.project}, ${only.severity}${only.isRaised ? ", raised" : ""}: ${only.title}`);
+  return prefixedSubject(`${facts.project}, ${facts.source}: ${plural(facts.items.length, "candle")}, ${worstText(facts.items)}`);
 }
 
 /** The lead line before the scrub: the count and the project. Also the body of the alert. */
@@ -185,6 +186,8 @@ interface CleanGroup {
 interface CleanMail {
   subject: string;
   header: string;
+  /** The quiet line under the wordmark. */
+  project: string;
   lead: string;
   groups: CleanGroup[];
   more: string | null;
@@ -211,6 +214,7 @@ function cleanMail(settings: EmailSettings, facts: CandleMailFacts, recipients: 
   const mail: CleanMail = {
     subject: clean(candleMailSubject(facts), SUBJECT_MAX),
     header: clean(`darius, ${facts.project}`),
+    project: clean(facts.project),
     lead: clean(candleMailLead(facts)),
     groups,
     more: layout.more > 0 ? `and ${String(layout.more)} more in darius` : null,
@@ -242,62 +246,36 @@ function candleText(mail: CleanMail): string {
 
 // --- the HTML body ---------------------------------------------------------------------
 
-const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif";
-const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
-const INK = "#1f2328";
-const QUIET = "#59636e";
-const RULE = "#d0d7de";
-const LINK = "#0969da";
-
-/** One colour per severity, dark enough on white and still readable when a client inverts the mail. */
-const SEVERITY_COLOR = {
-  critical: "#b42318",
-  high: "#c2410c",
-  medium: "#9a6700",
-  low: "#0969da",
-  info: "#59636e",
-} as const satisfies Record<Severity, string>;
-
 const STYLE = {
-  body: "margin:0;padding:0;background-color:#f6f8fa;",
-  outer: "background-color:#f6f8fa;padding:16px 8px;",
-  card: `max-width:640px;margin:0 auto;background-color:#ffffff;border:1px solid ${RULE};padding:20px;font-family:${FONT};font-size:15px;line-height:1.5;color:${INK};`,
-  header: `margin:0 0 4px 0;font-size:13px;color:${QUIET};`,
-  lead: `margin:0 0 8px 0;font-size:17px;font-weight:600;line-height:1.35;color:${INK};`,
-  item: "padding:8px 0;border-top:1px solid #e6e8eb;",
-  title: "font-weight:600;word-break:break-word;",
-  link: `color:${LINK};text-decoration:underline;`,
-  target: `font-family:${MONO};font-size:13px;color:${QUIET};word-break:break-all;margin-top:2px;`,
-  raised: `display:inline-block;margin-left:6px;padding:0 5px;border:1px solid ${QUIET};font-size:11px;font-weight:600;line-height:1.6;color:${QUIET};vertical-align:1px;`,
-  more: `margin:16px 0 0 0;color:${QUIET};`,
-  footer: `margin-top:20px;padding-top:12px;border-top:1px solid ${RULE};font-size:13px;color:${QUIET};`,
+  item: `padding:11px 0 12px 0;border-top:1px solid ${THEME.rule};`,
+  title: `font-family:${FONT.sans};font-size:15px;font-weight:600;line-height:1.4;color:${THEME.text};word-break:break-word;`,
+  titleLink: `color:${THEME.text};text-decoration:underline;`,
+  target: `margin-top:3px;font-family:${FONT.mono};font-size:12px;line-height:1.45;color:${THEME.quiet};word-break:break-all;`,
+  raised: `display:inline-block;margin-left:8px;padding:1px 6px;border:1px solid ${THEME.quiet};font-family:${FONT.sans};font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;line-height:1.4;color:${THEME.quiet};vertical-align:2px;`,
+  more: `margin:14px 0 6px 0;font-family:${FONT.sans};font-size:14px;color:${THEME.quiet};`,
+  reason: `margin:0;${SHELL_STYLE.quiet}`,
 } as const;
 
 function headingStyle(severity: Severity): string {
-  return `margin:20px 0 4px 0;font-size:14px;font-weight:700;color:${SEVERITY_COLOR[severity]};`;
-}
-
-function anchor(href: string, label: string): string {
-  return `<a href="${escapeHtml(href)}" style="${STYLE.link}">${escapeHtml(label)}</a>`;
+  return `margin:22px 0 2px 0;font-family:${FONT.serif};font-size:12px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;line-height:1.3;color:${SEVERITY_COLOR[severity]};`;
 }
 
 function itemHtml(item: CleanItem): string {
-  const title = item.link === undefined ? escapeHtml(item.title) : anchor(item.link, item.title);
+  const title = item.link === undefined ? escapeHtml(item.title) : anchor(item.link, item.title, STYLE.titleLink);
   const raised = item.isRaised ? `<span style="${STYLE.raised}">raised</span>` : "";
   const target = item.target === undefined ? "" : `<div style="${STYLE.target}">${escapeHtml(item.target)}</div>`;
   return `<div style="${STYLE.item}"><div style="${STYLE.title}">${title}${raised}</div>${target}</div>`;
 }
 
-function candleHtml(mail: CleanMail): string {
-  const parts = [`<p style="${STYLE.header}">${escapeHtml(mail.header)}</p>`, `<p style="${STYLE.lead}">${escapeHtml(mail.lead)}</p>`];
+function candleHtml(mail: CleanMail, hasLogo: boolean): string {
+  const content = [`<p style="${SHELL_STYLE.lead}">${escapeHtml(mail.lead)}</p>`];
   for (const group of mail.groups) {
-    parts.push(`<h2 style="${headingStyle(group.severity)}">${escapeHtml(group.heading)}</h2>`, ...group.items.map((item) => itemHtml(item)));
+    content.push(`<h2 style="${headingStyle(group.severity)}">${escapeHtml(group.heading)}</h2>`, ...group.items.map((item) => itemHtml(item)));
   }
-  if (mail.more !== null) parts.push(`<p style="${STYLE.more}">${mail.listLink === undefined ? escapeHtml(mail.more) : anchor(mail.listLink, mail.more)}</p>`);
-  const list = mail.listLink === undefined ? [] : [anchor(mail.listLink, mail.listLabel)];
-  parts.push(`<div style="${STYLE.footer}">${[...list, escapeHtml(mail.why), escapeHtml(mail.turnOff)].join("<br>")}</div>`);
-  const head = `<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(mail.subject)}</title></head>`;
-  return `<!doctype html><html>${head}<body style="${STYLE.body}"><div style="${STYLE.outer}"><div style="${STYLE.card}">\n${parts.join("\n")}\n</div></div></body></html>`;
+  if (mail.more !== null) content.push(`<p style="${STYLE.more}">${mail.listLink === undefined ? escapeHtml(mail.more) : anchor(mail.listLink, mail.more)}</p>`);
+  const button = mail.listLink === undefined ? "" : buttonLink(mail.listLink, mail.listLabel);
+  const footer = `${button}<p style="${STYLE.reason}">${escapeHtml(mail.why)}<br>${escapeHtml(mail.turnOff)}</p>`;
+  return mailHtml({ subject: mail.subject, project: mail.project, preview: mail.lead, content: content.join("\n"), footer, hasLogo });
 }
 
 // --- the message -----------------------------------------------------------------------
@@ -310,7 +288,7 @@ function candleHtml(mail: CleanMail): string {
 export function candleMessage(settings: EmailSettings, facts: CandleMailFacts, key: string, recipients: readonly string[] = []): EmailMessage {
   const mail = cleanMail(settings, facts, recipients);
   const message: EmailMessage = { key, subject: mail.subject, text: candleText(mail) };
-  if (settings.html !== false) message.html = candleHtml(mail);
+  if (settings.html !== false) message.html = candleHtml(mail, settings.logo !== false);
   return message;
 }
 

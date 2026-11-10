@@ -111,7 +111,7 @@ function status(args: ParsedArgs): number {
   }
   if (found.problem !== null) console.log(`! email is not set up on ${hostId()}: ${found.problem}`);
   else if (!found.isSetUp) console.log(`· email is not set up on ${hostId()}: darius email set --stdin`);
-  else console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)} by default${found.html === false ? ", mail as text only" : ""}`);
+  else console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)} by default${found.html === false ? ", mail as text only" : ""}${found.html !== false && found.logo === false ? ", no logo" : ""}`);
   if (here.project !== undefined) console.log(projectLine(here.project));
   if (here.problem !== undefined) console.log(`! ${here.problem}`);
   return code;

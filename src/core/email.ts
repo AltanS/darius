@@ -4,7 +4,7 @@
  * JSON over `fetch` to an HTTP mail API, so no runtime dependency and no SMTP.
  *
  * SETTINGS. Per host, in `<config>/email.json`, read here and nowhere else:
- * `url`, `token`, `from`, `to[]`, `web_url?`, `since`, `html?`. The file is refused when
+ * `url`, `token`, `from`, `to[]`, `web_url?`, `since`, `html?`, `logo?`. The file is refused when
  * its group or others have any access, as src/core/credentials.ts does, and it
  * is written with mode 0600 from the first byte. The config dir is never
  * synced and never archived (src/core/store-scan.ts).
@@ -36,13 +36,14 @@ import { isLoopbackOrTailnet } from "./config.ts";
 import { GROUP_OTHER_BITS, isMaskedFile } from "./credentials.ts";
 import type { JsonValue } from "./model.ts";
 import { isEmailAddress } from "./email-address.ts";
+import { prefixedSubject, SUBJECT_PREFIX } from "./mail-shell.ts";
 import { configDir } from "./paths.ts";
 import { endpointHost, scrubForLedger } from "./redact.ts";
 
 const FILE_NAME = "email.json";
 /** A hung provider must not hold the sweep or the sync. */
 const TIMEOUT_MS = 15_000;
-const KNOWN_KEYS: readonly string[] = ["url", "token", "from", "to", "web_url", "since", "html"];
+const KNOWN_KEYS: readonly string[] = ["url", "token", "from", "to", "web_url", "since", "html", "logo"];
 /** One word of printable ASCII: anything else cannot go in a header, and `fetch` would quote it in its error. */
 const PRINTABLE_WORD = /^[!-~]+$/u;
 /** Anything in an error that reads as an address, also URL-encoded and in another case than the settings have it. */
@@ -64,6 +65,11 @@ export interface EmailSettings {
    * does not know. Absent: true.
    */
   html?: boolean;
+  /**
+   * `false` (0.131.0): the HTML has no `<img>` for the logo, only the text
+   * wordmark, so opening a mail makes no request to GitHub. Absent: true.
+   */
+  logo?: boolean;
 }
 
 /** What may be said about the channel: no token, no address, no path of the url. */
@@ -76,6 +82,8 @@ export interface EmailStatus {
   since: string | null;
   /** Whether a report or candle mail carries `html` (0.127.0, 0.130.0). Null when the channel is not set up. */
   html: boolean | null;
+  /** Whether the HTML shows the logo from GitHub (0.131.0). Null when the channel is not set up. */
+  logo: boolean | null;
   /** Why the file is refused, in words that quote no value. Null when it is absent or good. */
   problem: string | null;
 }
@@ -169,7 +177,7 @@ function textsOf(list: readonly JsonValue[]): string[] {
 function checkedSettings(raw: JsonValue, where: string): EmailSettings {
   if (!isRecord(raw)) throw new Error(`${where} must be a JSON object`);
   if (Object.keys(raw).some((key) => !KNOWN_KEYS.includes(key))) throw new Error(`${where} has an unknown key; it takes only ${KNOWN_KEYS.join(", ")}`);
-  const { url, token, from, to, web_url: webUrl, since, html } = raw;
+  const { url, token, from, to, web_url: webUrl, since, html, logo } = raw;
   checkProviderUrl(url, where);
   if (!isText(url)) throw new Error(`${where}: url must be a URL`);
   if (!isText(token) || !PRINTABLE_WORD.test(token)) throw new Error(`${where}: token must be one word of printable characters`);
@@ -181,8 +189,10 @@ function checkedSettings(raw: JsonValue, where: string): EmailSettings {
   if (badEntry !== -1) throw new Error(`${where}: to[${String(badEntry)}] must be an email address`);
   if (!isText(since) || Number.isNaN(Date.parse(since))) throw new Error(`${where}: since must be a date and time`);
   if (html !== undefined && html !== true && html !== false) throw new Error(`${where}: html must be true or false`);
+  if (logo !== undefined && logo !== true && logo !== false) throw new Error(`${where}: logo must be true or false`);
   const settings: EmailSettings = { url, token, from, to: textsOf(list), since: new Date(since).toISOString() };
   if (html !== undefined) settings.html = html;
+  if (logo !== undefined) settings.logo = logo;
   if (webUrl === undefined) return settings;
   checkWebUrl(webUrl, where);
   if (!isText(webUrl)) throw new Error(`${where}: web_url must be a URL`);
@@ -252,10 +262,10 @@ export function writeEmailSettings(settings: EmailSettings): void {
 export function emailStatus(): EmailStatus {
   try {
     const settings = readEmailSettings();
-    if (settings === null) return { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: null };
-    return { isSetUp: true, host: endpointHost(settings.url), recipients: settings.to.length, since: settings.since, html: settings.html !== false, problem: null };
+    if (settings === null) return { isSetUp: false, host: null, recipients: 0, since: null, html: null, logo: null, problem: null };
+    return { isSetUp: true, host: endpointHost(settings.url), recipients: settings.to.length, since: settings.since, html: settings.html !== false, logo: settings.logo !== false, problem: null };
   } catch (cause) {
-    return { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: errorMessage(cause) };
+    return { isSetUp: false, host: null, recipients: 0, since: null, html: null, logo: null, problem: errorMessage(cause) };
   }
 }
 
@@ -295,7 +305,8 @@ function messageOf(settings: EmailSettings, notice: EmailNotice): EmailMessage {
   const hide = [settings.url];
   const lines = notice.body.split("\n").map((line) => scrubForLedger(line, hide));
   const link = webLink(settings, notice.url);
-  return { key: notice.key, subject: scrubForLedger(notice.title, hide), text: [...lines, ...(link === undefined ? [] : [`Link: ${link}`])].join("\n") };
+  const title = notice.title.startsWith(SUBJECT_PREFIX) ? notice.title : prefixedSubject(notice.title);
+  return { key: notice.key, subject: scrubForLedger(title, hide), text: [...lines, ...(link === undefined ? [] : [`Link: ${link}`])].join("\n") };
 }
 
 /**

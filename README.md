@@ -764,8 +764,9 @@ darius email test --project acme-web   # sends to that project's recipients (wit
   notice at most three times. Each try sends the same bytes.
 - One ledger line that lights or raises candles gives one mail. A run that reports 12 candles sends one mail
   with all 12.
-- The subject says the project, the source and the weight: `[acme-web] cve-scan: 12 candles, 3 critical`.
-  For one candle it is `[acme-web] high: <title>`.
+- Every subject darius sends starts with `[darius]`. A candle mail's subject then says the project, the source
+  and the weight: `[darius] acme-web, cve-scan: 12 candles, 3 critical`. For one candle it is
+  `[darius] acme-web, high: <title>`, with `, raised` after the severity when the line raised it.
 - The mail lists every candle, up to 50, grouped by severity, worst first. Each group has a heading with its
   count, such as `Critical (3)`. Inside a group the candles are sorted by key. A line "and N more in darius"
   stands for the rest. Each candle is its title, with its target on a second, quieter line. A raised candle
@@ -773,6 +774,13 @@ darius email test --project acme-web   # sends to that project's recipients (wit
 - A mail has a text body and an HTML body with the same content. In the HTML each title links to its candle
   page, and the footer links to the project's candle list, when `web_url` is set. The text has only the list
   link. `"html": false` sends the text only.
+- The HTML looks like the web app: a dark card in the app's colours, with the darius logo, the DARIUS wordmark
+  and the project in the header. Candle mails and report mails share this frame.
+- **The logo is an image on GitHub.** It is the app's emblem as a PNG in this repo, at
+  `https://raw.githubusercontent.com/AltanS/darius/v<version>/assets/email/gem-96.png`, pinned to the release
+  tag. When you open a mail, your mail client (or its image proxy, as in Gmail) fetches that one PNG from
+  GitHub. Add `"logo": false` to the settings to send no image at all: the wordmark stays as text, and opening
+  a mail makes no request. `email status` then says "no logo".
 - The footer says why you get the mail and how to turn it off (`candle_deliver` on the ritual, or the
   `--deliver` of `candle light`). It prints no address.
 - A message holds titles, severities, the project, the source, targets and links. It never holds a candle
@@ -792,7 +800,7 @@ To use the channel, name it: `candle light --deliver email`, or `candle_deliver 
 
 ### Mail recipients per project
 
-The channel belongs to the host: `url`, `token`, `from`, `web_url`, `since` and `html` stay in its
+The channel belongs to the host: `url`, `token`, `from`, `web_url`, `since`, `html` and `logo` stay in its
 `email.json`. Who gets a project's mail belongs to the project. Name the recipients in its `.darius.toml`, and
 commit it:
 
@@ -845,13 +853,14 @@ report_deliver = ["email"]
   the channel or the recipients.
 - A run that completed before `since`, or more than a day before the send, sends nothing. So adding the key
   does not mail old runs.
-- The subject is `[<project>] <ritual title>: <summary>`. The summary comes from the run's result block, or
-  is `complete`. The subject is one line of at most 200 characters.
+- The subject is `[darius] <project>, <ritual title>: <summary>`. The summary comes from the run's result
+  block, or is `complete`. The subject is one line of at most 200 characters.
 - The text is the findings as the run wrote them, then a footer: project, ritual, run id, finished time, and a
   link to the run page when `web_url` is set. A run with no findings text says so in one line.
 - The HTML is the same content, rendered from the markdown: headings, lists, tables, code, bold and italic.
-  Every text is escaped. There are no images and no scripts. A `[label](url)` link stays a link only for an
-  http or https url.
+  It sits in the same dark frame as a candle mail, with the logo (unless `"logo": false`) and a button that
+  opens the run. Every text is escaped. The logo is the only image, and there are no scripts. A
+  `[label](url)` link stays a link only for an http or https url.
 
 The provider receives:
 
@@ -859,7 +868,7 @@ The provider receives:
 {
   "from": "darius@example.com",
   "to": ["you@example.com"],
-  "subject": "[acme-web] Daily report: 37 pages checked; 1 critical fixed.",
+  "subject": "[darius] acme-web, Daily report: 37 pages checked; 1 critical fixed.",
   "text": "# Daily report\n\n37 pages checked.\n\n-- \nProject: acme-web\nRitual: Daily report (daily-report)\nRun: 01JZ8Q4V6T3M2K9X7B5N1R0WCE\nFinished: 2026-11-09T05:04:12.000Z\nLink: https://darius.example.com/w/acme-web/runs/01JZ8Q4V6T3M2K9X7B5N1R0WCE\n",
   "html": "<!doctype html><html>...</html>"
 }

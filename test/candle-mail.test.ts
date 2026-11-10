@@ -46,7 +46,7 @@ test("the cap: at most 50 candles, worst first, then one line for the rest, in t
   assert.match(message.text, /^and 10 more in darius$/mu);
   assert.equal([...(message.html ?? "").matchAll(/>Problem k-/gu)].length, 50);
   assert.match(message.html ?? "", />and 10 more in darius<\/a>/u);
-  assert.equal(message.subject, "[demo] scan: 60 candles, 45 high");
+  assert.equal(message.subject, "[darius] demo, scan: 60 candles, 45 high");
 });
 
 test("a group past the cap is left out, and so is an empty one", () => {
@@ -60,14 +60,14 @@ test("a group past the cap is left out, and so is an empty one", () => {
 
 test("one candle: the subject names its severity and title, capped; the body has the same layout", () => {
   const one = candleMessage(settings(), facts([item("only", "medium", { target: "web/package.json" })]), "k");
-  assert.equal(one.subject, "[demo] medium: Problem only");
+  assert.equal(one.subject, "[darius] demo, medium: Problem only");
   assert.match(one.text, /^A medium candle was lit in demo, from scan\.$/mu);
   assert.match(one.text, /^Medium \(1\)\n- Problem only\n {4}web\/package\.json$/mu);
   const long = candleMessage(settings(), facts([item("long", "high", { title: "x".repeat(500) })]), "k");
   assert.equal(long.subject.length, 200);
   assert.ok(long.subject.endsWith("..."));
   assert.match(long.text, /^- x{297}\.\.\.$/mu, "a title line is cut at 300 characters, as before");
-  assert.equal(candleMailSubject(facts([item("r", "critical", { isRaised: true })])), "[demo] critical, raised: Problem r");
+  assert.equal(candleMailSubject(facts([item("r", "critical", { isRaised: true })])), "[darius] demo, critical, raised: Problem r");
 });
 
 test("html false sends no html, and the provider gets no html field", () => {
@@ -85,9 +85,10 @@ test("the html escapes a title with a script tag and quotes, and holds no active
   assert.ok(html.includes("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39; &lt;img src=x onerror=1&gt;"));
   assert.ok(html.includes("&lt;b&gt;&quot;t&quot;&lt;/b&gt;"));
   assert.ok(html.includes('href="https://darius.example.com/w/demo/candles/k%22%3E%3Cscript%3E"'), "the key is encoded in the href");
-  for (const banned of ["<script", "<img", "<link", "<style", "@import", "url(", "border-radius", "border-left", "http://", "\u2014"]) {
+  for (const banned of ["<script", "<img src=x", "<link", "<style", "@import", "url(", "border-radius", "border-left", "http://", "\u2014"]) {
     assert.equal(html.toLowerCase().includes(banned), false, `the html holds ${banned}`);
   }
+  assert.deepEqual(html.match(/<img [^>]*>/gu)?.length, 1, "one image: the logo");
   assert.equal(message.text.includes("\u2014"), false, "no em dash in the text");
 });
 
@@ -124,6 +125,6 @@ test("the sample spans three severities and no real name", () => {
   const sample = sampleCandleFacts("host-a");
   assert.deepEqual([...new Set(sample.items.map((one) => one.severity))], ["critical", "high", "medium"]);
   const message = candleMessage(settings(), sample, "email-test:x");
-  assert.match(message.subject, /^\[example\] email test on host-a: 7 candles, 2 critical$/u);
+  assert.match(message.subject, /^\[darius\] example, email test on host-a: 7 candles, 2 critical$/u);
   assertClean(`${message.text}${message.html ?? ""}`, "the sample");
 });

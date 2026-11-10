@@ -20,7 +20,9 @@
  * or another address, stays in the text.
  *
  * THE HTML. The findings go through the web app's markdown parser
- * (src/web/markdown.ts), and each block becomes a few tags with inline styles.
+ * (src/web/markdown.ts), and each block becomes a few tags with inline styles
+ * in the app's dark theme, inside the shared shell (src/core/mail-shell.ts,
+ * 0.131.0) with the logo and the wordmark.
  * Every text is escaped. There are no images, no scripts and no raw HTML. A
  * link is `[label](url)` with an http or https url, and becomes a plain
  * `<a href>`; any other link keeps its label as text and drops the url.
@@ -29,6 +31,7 @@
 import type { MdBlock, MdLine, MdList } from "../web/api.ts";
 import { parseMarkdown } from "../web/markdown.ts";
 import { emailStatus, webLink, type EmailMessage, type EmailSettings } from "./email.ts";
+import { anchor, buttonLink, escapeHtml, FONT, mailHtml, prefixedSubject, SHELL_STYLE, THEME } from "./mail-shell.ts";
 import { findMarker } from "./marker.ts";
 import { maskSecrets } from "./mask-secrets.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
@@ -160,11 +163,11 @@ function cleanFindings(facts: ReportFacts, settings: EmailSettings): string | nu
   return text.length > FINDINGS_MAX ? `${text.slice(0, FINDINGS_MAX)}\n\n${CUT_NOTE}` : text;
 }
 
-/** The subject: `[<project>] <ritual>: <outcome>`, where the outcome is the result's summary or "complete". */
+/** The subject: `[darius] <project>, <ritual>: <outcome>`, where the outcome is the result's summary or "complete". */
 export function reportSubject(facts: ReportFacts, settings: EmailSettings): string {
   const summary = facts.summary === null ? "" : capLine(maskSecrets(scrubReportText(facts.summary, settings)), OUTCOME_MAX);
   const outcome = summary === "" ? "complete" : summary;
-  return capLine(scrubReportText(`[${facts.project}] ${facts.title}: ${outcome}`, settings), SUBJECT_MAX);
+  return capLine(scrubReportText(prefixedSubject(`${facts.project}, ${facts.title}: ${outcome}`), settings), SUBJECT_MAX);
 }
 
 interface Footer {
@@ -189,32 +192,29 @@ export function reportMessage(settings: EmailSettings, facts: ReportFacts, key: 
   const footerText = [...footer.lines, ...(footer.link === undefined ? [] : [`Link: ${footer.link}`])].join("\n");
   const text = `${findings ?? NO_FINDINGS}\n\n-- \n${footerText}\n`;
   const message: EmailMessage = { key, subject: reportSubject(facts, settings), text };
-  if (settings.html !== false) message.html = reportHtml(findings, footer);
+  if (settings.html !== false) message.html = reportHtml({ findings, footer, subject: message.subject, project: capLine(scrubReportText(`${facts.project}, ${facts.title}`, settings), SUBJECT_MAX), hasLogo: settings.logo !== false });
   return message;
 }
 
 // --- the HTML -----------------------------------------------------------------------------
 
-const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 const STYLE = {
-  body: "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1f2328;margin:0;padding:16px;",
-  p: "margin:0 0 12px 0;",
-  list: "margin:0 0 12px 0;padding-left:24px;",
-  nested: "margin-left:20px;",
-  code: `font-family:${MONO};font-size:13px;background:#f3f4f6;padding:1px 4px;`,
-  pre: `font-family:${MONO};font-size:13px;background:#f3f4f6;padding:12px;margin:0 0 12px 0;white-space:pre-wrap;word-break:break-word;`,
+  p: `margin:0 0 12px 0;color:${THEME.text};`,
+  list: `margin:0 0 12px 0;padding-left:24px;color:${THEME.text};`,
+  item: `color:${THEME.text};`,
+  nested: `margin-left:20px;color:${THEME.text};`,
+  code: `font-family:${FONT.mono};font-size:13px;background-color:${THEME.raised};color:${THEME.text};padding:1px 4px;`,
+  pre: `font-family:${FONT.mono};font-size:13px;line-height:1.45;background-color:${THEME.deep};color:${THEME.text};border:1px solid ${THEME.rule};padding:12px;margin:0 0 12px 0;white-space:pre-wrap;word-break:break-word;`,
   table: "border-collapse:collapse;margin:0 0 12px 0;",
-  cell: "border:1px solid #d0d7de;padding:4px 8px;text-align:left;vertical-align:top;",
-  link: "color:#0969da;",
-  footer: "margin-top:24px;padding-top:12px;border-top:1px solid #d0d7de;font-size:13px;color:#59636e;",
+  cell: `border:1px solid ${THEME.rule};padding:4px 8px;text-align:left;vertical-align:top;color:${THEME.text};`,
+  head: `border:1px solid ${THEME.rule};padding:4px 8px;text-align:left;vertical-align:top;color:${THEME.gold};font-family:${FONT.serif};font-weight:700;`,
+  link: SHELL_STYLE.link,
+  footerLine: `margin:0;${SHELL_STYLE.quiet}`,
 } as const;
 const HEADING_SIZES = [22, 19, 17, 15, 15, 15] as const;
 const CHECK_TEXT = { done: "[x]", open: "[ ]", doing: "[~]", blocked: "[!]", skipped: "[-]" } as const;
 const LINK = /\[([^\]\n]+)\]\(([^()\s]+)\)/gu;
 
-export function escapeHtml(text: string): string {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
-}
 
 function isWebUrl(text: string): boolean {
   try {
@@ -225,9 +225,6 @@ function isWebUrl(text: string): boolean {
   }
 }
 
-function anchor(href: string, label: string): string {
-  return `<a href="${escapeHtml(href)}" style="${STYLE.link}">${escapeHtml(label)}</a>`;
-}
 
 /** Plain text with `[label](url)` links: an http or https url becomes an anchor, any other keeps the label only. */
 function textHtml(text: string): string {
@@ -260,7 +257,7 @@ function listHtml(block: MdList): string {
   const items = block.items.map((item, index) => {
     const check = block.checks?.[index];
     const box = check === undefined || check === null ? "" : `${CHECK_TEXT[check]} `;
-    const style = block.nested?.[index] === true ? ` style="${STYLE.nested}"` : "";
+    const style = ` style="${block.nested?.[index] === true ? STYLE.nested : STYLE.item}"`;
     return `<li${style}>${escapeHtml(box)}${lineHtml(item)}</li>`;
   });
   return `<${tag}${start} style="${STYLE.list}">${items.join("")}</${tag}>`;
@@ -271,14 +268,14 @@ function blockHtml(block: MdBlock): string {
     case "heading": {
       const level = Math.min(Math.max(block.level, 1), 6);
       const size = HEADING_SIZES[level - 1] ?? 15;
-      return `<h${String(level)} style="margin:16px 0 8px 0;font-size:${String(size)}px;line-height:1.3;">${lineHtml(block.content)}</h${String(level)}>`;
+      return `<h${String(level)} style="margin:18px 0 8px 0;font-family:${FONT.serif};font-weight:700;font-size:${String(size)}px;line-height:1.3;letter-spacing:0.02em;color:${THEME.gold};">${lineHtml(block.content)}</h${String(level)}>`;
     }
     case "paragraph":
       return `<p style="${STYLE.p}">${block.lines.map((line) => lineHtml(line)).join("<br>")}</p>`;
     case "list":
       return listHtml(block);
     case "table": {
-      const head = `<tr>${block.head.map((cell) => `<th style="${STYLE.cell}">${lineHtml(cell)}</th>`).join("")}</tr>`;
+      const head = `<tr>${block.head.map((cell) => `<th style="${STYLE.head}">${lineHtml(cell)}</th>`).join("")}</tr>`;
       const rows = block.rows.map((row) => `<tr>${row.map((cell) => `<td style="${STYLE.cell}">${lineHtml(cell)}</td>`).join("")}</tr>`);
       return `<table style="${STYLE.table}">${head}${rows.join("")}</table>`;
     }
@@ -294,11 +291,20 @@ export function markdownHtml(markdown: string): string {
     .join("\n");
 }
 
-function reportHtml(findings: string | null, footer: Footer): string {
-  const content = findings === null ? `<p style="${STYLE.p}">${escapeHtml(NO_FINDINGS)}</p>` : markdownHtml(findings);
-  const link = footer.link === undefined ? [] : [anchor(footer.link, "Open the run")];
-  const foot = [...footer.lines.map((line) => escapeHtml(line)), ...link].join("<br>");
-  return `<!doctype html><html><head><meta charset="utf-8"></head><body style="${STYLE.body}">${content}\n<div style="${STYLE.footer}">${foot}</div></body></html>`;
+interface ReportHtmlParts {
+  findings: string | null;
+  footer: Footer;
+  subject: string;
+  /** The quiet line under the wordmark: project and ritual. */
+  project: string;
+  hasLogo: boolean;
+}
+
+function reportHtml(parts: ReportHtmlParts): string {
+  const content = parts.findings === null ? `<p style="${STYLE.p}">${escapeHtml(NO_FINDINGS)}</p>` : markdownHtml(parts.findings);
+  const button = parts.footer.link === undefined ? "" : buttonLink(parts.footer.link, "Open the run");
+  const footer = `${button}<p style="${STYLE.footerLine}">${parts.footer.lines.map((line) => escapeHtml(line)).join("<br>")}</p>`;
+  return mailHtml({ subject: parts.subject, project: parts.project, preview: parts.subject, content, footer, hasLogo: parts.hasLogo });
 }
 
 // --- the sample and the doctor note --------------------------------------------------------

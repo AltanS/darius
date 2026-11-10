@@ -155,7 +155,7 @@ test("the request: POST to the url, bearer token, hashed idempotency key, exactl
   assert.deepEqual(Object.keys(sent()).toSorted(), ["from", "subject", "text", "to"]);
   assert.equal(sent().from, FROM);
   assert.deepEqual(sent().to, TO);
-  assert.equal(sent().subject, NOTICE.title);
+  assert.equal(sent().subject, `[darius] ${NOTICE.title}`, "every subject starts with [darius] (0.131.0)");
   assert.equal(sent().text, NOTICE.body);
 });
 
@@ -169,7 +169,7 @@ test("the link comes only with web_url, and a trailing slash gives no double sla
 test("the title and each body line pass the redaction: the provider's url is cut and the lines stay", async () => {
   const url = `${origin}${API_PATH}`;
   await sendEmail(settings(), { ...NOTICE, title: `candle:\nsee ${url}`, body: `Severity: high\nTarget: ${url}` });
-  assert.equal(sent().subject, "candle: see 127.0.0.1");
+  assert.equal(sent().subject, "[darius] candle: see 127.0.0.1");
   assert.equal(sent().text, "Severity: high\nTarget: 127.0.0.1");
 });
 
@@ -246,7 +246,7 @@ test("a hung provider cannot hold the send: the timeout ends it", async () => {
 
 test("without the file the channel is not set up, and that is no problem", () => {
   assert.equal(readEmailSettings(), null);
-  assert.deepEqual(emailStatus(), { isSetUp: false, host: null, recipients: 0, since: null, html: null, problem: null });
+  assert.deepEqual(emailStatus(), { isSetUp: false, host: null, recipients: 0, since: null, html: null, logo: null, problem: null });
 });
 
 test("a file its group or others can read is refused, and an owner-only one passes", () => {
@@ -346,7 +346,7 @@ test("since is set to now when absent, kept when given, and made the form ledger
 test("the status holds no secret", () => {
   writeEmailSettings(settings({ web_url: "https://darius.example.com" }));
   const status = emailStatus();
-  assert.deepEqual(status, { isSetUp: true, host: "127.0.0.1", recipients: 2, since: settings().since, html: true, problem: null });
+  assert.deepEqual(status, { isSetUp: true, host: "127.0.0.1", recipients: 2, since: settings().since, html: true, logo: true, problem: null });
   assertClean(JSON.stringify(status), "the status");
 });
 
@@ -416,7 +416,7 @@ test("email test sends one message; a failure exits 1 with a clean line; no setu
   const good = await email(["test"]);
   assert.equal(good.code, 0);
   assert.equal(stub.received.length, 1);
-  assert.match(sent().subject, /^\[example\] email test on host-a: 7 candles, 2 critical$/u, "a sample candle mail (0.130.0)");
+  assert.match(sent().subject, /^\[darius\] example, email test on host-a: 7 candles, 2 critical$/u, "a sample candle mail (0.130.0), prefixed (0.131.0)");
   assert.match(sent().text, /^Critical \(2\)$/mu);
   assert.match(sent().html ?? "", /<h2 [^>]*>High \(3\)<\/h2>/u, "with html by default");
   assert.match(good.stdout, /took a test for 2 recipients: a sample candle mail, text and html/u);

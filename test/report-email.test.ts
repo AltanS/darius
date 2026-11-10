@@ -202,14 +202,14 @@ test("a complete run of an opted-in ritual sends one mail with the headers, the 
     assert.deepEqual(Object.keys(sent), ["from", "to", "subject", "text", "html"]);
     assert.equal(sent.from, FROM);
     assert.deepEqual(sent.to, TO);
-    assert.equal(sent.subject, "[acme-web] Daily report: 12 pages checked; 1 link fixed.");
+    assert.equal(sent.subject, "[darius] acme-web, Daily report: 12 pages checked; 1 link fixed.");
     const finished = lines(project, "run.completed")[0]?.at ?? "";
     const link = `https://darius.example.com/w/acme-web/runs/${run}`;
     assert.equal(sent.text, `${FINDINGS.trimEnd()}\n\n-- \nProject: acme-web\nRitual: Daily report (daily)\nRun: ${run}\nFinished: ${finished}\nLink: ${link}\n`);
     assert.equal(sent.text.includes("darius-result"), false, "the result block is not mailed");
     assert.match(sent.html ?? "", /<h1 [^>]*>Daily report<\/h1>/u);
     assert.match(sent.html ?? "", /<strong>One<\/strong>/u);
-    assert.match(sent.html ?? "", /<ul [^>]*><li>page 3<\/li><li>page 7<\/li><\/ul>/u);
+    assert.match(sent.html ?? "", /<ul [^>]*><li [^>]*>page 3<\/li><li [^>]*>page 7<\/li><\/ul>/u);
     assert.ok(sent.html?.includes(`<a href="${link}"`), "the html links the run page");
 
     const [sentLine] = lines(project, "alert.sent");
@@ -274,7 +274,7 @@ test("a run with no findings and no result says so in one line, and the subject 
     ritual(project, "check", ["email"], "check");
     const line = completed(project, "check");
     await flushAlerts({ projects: [project.name] });
-    assert.equal(mail().subject, "[bare] check: complete");
+    assert.equal(mail().subject, "[darius] bare, check: complete");
     assert.equal(mail().text, `The run left no findings text.\n\n-- \nProject: bare\nRitual: check\nRun: ${String(line.run)}\nFinished: ${line.at}\n`);
     assert.match(mail().html ?? "", /The run left no findings text\./u);
   });
@@ -378,7 +378,7 @@ test("the token, the addresses, the provider's url and obvious keys are scrubbed
         assert.equal(part.includes(secret), false, `holds ${secret}: ${part}`);
       }
     }
-    assert.equal(sent.subject, "[scrub] Daily report: Checked with [token]");
+    assert.equal(sent.subject, "[darius] scrub, Daily report: Checked with [token]");
     assert.match(sent.text, /The token is \[token\], encoded \[token\]\./u);
     assert.match(sent.text, /Mail went to \[address\] and \[address\]\./u);
     assert.match(sent.text, /The provider is 127\.0\.0\.1 at \/\.\.\./u);
@@ -424,7 +424,7 @@ test("email test --report sends one sample with text and html; html false sends 
   assert.match(human.stdout, /took a sample report for 2 recipients, text and html/u);
   assert.equal(provider.received.length, 1);
   const sent = mail();
-  assert.equal(sent.subject, "[example] Sample report: a sample report from host-a");
+  assert.equal(sent.subject, "[darius] example, Sample report: a sample report from host-a");
   assert.match(sent.text, /^# Sample report/u);
   assert.match(sent.html ?? "", /<table /u);
   assert.equal(readLedger(openProject("example", { create: true })).length, 0, "no ledger line");

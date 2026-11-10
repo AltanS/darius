@@ -466,7 +466,7 @@ test("a candle notice goes out by email: the text, the hashed key and a recipien
     assert.equal(mail?.idempotencyKey, createHash("sha256").update(key).digest("hex"));
     assert.equal(mail?.message.from, MAIL_FROM);
     assert.deepEqual(mail?.message.to, MAIL_TO);
-    assert.equal(mail?.message.subject, "[fa-mail] high: Vulnerable dependency");
+    assert.equal(mail?.message.subject, "[darius] fa-mail, high: Vulnerable dependency");
     assert.equal(
       mail?.message.text,
       [
@@ -518,7 +518,7 @@ test("a raised candle says so, and a run with many candles sends one mail with n
     await flushAlerts({ projects: [project.name] });
     assert.equal(service.mail.length, 1);
     const message = service.mail[0]?.message;
-    assert.equal(message?.subject, "[fa-mail-many] scan: 5 candles, 5 high");
+    assert.equal(message?.subject, "[darius] fa-mail-many, scan: 5 candles, 5 high");
     for (const key of ["a", "b", "c", "d", "e"]) assert.match(message?.text ?? "", new RegExp(`^- Candle ${key}\\n    t-${key}$`, "mu"), "every candle, not three");
     assert.match(message?.text ?? "", /^Turn it off: candle_deliver on the ritual scan\.$/mu);
     assert.equal(JSON.stringify(message).includes("THE-DETAIL"), false);
@@ -527,9 +527,9 @@ test("a raised candle says so, and a run with many candles sends one mail with n
     light(single, "k", { deliver: ["email"], severity: "low" });
     light(single, "k", { deliver: ["email"], severity: "critical" });
     await flushAlerts({ projects: [single.name] });
-    assert.equal(service.mail[1]?.message.subject, "[fa-mail-raise] low: Candle k");
+    assert.equal(service.mail[1]?.message.subject, "[darius] fa-mail-raise, low: Candle k");
     assert.match(service.mail[1]?.message.text ?? "", /^- Candle k$/mu);
-    assert.equal(service.mail[2]?.message.subject, "[fa-mail-raise] critical, raised: Candle k");
+    assert.equal(service.mail[2]?.message.subject, "[darius] fa-mail-raise, critical, raised: Candle k");
     assert.match(service.mail[2]?.message.text ?? "", /^A candle in fa-mail-raise was raised to critical, from ci:nightly\.$/mu);
     assert.match(service.mail[2]?.message.text ?? "", /^- Candle k \(raised\)$/mu);
     assert.match(service.mail[2]?.message.html ?? "", />raised<\/span>/u);
@@ -586,7 +586,7 @@ test("a digest of 12 candles: every candle in the mail, grouped worst first and 
     assert.equal(service.mail.length, 1);
     const message = service.mail[0]?.message;
     assert.equal(service.mail[0]?.idempotencyKey, createHash("sha256").update(`line:${line.id}:email`).digest("hex"));
-    assert.equal(message?.subject, "[fa-mail-digest] cve-scan: 12 candles, 3 critical");
+    assert.equal(message?.subject, "[darius] fa-mail-digest, cve-scan: 12 candles, 3 critical");
     const text = message?.text ?? "";
     const html = message?.html ?? "";
     const order = ["c-1", "c-2", "c-3", "h-1", "h-2", "h-3", "h-4", "h-5", "m-1", "m-2", "m-3", "m-4"];
@@ -620,7 +620,7 @@ test("a provider that fails and echoes the request leaves a scrubbed alert.faile
     assert.equal(failures(project, key)[0]?.error, "127.0.0.1 answered 500");
     assert.equal(failures(project, key)[0]?.channel, "email");
     assert.equal(service.mail[2]?.idempotencyKey, service.mail[0]?.idempotencyKey, "the same notice, so the provider can drop a double");
-    assert.equal(service.mail[2]?.message.subject, "[fa-mail-fail] high: Candle k", "a retry keeps the email text");
+    assert.equal(service.mail[2]?.message.subject, "[darius] fa-mail-fail, high: Candle k", "a retry keeps the email text");
     assert.deepEqual(service.mail[2]?.message, service.mail[0]?.message, "every try sends the same bytes");
     assertStoreClean();
   });
@@ -644,7 +644,7 @@ test("lines before since are not emailed, and leave no trace", async () => {
   await withEmail(emailSettings({ since: tick() }), async () => {
     const fresher = light(project, "new", { deliver: ["email"] });
     await flushAlerts({ projects: [project.name] });
-    assert.deepEqual(service.mail.map((mail) => mail.message.subject), ["[fa-mail-since] high: Candle new"]);
+    assert.deepEqual(service.mail.map((mail) => mail.message.subject), ["[darius] fa-mail-since, high: Candle new"]);
     assert.deepEqual(lines(project, "alert.sent").map((line) => line.key), [`line:${fresher.id}:email`]);
     assert.equal(readLedger(project).some((line) => line.key === `line:${old.id}:email`), false);
   });
