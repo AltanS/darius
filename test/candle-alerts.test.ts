@@ -44,7 +44,7 @@ interface FakeService {
   /** The HTTP status the next sends get. */
   status: number;
   /** What reached the mail path. */
-  mail: Array<{ idempotencyKey: string; message: { from: string; to: string[]; subject: string; text: string } }>;
+  mail: Array<{ idempotencyKey: string; message: { from: string; to: string[]; subject: string; text: string; html?: string } }>;
   /** The HTTP status the next mails get. An error echoes the request. */
   mailStatus: number;
 }
@@ -466,8 +466,27 @@ test("a candle notice goes out by email: the text, the hashed key and a recipien
     assert.equal(mail?.idempotencyKey, createHash("sha256").update(key).digest("hex"));
     assert.equal(mail?.message.from, MAIL_FROM);
     assert.deepEqual(mail?.message.to, MAIL_TO);
-    assert.equal(mail?.message.subject, "candle: Vulnerable dependency");
-    assert.equal(mail?.message.text, ["Severity: high", "Project: fa-mail", "Target: web/package.json", "Link: https://darius.example.com/w/fa-mail/candles/dep%2Fcve%201"].join("\n"));
+    assert.equal(mail?.message.subject, "[fa-mail] high: Vulnerable dependency");
+    assert.equal(
+      mail?.message.text,
+      [
+        "darius, fa-mail",
+        "",
+        "A high candle was lit in fa-mail, from ci:nightly.",
+        "",
+        "High (1)",
+        "- Vulnerable dependency",
+        "    web/package.json",
+        "",
+        "All candles in fa-mail: https://darius.example.com/w/fa-mail/candles",
+        "",
+        "-- ",
+        "You get this because fa-mail names you in its .darius.toml, or this host's email.json does.",
+        "Turn it off: the --deliver list of the darius candle light call that lit it.",
+        "",
+      ].join("\n"),
+    );
+    assert.match(mail?.message.html ?? "", /<a href="https:\/\/darius\.example\.com\/w\/fa-mail\/candles\/dep%2Fcve%201" [^>]*>Vulnerable dependency<\/a>/u, "the item links its own candle page");
     const [sentLine] = lines(project, "alert.sent");
     assert.equal(sentLine?.key, key);
     assert.equal(sentLine?.channel, "email");
@@ -499,16 +518,93 @@ test("a raised candle says so, and a run with many candles sends one mail with n
     await flushAlerts({ projects: [project.name] });
     assert.equal(service.mail.length, 1);
     const message = service.mail[0]?.message;
-    assert.equal(message?.subject, "5 candles in scan");
-    assert.equal(message?.text, ["Project: fa-mail-many", "1. high: Candle a, t-a", "2. high: Candle b, t-b", "3. high: Candle c, t-c", "and 2 more"].join("\n"));
+    assert.equal(message?.subject, "[fa-mail-many] scan: 5 candles, 5 high");
+    for (const key of ["a", "b", "c", "d", "e"]) assert.match(message?.text ?? "", new RegExp(`^- Candle ${key}\\n    t-${key}$`, "mu"), "every candle, not three");
+    assert.match(message?.text ?? "", /^Turn it off: candle_deliver on the ritual scan\.$/mu);
     assert.equal(JSON.stringify(message).includes("THE-DETAIL"), false);
 
     const single = fresh("fa-mail-raise");
     light(single, "k", { deliver: ["email"], severity: "low" });
     light(single, "k", { deliver: ["email"], severity: "critical" });
     await flushAlerts({ projects: [single.name] });
-    assert.equal(service.mail[1]?.message.text, "Severity: low\nProject: fa-mail-raise");
-    assert.equal(service.mail[2]?.message.text, "Severity: critical, raised\nProject: fa-mail-raise");
+    assert.equal(service.mail[1]?.message.subject, "[fa-mail-raise] low: Candle k");
+    assert.match(service.mail[1]?.message.text ?? "", /^- Candle k$/mu);
+    assert.equal(service.mail[2]?.message.subject, "[fa-mail-raise] critical, raised: Candle k");
+    assert.match(service.mail[2]?.message.text ?? "", /^A candle in fa-mail-raise was raised to critical, from ci:nightly\.$/mu);
+    assert.match(service.mail[2]?.message.text ?? "", /^- Candle k \(raised\)$/mu);
+    assert.match(service.mail[2]?.message.html ?? "", />raised<\/span>/u);
+  });
+});
+
+/** A ritual store item that asks for candle notices on these channels. */
+function ritualWithDeliver(project: Project, slug: string, deliver: string[]): void {
+  const now = new Date().toISOString();
+  const header: Ritual = {
+    id: ulid(),
+    kind: "ritual",
+    slug,
+    title: slug,
+    created: now,
+    updated: now,
+    tags: [],
+    anchor: "due",
+    policy: { mode: "report", may: [], hold: [] },
+    candle_deliver: deliver,
+  };
+  project.writeItem({ header, body: "" }, { who: "test" });
+}
+
+test("a digest of 12 candles: every candle in the mail, grouped worst first and by key, linked one by one; push keeps its short text", async () => {
+  await withEmail(emailSettings({ web_url: "https://darius.example.com" }), async () => {
+    const project = fresh("fa-mail-digest");
+    ritualWithDeliver(project, "cve-scan", ["push", "email"]);
+    // The result's own order is mixed, so the mail's order cannot come from it.
+    const items: FlagItem[] = [
+      { key: "h-2", severity: "high" },
+      { key: "c-3", severity: "critical", target: "shop/composer.lock" },
+      { key: "m-1", severity: "medium" },
+      { key: "h-5", severity: "high" },
+      { key: "c-1", severity: "critical" },
+      { key: "m-4", severity: "medium" },
+      { key: "h-1", severity: "high", target: "api/pnpm-lock.yaml" },
+      { key: "m-2", severity: "medium" },
+      { key: "h-4", severity: "high" },
+      { key: "c-2", severity: "critical" },
+      { key: "h-3", severity: "high" },
+      { key: "m-3", severity: "medium" },
+    ];
+    for (const item of items) Object.assign(item, { title: `Problem ${item.key}`, detail: "THE-DETAIL" });
+    const line = runWithCandles(project, "cve-scan", items);
+
+    const alerts = candleAlerts(project, readLedger(project), { host: "host-a", since: { push: "2000-01-01T00:00:00.000Z", email: "2000-01-01T00:00:00.000Z" } });
+    const push = alerts.find((alert) => alert.channel === "push");
+    assert.equal(push?.title, "12 candles in cve-scan");
+    assert.equal(push?.body, "fa-mail-digest:\n1. high: Problem h-2\n2. critical: Problem c-3\n3. medium: Problem m-1\nand 9 more", "the phone notice keeps three and a count");
+    assert.equal("candles" in (push ?? {}), false, "push carries no mail facts");
+
+    await flushAlerts({ projects: [project.name] });
+    assert.equal(service.mail.length, 1);
+    const message = service.mail[0]?.message;
+    assert.equal(service.mail[0]?.idempotencyKey, createHash("sha256").update(`line:${line.id}:email`).digest("hex"));
+    assert.equal(message?.subject, "[fa-mail-digest] cve-scan: 12 candles, 3 critical");
+    const text = message?.text ?? "";
+    const html = message?.html ?? "";
+    const order = ["c-1", "c-2", "c-3", "h-1", "h-2", "h-3", "h-4", "h-5", "m-1", "m-2", "m-3", "m-4"];
+    assert.deepEqual([...text.matchAll(/^- Problem (\S+)$/gmu)].map((match) => match[1]), order, "all 12 in the text, worst first, by key");
+    assert.deepEqual([...text.matchAll(/^(\w+ \(\d+\))$/gmu)].map((match) => match[1]), ["Critical (3)", "High (5)", "Medium (4)"]);
+    assert.match(text, /^12 candles in fa-mail-digest, from cve-scan: 3 critical, 5 high, 4 medium\.$/mu);
+    assert.match(text, /^- Problem c-3\n    shop\/composer\.lock$/mu, "the target on its own line");
+    assert.match(text, /^All candles in fa-mail-digest: https:\/\/darius\.example\.com\/w\/fa-mail-digest\/candles$/mu);
+    assert.equal(text.includes("/candles/"), false, "no item link in the text");
+    assert.deepEqual([...html.matchAll(/<h2 [^>]*>([^<]+)<\/h2>/gu)].map((match) => match[1]), ["Critical (3)", "High (5)", "Medium (4)"]);
+    assert.deepEqual(
+      [...html.matchAll(/href="https:\/\/darius\.example\.com\/w\/fa-mail-digest\/candles\/([^"]+)"[^>]*>Problem /gu)].map((match) => match[1]),
+      order,
+      "all 12 in the html, each linked to its own candle page",
+    );
+    assert.match(html, /href="https:\/\/darius\.example\.com\/w\/fa-mail-digest\/candles"[^>]*>All candles in fa-mail-digest<\/a>/u);
+    assert.equal(JSON.stringify(message).includes("THE-DETAIL"), false);
+    assertStoreClean();
   });
 });
 
@@ -524,7 +620,8 @@ test("a provider that fails and echoes the request leaves a scrubbed alert.faile
     assert.equal(failures(project, key)[0]?.error, "127.0.0.1 answered 500");
     assert.equal(failures(project, key)[0]?.channel, "email");
     assert.equal(service.mail[2]?.idempotencyKey, service.mail[0]?.idempotencyKey, "the same notice, so the provider can drop a double");
-    assert.equal(service.mail[2]?.message.subject, "candle: Candle k", "a retry keeps the email text");
+    assert.equal(service.mail[2]?.message.subject, "[fa-mail-fail] high: Candle k", "a retry keeps the email text");
+    assert.deepEqual(service.mail[2]?.message, service.mail[0]?.message, "every try sends the same bytes");
     assertStoreClean();
   });
 });
@@ -547,7 +644,7 @@ test("lines before since are not emailed, and leave no trace", async () => {
   await withEmail(emailSettings({ since: tick() }), async () => {
     const fresher = light(project, "new", { deliver: ["email"] });
     await flushAlerts({ projects: [project.name] });
-    assert.deepEqual(service.mail.map((mail) => mail.message.subject), ["candle: Candle new"]);
+    assert.deepEqual(service.mail.map((mail) => mail.message.subject), ["[fa-mail-since] high: Candle new"]);
     assert.deepEqual(lines(project, "alert.sent").map((line) => line.key), [`line:${fresher.id}:email`]);
     assert.equal(readLedger(project).some((line) => line.key === `line:${old.id}:email`), false);
   });

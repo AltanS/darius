@@ -14,8 +14,10 @@
  *                      line would stand in the shell history. It adds a line
  *                      when open candles asked for email and were not sent
  *                      (a count, and it writes nothing)
- *   email test         sends one test message to the host's default `to`,
- *                      and writes no ledger line. Exit 1 when `to` is empty
+ *   email test         sends one sample candle mail to the host's default
+ *                      `to`, with generic candles across three severities,
+ *                      text and html (only text when `html` is false), and
+ *                      writes no ledger line. Exit 1 when `to` is empty
  *   email test --report
  *                      sends one sample report, with text and html (only
  *                      text when `html` is false), and writes no ledger line
@@ -30,7 +32,8 @@
  */
 
 import { unsentEmailCandles } from "../core/alerts.ts";
-import { emailStatus, parseEmailInput, postEmail, readEmailSettings, sendEmail, writeEmailSettings, type EmailSettings } from "../core/email.ts";
+import { candleMessage, sampleCandleFacts } from "../core/candle-email.ts";
+import { emailStatus, parseEmailInput, postEmail, readEmailSettings, writeEmailSettings, type EmailSettings } from "../core/email.ts";
 import { projectRecipients } from "../core/email-recipients.ts";
 import { hostId } from "../core/ledger.ts";
 import { findMarker, MARKER_FILE } from "../core/marker.ts";
@@ -108,7 +111,7 @@ function status(args: ParsedArgs): number {
   }
   if (found.problem !== null) console.log(`! email is not set up on ${hostId()}: ${found.problem}`);
   else if (!found.isSetUp) console.log(`· email is not set up on ${hostId()}: darius email set --stdin`);
-  else console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)} by default${found.html === false ? ", reports as text only" : ""}`);
+  else console.log(`✓ email is set up on ${hostId()}: ${found.host ?? "?"}, ${recipients(found.recipients)} by default${found.html === false ? ", mail as text only" : ""}`);
   if (here.project !== undefined) console.log(projectLine(here.project));
   if (here.problem !== undefined) console.log(`! ${here.problem}`);
   return code;
@@ -141,6 +144,11 @@ async function sendSampleReport(settings: EmailSettings, to: readonly string[]):
   await postEmail(settings, reportMessage(settings, sampleReportFacts(hostId(), now), `email-test-report:${now.toISOString()}`), { to });
 }
 
+/** One sample candle mail through the same build as a real one (0.130.0), so the operator sees the layout in a real mail client. */
+async function sendSampleCandles(settings: EmailSettings, to: readonly string[]): Promise<void> {
+  await postEmail(settings, candleMessage(settings, sampleCandleFacts(hostId()), `email-test:${new Date().toISOString()}`, to), { to });
+}
+
 function projectFlag(args: ParsedArgs): string | undefined {
   const value = args.flags.project;
   if (value === undefined || value === false) return undefined;
@@ -170,14 +178,15 @@ async function sendTest(args: ParsedArgs): Promise<number> {
     if ("refusal" in list) return refuse(args, list.refusal);
     const { to } = list;
     if (isReport) await sendSampleReport(settings, to);
-    else await sendEmail(settings, { key: `email-test:${new Date().toISOString()}`, title: "darius email test", body: `A test from ${hostId()}. Email works.`, url: "/" }, { to });
+    else await sendSampleCandles(settings, to);
     const host = endpointHost(settings.url);
-    const html = isReport && settings.html !== false;
+    const html = settings.html !== false;
     const where = project === undefined ? {} : { project };
     const forWhom = `${recipients(to.length)}${project === undefined ? "" : ` of ${project}`}`;
-    if (args.json) printJson(isReport ? { ok: true, host, recipients: to.length, ...where, report: true, html } : { ok: true, host, recipients: to.length, ...where });
-    else if (isReport) console.log(`✓ ${host} took a sample report for ${forWhom}, ${html ? "text and html" : "text only"}`);
-    else console.log(`✓ ${host} took a test for ${forWhom}`);
+    const parts = html ? "text and html" : "text only";
+    if (args.json) printJson(isReport ? { ok: true, host, recipients: to.length, ...where, report: true, html } : { ok: true, host, recipients: to.length, ...where, html });
+    else if (isReport) console.log(`✓ ${host} took a sample report for ${forWhom}, ${parts}`);
+    else console.log(`✓ ${host} took a test for ${forWhom}: a sample candle mail, ${parts}`);
     return 0;
   } catch (cause) {
     return refuse(args, errorMessage(cause));

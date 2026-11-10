@@ -39,7 +39,9 @@
  * of its channel is history and sends nothing, and nothing replays it later.
  * A notice that waited for a repair goes out only if a candle of its opening is
  * still lit; if all are answered, accepted or out, it is dropped with no
- * line. Email (src/core/email.ts) has its own text, with less in it. A bad
+ * line. Email has its own mail (src/core/candle-email.ts, 0.130.0): every
+ * candle of the line up to 50, grouped by severity, as text and HTML, built
+ * from the facts the alert carries; push keeps its short text. A bad
  * `email.json` or `push.json` counts as not set up with the reason added, so
  * it cannot stop the flush.
  *
@@ -80,6 +82,7 @@ import { existsSync } from "node:fs";
 import { errorMessage } from "../runtime.ts";
 import { classifyBackups, STALE_AFTER_MS, SNAPSHOT_FAILED, type BackupState } from "./backup-state.ts";
 import { RUN_BOX_BLOCKED } from "./box-work.ts";
+import { candleMailLead, candleMailSubject, candleMessage, candlePath, turnOffText, type CandleMailFacts } from "./candle-email.ts";
 import { emailStatus, postEmail, readEmailSettings, sendEmail, type EmailMessage, type EmailSettings } from "./email.ts";
 import { noRecipientsReason, projectRecipients } from "./email-recipients.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
@@ -120,6 +123,8 @@ export interface Alert extends Notice {
   channel?: ChannelName;
   /** A run report (0.127.0): the email channel builds the mail from these facts at each try. */
   report?: ReportFacts;
+  /** A candle mail (0.130.0): the email channel builds it from these facts at each try. No ledger line holds them. */
+  candles?: CandleMailFacts;
 }
 
 function channelOf(alert: Alert): ChannelName {
@@ -302,13 +307,12 @@ export function ledgerAlerts(project: Project, ledger: readonly LedgerLine[], si
 
 // --- candle notices ------------------------------------------------------------------
 
-/** Most candles a notice lists by name; the rest is a count. */
+/**
+ * Most candles a push notice lists by name; the rest is a count. A phone
+ * notice must stay short. Email had the same three until 0.130.0; it now lists
+ * up to 50 (src/core/candle-email.ts).
+ */
 const CANDLE_LIST_MAX = 3;
-
-function candlePath(project: string, key?: string): string {
-  const base = `/w/${encodeURIComponent(project)}/candles`;
-  return key === undefined ? base : `${base}/${encodeURIComponent(key)}`;
-}
 
 function oneCandleNotice(project: string, candle: CandleOpened): Pick<Alert, "title" | "body" | "url"> {
   const what = candle.kind === "raised" ? `Candle raised to ${candle.severity}` : `Candle lit, ${candle.severity}`;
@@ -323,40 +327,49 @@ function manyCandlesNotice(project: string, candles: readonly CandleOpened[]): P
   return { title: `${String(candles.length)} candles in ${ritual}`, body: [`${project}:`, ...named, ...more].join("\n"), url: candlePath(project) };
 }
 
-/** An email: a third party stores it, so it carries the least. src/core/email.ts adds the link and redacts each line. */
-function oneCandleEmail(project: string, candle: CandleOpened): Pick<Alert, "title" | "body" | "url"> {
-  const severity = candle.kind === "raised" ? `${candle.severity}, raised` : candle.severity;
-  const target = candle.target === undefined ? [] : [`Target: ${oneLine(candle.target)}`];
-  return { title: `candle: ${oneLine(candle.title)}`, body: [`Severity: ${severity}`, `Project: ${project}`, ...target].join("\n"), url: candlePath(project, candle.key) };
+/** Where the candles of a line came from. */
+interface CandleSource {
+  /** The ritual slug, or the `source` of a `candle.lit` line, or the project. */
+  source: string;
+  /** Only when a run reported them. */
+  ritual?: string;
 }
 
-function manyCandlesEmail(project: string, candles: readonly CandleOpened[]): Pick<Alert, "title" | "body" | "url"> {
-  const named = candles.slice(0, CANDLE_LIST_MAX).map((candle, index) => {
-    const target = candle.target === undefined ? "" : `, ${oneLine(candle.target)}`;
-    return `${String(index + 1)}. ${candle.severity}: ${oneLine(candle.title)}${target}`;
+/** The source of a line's candles: the ritual of a run, else the `source` of a `candle.lit` line. */
+function sourceOf(project: string, opening: CandleOpening): CandleSource {
+  const ritual = opening.candles[0]?.ritual;
+  if (ritual !== undefined) return { source: ritual, ritual };
+  return { source: isText(opening.line.source) ? oneLine(opening.line.source) : project };
+}
+
+/**
+ * The facts of the candle mail of one line: each candle's title, severity,
+ * target and whether it was raised, never a body or a detail. Fixed once the
+ * line is written, so every try builds the same mail.
+ */
+function candleMailFacts(project: string, opening: CandleOpening): CandleMailFacts {
+  const { source, ritual } = sourceOf(project, opening);
+  const items = opening.candles.map((candle) => {
+    const item: CandleMailFacts["items"][number] = { key: candle.key, title: oneLine(candle.title), severity: candle.severity, isRaised: candle.kind === "raised" };
+    if (candle.target !== undefined) item.target = oneLine(candle.target);
+    return item;
   });
-  const more = candles.length > CANDLE_LIST_MAX ? [`and ${String(candles.length - CANDLE_LIST_MAX)} more`] : [];
-  const ritual = candles[0]?.ritual ?? project;
-  return { title: `${String(candles.length)} candles in ${ritual}`, body: [`Project: ${project}`, ...named, ...more].join("\n"), url: candlePath(project) };
+  return { project, source, turnOff: turnOffText(source, ritual), items };
 }
 
-/** How a channel words a notice. */
-interface CandleWording {
-  one: typeof oneCandleNotice;
-  many: typeof manyCandlesNotice;
-}
-
-const CANDLE_WORDING = {
-  push: { one: oneCandleNotice, many: manyCandlesNotice },
-  email: { one: oneCandleEmail, many: manyCandlesEmail },
-} satisfies Record<ChannelName, CandleWording>;
-
-/** The notice of one line for one channel: short plain text, with no candle body and no detail. */
+/**
+ * The notice of one line for one channel, with no candle body and no detail.
+ * Push is short plain text. Email carries the facts its mail is built from;
+ * its title and body (the subject and the lead) are what a failed line keeps.
+ */
 function candleNotice(project: string, opening: CandleOpening, channel: ChannelName): Alert {
   const key = candleKey(opening.line.id, channel);
+  if (channel === "email") {
+    const facts = candleMailFacts(project, opening);
+    return { key, tag: key, channel, title: candleMailSubject(facts), body: candleMailLead(facts), url: candlePath(project), candles: facts };
+  }
   const [only] = opening.candles;
-  const { one, many } = CANDLE_WORDING[channel];
-  const text = opening.candles.length === 1 && only !== undefined ? one(project, only) : many(project, opening.candles);
+  const text = opening.candles.length === 1 && only !== undefined ? oneCandleNotice(project, only) : manyCandlesNotice(project, opening.candles);
   return { key, tag: key, channel, ...text };
 }
 
@@ -602,8 +615,10 @@ function emailChannel(settings: EmailSettings, to: readonly string[]): OpenChann
   return {
     since: settings.since,
     async send(alert) {
-      if (alert.report === undefined) await sendEmail(settings, alert, { to });
-      else await postEmail(settings, reportMail(settings, alert, alert.report), { to });
+      if (alert.report !== undefined) await postEmail(settings, reportMail(settings, alert, alert.report), { to });
+      else if (alert.candles !== undefined) await postEmail(settings, candleMessage(settings, alert.candles, alert.key, to), { to });
+      // A retry rebuilt from a failed line has no facts: it goes as the plain text it stored.
+      else await sendEmail(settings, alert, { to });
       return { delivered: to.length, error: "" };
     },
   };
@@ -756,8 +771,8 @@ export async function sendAlerts(project: Project, alerts: readonly Alert[], opt
       if (isCandleKey(alert.key) && !isOpen(alert.key)) continue;
       const { channel, reason } = opened(name);
       if (options.isDryRun === true) {
-        // A dry run prints what would go; a report's facts hold the findings text, which stays out of that print.
-        const { report: _report, ...shown } = alert;
+        // A dry run prints what would go; a report's facts hold the findings text, which stays out of that print, and so do a candle mail's facts.
+        const { report: _report, candles: _candles, ...shown } = alert;
         if (channel !== null) delivery.pending.push(shown);
         continue;
       }

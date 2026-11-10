@@ -115,10 +115,10 @@ function escapeRegExp(text: string): string {
   return text.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-/** Each address of the settings as written, the bare part of a named one, and both with `%40`. */
-function settingsAddresses(settings: EmailSettings): string[] {
+/** Each address of the settings and of `more` as written, the bare part of a named one, and both with `%40`. */
+function settingsAddresses(settings: EmailSettings, more: readonly string[]): string[] {
   const found = new Set<string>();
-  for (const entry of [settings.from, ...settings.to]) {
+  for (const entry of [settings.from, ...settings.to, ...more]) {
     const bare = /<([^<>]+)>/u.exec(entry)?.[1];
     for (const address of bare === undefined ? [entry] : [entry, bare]) {
       found.add(address);
@@ -129,11 +129,15 @@ function settingsAddresses(settings: EmailSettings): string[] {
   return [...found].toSorted((a, b) => b.length - a.length);
 }
 
-/** `text` with the settings' token, addresses and provider url taken out. Keeps lines and length. */
-export function scrubReportText(text: string, settings: EmailSettings): string {
+/**
+ * `text` with the settings' token, addresses and provider url taken out, and
+ * the addresses in `recipients` too (a candle mail passes its resolved list).
+ * Keeps lines and length.
+ */
+export function scrubReportText(text: string, settings: EmailSettings, recipients: readonly string[] = []): string {
   let out = text;
   for (const token of [settings.token, encodeURIComponent(settings.token)]) out = out.replaceAll(token, "[token]");
-  for (const address of settingsAddresses(settings)) out = out.replace(new RegExp(escapeRegExp(address), "giu"), "[address]");
+  for (const address of settingsAddresses(settings, recipients)) out = out.replace(new RegExp(escapeRegExp(address), "giu"), "[address]");
   return hideUrls(out, [settings.url]);
 }
 

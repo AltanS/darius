@@ -750,7 +750,7 @@ Then feed the file to darius on stdin, and delete it:
 ```bash
 darius email set --stdin < email-settings.json && rm email-settings.json
 darius email status               # set up or not, the host of the url, the recipient counts
-darius email test                 # sends one message to the host's to list
+darius email test                 # sends one sample candle mail to the host's to list
 darius email test --report        # sends one sample ritual report, with text and HTML
 darius email test --project acme-web   # sends to that project's recipients (with or without --report)
 ```
@@ -760,9 +760,27 @@ darius email test --project acme-web   # sends to that project's recipients (wit
 - `url` must be https, or http on loopback or the tailnet. It may not hold a user, a password or a
   query. `web_url` is optional, and adds a link to each message.
 - darius sends `POST <url>` with `Authorization: Bearer <token>`, an `Idempotency-Key`, and the JSON
-  `{from, to, subject, text}`. Any 2xx is success. A request stops after 15 seconds, and darius tries one
-  notice at most three times.
-- A message holds the title, severity, project, target and link. It never holds a candle body or a detail.
+  `{from, to, subject, text, html}`. Any 2xx is success. A request stops after 15 seconds, and darius tries one
+  notice at most three times. Each try sends the same bytes.
+- One ledger line that lights or raises candles gives one mail. A run that reports 12 candles sends one mail
+  with all 12.
+- The subject says the project, the source and the weight: `[acme-web] cve-scan: 12 candles, 3 critical`.
+  For one candle it is `[acme-web] high: <title>`.
+- The mail lists every candle, up to 50, grouped by severity, worst first. Each group has a heading with its
+  count, such as `Critical (3)`. Inside a group the candles are sorted by key. A line "and N more in darius"
+  stands for the rest. Each candle is its title, with its target on a second, quieter line. A raised candle
+  says "raised".
+- A mail has a text body and an HTML body with the same content. In the HTML each title links to its candle
+  page, and the footer links to the project's candle list, when `web_url` is set. The text has only the list
+  link. `"html": false` sends the text only.
+- The footer says why you get the mail and how to turn it off (`candle_deliver` on the ritual, or the
+  `--deliver` of `candle light`). It prints no address.
+- A message holds titles, severities, the project, the source, targets and links. It never holds a candle
+  body or a detail. darius takes the token, the `from` and `to` addresses, the project's recipients and the
+  provider's url out of every line, and cuts a line at 300 characters.
+- A push notice stays short: three candles and a count.
+- `darius email test` sends a sample candle mail with generic candles in three severities, so you can see the
+  layout in your mail client.
 - Candles from before `set` send no mail. Add `since` to the JSON to choose another start.
 - The token and the addresses stay in that file: not in the store, the ledger, a log or an error.
 - A run cannot use `email set` or `email test`. It can use `email status`.
@@ -850,7 +868,7 @@ The provider receives:
 - The `Idempotency-Key` is the SHA-256 hex of `report:<run id>`. Each try sends the same bytes, so a provider
   that refuses the same key with another body sees no change. darius tries a report at most three times.
 - Add `"html": false` to the settings to send the text only, with no `html` field, for a provider that refuses
-  a field it does not know. `email status` then says "reports as text only".
+  a field it does not know. Candle mails follow the same setting. `email status` then says "mail as text only".
 - darius takes these out of the subject, the text and the HTML: the token (also URL-encoded), the `from` and `to`
   addresses (in any case), the provider's url (cut to its host name), and obvious key shapes such as `sk-...`,
   `ghp_...`, `AKIA...`, a `Bearer` value or `token=...`. It does not take out other addresses or a secret in

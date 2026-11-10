@@ -59,8 +59,9 @@ export interface EmailSettings {
   /** Lines before this time are history, so setup does not email old candles. */
   since: string;
   /**
-   * `false` (0.127.0): a report mail goes as text only, with no `html` field,
-   * for a provider that refuses a field it does not know. Absent: true.
+   * `false` (0.127.0): a report mail, and from 0.130.0 a candle mail, goes as
+   * text only, with no `html` field, for a provider that refuses a field it
+   * does not know. Absent: true.
    */
   html?: boolean;
 }
@@ -73,7 +74,7 @@ export interface EmailStatus {
   /** The host's default recipients (`to`). A project's marker may name its own. */
   recipients: number;
   since: string | null;
-  /** Whether a report mail carries `html` (0.127.0). Null when the channel is not set up. */
+  /** Whether a report or candle mail carries `html` (0.127.0, 0.130.0). Null when the channel is not set up. */
   html: boolean | null;
   /** Why the file is refused, in words that quote no value. Null when it is absent or good. */
   problem: string | null;
@@ -284,7 +285,12 @@ export function webLink(settings: EmailSettings, path: string): string | undefin
   return settings.web_url === undefined ? undefined : `${settings.web_url.replace(/\/+$/u, "")}${path}`;
 }
 
-/** A candle notice as a mail. Title and every body line pass the redaction, and the link comes from this host's settings. */
+/**
+ * A notice as a plain text mail. Title and every body line pass the
+ * redaction, and the link comes from this host's settings. Since 0.130.0 a
+ * candle notice is built by src/core/candle-email.ts; this form is left for a
+ * retry that only has the stored title and body of a failed line.
+ */
 function messageOf(settings: EmailSettings, notice: EmailNotice): EmailMessage {
   const hide = [settings.url];
   const lines = notice.body.split("\n").map((line) => scrubForLedger(line, hide));
@@ -309,7 +315,7 @@ export interface SendOptions {
   timeoutMs?: number;
 }
 
-/** Sends one candle notice. See `postEmail`. */
+/** Sends one notice as plain text. See `messageOf` and `postEmail`. */
 export async function sendEmail(settings: EmailSettings, notice: EmailNotice, options: SendOptions = {}): Promise<void> {
   await postEmail(settings, messageOf(settings, notice), options);
 }

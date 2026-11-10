@@ -94,7 +94,7 @@ function settings(more: Partial<EmailSettings> = {}): EmailSettings {
 const NOTICE: EmailNotice = { key: "line:ABC:email", title: "candle: Vulnerable dependency", body: "Severity: high\nProject: demo\nTarget: web/package.json", url: "/w/demo/candles/k" };
 
 /** The sent JSON. */
-function sent(index = 0): { from: string; to: string[]; subject: string; text: string } {
+function sent(index = 0): { from: string; to: string[]; subject: string; text: string; html?: string } {
   return JSON.parse(stub.received[index]?.body ?? "");
 }
 
@@ -416,8 +416,12 @@ test("email test sends one message; a failure exits 1 with a clean line; no setu
   const good = await email(["test"]);
   assert.equal(good.code, 0);
   assert.equal(stub.received.length, 1);
-  assert.match(sent().text, /A test from host-a/u);
+  assert.match(sent().subject, /^\[example\] email test on host-a: 7 candles, 2 critical$/u, "a sample candle mail (0.130.0)");
+  assert.match(sent().text, /^Critical \(2\)$/mu);
+  assert.match(sent().html ?? "", /<h2 [^>]*>High \(3\)<\/h2>/u, "with html by default");
+  assert.match(good.stdout, /took a test for 2 recipients: a sample candle mail, text and html/u);
   assertClean(good.stdout, "stdout");
+  assertClean(sent().text, "the sample text");
 
   stub.status = 401;
   stub.isEcho = true;

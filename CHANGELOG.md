@@ -2,6 +2,22 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.130.0] - 2026-11-10
+
+### Changed
+
+- A candle mail lists every candle of its ledger line, up to 50, then "and N more in darius". It named three before, because email shared the push wording and its cap of three. Push keeps its short text with three candles and a count.
+- The candles are grouped by severity, worst first, each group headed with its count, such as `Critical (3)`, and sorted by key inside a group. Each candle is its title, with its target on a second line. A raised candle says "raised".
+- The subject says the project, the source and the weight: `[<project>] <ritual>: 12 candles, 3 critical`, or `[<project>] <severity>: <title>` for one candle.
+- The mail has a header line `darius, <project>`, a lead line with the count and the project, and a footer that says why the reader gets it and where to turn it off. It prints no address.
+- Every line of a candle mail now also loses the email token, the `from` and `to` addresses and the project's resolved recipients, as a report does. It lost only the provider's url before.
+- `darius email test` sends a sample candle mail with generic candles in three severities, instead of one line of text. `email status` says "mail as text only" when `html` is false.
+
+### Added
+
+- An HTML body next to the text body of a candle mail, unless `html` is false in `email.json`. It has a link per candle to its candle page and a link to the project's candle list, when `web_url` is set. Inline styles only, a light card at most 640 px wide, the system font, a colour per severity, square corners, and no image, script, web font or remote resource. Every text is escaped.
+- Every try of one candle mail sends the same bytes: the mail is built from the ledger line and the settings, and never reads the clock.
+
 ## [0.129.1] - 2026-11-10
 
 ### Fixed
