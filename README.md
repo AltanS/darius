@@ -335,10 +335,15 @@ darius box status [--json]   # box on by default or by key, the newest check per
 darius box clear <work dir>  # remove a work dir's taint after you looked at it
 ```
 
-The box needs bwrap and a kernel with `dev.tty.legacy_tiocsti = 0` (for a herdr tab). `darius doctor`
+The box needs bwrap and a kernel with `dev.tty.legacy_tiocsti = 0` (for a herdr tab or an hc terminal). `darius doctor`
 warns when the box is on, by default or by the key, and bwrap fails its probe. The box does not stop public exfiltration under
 the default `net = "public"`, a host you list in `reach`, or files in the work dir that you run later.
 See "The box" and "What the box does not stop" in `docs/concept.md`.
+
+A profile picks where a run's harness runs: `surface = "headless"` (the default), `"herdr"` (a herdr
+tab) or `"hc"` (a herdr-core terminal, 0.133.0). Set it with `darius profile add|set <name> --surface hc`.
+An attended surface that is not available here runs the ritual headless and says so (`surface-fallback`).
+Attach to an hc run with `hc attach d-<run>`; see "Surfaces" in `docs/concept.md`.
 
 ### Unattended runs: a checkout behind its upstream
 

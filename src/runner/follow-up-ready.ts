@@ -7,7 +7,8 @@
  * The checks are the ones `darius run follow-up` makes, on the same code
  * path: the parent and its questions (planFollowUp), then a dry run of the
  * follow-up through runDue, which checks the ritual, the host pin, the
- * linked checkout, `max_mode`, the profile and herdr (or the ritual's
+ * linked checkout, `max_mode`, the profile and herdr (hc for a profile with
+ * `surface = "hc"`, 0.133.0; or the ritual's
  * `follow_up = "headless"`, 0.69.0). A dry run reaches no bucket. The
  * spawned CLI checks everything again before it starts.
  *
@@ -36,11 +37,18 @@ import { DEFAULT_RUN_TIMEOUT_MS, runDue, viewRun } from "./run-due.ts";
 
 const RITUAL_PREFIX = "ritual/";
 
+/** The surface a dry run reported: headless, hc, else herdr, as before 0.133.0. */
+function readySurface(value: string | undefined): "headless" | "herdr" | "hc" {
+  if (value === "headless" || value === "hc") return value;
+  return "herdr";
+}
+
 /** The words the page leads with for the two reasons an operator meets most. */
 function reasonOf(skip: { reason?: string | undefined; detail?: string | undefined }, host: string): string {
   const detail = skip.detail ?? "";
   if (skip.reason === "not-followable" && detail.includes("permissions gated")) return `gated profile: ${detail}`;
   if (skip.reason === "not-followable" && detail.startsWith("a follow-up opens a herdr tab")) return `no herdr on ${host}: ${detail}`;
+  if (skip.reason === "not-followable" && detail.startsWith("a follow-up opens an hc terminal")) return `no hc on ${host}: ${detail}`;
   return detail === "" ? (skip.reason ?? "skipped") : `${skip.reason ?? "skipped"}: ${detail}`;
 }
 
@@ -151,7 +159,7 @@ async function remoteReadiness(at: { project: string; run: string; host: string;
   const json = lastJson(ran.stdout);
   const entry = reportEntry(json);
   if (entry !== null && entry.action === "would-start") {
-    const surface = field(entry.surface) === "headless" ? "headless" : "herdr";
+    const surface = readySurface(field(entry.surface));
     return { ready: true, host: right, via: host, profile: field(entry.profile) ?? "built-in", surface, questions: offer.questions, items: offer.items };
   }
   if (entry !== null) return off(reasonOf({ reason: field(entry.reason), detail: field(entry.detail) }, right));
@@ -205,7 +213,7 @@ export async function followUpReadiness(projectName: string, run: string, forwar
     const entry = report.projects[0]?.rituals[0];
     if (entry === undefined) return off(report.errors[0]?.error ?? `no ritual ${slug} in ${projectName}`);
     if (entry.action !== "would-start") return off(reasonOf(entry, host));
-    return { ready: true, host, profile: entry.profile ?? "built-in", surface: entry.surface === "headless" ? "headless" : "herdr", questions, items };
+    return { ready: true, host, profile: entry.profile ?? "built-in", surface: readySurface(entry.surface), questions, items };
   } catch (cause) {
     return off(errorMessage(cause));
   }

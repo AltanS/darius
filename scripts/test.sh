@@ -35,6 +35,10 @@ export NO_COLOR=1
 # The operator's herdr is live: a test that reached it would open tabs there.
 # Tests that need herdr put a fake on DARIUS_HERDR themselves.
 export DARIUS_HERDR="$SANDBOX/no-herdr"
+# The same for herdr-core: `hc connect` would start or reach the operator's
+# live core. Tests that need hc put a fake on DARIUS_HC themselves.
+export DARIUS_HC="$SANDBOX/no-hc"
+unset DARIUS_HC_SESSION
 # The same for Tailscale: the web page's `auto` bind and identity checks
 # must not reach the real tailnet from a test.
 export DARIUS_TAILSCALE="$SANDBOX/no-tailscale"

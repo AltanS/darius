@@ -314,9 +314,12 @@ export const claudeHarness: HarnessAdapter = {
   prepare(input: PlanInput): HarnessLaunch {
     const settings = join(input.files.dir, "settings.json");
     writeFileSync(settings, `${JSON.stringify(hookSettings(input.gate, input.scope), null, 2)}\n`);
+    const interactive = buildArgv(input, settings, "interactive");
+    // The prompt goes first: the two tool lists at the end are variadic and would take it as a tool name.
     return {
       headless: buildArgv(input, settings, "headless"),
-      interactive: buildArgv(input, settings, "interactive"),
+      interactive,
+      prompted: [firstMessage(input), ...interactive],
       message: firstMessage(input),
     };
   },

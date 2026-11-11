@@ -110,7 +110,7 @@ export function readReadiness(status: number, text: string): Loaded {
   const items = itemsOf(parsed.items);
   const profile = textOf(parsed.profile);
   if (parsed.ready !== true || questions === null || items === null || profile === undefined) return { state: "failed", message: "The host sent a follow-up check that this page cannot read." };
-  const ready: FollowUpReadiness = { ready: true, host, profile, surface: parsed.surface === "headless" ? "headless" : "herdr", questions, items };
+  const ready: FollowUpReadiness = { ready: true, host, profile, surface: parsed.surface === "headless" || parsed.surface === "hc" ? parsed.surface : "herdr", questions, items };
   const via = textOf(parsed.via);
   if (via !== undefined) ready.via = via;
   return { state: "done", readiness: ready };

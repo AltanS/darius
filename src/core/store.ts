@@ -66,7 +66,7 @@ import { sleepSync } from "../runtime.ts";
 import { parseDocument, serializeDocument } from "./frontmatter.ts";
 import type { FrontmatterHeader, FrontmatterList, FrontmatterMap, FrontmatterScalar, FrontmatterValue } from "./frontmatter.ts";
 import { appendLine, defaultWho } from "./ledger.ts";
-import { UsageError } from "./model.ts";
+import { isSurfaceId, UsageError } from "./model.ts";
 import type { Document, Item, Kind, Policy, Profile, Ritual, Vigil } from "./model.ts";
 import { projectDir, stateDir } from "./paths.ts";
 import { SEVERITIES, type Severity } from "./result.ts";
@@ -490,8 +490,8 @@ function toPermissions(value: string | undefined, where: string): Profile["permi
 }
 
 function toSurface(value: string | undefined, where: string): Profile["surface"] {
-  if (value === undefined || value === "headless" || value === "herdr") return value;
-  throw new Error(`${where}: 'surface' must be headless or herdr, got '${value}'`);
+  if (value === undefined || isSurfaceId(value)) return value;
+  throw new Error(`${where}: 'surface' must be headless, herdr or hc, got '${value}'`);
 }
 
 function decodeProfile(reader: FieldReader, where: string): Profile {

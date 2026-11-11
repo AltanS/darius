@@ -90,6 +90,13 @@ interface FollowUpCardProps {
 }
 
 /** The CLI command for the same follow-up, for a host where the button is off. */
+/** One line on where and how the follow-up runs. */
+function followUpHow(surface: "headless" | "herdr" | "hc", host: string): string {
+  if (surface === "headless") return `The run is headless on ${host}.`;
+  if (surface === "hc") return `The run opens in an hc terminal on ${host}, attended.`;
+  return `The run opens in a herdr tab on ${host}, attended.`;
+}
+
 function followUpCommand(run: string, project: string, numbers: readonly number[]): string {
   const approve = numbers.length === 0 ? '--note "<decision>"' : numbers.map((n) => `--approve ${n}`).join(" ");
   return `darius run follow-up ${run} ${approve} --project ${project}`;
@@ -167,7 +174,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
   const approved = chosen.length + chosenKeys.length;
   const isAllPicked = proposals.length > 0 && chosenKeys.length === proposals.length;
   const where = readiness.via === undefined ? readiness.host : `${readiness.host}, forwarded from ${readiness.via}`;
-  const how = readiness.surface === "headless" ? `The run is headless on ${readiness.host}.` : `The run opens in a herdr tab on ${readiness.host}, attended.`;
+  const how = followUpHow(readiness.surface, readiness.host);
 
   const start = async (): Promise<void> => {
     setBusy(true);

@@ -57,6 +57,7 @@ import { commitAll, dirty as dirtyFile, initRepo, NO_GIT } from "./helpers/git.t
 import { readBehindRecord } from "../src/core/checkout-behind.ts";
 import { ritualLifecycle } from "../src/core/due.ts";
 import { SETUP_UNITS, type Config } from "../src/core/config.ts";
+import { writeFakeHc, type FakeHcCall } from "./helpers/fake-hc.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-runner-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -148,6 +149,11 @@ process.env.DARIUS_CLAUDE = FAKE_CLAUDE;
 appendLine(openProject("_global", { create: true }), { who: "test", type: "harness.checked", harness: "claude", version: "2.1.999", outcome: "passed" });
 // Never the operator's live herdr: tests that need one use FAKE_HERDR below.
 process.env.DARIUS_HERDR = join(SANDBOX, "no-herdr");
+// Nor its live hc core: tests that need one use the fake below.
+process.env.DARIUS_HC = join(SANDBOX, "no-hc");
+const FAKE_HC_DIR = join(SANDBOX, "hc");
+mkdirSync(FAKE_HC_DIR, { recursive: true });
+const FAKE_HC = writeFakeHc(FAKE_HC_DIR);
 
 /**
  * A fake herdr: enough of the CLI for the herdr surface. `agent prompt`
@@ -1629,6 +1635,102 @@ test("herdr surface: a startup dialog nobody answers holds the run, and the tab 
   assert.match(JSON.stringify(linesOf(project, "run.held")[0]?.questions), /waits at a startup dialog in herdr tab/u);
   assert.equal(herdrCalls().some((line) => line.startsWith("agent prompt")), false);
   assert.equal(herdrCalls().some((line) => line.startsWith("tab close")), false);
+});
+
+// --- the hc surface (0.133.0) -----------------------------------------------------------
+
+function hcCalls(): FakeHcCall[] {
+  const file = join(FAKE_HC_DIR, "calls.jsonl");
+  return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter((line) => line !== "").map((line): FakeHcCall => JSON.parse(line)) : [];
+}
+
+/** Runs `fn` with the fake hc on (it starts the fake claude from the terminal's argv), a fast poll, and a clean call log. */
+async function withFakeHc<T>(opts: { states?: string[]; graceMs?: number }, fn: () => Promise<T>): Promise<T> {
+  writeFileSync(join(FAKE_HC_DIR, "calls.jsonl"), "");
+  writeFileSync(join(FAKE_HC_DIR, "spawn"), "");
+  writeFileSync(join(FAKE_HC_DIR, "states"), `${(opts.states ?? ["live:working"]).join("\n")}\n`);
+  process.env.FAKE_HC_DIR = FAKE_HC_DIR;
+  process.env.DARIUS_HC = FAKE_HC;
+  process.env.DARIUS_HC_POLL_MS = "50";
+  process.env.DARIUS_HC_WAIT_GRACE_MS = String(opts.graceMs ?? 600_000);
+  try {
+    return await fn();
+  } finally {
+    process.env.DARIUS_HC = join(SANDBOX, "no-hc");
+    delete process.env.DARIUS_HC_POLL_MS;
+    delete process.env.DARIUS_HC_WAIT_GRACE_MS;
+  }
+}
+
+test("a profile that asks for the hc surface runs headless where hc is missing, and says so", async () => {
+  await addProfile("rd-hc-missing", ["--surface", "hc"]);
+  const project = "rd-profile-hc";
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-hc-missing" } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, report } = await runDueJson(project);
+  assert.equal(code, 0, JSON.stringify(report));
+  const entry: ProfiledEntry | undefined = ritualsOf(report)[0];
+  assert.equal(entry?.surface, "headless");
+  assert.match(entry?.warnings?.[0] ?? "", /^surface-fallback: hc is not installed here \(.*\); ran headless$/u);
+});
+
+test("hc surface: the harness starts in an hc terminal with its first message in the argv and the run variables in env; the run completes; the terminal stays until the ritual has a newer run", async () => {
+  await addProfile("rd-hc", ["--surface", "hc"]);
+  const project = "rd-hc-watch";
+  seedRitual(project, { policy: { ...HEARTBEAT_POLICY, profile: "rd-hc" } });
+  process.env.FAKE_CLAUDE_MODE = "complete";
+  const { code, report } = await withFakeHc({}, () => runDueJson(project));
+  assert.equal(code, 0, JSON.stringify(report));
+  const entry: ProfiledEntry | undefined = ritualsOf(report)[0];
+  assert.equal(entry?.surface, "hc");
+  assert.equal(entry?.end, "complete");
+  assert.equal(entry?.warnings, undefined);
+  const run = entry?.run ?? "";
+  const started = hcCalls().find((call) => call.method === "terminal.run");
+  const argv = started?.params.argv ?? [];
+  assert.equal(argv[0], FAKE_CLAUDE, "the harness first: no sandbox in front here");
+  assert.match(argv[1] ?? "", new RegExp(`^Run ritual heartbeat now\\. Run id ${run}\\.`, "u"), "the first message is the first argv word");
+  assert.equal(argv.includes("-p"), false, "interactive: no print mode");
+  assert.ok(argv.includes("--append-system-prompt-file"));
+  const env = started?.params.env ?? {};
+  assert.equal(env.DARIUS_RUN, run);
+  assert.equal(env.DARIUS_PROJECT, project);
+  assert.equal(env.PATH, undefined, "the core's env owns PATH");
+  assert.equal(started?.params.name, agentName(run));
+  assert.deepEqual(started?.params.labels, { darius_project: project, darius_ritual: "heartbeat", darius_run: run });
+  const file = join(openProject(project).root, "runs", run, "hc.json");
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).terminals, [readFileSync(join(FAKE_HC_DIR, "newest"), "utf8").trim()]);
+  assert.equal(hcCalls().some((call) => call.method === "terminal.kill" || call.method === "terminal.rm"), false, "a finished run's terminal stays");
+
+  const address = String(JSON.parse(readFileSync(file, "utf8")).terminals[0]);
+  const newer = ulid();
+  appendLine(openProject(project), { who: "test", type: "run.started", item: "ritual/heartbeat", run: newer });
+  appendLine(openProject(project), { who: "test", type: "run.completed", item: "ritual/heartbeat", run: newer, outcome: "complete", findings_sha: null });
+  await withFakeHc({}, () => runDueJson(project));
+  const removed = hcCalls().filter((call) => call.method === "terminal.rm").map((call) => call.params.terminal);
+  assert.ok(removed.includes(address), JSON.stringify(hcCalls()));
+  assert.equal(existsSync(file), false);
+});
+
+test("hc surface: a run past its timeout fails and its terminal is killed; an agent that idles holds the run with how to attach", async () => {
+  await addProfile("rd-hc-slow", ["--surface", "hc"]);
+  const slow = "rd-hc-slow";
+  seedRitual(slow, { policy: { ...HEARTBEAT_POLICY, profile: "rd-hc-slow" } });
+  process.env.FAKE_CLAUDE_MODE = "silent";
+  const timedOut = await withFakeHc({}, () => runDueJson(slow, ["--timeout", "0.3"]));
+  assert.equal(ritualsOf(timedOut.report)[0]?.end, "failed", JSON.stringify(timedOut.report));
+  assert.equal(hcCalls().filter((call) => call.method === "terminal.kill").length, 1);
+  const blob = JSON.parse(getBlobText(openProject(slow), String(linesOf(slow, "run.completed")[0]?.findings_sha)) ?? "{}");
+  assert.match(blob.reason, /was stopped after the run timeout/u);
+
+  const idle = "rd-hc-idle";
+  seedRitual(idle, { policy: { ...HEARTBEAT_POLICY, profile: "rd-hc-slow" } });
+  const held = await withFakeHc({ states: ["live:working", "live:working", "live:idle"], graceMs: 150 }, () => runDueJson(idle));
+  const entry = ritualsOf(held.report)[0];
+  assert.equal(entry?.end, "held", JSON.stringify(held.report));
+  const line = linesOf(idle, "run.held")[0];
+  assert.match(JSON.stringify(line?.questions), /waits for input in hc terminal d-\S+ \(idle for over 0 min\); attach with hc attach d-/u);
+  assert.equal(line?.who, `hc:${entry?.run ?? ""}`);
 });
 
 // --- skills and run now ----------------------------------------------------------------

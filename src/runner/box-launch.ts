@@ -93,8 +93,14 @@ export interface SandboxRequest {
   workDir: string;
   /** Report mode: the box shows the work dir read-only. */
   isReport: boolean;
-  /** A herdr tab: the harness needs the terminal, so no `--new-session`, and the tab's TERM. */
+  /** A herdr tab or an hc terminal: the harness needs the terminal, so no `--new-session`, and the terminal's TERM. */
   hasTty: boolean;
+  /**
+   * The TERM the harness gets in the box when `hasTty`. Absent: the herdr
+   * tab's own, which its shell fills in when it runs the alias (TAB_TERM).
+   * hc runs the argv with no shell, so it passes a literal (0.133.0).
+   */
+  term?: string;
   /** The ritual's box keys from the marker; `{}` when there is no marker. */
   ritual: RitualBoxKeys;
   harness: HarnessAdapter;
@@ -306,8 +312,8 @@ export async function openBox(request: SandboxRequest): Promise<OpenBox> {
   if ("problem" in probe) throw new BoxError(probe.problem);
   const cfg = loadConfigIfPresent();
   const facts = hostBoxFacts({ workDir: request.workDir });
-  // In a tab the tab's shell gives the harness its own TERM when it runs the alias.
-  if (request.hasTty) facts.env = { ...facts.env, TERM: TAB_TERM };
+  // In a tab the tab's shell gives the harness its own TERM when it runs the alias; hc has no shell, so its TERM is a literal.
+  if (request.hasTty) facts.env = { ...facts.env, TERM: request.term ?? TAB_TERM };
   const filesInput = hostBoxFiles({ run: request.run.id, dariusBin: dariusBin(), home: facts.home, runtimeDir: facts.runtimeDir, env: facts.env });
   const enter = boxEnterPrefix(filesInput.darius, BOX_RELAY_PORT);
   const plan = boxPlan({

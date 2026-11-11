@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.133.0] - 2026-11-11
+
+### Added
+
+- **The hc surface.** A profile with `surface = "hc"` (`darius profile add|set --surface hc`, or `surface = "hc"` in a marker profile) runs the harness in a herdr-core terminal, next to the herdr tab. hc runs the argv directly: darius puts the sandbox argv (mask or box) straight in front of the harness argv, with no shell alias, no marker echo and no wait for a shell prompt. The first message is the first argv word, as the hc manual advises. The `herdr` surface does not change.
+- darius talks to hc through `hc connect`, one JSON-RPC call per process. The run variables go in the API's `env`, on top of the core's environment, because `hc run` has no env flag and a terminal does not get the caller's environment. None of them is a secret.
+- The box fails closed on hc too: hc must show the launch argv as the terminal's program, and bwrap, with the terminal's own pid, as the leader of its foreground group. Otherwise darius kills the terminal and the ritual is skipped as `box-broken`. A boxed terminal gets `TERM=xterm-256color`, because there is no shell to fill in the tab's TERM.
+- The watch uses `hc wait`, which comes back early when the agent stops working, and still polls the ledger. The ledger ends the run; an agent idle, done, blocked or in error past the grace time holds the run with a question that names `hc attach <name>`; a terminal that never reported a status and whose gate log never grew counts as waiting too, because Claude Code reports nothing at its folder trust dialog. The timeout kills the terminal. A prompt that did not land is sent again with `hc send --if idle`, at most twice, as on herdr. `DARIUS_HC_POLL_MS`, `DARIUS_HC_WAIT_GRACE_MS`, `DARIUS_HC_CONFIRM_MS` and `DARIUS_HC_IDLE_RESEND_MS` tune it.
+- Finished terminals stay for the person and are removed (killed when live, then removed) by the same rule as herdr tabs: a newer run of the ritual, or 48 hours after the run ended. `hc.json` in the run dir records each launch's address. darius removes only a terminal that carries its run's `darius_run` label.
+- Where hc is missing or its core does not answer, a run falls back to headless with a `surface-fallback:` warning, as on herdr. A follow-up whose profile says `surface = "hc"` opens an hc terminal and refuses when hc is not available, unless `--headless`. The run page's follow-up card says "hc terminal".
+- `DARIUS_HC` names the hc executable (default `hc` on PATH) and `DARIUS_HC_SESSION` an isolated session (passed to hc as `HC_SESSION`). The test suite points `DARIUS_HC` at a missing file.
+
 ## [0.132.0] - 2026-11-10
 
 ### Changed

@@ -149,7 +149,7 @@ import { dirname, join, resolve } from "node:path";
 import { isEmailAddress } from "./email-address.ts";
 import { BOX_NETS, BOX_TOOLS, envPassProblem, hostPortText, parseHostPort, writableProblem, type BoxNet, type BoxTool, type ProtectedDirs } from "./box.ts";
 import type { OwnedKind } from "./kinds.ts";
-import type { Policy, ProfileFields } from "./model.ts";
+import { isSurfaceId, type Policy, type ProfileFields } from "./model.ts";
 import { parseToml, type TomlDocument, type TomlValue } from "./toml.ts";
 import { isZone } from "./zone.ts";
 
@@ -384,7 +384,7 @@ function decodeProfile(table: Readonly<Record<string, TomlValue>>, at: { file: s
     fields.permissions = permissions;
   }
   if (surface !== undefined) {
-    if (surface !== "headless" && surface !== "herdr") throw fail("surface", '"headless" or "herdr"');
+    if (!isText(surface) || !isSurfaceId(surface)) throw fail("surface", '"headless", "herdr" or "hc"');
     fields.surface = surface;
   }
   if (maxTurns !== undefined) {

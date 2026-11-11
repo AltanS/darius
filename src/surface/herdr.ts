@@ -54,28 +54,23 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JsonValue } from "../core/model.ts";
 import { appendRunLog } from "../core/sandbox.ts";
 import { errorMessage } from "../runtime.ts";
+import { agentName, closeDueRuns, gateLogSize, MAX_RESENDS, showMs, sleep, type TabRun } from "./attended.ts";
 import type { ChildEnv, LaunchResult } from "./headless.ts";
+
+export { agentName, DEFAULT_CONFIRM_MS, DEFAULT_IDLE_RESEND_MS, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, isTabDue, TAB_KEEP_MS, type TabRun } from "./attended.ts";
 
 export const RUNS_WORKSPACE = "darius-runs";
 const HERDR_TIMEOUT_MS = 60_000;
 const AGENT_START_TIMEOUT_MS = 60_000;
-export const DEFAULT_POLL_MS = 3_000;
 /** A new tab's shell takes a moment to reach its prompt; `agent start` refuses it until then. */
 const SHELL_READY_TIMEOUT_MS = 30_000;
 const SHELL_READY_RETRY_MS = 500;
-export const DEFAULT_WAIT_GRACE_MS = 10 * 60_000;
-/** How long one sent prompt is watched for a sign that it landed. */
-export const DEFAULT_CONFIRM_MS = 30_000;
-/** An agent that stays idle this long after a send, with no other sign, did not get the prompt. */
-export const DEFAULT_IDLE_RESEND_MS = 20_000;
-/** A prompt that did not land is sent again at most this many times. */
-const MAX_RESENDS = 2;
 /** Where a run records its tab, so the next batch can close it. */
 const TAB_FILE = "herdr.json";
 
@@ -216,19 +211,6 @@ export interface HerdrPlan {
   hold(question: string): void;
 }
 
-/** The longest herdr agent name. */
-const AGENT_NAME_MAX = 32;
-
-/**
- * A herdr agent name for one launch of a run: lowercase, starts with a
- * letter, at most 32 characters. The first launch is `d-<run>`; a later one
- * adds `-r<launch>`, and the run part is cut to make room, never the suffix.
- */
-export function agentName(run: string, launch = 1): string {
-  const suffix = launch <= 1 ? "" : `-r${String(launch)}`;
-  return `d-${run.toLowerCase()}`.slice(0, AGENT_NAME_MAX - suffix.length) + suffix;
-}
-
 /**
  * The tab ids `herdr.json` in `runDir` records: the `tabs` list, or the one
  * `tab` a file written before 0.66.0 holds. Empty when there is none.
@@ -277,12 +259,6 @@ async function agentState(plan: HerdrPlan, name: string): Promise<AgentState> {
   const status = isRecord(agent) ? agent.agent_status : undefined;
   if (status === "idle" || status === "working" || status === "blocked" || status === "done") return status;
   return "unknown";
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 interface WatchEnd {
@@ -423,16 +399,6 @@ async function waitUntilReady(plan: HerdrPlan, name: string, started: number): P
   }
 }
 
-/** The size of the run's gate log; it grows when a tool call reaches the hook, so the agent got its prompt. */
-function gateLogSize(runDir: string): number {
-  const file = join(runDir, "gate.jsonl");
-  return existsSync(file) ? statSync(file).size : 0;
-}
-
-function showMs(ms: number): string {
-  return ms >= 1_000 ? `${String(Math.round(ms / 1_000))} s` : `${String(ms)} ms`;
-}
-
 type ConfirmEnd = { sign: "confirmed" | "idle" | "blocked" | "unsure" } | { sign: "ended"; end: WatchEnd };
 
 /**
@@ -535,29 +501,6 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
   return ended(started, end);
 }
 
-/** How long a finished run's tab stays when its ritual does not run again. */
-export const TAB_KEEP_MS = 48 * 60 * 60 * 1000;
-
-/** What closeFinishedTabs needs to know about one run, read from the ledger. */
-export interface TabRun {
-  run: string;
-  /** The ledger item, `ritual/<slug>`: runs of one ritual share it. */
-  item: string;
-  phase: "running" | "held" | "closed";
-  /** ISO time of the run.started line. */
-  startedAt: string;
-  /** ISO time of the run.completed line; a closed run without it counts as old. */
-  endedAt?: string;
-}
-
-/** True when the finished run's tab is due to close: a newer run of its ritual exists, or it ended over 48 hours ago. */
-export function isTabDue(run: TabRun, all: readonly TabRun[], now: number): boolean {
-  if (run.phase !== "closed") return false;
-  if (all.some((other) => other.item === run.item && other.run !== run.run && other.startedAt > run.startedAt)) return true;
-  const endedMs = run.endedAt === undefined ? Number.NaN : Date.parse(run.endedAt);
-  return Number.isNaN(endedMs) || now - endedMs > TAB_KEEP_MS;
-}
-
 /**
  * Closes the herdr tabs of every finished run in `runsDir` that isTabDue
  * (each launch of a resumed run has one), and forgets them. A running or held run keeps its tab. Best effort: a tab the
@@ -569,15 +512,15 @@ export async function closeFinishedTabs(
   now: number = Date.now(),
   target: HerdrTarget = herdrTarget(),
 ): Promise<number> {
-  let closed = 0;
-  for (const run of runs) {
-    const file = join(runsDir, run.run, TAB_FILE);
-    if (!existsSync(file) || !isTabDue(run, runs, now)) continue;
-    for (const tab of recordedTabs(join(runsDir, run.run))) {
-      const output = await runHerdr(target, ["tab", "close", tab]);
-      if (output.code === 0) closed += 1;
-    }
-    rmSync(file, { force: true });
-  }
-  return closed;
+  return closeDueRuns(runsDir, runs, now, {
+    file: TAB_FILE,
+    close: async (runDir) => {
+      let closed = 0;
+      for (const tab of recordedTabs(runDir)) {
+        const output = await runHerdr(target, ["tab", "close", tab]);
+        if (output.code === 0) closed += 1;
+      }
+      return closed;
+    },
+  });
 }

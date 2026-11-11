@@ -96,7 +96,7 @@ import { latestHandoff } from "../core/handoff.ts";
 import { appendLine, hostId, readLedger, type LedgerLineInput } from "../core/ledger.ts";
 import { takeLease, type LeaseOutcome } from "../core/lease.ts";
 import { isAboveCap, MARKER_FILE, type Marker, type RepoRitual } from "../core/marker.ts";
-import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual } from "../core/model.ts";
+import type { Document, JsonValue, LedgerLine, Profile, ProfileFields, Ritual, SurfaceId } from "../core/model.ts";
 import { projectDir } from "../core/paths.ts";
 import { reconcileProject, skillDirty, skillFolder } from "../core/reconcile.ts";
 import type { RitualBoxKeys } from "../core/box.ts";
@@ -114,6 +114,7 @@ import { allowsSubagents } from "../harness/gate.ts";
 import { resolveProfile, type RepoProfiles, type Resolution } from "../harness/profile.ts";
 import { errorMessage } from "../runtime.ts";
 import { launchHeadless, type ChildEnv, type LaunchResult } from "../surface/headless.ts";
+import { closeFinishedTerminals, HC_TERM, hcTarget, hcUnavailable, launchHc } from "../surface/hc.ts";
 import { closeFinishedTabs, DEFAULT_CONFIRM_MS, DEFAULT_IDLE_RESEND_MS, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, herdrTarget, herdrUnavailable, launchHerdr, RUNS_WORKSPACE, type TabRun } from "../surface/herdr.ts";
 import { followUpSection, parentResult, type FollowUp } from "./follow-up.ts";
 import { boxReadiness, type BoxReadiness } from "./box-check.ts";
@@ -531,9 +532,15 @@ function rejectedFindings(runDir: string): string | null {
   return text.length > 20_000 ? `${text.slice(0, 20_000)}\n[clipped]` : text;
 }
 
-function failureBlob(launch: LaunchResult, facts: ResultFacts, harness: string, runDir: string): string {
+/** What an attended surface did with a launch whose box it could not prove. */
+function brokenAction(surface: SurfaceId): string {
+  return surface === "hc" ? "the hc terminal was killed" : "the herdr tab was closed";
+}
+
+function failureBlob(launch: LaunchResult, facts: ResultFacts, ran: { harness: string; surface: SurfaceId }, runDir: string): string {
+  const { harness } = ran;
   let reason = `${harness} exited without completing or holding the run`;
-  if (launch.boxBroken !== undefined) reason = `box-broken: ${launch.boxBroken}; the herdr tab was closed`;
+  if (launch.boxBroken !== undefined) reason = `box-broken: ${launch.boxBroken}; ${brokenAction(ran.surface)}`;
   else if (launch.spawnError !== undefined) reason = launch.spawnError.includes("is not on PATH") ? launch.spawnError : `${harness} did not start: ${launch.spawnError}`;
   else if (launch.exitCode === 127) reason = `${harness} is not on PATH: install it or set the profile's command`;
   else if (launch.timedOut) reason = `${harness} was stopped after the run timeout (${String(launch.durationMs)} ms)`;
@@ -563,7 +570,7 @@ interface RunClose {
 function finalizeRun(
   ctx: ProjectContext,
   run: string,
-  ended: { launch: LaunchResult; facts: ResultFacts; harness: string },
+  ended: { launch: LaunchResult; facts: ResultFacts; harness: string; surface: SurfaceId },
 ): RunClose {
   const { launch, facts } = ended;
   return ctx.project.withLock(() => {
@@ -580,7 +587,7 @@ function finalizeRun(
       item: view.item,
       run,
       outcome: "failed",
-      findings_sha: putBlob(ctx.project, failureBlob(launch, facts, ended.harness, join(ctx.project.root, "runs", run))),
+      findings_sha: putBlob(ctx.project, failureBlob(launch, facts, { harness: ended.harness, surface: ended.surface }, join(ctx.project.root, "runs", run))),
     };
     if (facts.sessionId !== undefined) line.session_id = facts.sessionId;
     appendLine(ctx.project, line);
@@ -613,21 +620,27 @@ function toRunEnd(outcome: string | undefined): RunEnd {
   return "failed";
 }
 
-/** The surface a run uses. A profile's `herdr` falls back to headless, with a warning, where herdr is not running. */
+/** The surface a run uses. A profile's `herdr` or `hc` falls back to headless, with a warning, where that surface is not available. */
 interface SurfaceChoice {
-  surface: "headless" | "herdr";
+  surface: SurfaceId;
   warning?: string;
 }
 
+/** null when the attended surface answers here, else why not. */
+function attendedUnavailable(surface: "herdr" | "hc"): Promise<string | null> {
+  return surface === "hc" ? hcUnavailable() : herdrUnavailable();
+}
+
 async function chooseSurface(profile: ResolvedProfile): Promise<SurfaceChoice> {
-  if (profile.surface !== "herdr") return { surface: "headless" };
-  const unavailable = await herdrUnavailable();
-  if (unavailable === null) return { surface: "herdr" };
+  if (profile.surface === "headless") return { surface: "headless" };
+  const unavailable = await attendedUnavailable(profile.surface);
+  if (unavailable === null) return { surface: profile.surface };
   return { surface: "headless", warning: `surface-fallback: ${unavailable}; ran headless` };
 }
 
 /**
- * A follow-up is attended: a herdr tab, never a silent fallback. Headless
+ * A follow-up is attended: a herdr tab, or an hc terminal when its profile
+ * says `surface = "hc"` (0.133.0), never a silent fallback. Headless
  * only when asked (`--headless`) or when the ritual says `follow_up =
  * "headless"` in the marker (0.69.0). The web readiness dry run takes this
  * path too, so the page and the CLI agree.
@@ -636,8 +649,13 @@ export function followUpIsHeadless(followUp: FollowUp, ritual: Ritual): boolean 
   return followUp.headless === true || ritual.follow_up === "headless";
 }
 
-async function followUpSurface(followUp: FollowUp, ritual: Ritual): Promise<SurfaceChoice | { refused: string }> {
+async function followUpSurface(followUp: FollowUp, ritual: Ritual, profile: ResolvedProfile): Promise<SurfaceChoice | { refused: string }> {
   if (followUpIsHeadless(followUp, ritual)) return { surface: "headless" };
+  if (profile.surface === "hc") {
+    const unavailable = await hcUnavailable();
+    if (unavailable === null) return { surface: "hc" };
+    return { refused: `a follow-up opens an hc terminal, and ${unavailable}; install hc, or pass --headless` };
+  }
   const unavailable = await herdrUnavailable();
   if (unavailable === null) return { surface: "herdr" };
   return { refused: `a follow-up opens a herdr tab, and ${unavailable}; start herdr, or pass --headless` };
@@ -797,9 +815,10 @@ function prepareRun(ctx: ProjectContext, target: RunTarget): PreparedRun {
 }
 
 /**
- * The variables a herdr tab gets: the run's, and the store dirs when set.
- * Not PATH: the tab's login shell owns it, and the timer's PATH is narrowed
- * for the unit (src/core/unit-path.ts).
+ * The variables a herdr tab or an hc terminal gets: the run's, and the store
+ * dirs when set. Not PATH: the tab's login shell (hc: the core's env) owns it,
+ * and the timer's PATH is narrowed for the unit (src/core/unit-path.ts). None
+ * of them is a secret.
  */
 const TAB_ENV_KEYS: readonly string[] = [
   "DARIUS_RUN", "DARIUS_RUN_POLICY", "DARIUS_PROJECT", "DARIUS_WHO", "DARIUS_STATE_DIR", "DARIUS_CONFIG_DIR",
@@ -826,6 +845,30 @@ function launchOnSurface(ctx: ProjectContext, target: RunTarget, prepared: Prepa
     return launchHeadless({ bin: prepared.bin, argv: prepared.launch.headless, cwd, env: prepared.env, timeoutMs, sandbox: sandbox.prefix });
   }
   const project = ctx.project;
+  if (target.surface.surface === "hc") {
+    return launchHc({
+      target: hcTarget(),
+      bin: prepared.bin,
+      argv: prepared.launch.prompted,
+      message: prepared.launch.message,
+      cwd,
+      env: tabEnv(prepared.env),
+      labels: { darius_project: project.name, darius_ritual: doc.header.slug },
+      run,
+      runDir: prepared.files.dir,
+      timeoutMs,
+      pollMs: envNumber("DARIUS_HC_POLL_MS", DEFAULT_POLL_MS),
+      graceMs: envNumber("DARIUS_HC_WAIT_GRACE_MS", DEFAULT_WAIT_GRACE_MS),
+      confirmMs: envNumber("DARIUS_HC_CONFIRM_MS", DEFAULT_CONFIRM_MS),
+      idleMs: envNumber("DARIUS_HC_IDLE_RESEND_MS", DEFAULT_IDLE_RESEND_MS),
+      sandbox: sandbox.prefix,
+      isBox: sandbox.isBox,
+      phase: () => viewRun(readLedger(project), run).phase ?? "running",
+      hold: (question) => {
+        recordHold({ project: project.name, run }, { question, who: `hc:${run}` });
+      },
+    });
+  }
   return launchHerdr({
     target: herdrTarget(),
     kind: target.resolution.harness.id,
@@ -855,10 +898,11 @@ async function launchRun(ctx: ProjectContext, target: RunTarget, prepared: Prepa
   const launch = await launchOnSurface(ctx, target, prepared, sandbox);
   const facts = resolution.harness.parseResult(launch.stdout);
   if (facts.sessionId !== undefined) writeSessionNote(prepared.files.dir, { harness: resolution.harness.id, session_id: facts.sessionId });
-  const { end, questions, result } = finalizeRun(ctx, run, { launch, facts, harness: resolution.harness.id });
+  const { surface } = target.surface;
+  const { end, questions, result } = finalizeRun(ctx, run, { launch, facts, harness: resolution.harness.id, surface });
   if (launch.boxBroken !== undefined) {
-    // The tab is closed and the run is failed (finalizeRun): a box the surface cannot prove never runs on.
-    appendRunLog(prepared.files.dir, `box: the herdr tab was closed, ${launch.boxBroken}`);
+    // The tab is closed (the terminal killed) and the run is failed (finalizeRun): a box the surface cannot prove never runs on.
+    appendRunLog(prepared.files.dir, `box: ${brokenAction(surface)}, ${launch.boxBroken}`);
     const entry = skipped(doc.header.slug, "box-broken", launch.boxBroken);
     entry.run = run;
     entry.end = end;
@@ -971,11 +1015,11 @@ async function runRitual(ctx: ProjectContext, target: Omit<RunTarget, "run">): P
 /** What the run's sandbox needs: the run, its work dir and mode, the surface, the marker's box keys, the harness and env_pass. */
 function sandboxRequest(ctx: ProjectContext, target: RunTarget, prepared: PreparedRun): SandboxRequest {
   const { harness, profile } = target.resolution;
-  return {
+  const request: SandboxRequest = {
     run: { id: target.run, dir: prepared.files.dir, policy: prepared.files.policy, project: ctx.project.name, who: `${harness.id}:${target.run}` },
     workDir: target.cwd,
     isReport: target.doc.header.policy.mode === "report",
-    hasTty: target.surface.surface === "herdr",
+    hasTty: target.surface.surface !== "headless",
     ritual: target.box,
     harness,
     envPass: profile.envPass ?? [],
@@ -984,6 +1028,9 @@ function sandboxRequest(ctx: ProjectContext, target: RunTarget, prepared: Prepar
       if (owner.project === ctx.project.name) recordPlants(ctx, owner.run, check);
     },
   };
+  // hc runs the argv with no shell to fill in the tab's TERM.
+  if (target.surface.surface === "hc") request.term = HC_TERM;
+  return request;
 }
 
 
@@ -1089,7 +1136,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       const name = resolution.profile.name ?? "built-in";
       return skipped(slug, "not-followable", `profile ${name} has permissions gated, and its allowlist would refuse the granted lines; name a profile with permissions = "skip" in [defaults] follow_up of .darius.toml`);
     }
-    const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp, doc.header);
+    const chosen = followUp === undefined ? await chooseSurface(resolution.profile) : await followUpSurface(followUp, doc.header, resolution.profile);
     if ("refused" in chosen) return skipped(slug, "not-followable", chosen.refused);
     const surface = chosen;
     // `sandbox = "off"` in the marker: this ritual runs unboxed, so the box check does not gate it.
@@ -1103,7 +1150,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
       const entry: RitualEntry = { ...launchFacts(resolution, surface, warnings), slug, action: "would-start" };
       if (followUp !== undefined) {
         entry.followUpOf = followUp.parent;
-        entry.detail = surface.surface === "herdr" ? `a herdr tab in workspace ${RUNS_WORKSPACE}, cwd ${where.dir}` : `headless, cwd ${where.dir}`;
+        entry.detail = followUpDetail(surface.surface, where.dir);
       }
       return entry;
     }
@@ -1176,7 +1223,7 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
     entry.syncBefore = synced.word;
     ctx.syncBefore = synced.word;
     if (synced.outdated !== undefined) ctx.outdated = synced.outdated;
-    await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
+    await closeFinishedAttended(ctx.project);
   }
   reconcileStep(ctx, entry);
   const slugs = ctx.project.listItems("ritual").filter((slug) => ctx.options.only === undefined || slug === ctx.options.only);
@@ -1185,7 +1232,7 @@ async function runProject(ctx: ProjectContext, cfg: Config | null): Promise<Proj
     if (ritual !== null) entry.rituals.push(ritual);
   }
   // A ritual that ran just now has a newer run: its older tab can go (0.52.0).
-  if (!ctx.options.isDryRun) await closeFinishedTabs(join(ctx.project.root, "runs"), tabRuns(ctx.project));
+  if (!ctx.options.isDryRun) await closeFinishedAttended(ctx.project);
   recordBehind(ctx, entry);
   const didStart = entry.rituals.some((ritual) => ritual.action === "started");
   if (didStart) entry.syncAfter = (await syncStep(ctx.project, remote)).word;
@@ -1231,6 +1278,21 @@ export async function runDue(options: RunDueOptions): Promise<{ report: BatchRep
 function listRuns(project: Project): string[] {
   const dir = join(project.root, "runs");
   return existsSync(dir) ? readdirSync(dir) : [];
+}
+
+/** Closes the herdr tabs and removes the hc terminals of the project's finished runs that are due. */
+async function closeFinishedAttended(project: Project): Promise<void> {
+  const runsDir = join(project.root, "runs");
+  const runs = tabRuns(project);
+  await closeFinishedTabs(runsDir, runs);
+  await closeFinishedTerminals(runsDir, runs);
+}
+
+/** Where a follow-up's dry run says it would start. */
+function followUpDetail(surface: SurfaceId, dir: string): string {
+  if (surface === "herdr") return `a herdr tab in workspace ${RUNS_WORKSPACE}, cwd ${dir}`;
+  if (surface === "hc") return `an hc terminal, cwd ${dir}`;
+  return `headless, cwd ${dir}`;
 }
 
 /** Every run of the ledger and every run dir here, with what closeFinishedTabs needs. A run the ledger does not know counts as closed and old. */

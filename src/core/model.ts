@@ -124,6 +124,17 @@ export interface Vigil extends ItemHeader {
  * profiles and surfaces" > "Profiles"). Store-wide profiles live in the
  * reserved `_global` project; a repo's `.darius.toml` may override them.
  */
+/** Where a run's harness runs: in the background, in a herdr tab, or in an hc (herdr-core) terminal (0.133.0). */
+export type SurfaceId = "headless" | "herdr" | "hc";
+
+/** Every surface id, in the order the help texts name them. */
+export const SURFACE_IDS: readonly SurfaceId[] = ["headless", "herdr", "hc"];
+
+/** True when `value` names a surface. */
+export function isSurfaceId(value: string): value is SurfaceId {
+  return SURFACE_IDS.some((id) => id === value);
+}
+
 export interface Profile extends ItemHeader, ProfileFields {
   kind: "profile";
 }
@@ -134,7 +145,7 @@ export interface ProfileFields {
   model?: string;
   effort?: string;
   permissions?: "gated" | "skip";
-  surface?: "headless" | "herdr";
+  surface?: SurfaceId;
   max_turns?: number;
   args?: string[];
   /**

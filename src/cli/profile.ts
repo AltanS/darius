@@ -5,7 +5,7 @@
  * item. A repo's `.darius.toml` may override them field by field.
  *
  *   profile add <name> [--harness H] [--model M] [--effort E]
- *               [--permissions gated|skip] [--surface headless|herdr]
+ *               [--permissions gated|skip] [--surface headless|herdr|hc]
  *               [--max-turns N] [--arg=A ...] [--title T] [--who W]
  *   profile set <name> (the same flags; a flag given replaces the field,
  *               an empty value clears it, `--arg ""` clears the args)
@@ -22,7 +22,7 @@
  */
 
 import { defaultWho } from "../core/ledger.ts";
-import type { Profile, ProfileFields } from "../core/model.ts";
+import { isSurfaceId, type Profile, type ProfileFields } from "../core/model.ts";
 import { GLOBAL_PROJECT, openProject, type Project } from "../core/store.ts";
 import { ulid } from "../core/ulid.ts";
 import { checkProfileFields } from "../harness/profile.ts";
@@ -58,8 +58,8 @@ function permissionsFlag(value: string): ProfileFields["permissions"] {
 }
 
 function surfaceFlag(value: string): ProfileFields["surface"] {
-  if (value === "headless" || value === "herdr") return value;
-  throw new UsageError(`--surface must be 'headless' or 'herdr', got '${value}'`);
+  if (isSurfaceId(value)) return value;
+  throw new UsageError(`--surface must be 'headless', 'herdr' or 'hc', got '${value}'`);
 }
 
 function maxTurnsFlag(value: string): number {

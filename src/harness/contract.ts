@@ -63,7 +63,7 @@ export interface ResolvedProfile {
   model?: string;
   effort?: string;
   permissions: "gated" | "skip";
-  surface: "headless" | "herdr";
+  surface: "headless" | "herdr" | "hc";
   maxTurns?: number;
   args: string[];
   /** The profile's `env_pass` (0.117.0): variables a run in the box gets. Absent when none. */
@@ -97,10 +97,14 @@ export interface ResultFacts {
  * How to start one run. `headless` is the whole argv of a background run,
  * first message included. `interactive` starts the harness's own UI in a
  * terminal pane, and `message` is then typed into it as the first prompt.
+ * `prompted` is `interactive` with `message` already in it as the first task
+ * (0.133.0): the hc surface starts the harness with it, because a send to an
+ * agent that is still booting can be dropped.
  */
 export interface HarnessLaunch {
   headless: string[];
   interactive: string[];
+  prompted: string[];
   message: string;
 }
 

@@ -767,7 +767,7 @@ export interface RitualPolicy {
   onHold: "stop" | "deny";
   /** What only a follow-up run may also run (0.69.0); empty when the policy sets none. */
   followUpMay: string[];
-  /** How a follow-up runs (0.69.0): "attended" in a herdr tab, or "headless". */
+  /** How a follow-up runs (0.69.0): "attended" in a herdr tab (or an hc terminal, by its profile), or "headless". */
   followUp: "attended" | "headless";
   notes: string | null;
   model: string | null;
@@ -957,8 +957,8 @@ export type FollowUpReadiness =
       /** This host, when the follow-up starts on `host` over ssh (0.69.0). */
       via?: string;
       profile: string;
-      /** How it runs (0.69.0): headless, or attended in a herdr tab. */
-      surface: "headless" | "herdr";
+      /** How it runs (0.69.0): headless, or attended in a herdr tab or (0.133.0) an hc terminal. */
+      surface: "headless" | "herdr" | "hc";
       questions: FollowUpQuestion[];
       /** The needs-decision items with a key the operator may approve (0.69.0). */
       items: FollowUpItem[];
