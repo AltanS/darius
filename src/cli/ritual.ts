@@ -67,7 +67,7 @@ import { parseDate, ritualLifecycle, ritualState, rollCadence, type RitualState 
 import { handoffLines, lapsedAnswers, latestHandoff } from "../core/handoff.ts";
 import { findMarker, isAboveCap, MARKER_FILE, PERMISSION_RULE_RE, type Marker } from "../core/marker.ts";
 import { reconcileProject, ritualWarnings, type ReconcileResult } from "../core/reconcile.ts";
-import { readStaleRecord } from "../core/reconcile-guard.ts";
+import { readHeldRecord, readStaleRecord } from "../core/reconcile-guard.ts";
 import { loadConfigIfPresent } from "../core/config.ts";
 import { lastSyncAt } from "../core/sync.ts";
 import type { Document, Policy, Ritual } from "../core/model.ts";
@@ -338,6 +338,7 @@ function listRituals(project: Project): ListedRitual[] {
   const now = new Date();
   const marker = v3Marker(project);
   const isStale = readStaleRecord(project) !== null;
+  const isHeld = readHeldRecord(project) !== null;
   return project.listItems("ritual").flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
@@ -356,7 +357,7 @@ function listRituals(project: Project): ListedRitual[] {
     if (doc.header.tz !== undefined) listed.tz = doc.header.tz;
     if (doc.header.args !== undefined) listed.args = doc.header.args;
     if (markerSandbox(slug, marker) === "off") listed.sandbox = "off";
-    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, isStale);
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, isStale, isHeld);
     if (warnings.length > 0) listed.warnings = warnings;
     return [listed];
   });
@@ -384,13 +385,13 @@ function runList(args: ParsedArgs): number {
 }
 
 /** `repo (commit X, host Y, <date>)`, `unmanaged` (v3 project, not in the marker) or `store`. */
-function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, at: { marker: Marker | null; isStale: boolean }): string {
+function showSource(doc: Document<Ritual>, ledger: ReturnType<typeof readLedger>, at: { marker: Marker | null; isStale: boolean; isHeld: boolean }): string {
   const { marker } = at;
   const { header } = doc;
   if (header.source === "repo") {
     const commit = header.def_commit === undefined ? "no commit" : `commit ${header.def_commit}`;
     const dirty = header.def_dirty === true ? ", uncommitted changes" : "";
-    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, at.isStale).map((warning) => `\n  ! ${warning}`).join("");
+    const warnings = ritualWarnings(doc, ritualLifecycle(ledger, doc.header.slug), marker, at.isStale, at.isHeld).map((warning) => `\n  ! ${warning}`).join("");
     return `repo (${commit}, host ${header.def_host ?? "?"}, ${header.def_at ?? "?"}${dirty})${warnings}`;
   }
   return marker !== null && !isRepoRitual(doc, header.slug, marker) ? "unmanaged (not in .darius.toml; it never runs unattended)" : "store";
@@ -418,7 +419,7 @@ function runShow(args: ParsedArgs): number {
   if (doc.header.skill !== undefined) console.log(`skill: ${doc.header.skill}`);
   if (doc.header.args !== undefined) console.log(`args: ${doc.header.args}`);
   if (doc.header.timeout !== undefined) console.log(`timeout: ${doc.header.timeout}`);
-  console.log(`source: ${showSource(doc, ledger, { marker: v3Marker(project), isStale: readStaleRecord(project) !== null })}`);
+  console.log(`source: ${showSource(doc, ledger, { marker: v3Marker(project), isStale: readStaleRecord(project) !== null, isHeld: readHeldRecord(project) !== null })}`);
   if (doc.header.host !== undefined) console.log(`host: ${doc.header.host} (other hosts skip it)`);
   if (markerSandbox(slug, v3Marker(project)) === "off") console.log('sandbox: off (the marker runs it outside the box on a host with [run] sandbox = "box")');
   console.log(`policy: ${formatPolicy(doc.header.policy)}`);
@@ -531,6 +532,7 @@ function reconcileLines(project: string, result: ReconcileResult, isDry: boolean
   const lines = [`${isDry ? "·" : "✓"} ${isDry ? "would reconcile" : "reconciled"} ${project}${where} on ${hostId()}: ${counts}`];
   if (result.unmanaged.length > 0) lines.push(`  unmanaged: ${result.unmanaged.join(", ")} (not in ${MARKER_FILE}; they never run unattended)`);
   if (result.dirty) lines.push(`! ${MARKER_FILE} has uncommitted changes; unattended runs skip this project's rituals until you commit them`);
+  if (result.kept !== undefined) lines.push(`  kept: ${result.kept.join(", ")} (mirrored from this commit, not in ${MARKER_FILE} here)`);
   for (const warning of result.warnings) lines.push(`! ${warning}`);
   return lines;
 }
@@ -539,6 +541,15 @@ function reconcileLines(project: string, result: ReconcileResult, isDry: boolean
 function staleLines(project: string, result: ReconcileResult): string[] {
   const where = result.commit === undefined ? "" : ` at commit ${result.commit}`;
   return [`! did not reconcile ${project}${where} on ${hostId()}: ${result.stale?.line ?? "the checkout is stale"}`];
+}
+
+/** What a held dirty marker prints (0.135.0): nothing was written, why, and the way to mirror it anyway. */
+function heldLines(project: string, result: ReconcileResult): string[] {
+  const where = result.commit === undefined ? "" : ` at commit ${result.commit}`;
+  return [
+    `! did not reconcile ${project}${where} on ${hostId()}: ${result.held?.line ?? `${MARKER_FILE} has uncommitted changes`}`,
+    `  to mirror the uncommitted marker anyway: darius ritual reconcile --force`,
+  ];
 }
 
 const SYNC_STALE_MS = 60 * 60_000;
@@ -585,8 +596,9 @@ function runReconcile(args: ParsedArgs): number {
   if (args.json) printJson({ project: project.name, dryRun: isDry, ...result });
   else if (!result.ok) console.error(`! ${result.error ?? "the marker does not parse"}`);
   else if (result.stale !== undefined) for (const line of staleLines(project.name, result)) console.error(line);
+  else if (result.held !== undefined) for (const line of heldLines(project.name, result)) console.error(line);
   else for (const line of reconcileLines(project.name, result, isDry)) console.log(line);
-  return result.ok && result.stale === undefined ? 0 : 1;
+  return result.ok && result.stale === undefined && result.held === undefined ? 0 : 1;
 }
 
 // --- dispatch ---------------------------------------------------------------------

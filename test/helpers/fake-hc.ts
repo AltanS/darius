@@ -14,6 +14,9 @@
  *   - `gate-after-send-<n>`: the n-th send appends a line to `$RUN_DIR/gate.jsonl`.
  *   - `foreground`: the foreground name `terminal.get` shows (default: the
  *     basename of argv[0]); `foreground-pid` "other" gives it another pid.
+ *   - `pid`: the pid `terminal.run` gives the terminal, for a real process
+ *     tree the watch walks in /proc. Default: 2000000000 + n, above any
+ *     pid_max, so /proc has no such process.
  *   - `spawn`: when present, `terminal.run` starts argv detached in its cwd,
  *     with the request's env on top of the fake's own.
  *   - `unavailable`: when present, `server.status` answers an error.
@@ -59,7 +62,7 @@ process.stdin.on("end", () => {
     case "terminal.run": {
       const n = Number(read("count", "0")) + 1;
       fs.writeFileSync(file("count"), String(n));
-      const t = { address: "t" + n, name: params.name, argv: params.argv, cwd: params.cwd, labels: params.labels || {}, env: params.env || {}, pid: 4000 + n, state: "live", status: "-", reported: false };
+      const t = { address: "t" + n, name: params.name, argv: params.argv, cwd: params.cwd, labels: params.labels || {}, env: params.env || {}, pid: Number(read("pid", "").trim()) || 2000000000 + n, state: "live", status: "-", reported: false };
       save(t);
       fs.writeFileSync(file("newest"), t.address);
       if (fs.existsSync(file("spawn"))) {

@@ -913,9 +913,12 @@ test("ritual list warns when the mirror differs from this checkout, and when a r
   assert.match(list.stdout, /! mirror is from host-b \(commit abc123\), this checkout differs: darius ritual reconcile/u);
 
   const full = readFileSync(join(dir, ".darius.toml"), "utf8");
+  // Committed both times: an uncommitted marker is not reconciled (0.135.0).
   writeFileSync(join(dir, ".darius.toml"), full.slice(0, full.indexOf("[rituals.daily]")));
+  commitAll(dir, "drop daily");
   await runCli(ritualCommand, project, ["reconcile"]);
   writeFileSync(join(dir, ".darius.toml"), full);
+  commitAll(dir, "bring daily back");
   const again = await runCli(ritualCommand, project, ["reconcile"]);
   assert.match(again.stdout, /! daily was retired; use a new slug/u);
   assert.match((await runCli(ritualCommand, project, ["list"])).stdout, /! daily was retired; use a new slug/u);

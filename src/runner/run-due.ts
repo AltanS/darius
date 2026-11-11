@@ -340,6 +340,10 @@ interface RepoState {
   stale?: string;
   /** The sync before the batch pulled nothing (offline, or refused for the compat floor), so reconcile wrote nothing (0.129.0). */
   isHeld?: boolean;
+  /** `.darius.toml` differs from HEAD, so reconcile did not mirror it (0.135.0): the store keeps the committed definitions. */
+  isDirtyHeld?: boolean;
+  /** Repo rituals this marker does not name, kept because their mirror is from this checkout's commit (0.135.0). */
+  kept?: ReadonlySet<string>;
 }
 
 function skipped(slug: string, reason: SkipReason, detail?: string | undefined): RitualEntry {
@@ -407,6 +411,10 @@ function repoBlocker(ctx: ProjectContext, doc: Document<Ritual>, isByHand: boole
   if (repo.isHeld === true && doc.header.source === "repo" && !repo.named.has(slug)) {
     return skipped(slug, "not-in-marker", `not in ${MARKER_FILE} of this checkout; reconcile waits for a sync that reaches the bucket`);
   }
+  // 0.135.0: the mirror is from this checkout's commit, but this marker does not name it; it is not retired, and it does not run here.
+  if (repo.kept?.has(slug) === true) {
+    return skipped(slug, "not-in-marker", `not in ${MARKER_FILE} of this checkout, which is at the commit its mirror is from; kept, not retired`);
+  }
   if (doc.header.source !== "repo" && !repo.named.has(slug)) {
     return isByHand ? undefined : skipped(slug, "not-in-marker", `not in ${MARKER_FILE}; it never runs unattended`);
   }
@@ -414,10 +422,19 @@ function repoBlocker(ctx: ProjectContext, doc: Document<Ritual>, isByHand: boole
   return undefined;
 }
 
-/** The warning a by-hand run of a v3 ritual carries when its marker is dirty. */
+/**
+ * The warning a by-hand run of a v3 ritual carries when its marker is dirty.
+ * Since 0.135.0 reconcile does not mirror a dirty marker, so the run's
+ * definition is the store's, from the last committed marker; the checkout's
+ * file still gives the timeout, the box keys and the profiles, as for any
+ * checkout that differs from the mirror.
+ */
 function dirtyWarnings(ctx: ProjectContext, isByHand: boolean): string[] {
-  const dirty = isByHand && ctx.repo?.dirty === true && (ctx.repo.version ?? 0) >= 3;
-  return dirty ? [`${MARKER_FILE} has uncommitted changes; this run uses them`] : [];
+  const repo = ctx.repo;
+  const dirty = isByHand && repo?.dirty === true && (repo.version ?? 0) >= 3;
+  if (!dirty) return [];
+  if (repo.isDirtyHeld !== true) return [`${MARKER_FILE} has uncommitted changes; this run uses them`];
+  return [`${MARKER_FILE} has uncommitted changes, which are not reconciled: this run uses the store's definition, with the timeout, box keys and profiles of this checkout's file`];
 }
 
 /** The skill file of a ritual, relative to the checkout. */
@@ -1204,7 +1221,14 @@ function reconcileStep(ctx: ProjectContext, entry: ProjectEntry): void {
   if (!result.ok) repo.error = result.error ?? `${checkout}: ${MARKER_FILE} does not parse`;
   else {
     repo.version = result.marker === "v3" ? 3 : 2;
-    repo.named = new Set([...result.adopted, ...result.updated, ...result.unchanged]);
+    // A held dirty marker: the rituals it would update are still in the store, at the committed definition.
+    repo.named = new Set([...result.adopted, ...result.updated, ...result.unchanged, ...(result.held?.updated ?? [])]);
+  }
+  if (result.kept !== undefined) repo.kept = new Set(result.kept);
+  if (result.held !== undefined) {
+    repo.isDirtyHeld = true;
+    const { line, adopted, updated, retired } = result.held;
+    entry.markerHeld = { checkout, line, adopted, updated, retired };
   }
   if (result.stale !== undefined) {
     const { relation, host, commit, line } = result.stale;

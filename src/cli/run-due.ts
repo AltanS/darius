@@ -30,7 +30,9 @@ import { resolveProject, stateDir } from "../core/paths.ts";
 import { isInsideMask } from "../core/sandbox.ts";
 import { sshDarius, sshDariusLine, sshProgram } from "../core/ssh.ts";
 import { openProject, type Project } from "../core/store.ts";
-import { ritualHost } from "../core/workdir.ts";
+import { MARKER_FILE, readMarker } from "../core/marker.ts";
+import { markerDirty } from "../core/reconcile.ts";
+import { checkoutDir, ritualHost } from "../core/workdir.ts";
 import { parentResult, planFollowUp, type FollowUp, type FollowUpRequest } from "../runner/follow-up.ts";
 import { runDue, viewRun, DEFAULT_RUN_TIMEOUT_MS, type RunDueOptions } from "../runner/run-due.ts";
 import { deliverReport, skipAlerts, type BatchReport, type ReportScope } from "../runner/report.ts";
@@ -258,6 +260,23 @@ function byHandExitCode(report: BatchReport): number {
  * line, `darius run now: started run <id> on <host>` (0.80.0): the web page
  * waits for it (src/web/action-api.ts).
  */
+/**
+ * The hint for `run now` of a slug the store lacks (0.135.0): a ritual that
+ * only an uncommitted `.darius.toml` names is not reconciled, so it is not in
+ * the store. Empty when that is not the case, or the marker does not read.
+ */
+function onlyInDirtyMarker(project: Project, slug: string): string {
+  const checkout = checkoutDir(project, readLedger(project));
+  if (checkout === undefined) return "";
+  try {
+    const named = readMarker(checkout)?.rituals.some((ritual) => ritual.slug === slug) === true;
+    if (!named || !markerDirty(checkout)) return "";
+  } catch {
+    return "";
+  }
+  return `: it is only in the uncommitted ${MARKER_FILE} of ${checkout}, which is not reconciled; commit it, or run darius ritual reconcile --force to adopt it now`;
+}
+
 export async function runNow(args: ParsedArgs): Promise<number> {
   const slug = args.positional[1];
   if (slug === undefined || slug === "") throw new UsageError("run now: missing <ritual>");
@@ -266,7 +285,7 @@ export async function runNow(args: ParsedArgs): Promise<number> {
   if (forwarded !== undefined) return forwarded;
   const store = openProject(project);
   const doc = store.readItem<Ritual>("ritual", slug);
-  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project}`);
+  if (doc === null) throw new NotFoundError(`no ritual '${slug}' in ${project}${onlyInDirtyMarker(store, slug)}`);
   const wrongHost = refuseWrongHost(args, { project: store, ledger: readLedger(store), doc });
   if (wrongHost !== undefined) return wrongHost;
   const now: NonNullable<RunDueOptions["now"]> = {};

@@ -69,7 +69,7 @@ import { basename, join } from "node:path";
 import type { JsonValue } from "../core/model.ts";
 import { appendRunLog } from "../core/sandbox.ts";
 import { errorMessage } from "../runtime.ts";
-import { agentName, closeDueRuns, gateLogSize, MAX_RESENDS, showMs, sleep, type TabRun } from "./attended.ts";
+import { agentName, closeDueRuns, gateLogSize, hasHarnessWork, MAX_RESENDS, showMs, sleep, type TabRun } from "./attended.ts";
 import type { ChildEnv, LaunchResult } from "./headless.ts";
 
 /** The TERM every hc terminal gets (probed above); a boxed launch passes it, as the box clears the env. */
@@ -394,16 +394,26 @@ async function confirmFirstMessage(plan: HcPlan, terminal: { address: string; na
   return { ready: true };
 }
 
-/** The status words that mean the agent waits for a person. */
-const WAITING: ReadonlySet<string> = new Set(["idle", "done", "blocked", "error"]);
+/** The status words that mean the agent waits for a person, whatever else runs. */
+const WAITING_NOW: ReadonlySet<string> = new Set(["blocked", "error"]);
+/** The status words of an agent at rest: it waits for a person only when none of its own work is in progress. */
+const AT_REST: ReadonlySet<string> = new Set(["idle", "done"]);
 
 /**
- * Why the agent waits for input, or undefined when it does not. A terminal
- * that never reported and whose gate log never grew waits too: Claude Code
- * reports nothing at its folder trust dialog.
+ * Why the agent waits for input, or undefined when it does not. `blocked`
+ * and `error` wait at once. `idle` and `done` wait only when no tool shell of
+ * the harness runs under the terminal (hasHarnessWork, 0.135.0): Claude Code
+ * reports `done` while a `run_in_background` command runs, and it is woken
+ * when the command ends, so nobody is needed. hc exposes no status detail for
+ * that, so the signal is the process tree from the terminal's pid. A shell
+ * that never ends keeps the run from being held, but not open: the run's
+ * timeout kills the terminal. A terminal that never reported and whose gate
+ * log never grew waits too: Claude Code reports nothing at its folder trust
+ * dialog.
  */
 function waitingWord(snap: Snapshot, plan: HcPlan, gateAtLaunch: number): string | undefined {
-  if (snap.status !== null && WAITING.has(snap.status)) return snap.status;
+  if (snap.status !== null && WAITING_NOW.has(snap.status)) return snap.status;
+  if (snap.status !== null && AT_REST.has(snap.status)) return hasHarnessWork(snap.pid === null ? [] : [snap.pid]) ? undefined : snap.status;
   if (!snap.reported && gateLogSize(plan.runDir) <= gateAtLaunch) return "silent, perhaps at a startup dialog such as the folder trust question,";
   return undefined;
 }

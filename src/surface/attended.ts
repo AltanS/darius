@@ -6,13 +6,91 @@
  * these lines moved here from herdr.ts as they were.
  */
 
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** How often an attended surface looks at the ledger and the agent. */
 export const DEFAULT_POLL_MS = 3_000;
 /** How long an agent may wait for input before the run is held with a question. */
 export const DEFAULT_WAIT_GRACE_MS = 10 * 60_000;
+/**
+ * The argv mark of a harness's own tool shell (0.135.0). Claude Code runs
+ * every Bash tool call, `run_in_background` ones too, as a child
+ * `bash -c "source <config dir>/shell-snapshots/snapshot-<shell>-<id>.sh ...
+ * && eval '<command>'"`, probed on Claude Code 2.1 on 2026-11-11. A background
+ * one is its own session leader, so it is not in the terminal's foreground
+ * group, but it stays a child of the harness process. Long-lived helpers
+ * such as MCP servers are children too, and do not carry this mark.
+ */
+export const HARNESS_SHELL_MARK = "/shell-snapshots/snapshot-";
+
+/** One /proc entry: its parent and whether it is a zombie. */
+interface ProcEntry {
+  ppid: number;
+  isZombie: boolean;
+}
+
+/** Parent pid and state from `/proc/<pid>/stat`; the name in parentheses may hold spaces and parentheses. */
+function readStat(procRoot: string, pid: string): ProcEntry | undefined {
+  try {
+    const text = readFileSync(join(procRoot, pid, "stat"), "utf8");
+    const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+    const ppid = Number(fields[1]);
+    if (!Number.isInteger(ppid)) return undefined;
+    return { ppid, isZombie: fields[0] === "Z" };
+  } catch {
+    // The process ended between the listing and the read.
+    return undefined;
+  }
+}
+
+function readCmdline(procRoot: string, pid: number): string {
+  try {
+    return readFileSync(join(procRoot, String(pid), "cmdline"), "utf8").replaceAll("\0", " ");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * True when a live descendant of one of `roots` is a harness tool shell
+ * (HARNESS_SHELL_MARK): the agent waits on its own work, a background
+ * command it will be woken by, not on a person. Reads /proc of this host;
+ * the box's `--unshare-pid` hides nothing from outside, so the host pids of
+ * the tree are all there. A root itself never counts, and a root of 0 or 1 is
+ * ignored (init's descendants are the whole host). No /proc (not Linux)
+ * answers false, which is the rule before 0.135.0.
+ */
+export function hasHarnessWork(roots: readonly number[], procRoot = "/proc"): boolean {
+  const starts = roots.filter((pid) => Number.isInteger(pid) && pid > 1);
+  if (starts.length === 0) return false;
+  let names: string[];
+  try {
+    names = readdirSync(procRoot).filter((name) => /^\d+$/u.test(name));
+  } catch {
+    return false;
+  }
+  const children = new Map<number, number[]>();
+  const zombies = new Set<number>();
+  for (const name of names) {
+    const entry = readStat(procRoot, name);
+    if (entry === undefined) continue;
+    const pid = Number(name);
+    if (entry.isZombie) zombies.add(pid);
+    children.set(entry.ppid, [...(children.get(entry.ppid) ?? []), pid]);
+  }
+  const seen = new Set<number>(starts);
+  const queue = starts.flatMap((pid) => children.get(pid) ?? []);
+  while (queue.length > 0) {
+    const pid = queue.shift();
+    if (pid === undefined || seen.has(pid)) continue;
+    seen.add(pid);
+    if (!zombies.has(pid) && readCmdline(procRoot, pid).includes(HARNESS_SHELL_MARK)) return true;
+    queue.push(...(children.get(pid) ?? []));
+  }
+  return false;
+}
+
 /** How long one sent prompt is watched for a sign that it landed. */
 export const DEFAULT_CONFIRM_MS = 30_000;
 /** An agent that stays idle this long after a send, with no other sign, did not get the prompt. */

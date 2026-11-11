@@ -325,19 +325,34 @@ test("no git: commit is absent, dirty is false, and the mirror is still written"
   assert.equal(note, "left .darius.toml");
 });
 
-test("dirty: only an uncommitted .darius.toml counts; it is recorded and rewrites the mirror", { skip: NO_GIT }, () => {
+test("dirty: only an uncommitted .darius.toml counts; it is not mirrored (0.135.0), and --force mirrors it with the flag", { skip: NO_GIT }, () => {
   const { project, dir } = setup({ git: true });
   dirty(dir, "README.md");
   const clean = reconcileProject(project, dir, HOST, T1);
   assert.equal(clean.dirty, false, "another dirty file never counts");
+  assert.equal(clean.held, undefined);
+  const before = readItemText(project, "ritual", "daily-report");
+  const ledgerBefore = readLedger(project).length;
   dirty(dir, ".darius.toml");
+  const comment = reconcileProject(project, dir, HOST, T2);
+  assert.equal(comment.dirty, true);
+  assert.deepEqual([comment.held?.adopted, comment.held?.updated, comment.held?.retired], [[], [], []], "a comment changes no definition; the dirty flag alone is no change");
+  assert.equal(comment.held?.line, `.darius.toml of ${project.name} at ${clean.commit ?? ""} has uncommitted changes, so it is not reconciled: the store keeps the definitions it has. Commit or revert the change`);
+  const marker = join(dir, ".darius.toml");
+  writeFileSync(marker, readFileSync(marker, "utf8").replace('title = "Daily site report"', 'title = "Daily report"'));
   const result = reconcileProject(project, dir, HOST, T2);
-  assert.equal(result.dirty, true);
-  assert.deepEqual(result.updated, ["daily-report", "weekly-audit"], "same hash and commit, dirty flag changed");
+  assert.deepEqual([result.adopted, result.updated, result.retired], [[], [], []], "nothing reads as done");
+  assert.deepEqual(result.held?.updated, ["daily-report"], "what a reconcile would have done");
+  assert.deepEqual(result.unchanged, ["weekly-audit"]);
+  assert.equal(readItemText(project, "ritual", "daily-report"), before, "the mirror is not rewritten");
+  assert.equal(readLedger(project).length, ledgerBefore, "no ritual.defined line");
+
+  const forced = reconcileProject(project, dir, HOST, T3, { force: true });
+  assert.equal(forced.held, undefined);
+  assert.deepEqual(forced.updated, ["daily-report", "weekly-audit"], "daily: a new title; weekly: same hash and commit, dirty flag changed");
   assert.equal(ritual(project, "daily-report").def_dirty, true);
   const line = defined(project).findLast((entry) => entry.slug === "daily-report");
   assert.equal(line?.dirty, true);
-  assert.deepEqual(reconcileProject(project, dir, HOST, T3).unchanged, ["daily-report", "weekly-audit"]);
 });
 
 // --- may_extra and hold_extra reach the mirror ------------------------------------------

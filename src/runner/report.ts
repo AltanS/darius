@@ -104,6 +104,12 @@ export interface ProjectEntry {
   stale?: { checkout: string; relation: "behind" | "unknown" | "diverged"; host: string; commit: string; line: string };
   /** "held" (0.129.0): the sync before the batch pulled nothing, so reconcile wrote nothing; `warnings` says why. */
   reconcile?: "held";
+  /**
+   * `.darius.toml` of the checkout differs from HEAD (0.135.0): reconcile
+   * wrote nothing and the store keeps its definitions. The lists are what a
+   * reconcile from this marker would have changed.
+   */
+  markerHeld?: { checkout: string; line: string; adopted: string[]; updated: string[]; retired: string[] };
 }
 
 export interface BatchReport {
@@ -296,6 +302,7 @@ export function formatReport(report: BatchReport, scope: ReportScope = "all"): s
     for (const warning of project.warnings ?? []) lines.push(`! ${project.project}: ${warning}`);
     const stale = describeStale(project);
     if (stale !== null) lines.push(`! ${stale}`);
+    if (project.markerHeld !== undefined) lines.push(`! ${project.markerHeld.line}`);
   }
   // Only a ritual that is about to run asks for the check, so this line comes with news of its own.
   for (const project of report.projects) {

@@ -2,6 +2,21 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.135.0] - 2026-11-11
+
+### Fixed
+
+- **A host no longer retires a ritual that another host adopted from an uncommitted marker.** The incident, twice: host-a had an uncommitted `.darius.toml` that added a ritual, and its run-due pass adopted it and recorded its HEAD, commit X. host-b at X with a clean marker found the record at its own HEAD, so the 0.129.0 guard let it reconcile ("same commit"), and it retired the ritual as `left .darius.toml at X`. A retired slug cannot come back. The guard compares commits only, and a dirty marker was mirrored with the commit it was not in.
+- Now reconcile mirrors only a marker that is the same as at HEAD. In a git work tree, a modified, staged or untracked `.darius.toml` is held: no adopt, no update, no retire, no `ritual.defined` line. The store keeps the definitions it has. This holds for run-due, its dry run and `darius ritual reconcile`. Outside git, or when git fails, nothing changes.
+- A held pass says so once: `.darius.toml of <project> at <commit> has uncommitted changes, so it is not reconciled: the store keeps the definitions it has. It would adopt <slug>. Commit or revert the change`. It is in the run-due report (not in the news scope), in the JSON project entry as `markerHeld` (`checkout`, `line`, `adopted`, `updated`, `retired`), in `darius doctor` from `marker-dirty.json` in the project's store dir (local, never synced; a clean reconcile removes it), and `ritual list` and `ritual show` advise a commit instead of a reconcile. Unattended, the rituals skip as `marker-dirty`, as before. A dirty flag alone (a comment line) is listed as no change.
+- `darius ritual reconcile` on a dirty marker writes nothing, prints the line and exits 1. `--force` mirrors the dirty marker anyway, as before; the result JSON has `held`.
+- A repo ritual whose mirror names the commit this checkout is at is never retired by a marker that does not name it: the same commit with other content means a dirty marker, not a removal. Reconcile lists it as `kept` with a warning, and run-due skips it on this host as `not-in-marker` (quiet). It retires once a newer commit lacks it. This covers mirrors that a darius before 0.135.0, or a `--force`, made from a dirty marker, so it helps while hosts update one by one.
+- **An agent that waits on its own background command is no longer held as waiting for a person.** Claude Code reports `done` while a `run_in_background` command runs, and is woken when it ends. The hc and herdr watches held such a run after the grace time (10 min). Now `idle` and `done` count as waiting only when no tool shell of the harness runs under the agent: darius walks `/proc` from the hc terminal's pid, or from the herdr pane's foreground pids (`pane process-info`), and looks for a process whose argv carries `/shell-snapshots/snapshot-`, which Claude Code's Bash tool shells carry and helpers such as MCP servers do not. `blocked` and `error` still count at once. A shell that never ends keeps the run from being held, not open: the run's timeout kills it as before. hc offers no status detail for background work (`wait --children` is about child terminals), so herdr and hc use the same process signal. A host without `/proc` keeps the old rule.
+
+### Changed
+
+- By hand (`run now`) a ritual whose marker is dirty runs the store's definition, from the last committed marker, with the timeout, box keys and profiles of the checkout's file, and the warning says so: `.darius.toml has uncommitted changes, which are not reconciled: this run uses the store's definition, with the timeout, box keys and profiles of this checkout's file`. Before, it reconciled the dirty marker first. `run now` of a slug that only the dirty marker names exits as before (`no ritual '<slug>'`), and now adds that it is only in the uncommitted marker: commit it, or `darius ritual reconcile --force` to adopt it now.
+
 ## [0.134.0] - 2026-11-11
 
 ### Added

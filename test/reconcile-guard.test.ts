@@ -26,8 +26,10 @@ import {
   commitRelation,
   decideReconcile,
   headFacts,
+  heldDoctorLine,
   latestRecord,
   markerHash,
+  readHeldRecord,
   readStaleRecord,
   staleDoctorLine,
   type GuardDecision,
@@ -650,4 +652,101 @@ test("case c: host-a moves back to C1 and retires what C2 added; host-b at C2 do
   const blocked = reconcileAs("host-a", project, a, new Date("2026-11-09T06:15:00.000Z"));
   assert.deepEqual([blocked.stale?.relation, blocked.stale?.host], ["behind", "host-b"], "host-a at C1 is older than host-b's record now");
   assert.equal(project.readItem<Ritual>("ritual", "daily")?.header.def_commit, c2, "no flip-flop back to C1");
+});
+
+// --- the dirty hold and the same-commit rule (0.135.0) --------------------------------------
+
+/** The two-host marker plus a `[rituals.<slug>]` table, as an uncommitted edit would add it. */
+function withRitual(project: string, slug: string, opts: { dailyTitle: string; withExtra: boolean }): string {
+  return `${twoHostMarker(project, opts)}[rituals.${slug}]\ntitle = "New"\ncadence = "1w"\nskill = "daily"\nmode = "off"\n`;
+}
+
+test("dirty hold: an uncommitted ritual is not adopted, nothing is written, and doctor says so; the commit adopts it", { skip: NO_GIT }, () => {
+  const { project: name, a, c2 } = chain();
+  const project = openProject(name, { create: true });
+  reconcileAs("host-a", project, a, T1);
+  const linesBefore = definedLines(project).length;
+  writeFileSync(join(a, ".darius.toml"), withRitual(name, "new-slug", { dailyTitle: "Daily, new", withExtra: true }));
+
+  const held = reconcileAs("host-a", project, a, T2);
+  assert.equal(held.dirty, true);
+  assert.deepEqual([held.adopted, held.updated, held.retired], [[], [], []]);
+  assert.deepEqual(held.held?.adopted, ["new-slug"]);
+  assert.equal(held.held?.line, `.darius.toml of ${name} at ${c2} has uncommitted changes, so it is not reconciled: the store keeps the definitions it has. It would adopt new-slug. Commit or revert the change`);
+  assert.equal(project.readItem<Ritual>("ritual", "new-slug"), null, "no store item");
+  assert.equal(definedLines(project).length, linesBefore, "no ritual.defined line, so no record names this commit for a dirty marker");
+  assert.equal(heldDoctorLine(readHeldRecord(project)), `WARN: ${held.held?.line ?? ""} (reconcile, ${T2.toISOString()}). Until then the store keeps the definitions it has.`);
+
+  const c3 = commitMarker(a, withRitual(name, "new-slug", { dailyTitle: "Daily, new", withExtra: true }), "C3 adds new-slug");
+  const adopted = reconcileAs("host-a", project, a, T3);
+  assert.equal(adopted.held, undefined);
+  assert.deepEqual(adopted.adopted, ["new-slug"]);
+  assert.deepEqual([project.readItem<Ritual>("ritual", "new-slug")?.header.def_commit, project.readItem<Ritual>("ritual", "new-slug")?.header.def_dirty], [c3, false]);
+  assert.equal(readHeldRecord(project), null, "a clean reconcile clears the doctor record");
+});
+
+test("dirty hold: an untracked .darius.toml is held too; outside git a marker reconciles as before", { skip: NO_GIT }, () => {
+  counter += 1;
+  const name = `acme-untracked-${String(counter)}`;
+  const dir = join(SANDBOX, `untracked-${String(counter)}`);
+  mkdirSync(dir, { recursive: true });
+  git(dir, ["init", "--quiet", "--initial-branch=main"]);
+  writeFileSync(join(dir, "README.md"), "# acme\n");
+  git(dir, ["add", "README.md"]);
+  git(dir, ["commit", "--quiet", "--message", "readme only"]);
+  writeFileSync(join(dir, ".darius.toml"), twoHostMarker(name, { dailyTitle: "Daily", withExtra: false }));
+  const project = openProject(name, { create: true });
+  const held = reconcileAs("host-a", project, dir, T1);
+  assert.deepEqual(held.held?.adopted, ["daily", "weekly"]);
+  assert.deepEqual(project.listItems("ritual"), []);
+
+  const plain = join(SANDBOX, `no-git-${String(counter)}`);
+  mkdirSync(plain, { recursive: true });
+  writeFileSync(join(plain, ".darius.toml"), twoHostMarker(`${name}-plain`, { dailyTitle: "Daily", withExtra: false }));
+  const outside = reconcileAs("host-a", openProject(`${name}-plain`, { create: true }), plain, T1);
+  assert.equal(outside.held, undefined);
+  assert.deepEqual(outside.adopted, ["daily", "weekly"]);
+});
+
+test("same commit: host-b at the commit a dirty marker was adopted from never retires the ritual; a newer commit without it does", { skip: NO_GIT }, () => {
+  const { project: name, a, b, c2 } = chain();
+  const project = openProject(name, { create: true });
+  reconcileAs("host-a", project, a, T1);
+  // The incident: host-a mirrored its uncommitted marker (a darius before 0.135.0 did, --force does) and recorded C2.
+  writeFileSync(join(a, ".darius.toml"), withRitual(name, "new-slug", { dailyTitle: "Daily, new", withExtra: true }));
+  const forced = reconcileAs("host-a", project, a, T2, { force: true });
+  assert.deepEqual(forced.adopted, ["new-slug"]);
+  assert.equal(latestRecord(readLedger(project))?.commit, c2);
+
+  git(b, ["pull", "--quiet", "--ff-only"]);
+  const atSame = reconcileAs("host-b", project, b, T3);
+  assert.equal(atSame.stale, undefined);
+  assert.equal(atSame.held, undefined, "host-b's marker is clean");
+  assert.deepEqual(atSame.retired, [], "same commit, other content: someone was dirty, the ritual did not leave git");
+  assert.deepEqual(atSame.kept, ["new-slug"]);
+  assert.ok(atSame.warnings.includes(`new-slug is not in .darius.toml here, but host-a mirrored it from the same commit ${c2} with uncommitted changes: not retired; a newer commit without it retires it`), JSON.stringify(atSame.warnings));
+  assert.equal(ritualLifecycle(readLedger(project), "new-slug"), "active");
+
+  // A genuine removal: C3 drops extra, and new-slug was never committed. Both retire.
+  git(b, ["checkout", "--quiet", "--", ".darius.toml"]);
+  const c3 = commitMarker(b, twoHostMarker(name, { dailyTitle: "Daily, new", withExtra: false }), "C3 drops extra");
+  const removed = reconcileAs("host-b", project, b, new Date("2026-11-09T06:15:00.000Z"));
+  assert.deepEqual(removed.retired.toSorted(), ["extra", "new-slug"]);
+  assert.equal(removed.kept, undefined);
+  const ledger = readLedger(project);
+  assert.equal(ritualLifecycle(ledger, "extra"), "retired");
+  assert.equal(ledger.findLast((line) => line.type === "ritual.lifecycle" && line.item === "ritual/extra")?.note, `left .darius.toml at ${c3}`);
+});
+
+test("same commit: host-a holds its dirty marker, so host-b at the same commit has nothing to retire", { skip: NO_GIT }, () => {
+  const { project: name, a, b } = chain();
+  const project = openProject(name, { create: true });
+  reconcileAs("host-a", project, a, T1);
+  writeFileSync(join(a, ".darius.toml"), withRitual(name, "new-slug", { dailyTitle: "Daily, new", withExtra: true }));
+  assert.deepEqual(reconcileAs("host-a", project, a, T2).held?.adopted, ["new-slug"]);
+  git(b, ["pull", "--quiet", "--ff-only"]);
+  const followed = reconcileAs("host-b", project, b, T3);
+  assert.deepEqual([followed.adopted, followed.updated, followed.retired], [[], [], []]);
+  assert.deepEqual(followed.unchanged, ["daily", "weekly", "extra"]);
+  assert.equal(project.readItem<Ritual>("ritual", "new-slug"), null);
 });

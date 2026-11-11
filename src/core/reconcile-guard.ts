@@ -63,6 +63,8 @@ export const GUARD_GIT_TIMEOUT_MS = 5_000;
 /** The ledger line type that carries the record (reconcile.ts writes it). */
 const RECORD_TYPE = "ritual.defined";
 const STALE_FILE = "marker-stale.json";
+/** The dirty marker the last reconcile held (0.135.0): local, never synced, for doctor. */
+const HELD_FILE = "marker-dirty.json";
 /** A commit as darius writes it: hex, 7 to 64 characters. Anything else is no commit. */
 const COMMIT_PATTERN = /^[0-9a-f]{7,64}$/u;
 const SHORT = 12;
@@ -259,13 +261,10 @@ export interface StaleRecord {
   line: string;
 }
 
-function staleFile(project: Project): string {
-  return join(project.root, STALE_FILE);
-}
+/** The dirty marker the last reconcile held (0.135.0), in `marker-dirty.json`: the same shape. */
+export type HeldRecord = StaleRecord;
 
-/** Writes `marker-stale.json` in the project's local store dir, or removes it when `record` is null. Never synced. */
-export function writeStaleRecord(project: Project, record: StaleRecord | null): void {
-  const file = staleFile(project);
+function writeRecordFile(file: string, record: StaleRecord | null): void {
   if (record === null) {
     rmSync(file, { force: true });
     return;
@@ -275,9 +274,7 @@ export function writeStaleRecord(project: Project, record: StaleRecord | null): 
   renameSync(temp, file);
 }
 
-/** The last stale finding, or null when there is none or it does not read. */
-export function readStaleRecord(project: Project): StaleRecord | null {
-  const file = staleFile(project);
+function readRecordFile(file: string): StaleRecord | null {
   if (!existsSync(file)) return null;
   try {
     const parsed: JsonValue = JSON.parse(readFileSync(file, "utf8"));
@@ -290,8 +287,34 @@ export function readStaleRecord(project: Project): StaleRecord | null {
   }
 }
 
+/** Writes `marker-stale.json` in the project's local store dir, or removes it when `record` is null. Never synced. */
+export function writeStaleRecord(project: Project, record: StaleRecord | null): void {
+  writeRecordFile(join(project.root, STALE_FILE), record);
+}
+
+/** The last stale finding, or null when there is none or it does not read. */
+export function readStaleRecord(project: Project): StaleRecord | null {
+  return readRecordFile(join(project.root, STALE_FILE));
+}
+
+/** Writes `marker-dirty.json` in the project's local store dir, or removes it when `record` is null. Never synced. */
+export function writeHeldRecord(project: Project, record: HeldRecord | null): void {
+  writeRecordFile(join(project.root, HELD_FILE), record);
+}
+
+/** The dirty marker the last reconcile held, or null when there is none or it does not read. */
+export function readHeldRecord(project: Project): HeldRecord | null {
+  return readRecordFile(join(project.root, HELD_FILE));
+}
+
 /** What `darius doctor` says: one line, or none. */
 export function staleDoctorLine(record: StaleRecord | null): string | null {
   if (record === null) return null;
   return `WARN: ${record.line} (reconcile, ${record.at}). Until then this host does not reconcile the marker and skips the project's rituals.`;
+}
+
+/** What `darius doctor` says about a held dirty marker: one line, or none. */
+export function heldDoctorLine(record: HeldRecord | null): string | null {
+  if (record === null) return null;
+  return `WARN: ${record.line} (reconcile, ${record.at}). Until then the store keeps the definitions it has.`;
 }

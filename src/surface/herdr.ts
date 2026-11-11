@@ -60,7 +60,7 @@ import { join } from "node:path";
 import type { JsonValue } from "../core/model.ts";
 import { appendRunLog } from "../core/sandbox.ts";
 import { errorMessage } from "../runtime.ts";
-import { agentName, closeDueRuns, gateLogSize, MAX_RESENDS, showMs, sleep, type TabRun } from "./attended.ts";
+import { agentName, closeDueRuns, gateLogSize, hasHarnessWork, MAX_RESENDS, showMs, sleep, type TabRun } from "./attended.ts";
 import type { ChildEnv, LaunchResult } from "./headless.ts";
 
 export { agentName, DEFAULT_CONFIRM_MS, DEFAULT_IDLE_RESEND_MS, DEFAULT_POLL_MS, DEFAULT_WAIT_GRACE_MS, isTabDue, TAB_KEEP_MS, type TabRun } from "./attended.ts";
@@ -129,6 +129,10 @@ function isRecord(value: JsonValue | undefined): value is { readonly [key: strin
 
 function isText(value: JsonValue | undefined): value is string {
   return typeof value === "string";
+}
+
+function isNumber(value: JsonValue | undefined): value is number {
+  return typeof value === "number";
 }
 
 function parseJson(text: string): JsonValue | undefined {
@@ -266,8 +270,36 @@ interface WatchEnd {
   note: string;
 }
 
+/** The pids of the pane's foreground processes, or none when herdr cannot say. */
+async function foregroundPids(plan: HerdrPlan, pane: string): Promise<number[]> {
+  const output = await runHerdr(plan.target, ["pane", "process-info", "--pane", pane]);
+  if (output.code !== 0) return [];
+  const parsed = parseJson(output.stdout);
+  const result = isRecord(parsed) ? parsed.result : undefined;
+  const info = isRecord(result) ? result.process_info : undefined;
+  const processes = isRecord(info) ? info.foreground_processes : undefined;
+  if (!Array.isArray(processes)) return [];
+  return processes.flatMap((process) => (isRecord(process) && isNumber(process.pid) ? [process.pid] : []));
+}
+
+/**
+ * Whether the agent waits for a person (0.135.0). `blocked` waits at once.
+ * `idle` and `done` wait only when no tool shell of the harness runs under
+ * the pane's foreground processes (hasHarnessWork): Claude Code is done while
+ * a `run_in_background` command runs, and it is woken when it ends. A
+ * background shell is its own session, so herdr does not list it, but it is
+ * a child of the harness process it does list. A shell that never ends keeps
+ * the run from being held, but not open: the run's timeout closes the tab.
+ */
+async function isWaitingForPerson(plan: HerdrPlan, state: AgentState, pane: string): Promise<boolean> {
+  if (state === "blocked") return true;
+  if (state !== "idle" && state !== "done") return false;
+  return !hasHarnessWork(await foregroundPids(plan, pane));
+}
+
 /** Polls the ledger and the agent until the run ends, the agent waits too long, or the timeout. */
-async function watch(plan: HerdrPlan, name: string, started: number): Promise<WatchEnd> {
+async function watch(plan: HerdrPlan, agent: { name: string; pane: string }, started: number): Promise<WatchEnd> {
+  const { name } = agent;
   let waitingSince: number | undefined;
   for (;;) {
     if (plan.phase() !== "running") return { timedOut: false, note: "the run ended in the ledger" };
@@ -275,7 +307,7 @@ async function watch(plan: HerdrPlan, name: string, started: number): Promise<Wa
     if (now - started > plan.timeoutMs) return { timedOut: true, note: "the run timed out" };
     const state = await agentState(plan, name);
     if (state === "gone") return { timedOut: false, note: "the agent exited" };
-    const isWaiting = state === "blocked" || state === "idle" || state === "done";
+    const isWaiting = await isWaitingForPerson(plan, state, agent.pane);
     waitingSince = isWaiting ? (waitingSince ?? now) : undefined;
     if (waitingSince !== undefined && now - waitingSince > plan.graceMs) {
       const minutes = Math.round(plan.graceMs / 60_000);
@@ -467,10 +499,12 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
   const earlier = recordedTabs(plan.runDir);
   const name = agentName(plan.run, earlier.length + 1);
   let tab: string | undefined;
+  let pane = "";
   try {
     const workspace = await runsWorkspace(plan);
     const opened = await openTab(plan, workspace);
     tab = opened.tab;
+    pane = opened.pane;
     writeFileSync(join(plan.runDir, TAB_FILE), `${JSON.stringify({ tabs: [...earlier, tab], agent: name })}\n`);
     const isMasked = plan.sandbox !== undefined && (await maskTab(plan, plan.sandbox, opened.pane));
     if (plan.isBox === true && !isMasked) return await closeBroken(plan, tab, started, "the tab's shell did not take the box alias");
@@ -496,7 +530,7 @@ export async function launchHerdr(plan: HerdrPlan): Promise<LaunchResult> {
     if (tab !== undefined) await runHerdr(plan.target, ["tab", "close", tab]);
     return ended(started, { note: "the harness did not start", spawnError: errorMessage(cause) });
   }
-  const end = await watch(plan, name, started);
+  const end = await watch(plan, { name, pane }, started);
   if (end.timedOut) await runHerdr(plan.target, ["tab", "close", tab]);
   return ended(started, end);
 }

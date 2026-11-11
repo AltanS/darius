@@ -966,7 +966,7 @@ test("the ritual's timeout from git sets the lease TTL, not the unit's --timeout
   }
 });
 
-test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch; by hand it warns and runs", { skip: NO_GIT }, async () => {
+test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch, and is not reconciled; by hand it warns and runs the store's definition", { skip: NO_GIT }, async () => {
   const project = "rd-v3-dirty";
   const dir = v3Checkout(project, { git: true });
   process.env.FAKE_CLAUDE_MODE = "complete";
@@ -977,10 +977,14 @@ test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch;
   assert.deepEqual([entry?.action, entry?.reason], ["skipped", "marker-dirty"], JSON.stringify(timer.report));
   assert.equal(timer.code, 1);
   assert.equal(linesOf(project, "run.started").length, 0);
+  const held = timer.report.projects[0]?.markerHeld;
+  assert.match(held?.line ?? "", /^\.darius\.toml of rd-v3-dirty at [0-9a-f]{12} has uncommitted changes, so it is not reconciled/u, JSON.stringify(timer.report));
+  assert.equal(openProject(project).readItem<Ritual>("ritual", "daily")?.header.def_dirty, false, "the mirror stays at the committed marker");
+  assert.ok(formatReport(timer.report, "digest").includes(`! ${held?.line ?? ""}`));
   const hand = await batchAt(project, AFTER_AT, { only: "daily", now: {} });
   const ran = ritualsOf(hand.report)[0];
   assert.equal(ran?.end, "complete", JSON.stringify(hand.report));
-  assert.ok((ran?.warnings ?? []).some((warning) => /\.darius\.toml has uncommitted changes; this run uses them/u.test(warning)));
+  assert.ok((ran?.warnings ?? []).some((warning) => /\.darius\.toml has uncommitted changes, which are not reconciled: this run uses the store's definition/u.test(warning)), JSON.stringify(ran));
 });
 
 // --- cross-host guards (0.126.0) ---------------------------------------------------------------

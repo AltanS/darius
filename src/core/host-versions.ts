@@ -17,7 +17,7 @@
 import { existsSync } from "node:fs";
 
 import { behindDoctorLine, readBehindRecord } from "./checkout-behind.ts";
-import { readStaleRecord, staleDoctorLine } from "./reconcile-guard.ts";
+import { heldDoctorLine, readHeldRecord, readStaleRecord, staleDoctorLine } from "./reconcile-guard.ts";
 import { readLedger } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { projectDir, resolveProject } from "./paths.ts";
@@ -132,7 +132,7 @@ function projectHere(cwd: string): string | undefined {
  * What the full `darius doctor` adds about the hosts and the checkout
  * (0.126.0): the host versions from the ledgers of the project at `cwd` and
  * of `_global`, the stale checkout the last reconcile found (0.129.0,
- * src/core/reconcile-guard.ts), and the behind check run-due recorded for
+ * src/core/reconcile-guard.ts), the dirty marker it held (0.135.0), and the behind check run-due recorded for
  * that project's checkout (src/core/checkout-behind.ts). Doctor fetches nothing.
  */
 export function syncGuardLines(cwd: string, now: Date = new Date()): SyncGuardLines {
@@ -140,6 +140,6 @@ export function syncGuardLines(cwd: string, now: Date = new Date()): SyncGuardLi
   const project = storeOf(name);
   const ledgers = [project, storeOf(GLOBAL_PROJECT)].flatMap((store) => (store === null ? [] : [readLedger(store)]));
   const hosts = hostVersionLines(compareHostVersions(ledgers, now));
-  const lines = project === null ? [] : [staleDoctorLine(readStaleRecord(project)), behindDoctorLine(project.name, readBehindRecord(project))];
+  const lines = project === null ? [] : [staleDoctorLine(readStaleRecord(project)), heldDoctorLine(readHeldRecord(project)), behindDoctorLine(project.name, readBehindRecord(project))];
   return { hosts, checkout: lines.filter((line) => line !== null) };
 }

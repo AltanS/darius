@@ -30,6 +30,24 @@
  * any host, writes nothing and returns `stale`. Each line now also carries
  * `marker_hash`, the sha256 of the marker file. `force` (only `darius ritual
  * reconcile --force`, a person's verb) skips the guard.
+ *
+ * The dirty hold (0.135.0): in a git work tree, a `.darius.toml` that differs
+ * from HEAD (modified, staged or untracked) is not mirrored. Nothing is
+ * written: no adopt, no update, no retire, no `ritual.defined` line. The
+ * result carries `held` with the line the report and doctor say, and what
+ * the reconcile would have changed. Why: host-a adopted a ritual from its
+ * uncommitted marker and recorded its HEAD, commit X. host-b at X with a
+ * clean marker found the record at its own HEAD, so the guard let it
+ * reconcile, and it retired the ritual as "left .darius.toml at X". The
+ * ritual had never been in git. `force` mirrors a dirty marker anyway. Outside
+ * git (or when git fails) a marker is never dirty, so it reconciles as before.
+ *
+ * The same-commit rule (0.135.0): a repo ritual whose mirror names the
+ * commit this checkout is at (`def_commit`) is never retired by a marker that
+ * does not name it. The same commit with other content means one of the two
+ * markers was dirty, not that the ritual left git. The ritual is `kept`, with
+ * a warning, and retires once a newer commit lacks it. This covers mirrors
+ * that a darius before 0.135.0 or a `--force` adopted from a dirty marker.
  */
 
 import { spawnSync } from "node:child_process";
@@ -39,7 +57,18 @@ import { ritualLifecycle } from "./due.ts";
 import { appendLines, defaultWho, hostId, readLedger, type LedgerLineInput } from "./ledger.ts";
 import { definitionHash, MARKER_FILE, readMarker, type Marker, type RepoRitual } from "./marker.ts";
 import type { Document, LedgerLine, Policy, Ritual } from "./model.ts";
-import { commitRelation, decideReconcile, headFacts, latestRecord, markerHash, staleLine, writeStaleRecord, type GuardDecision, type StaleMarker } from "./reconcile-guard.ts";
+import {
+  commitRelation,
+  decideReconcile,
+  headFacts,
+  latestRecord,
+  markerHash,
+  staleLine,
+  writeHeldRecord,
+  writeStaleRecord,
+  type GuardDecision,
+  type StaleMarker,
+} from "./reconcile-guard.ts";
 import { itemRef, type Project } from "./store.ts";
 import { parseToml, type TomlValue } from "./toml.ts";
 import { ulid } from "./ulid.ts";
@@ -67,6 +96,25 @@ export interface ReconcileResult {
    * history (0.129.0): nothing was written. `line` is what the report says.
    */
   stale?: StaleMarker & { line: string };
+  /**
+   * `.darius.toml` differs from HEAD (0.135.0): nothing was written. `line` is
+   * what the report and doctor say; the lists are what a reconcile from this
+   * marker would have changed.
+   */
+  held?: HeldMarker;
+  /**
+   * Repo rituals this marker does not name, kept because their mirror is
+   * from the commit this checkout is at (0.135.0). Absent when there is none.
+   */
+  kept?: string[];
+}
+
+/** A dirty marker that reconcile did not mirror (0.135.0). */
+export interface HeldMarker {
+  line: string;
+  adopted: string[];
+  updated: string[];
+  retired: string[];
 }
 
 /** The `change` of a `ritual.defined` ledger line. */
@@ -113,6 +161,24 @@ export function checkoutCommit(checkout: string): string | undefined {
 export function markerDirty(checkout: string): boolean {
   const out = git(checkout, ["status", "--porcelain", "--", MARKER_FILE]);
   return out !== undefined && out.trim() !== "";
+}
+
+/** The line a held dirty marker gets in the report and in doctor (0.135.0). */
+export function heldLine(project: string, held: { commit?: string; adopted: readonly string[]; updated: readonly string[]; retired: readonly string[] }): string {
+  const where = held.commit === undefined ? "" : ` at ${held.commit}`;
+  const waiting = [
+    held.adopted.length > 0 ? `adopt ${held.adopted.join(", ")}` : "",
+    held.updated.length > 0 ? `update ${held.updated.join(", ")}` : "",
+    held.retired.length > 0 ? `retire ${held.retired.join(", ")}` : "",
+  ].filter((part) => part !== "");
+  const pending = waiting.length === 0 ? "" : ` It would ${waiting.join("; ")}.`;
+  return `${MARKER_FILE} of ${project}${where} has uncommitted changes, so it is not reconciled: the store keeps the definitions it has.${pending} Commit or revert the change`;
+}
+
+/** Whether two commit ids name the same commit: one is a prefix of the other (short ids can differ in length). */
+function sameCommit(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined || left === "" || right === "") return false;
+  return left.startsWith(right) || right.startsWith(left);
 }
 
 /** A skill's folder in a checkout, as git sees it: `.claude/skills/<skill>/`. */
@@ -347,6 +413,10 @@ export function reconcileProject(
     return { decision, record: record?.id };
   };
   let judged = judge(readLedger(project));
+  // 0.135.0: only a committed marker is mirrored. `at.dirty` is false outside git, so a checkout outside git reconciles as before.
+  const isHeldDirty = at.dirty && !at.isForced && head.state === "commit";
+  // A held reconcile classifies like a dry run, then reports the changes as held.
+  const isNoWrite = isDry || isHeldDirty;
   project.withLock(() => {
     const lines: LedgerLineInput[] = [];
     const named = new Set(definitions.map((definition) => definition.ritual.slug));
@@ -358,7 +428,7 @@ export function reconcileProject(
       result.stale = { ...decision.stale, line: staleLine(project.name, decision.stale) };
       return;
     }
-    if (decision.action === "unchanged") {
+    if (decision.action === "unchanged" && !isHeldDirty) {
       listUnchanged(result, { definitions, ledger, project });
       return;
     }
@@ -370,12 +440,13 @@ export function reconcileProject(
         result.warnings.push(`${slug} was retired; use a new slug`);
         continue;
       }
-      const step = reconcileOne(existing, definition, at);
+      // Held: compare as if committed, so the dirty flag alone is no change to report.
+      const step = reconcileOne(existing, definition, isHeldDirty ? { ...at, dirty: false } : at);
       if (step.change === null) {
         result.unchanged.push(slug);
         continue;
       }
-      if (!isDry) project.writeItem(step.doc, { who: defaultWho() });
+      if (!isNoWrite) project.writeItem(step.doc, { who: defaultWho() });
       result[step.change].push(slug);
       lines.push(definedLine(slug, step.change, { hash: definition.hash, at }));
     }
@@ -387,15 +458,43 @@ export function reconcileProject(
         result.unmanaged.push(slug);
         continue;
       }
+      // 0.135.0: the mirror is from this very commit, so the ritual did not leave git; one of the two markers was dirty.
+      if (sameCommit(doc.header.def_commit, at.commit)) {
+        result.kept = [...(result.kept ?? []), slug];
+        if (isHeldDirty) continue;
+        const from = doc.header.def_host ?? "another host";
+        const how = doc.header.def_dirty === true ? " with uncommitted changes" : "";
+        result.warnings.push(`${slug} is not in ${MARKER_FILE} here, but ${from} mirrored it from the same commit ${at.commit ?? ""}${how}: not retired; a newer commit without it retires it`);
+        continue;
+      }
       const note = at.commit === undefined ? `left ${MARKER_FILE}` : `left ${MARKER_FILE} at ${at.commit}`;
       lines.push({ who: defaultWho(), type: "ritual.lifecycle", item: itemRef("ritual", slug), at: now.toISOString(), state: "retired", note });
       lines.push(definedLine(slug, "retired", { hash: doc.header.def_hash, at }));
       result.retired.push(slug);
     }
+    if (isHeldDirty) {
+      holdChanges(result, project.name);
+      return;
+    }
     if (!isDry) appendLines(project, lines);
   });
   if (!isDry) keepStaleRecord(project, { checkout, now }, result);
   return result;
+}
+
+/**
+ * The dirty hold (0.135.0): what this marker would have changed moves into
+ * `held`, and the change lists stay empty, so no caller reads them as done.
+ */
+function holdChanges(result: ReconcileResult, project: string): void {
+  const changes = { adopted: result.adopted, updated: result.updated, retired: result.retired };
+  const facts: Parameters<typeof heldLine>[1] = { ...changes };
+  if (result.commit !== undefined) facts.commit = result.commit;
+  result.held = { line: heldLine(project, facts), ...changes };
+  result.adopted = [];
+  result.updated = [];
+  result.retired = [];
+  delete result.kept;
 }
 
 /**
@@ -411,25 +510,38 @@ function listUnchanged(result: ReconcileResult, at: { definitions: readonly Defi
   }
 }
 
-/** Keeps `marker-stale.json` in step with this reconcile, for `darius doctor`. A write failure is a warning. */
+/** Keeps `marker-stale.json` and `marker-dirty.json` in step with this reconcile, for `darius doctor`. A write failure is a warning. */
 function keepStaleRecord(project: Project, at: { checkout: string; now: Date }, result: ReconcileResult): void {
+  const stamp = { at: at.now.toISOString(), checkout: at.checkout };
   try {
-    writeStaleRecord(project, result.stale === undefined ? null : { at: at.now.toISOString(), checkout: at.checkout, line: result.stale.line });
+    writeStaleRecord(project, result.stale === undefined ? null : { ...stamp, line: result.stale.line });
   } catch (cause) {
     result.warnings.push(`cannot record the stale checkout for darius doctor: ${errorMessage(cause)}`);
+  }
+  try {
+    // A stale checkout returns before the hold is judged, so it keeps the last held finding.
+    if (result.stale === undefined) writeHeldRecord(project, result.held === undefined ? null : { ...stamp, line: result.held.line });
+  } catch (cause) {
+    result.warnings.push(`cannot record the held marker for darius doctor: ${errorMessage(cause)}`);
   }
 }
 
 /**
  * What `ritual list` and the web warn about: a retired slug named again, and a mirror this checkout differs from (section 4.3).
  * `isStale`: the last reconcile found this checkout older than the store's marker (`marker-stale.json`, 0.129.0), so the advice is a pull, not a reconcile.
+ * `isHeld`: the last reconcile held this checkout's dirty marker (`marker-dirty.json`, 0.135.0), so the advice is a commit.
  */
-export function ritualWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null, isStale = false): string[] {
+export function ritualWarnings(doc: Document<Ritual>, lifecycle: string, marker: Marker | null, isStale = false, isHeld = false): string[] {
   const { header } = doc;
   const defined = marker?.rituals.find((ritual) => ritual.slug === header.slug);
   if (marker === null || defined === undefined || header.source !== "repo") return [];
   if (lifecycle === "retired") return [`${header.slug} was retired; use a new slug`];
   if (header.def_hash === mirrorHash(marker, defined)) return [];
   const commit = header.def_commit === undefined ? "" : ` (commit ${header.def_commit})`;
-  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: ${isStale ? "pull the checkout" : "darius ritual reconcile"}`];
+  return [`mirror is from ${header.def_host ?? "another host"}${commit}, this checkout differs: ${adviceFor(isStale, isHeld)}`];
+}
+
+function adviceFor(isStale: boolean, isHeld: boolean): string {
+  if (isStale) return "pull the checkout";
+  return isHeld ? `commit or revert ${MARKER_FILE}; an uncommitted marker is not reconciled` : "darius ritual reconcile";
 }

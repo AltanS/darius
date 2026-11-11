@@ -8,12 +8,13 @@
  */
 
 import { test } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { agentName } from "../src/surface/attended.ts";
+import { agentName, hasHarnessWork } from "../src/surface/attended.ts";
 import { attachCommand, closeFinishedTerminals, hcUnavailable, launchHc, recordedTerminals, type HcPlan } from "../src/surface/hc.ts";
 import { writeFakeHc, type FakeHcCall } from "./helpers/fake-hc.ts";
 
@@ -35,6 +36,8 @@ interface Setup {
   otherPid?: boolean;
   /** Closes the run in the "ledger" after this many ms. */
   closeAfterMs?: number;
+  /** The terminal's pid (the fake's `pid` file): a real process for the /proc walk. */
+  pid?: number;
 }
 
 /** A fake hc dir and a plan with short times. */
@@ -48,6 +51,7 @@ function setup(name: string, opts: Setup = {}, plan: Partial<HcPlan> = {}): Case
   if (opts.gateAfterSend !== undefined) writeFileSync(join(dir, `gate-after-send-${String(opts.gateAfterSend)}`), "");
   if (opts.foreground !== undefined) writeFileSync(join(dir, "foreground"), opts.foreground);
   if (opts.otherPid === true) writeFileSync(join(dir, "foreground-pid"), "other");
+  if (opts.pid !== undefined) writeFileSync(join(dir, "pid"), String(opts.pid));
   process.env.FAKE_HC_DIR = dir;
   process.env.RUN_DIR = runDir;
   const held: string[] = [];
@@ -187,6 +191,81 @@ test("in the watch: idle past the grace time holds; a terminal that never report
   await launchHc(silent.plan);
   assert.equal(silent.held.length, 1);
   assert.match(silent.held[0] ?? "", /\(silent, perhaps at a startup dialog such as the folder trust question, for over/u);
+});
+
+// --- the agent's own background work (0.135.0) --------------------------------------------
+
+/**
+ * A stand-in for the harness process: a bash whose child is a tool shell as
+ * Claude Code starts one for `run_in_background` (HARNESS_SHELL_MARK in its
+ * argv), or a plain helper such as an MCP server. Killed with the test.
+ */
+/** A process tree that stands in for the harness, and how to end it. */
+interface AgentTree {
+  pid: number;
+  stop: () => void;
+}
+
+function agentTree(child: "tool-shell" | "helper"): AgentTree {
+  const snapshot = join(ROOT, "claude", "shell-snapshots", "snapshot-bash-1-x.sh");
+  const inner = child === "tool-shell" ? `exec -a bash bash -c 'source ${snapshot} 2>/dev/null || true; sleep 30; exit 0' &` : "sleep 30 &";
+  const agent = spawn("bash", ["-c", `${inner}\nwait`], { stdio: "ignore", detached: true });
+  const pid = agent.pid ?? 0;
+  return {
+    pid,
+    stop: () => {
+      process.kill(-pid, "SIGKILL");
+    },
+  };
+}
+
+/** Waits until /proc shows a child of `pid` (the bash above forks it). */
+async function childUp(pid: number): Promise<void> {
+  for (let tries = 0; tries < 100; tries += 1) {
+    if (existsSync(`/proc/${String(pid)}/task/${String(pid)}/children`) && readFileSync(`/proc/${String(pid)}/task/${String(pid)}/children`, "utf8").trim() !== "") return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`no child of ${String(pid)}`);
+}
+
+const NO_PROC = existsSync("/proc/self/stat") ? false : "no /proc on this host";
+
+test("done with a live tool shell of the harness past the grace time is not held: it waits on its own background command", { skip: NO_PROC }, async () => {
+  const tree = agentTree("tool-shell");
+  try {
+    await childUp(tree.pid);
+    assert.equal(hasHarnessWork([tree.pid]), true);
+    const c = setup("bg-done", { states: ["live:working", "live:done"], pid: tree.pid, closeAfterMs: 1_500 }, { graceMs: 300 });
+    const result = await launchHc(c.plan);
+    assert.deepEqual(c.held, [], "nobody is needed while its own command runs");
+    assert.match(result.stderrTail, /the run ended in the ledger/u);
+  } finally {
+    tree.stop();
+  }
+});
+
+test("done with no tool shell past the grace time is held, also with a helper child; blocked holds at once with a tool shell", { skip: NO_PROC }, async () => {
+  const helper = agentTree("helper");
+  const tree = agentTree("tool-shell");
+  try {
+    await childUp(helper.pid);
+    await childUp(tree.pid);
+    assert.equal(hasHarnessWork([helper.pid]), false, "a helper such as an MCP server is no work in progress");
+    const done = setup("bg-none", { states: ["live:working", "live:done"], pid: helper.pid }, { graceMs: 300 });
+    await launchHc(done.plan);
+    assert.equal(done.held.length, 1);
+    assert.match(done.held[0] ?? "", /\(done for over 0 min\)/u);
+
+    const blocked = setup("bg-blocked", { states: ["live:working", "live:blocked"], pid: tree.pid }, { graceMs: 300 });
+    await launchHc(blocked.plan);
+    assert.equal(blocked.held.length, 1);
+    assert.match(blocked.held[0] ?? "", /\(blocked for over 0 min\)/u);
+  } finally {
+    helper.stop();
+    tree.stop();
+  }
+  assert.equal(hasHarnessWork([0, 1]), false, "init's tree is never walked");
+  assert.equal(hasHarnessWork([2_000_000_001]), false, "a pid that does not exist has no work");
 });
 
 test("timeout: the terminal is killed and the launch reports timedOut", async () => {

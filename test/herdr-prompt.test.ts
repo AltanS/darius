@@ -12,6 +12,7 @@
  */
 
 import { test } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,6 +51,9 @@ case "$1 \${2:-}" in
     fi
     printf '{"result":{"agent":{"agent_status":"%s"}}}\\n' "$state" ;;
   "tab close") printf '{"result":{"type":"ok"}}\\n' ;;
+  "pane process-info")
+    if [ ! -e "$dir/pid" ]; then printf '{"error":{"code":"unknown","message":"no pid"}}\\n' >&2; exit 1; fi
+    printf '{"result":{"process_info":{"foreground_processes":[{"name":"claude","pid":%s}]}}}\\n' "$(cat "$dir/pid")" ;;
   *) printf '{"error":{"code":"unknown","message":"fake herdr: %s"}}\\n' "$*" >&2; exit 1 ;;
 esac
 `;
@@ -62,7 +66,7 @@ interface Case {
 }
 
 /** A fake herdr dir and a plan with short times. `states` is the agent's state per `agent get`. */
-function setup(name: string, states: string[], extra: { after?: Record<number, string[]>; gateAfter?: number; closed?: boolean } = {}): Case {
+function setup(name: string, states: string[], extra: { after?: Record<number, string[]>; gateAfter?: number; closed?: boolean; closeAfterMs?: number; pid?: number } = {}): Case {
   const dir = join(ROOT, name);
   const runDir = join(dir, "run");
   mkdirSync(runDir, { recursive: true });
@@ -72,6 +76,9 @@ function setup(name: string, states: string[], extra: { after?: Record<number, s
   writeFileSync(join(dir, "states"), `${states.join("\n")}\n`);
   for (const [n, list] of Object.entries(extra.after ?? {})) writeFileSync(join(dir, `after-${n}`), `${list.join("\n")}\n`);
   if (extra.gateAfter !== undefined) writeFileSync(join(dir, `gate-after-${String(extra.gateAfter)}`), "");
+  if (extra.pid !== undefined) writeFileSync(join(dir, "pid"), String(extra.pid));
+  const startedAt = Date.now();
+  const closeAfter = extra.closeAfterMs;
   process.env.FAKE_HERDR_DIR = dir;
   process.env.RUN_DIR = runDir;
   const held: string[] = [];
@@ -90,7 +97,7 @@ function setup(name: string, states: string[], extra: { after?: Record<number, s
     graceMs: 400,
     confirmMs: 3_000,
     idleMs: 150,
-    phase: () => (extra.closed === true || held.length > 0 ? "closed" : "running"),
+    phase: () => (extra.closed === true || held.length > 0 || (closeAfter !== undefined && Date.now() - startedAt > closeAfter) ? "closed" : "running"),
     hold: (question) => {
       held.push(question);
     },
@@ -167,4 +174,57 @@ test("the prompt never lands: exactly two resends, then the normal watch holds t
   assert.equal(c.held.length, 1);
   assert.match(c.held[0] ?? "", /the agent waits for input in herdr tab "x abc123" \(idle for over/u);
   assert.match(result.stderrTail, /past the grace time/u);
+});
+
+// --- the agent's own background work (0.135.0) --------------------------------------------
+
+/** A bash standing in for the harness, with a tool shell child as Claude Code starts one for `run_in_background`, or a plain helper child. */
+/** A process tree that stands in for the harness, and how to end it. */
+interface AgentTree {
+  pid: number;
+  stop: () => void;
+}
+
+function agentTree(child: "tool-shell" | "helper"): AgentTree {
+  const snapshot = join(ROOT, "claude", "shell-snapshots", "snapshot-bash-1-x.sh");
+  const inner = child === "tool-shell" ? `bash -c 'source ${snapshot} 2>/dev/null || true; sleep 30; exit 0' &` : "sleep 30 &";
+  const agent = spawn(BASH, ["-c", `${inner}\nwait`], { stdio: "ignore", detached: true });
+  const pid = agent.pid ?? 0;
+  return {
+    pid,
+    stop: () => {
+      process.kill(-pid, "SIGKILL");
+    },
+  };
+}
+
+async function childUp(pid: number): Promise<void> {
+  const file = `/proc/${String(pid)}/task/${String(pid)}/children`;
+  for (let tries = 0; tries < 100; tries += 1) {
+    if (existsSync(file) && readFileSync(file, "utf8").trim() !== "") return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`no child of ${String(pid)}`);
+}
+
+test("done with a tool shell under the pane's foreground is not held; done with only a helper is", { skip: existsSync("/proc/self/stat") ? false : "no /proc" }, async () => {
+  const tree = agentTree("tool-shell");
+  const helper = agentTree("helper");
+  try {
+    await childUp(tree.pid);
+    await childUp(helper.pid);
+    const busy = setup("bg-done", ["working", "done"], { gateAfter: 1, pid: tree.pid, closeAfterMs: 1_500 });
+    const result = await launchHerdr(busy.plan);
+    assert.deepEqual(busy.held, [], "it waits on its own background command");
+    assert.match(result.stderrTail, /the run ended in the ledger/u);
+    assert.ok(calls(busy).some((line) => line === "pane process-info --pane w1:p1"), calls(busy).join("\n"));
+
+    const idle = setup("bg-none", ["working", "done"], { gateAfter: 1, pid: helper.pid });
+    await launchHerdr(idle.plan);
+    assert.equal(idle.held.length, 1);
+    assert.match(idle.held[0] ?? "", /\(done for over 0 min\)/u);
+  } finally {
+    tree.stop();
+    helper.stop();
+  }
 });
