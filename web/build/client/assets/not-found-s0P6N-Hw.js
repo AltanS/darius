@@ -1,0 +1,1 @@
+import{N as e}from"./chunk-OB3PAWPO-zbfVsNFB.js";import{n as t}from"./route-error-CwvUUCIy.js";var n=()=>[{title:`Not found | darius`}],r=e(function(){return null});export{t as ErrorBoundary,r as default,n as meta};

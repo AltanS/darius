@@ -13,7 +13,8 @@ import { join } from "node:path";
 
 import { candleMessage, sampleCandleFacts } from "../src/core/candle-email.ts";
 import { parseEmailInput, sendEmail, type EmailSettings } from "../src/core/email.ts";
-import { logoUrl, MAIL_REPO, SEVERITY_COLOR, SUBJECT_PREFIX, THEME } from "../src/core/mail-shell.ts";
+import { logoUrl, MAIL_REPO, MARK_COLOR, markUrl, SEVERITY_COLOR, SUBJECT_PREFIX, THEME } from "../src/core/mail-shell.ts";
+import { GLYPH_GRID, GLYPHS } from "../web/app/lib/glyphs.ts";
 import { reportMessage, sampleReportFacts } from "../src/core/report-email.ts";
 import { VERSION } from "../src/version.ts";
 
@@ -65,6 +66,33 @@ test("the logo is the app's emblem on GitHub, pinned to the tag of this version"
   for (const part of ['width="48"', 'height="48"', 'alt="darius"', "display:block;border:0"]) assert.ok(img.includes(part), `the img has ${part}`);
 });
 
+/** The `<img>` of the kind mark in the project line, or "" when there is none. */
+function markOf(html: string): string {
+  return /<div style="margin-top:4px;[^>]*>(<img [^>]*>)/u.exec(headerOf(html))?.[1] ?? "";
+}
+
+test("each mail starts its project line with the mark of its kind, pinned like the logo, decoration only", () => {
+  assert.equal(markUrl("candle"), `https://raw.githubusercontent.com/AltanS/darius/v${VERSION}/assets/email/candle-40.png`);
+  assert.equal(markUrl("ritual", "1.2.3"), "https://raw.githubusercontent.com/AltanS/darius/v1.2.3/assets/email/ritual-40.png");
+  for (const [html, mark] of [
+    [candleHtml(), "candle"],
+    [reportHtml(), "ritual"],
+  ] as const) {
+    const img = markOf(html);
+    assert.ok(img.includes(`src="${markUrl(mark)}"`), `the ${mark} mail carries the ${mark} mark`);
+    for (const part of ['width="20"', 'height="20"', 'alt=""', "vertical-align:middle", "border:0", "width:20px;height:20px;"]) assert.ok(img.includes(part), `the mark has ${part}`);
+    assert.equal(html.match(/<img [^>]*>/gu)?.length, 2, "the logo and one mark, no mark per row");
+    const png = readFileSync(join(ROOT, "assets", "email", `${mark}-40.png`));
+    assert.equal(png.subarray(1, 4).toString("latin1"), "PNG");
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [40, 40], "40 by 40, shown at 20");
+  }
+  assert.deepEqual(MARK_COLOR, { candle: "#d98b3a", ritual: "#4cc0c8" }, "the colours the app draws them in: --color-late and --color-ritual");
+  const css = readFileSync(join(ROOT, "web", "app", "app.css"), "utf8");
+  assert.ok(css.includes(`--color-late: ${MARK_COLOR.candle};`) && css.includes(`--color-ritual: ${MARK_COLOR.ritual};`), "the mark colours match the app's tokens");
+  assert.equal(GLYPH_GRID, 16);
+  assert.ok(GLYPHS.candle.length > 0 && GLYPHS.ritual.length > 0, "the mail marks come from the app's glyphs");
+});
+
 test("logo false sends no img, and the wordmark stays as text, in both mails", () => {
   for (const html of [candleHtml({ logo: false }), reportHtml({ logo: false })]) {
     assert.equal(html.includes("<img"), false);
@@ -83,7 +111,7 @@ test("candle and report mails share one shell: the same page, card, header and f
     headerOf(html)
       .replace(/<title>[^<]*<\/title>/u, "<title></title>")
       .replace(/(<div style="display:none[^>]*>)[^<]*/u, "$1")
-      .replace(/(<div style="margin-top:4px;[^>]*>)[^<]*/u, "$1");
+      .replace(/(<div style="margin-top:4px;[^>]*>)(<img [^>]*>)?[^<]*/u, "$1");
   assert.ok(frame(candle).includes("<img "));
   assert.equal(frame(candle), frame(report), "the same page and header up to the project line");
   for (const html of [candle, report]) {
@@ -103,7 +131,11 @@ test("the html keeps to what mail clients render: no css they drop, no remote pa
       assert.equal(lower.includes(banned), false, `the html holds ${banned}`);
     }
     assert.equal(/(?<!text-)transform/u.test(lower), false, "no transform");
-    assert.deepEqual([...html.matchAll(/(?:src|href)="(https?:[^"]+)"/gu)].map((match) => match[1]).filter((url) => !url.startsWith("https://darius.example.com/") && url !== "https://example.com"), [logoUrl()]);
+    const marks = new Set([markUrl("candle"), markUrl("ritual")]);
+    assert.deepEqual(
+      [...html.matchAll(/(?:src|href)="(https?:[^"]+)"/gu)].map((match) => match[1]).filter((url) => !url.startsWith("https://darius.example.com/") && url !== "https://example.com" && !marks.has(url ?? "")),
+      [logoUrl()],
+    );
     for (const tag of html.matchAll(/<(p|h[1-6]|a|span|li|th|td|pre|code|ul|ol)\b[^>]*>/gu)) {
       const element = tag[0];
       if (tag[1] === "td" && !element.includes("padding:4px 8px")) continue;

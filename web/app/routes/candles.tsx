@@ -2,7 +2,8 @@ import { Link } from "react-router";
 
 import type { Route } from "./+types/candles";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
-import { CandleRows } from "../components/candles.tsx";
+import { CandleIcon, CandleRows } from "../components/candles.tsx";
+import { TITLE_ICON } from "../components/section.tsx";
 import { Section } from "../components/ui.tsx";
 import { emptyText, filterCandles, candlesHref, litCount, readView, viewText, type CandleView } from "../lib/candles.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
@@ -46,7 +47,10 @@ export default function Candles({ loaderData }: Route.ComponentProps): React.Rea
   return (
     <div>
       <header className="page-head">
-        <h1 className="page-title">Candles</h1>
+        <h1 className="page-title has-title-icon">
+          <CandleIcon size={TITLE_ICON} />
+          Candles
+        </h1>
         <p className="page-meta">
           <span>{viewText(view, scope)}</span>
         </p>

@@ -275,7 +275,7 @@ function candleHtml(mail: CleanMail, hasLogo: boolean): string {
   if (mail.more !== null) content.push(`<p style="${STYLE.more}">${mail.listLink === undefined ? escapeHtml(mail.more) : anchor(mail.listLink, mail.more)}</p>`);
   const button = mail.listLink === undefined ? "" : buttonLink(mail.listLink, mail.listLabel);
   const footer = `${button}<p style="${STYLE.reason}">${escapeHtml(mail.why)}<br>${escapeHtml(mail.turnOff)}</p>`;
-  return mailHtml({ subject: mail.subject, project: mail.project, preview: mail.lead, content: content.join("\n"), footer, hasLogo });
+  return mailHtml({ subject: mail.subject, project: mail.project, preview: mail.lead, content: content.join("\n"), footer, hasLogo, mark: "candle" });
 }
 
 // --- the message -----------------------------------------------------------------------

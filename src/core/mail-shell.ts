@@ -23,6 +23,15 @@
  * makes the bytes immutable, and the URL depends on VERSION alone, so the
  * mail stays byte-stable. `"logo": false` in `email.json` sends no `<img>`:
  * then no mail client fetches anything. The wordmark is live text either way.
+ *
+ * THE KIND MARK (0.134.0). The project line under the wordmark starts with the
+ * mark of what the mail is about: the candle for a candle mail, the two arrows
+ * of a ritual for a run report. The app draws the same strokes
+ * (web/app/lib/glyphs.ts), in the same colours; web/scripts/mail-logo.ts
+ * renders them as PNGs next to the logo, and they travel the same way. The
+ * mark is decoration: `alt=""`, so a client that blocks images shows the
+ * words alone, and fixed width and height keep the line in place. It follows
+ * the logo setting: `"logo": false` sends neither.
  */
 
 import { VERSION } from "../version.ts";
@@ -36,9 +45,35 @@ const LOGO_FILE = "assets/email/gem-96.png";
 /** The logo is 96 pixels, shown at 48 (2x). */
 const LOGO_SIZE = 48;
 
+/** The kind marks a mail can carry. Darius sends no mail of its own for a vigil: a vigil's candles come as a candle mail. */
+export type MailMark = "candle" | "ritual";
+/** The marks are 16 unit glyphs, rendered at 40 pixels, shown at 20 (2x). */
+const MARK_SIZE = 20;
+/** The pixels of a mark's PNG. */
+export const MARK_PIXELS = MARK_SIZE * 2;
+/** The PNG the renderer writes for a mark (web/scripts/mail-logo.ts). */
+export function markFile(mark: MailMark): string {
+  return `assets/email/${mark}-${String(MARK_PIXELS)}.png`;
+}
+
+/** The colour of each mark, as the app draws it: candle `--color-late`, ritual `--color-ritual`. */
+export const MARK_COLOR = {
+  candle: "#d98b3a",
+  ritual: "#4cc0c8",
+} as const satisfies Record<MailMark, string>;
+
+function assetUrl(file: string, version: string): string {
+  return `https://raw.githubusercontent.com/${MAIL_REPO}/v${version}/${file}`;
+}
+
 /** The address of the logo for a darius version: the tag `v<version>` of the public repo. */
 export function logoUrl(version: string = VERSION): string {
-  return `https://raw.githubusercontent.com/${MAIL_REPO}/v${version}/${LOGO_FILE}`;
+  return assetUrl(LOGO_FILE, version);
+}
+
+/** The address of a kind mark, pinned like the logo. */
+export function markUrl(mark: MailMark, version: string = VERSION): string {
+  return assetUrl(markFile(mark), version);
 }
 
 /** `[darius] <rest>`. The caller caps and scrubs the whole. */
@@ -132,11 +167,19 @@ export interface ShellParts {
   footer: string;
   /** False: no `<img>`, only the wordmark. */
   hasLogo: boolean;
+  /** What the mail is about: its mark starts the project line. */
+  mark: MailMark;
+}
+
+function markHtml(mark: MailMark): string {
+  const size = String(MARK_SIZE);
+  return `<img src="${escapeHtml(markUrl(mark))}" width="${size}" height="${size}" alt="" style="display:inline-block;vertical-align:middle;margin:0 7px 0 0;border:0;outline:none;text-decoration:none;width:${size}px;height:${size}px;">`;
 }
 
 function header(parts: ShellParts): string {
   const wordmark = `<div style="font-family:${FONT.serif};font-size:20px;font-weight:700;line-height:1.1;letter-spacing:0.22em;text-transform:uppercase;color:${THEME.gold};">darius</div>`;
-  const project = `<div style="margin-top:4px;${SHELL_STYLE.quiet}">${escapeHtml(parts.project)}</div>`;
+  const mark = parts.hasLogo ? markHtml(parts.mark) : "";
+  const project = `<div style="margin-top:4px;${SHELL_STYLE.quiet}">${mark}${escapeHtml(parts.project)}</div>`;
   const logo = parts.hasLogo
     ? `<td width="${String(LOGO_SIZE + 14)}" valign="middle" style="width:${String(LOGO_SIZE + 14)}px;padding:0;"><img src="${escapeHtml(logoUrl())}" width="${String(LOGO_SIZE)}" height="${String(LOGO_SIZE)}" alt="darius" style="display:block;border:0;outline:none;text-decoration:none;width:${String(LOGO_SIZE)}px;height:${String(LOGO_SIZE)}px;"></td>`
     : "";

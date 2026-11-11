@@ -2,9 +2,10 @@ import { Link } from "react-router";
 
 import type { Route } from "./+types/rituals";
 import { ComingUp } from "../components/agenda.tsx";
+import { KindIcon } from "../components/kind.tsx";
 import { PhoneMore } from "../components/pulse.tsx";
 import { RunList } from "../components/runs.tsx";
-import { SectionPageHead } from "../components/section.tsx";
+import { SectionPageHead, TITLE_ICON } from "../components/section.tsx";
 import { SectHead } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
@@ -41,7 +42,7 @@ export default function Rituals({ loaderData }: Route.ComponentProps): React.Rea
   const runsPath = href({ to: "section", ws: workspace, section: "runs" });
   return (
     <div className="proj">
-      <SectionPageHead title="Rituals" workspace={workspace} fact={`${active} active, ${agenda.overdue} late`} />
+      <SectionPageHead title="Rituals" icon={<KindIcon kind="ritual" size={TITLE_ICON} />} workspace={workspace} fact={`${active} active, ${agenda.overdue} late`} />
       <div className="proj-body">
         <div className="board">
           <div className="board-main">

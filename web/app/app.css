@@ -2791,6 +2791,18 @@
 
   /* Page titles that are read, not displayed: sans. */
 
+  /* A section page title with its mark (Candles, Vigils, Rituals): the icon beside the name, centred on the first line. */
+
+  .page-title.has-title-icon {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .page-title.has-title-icon > svg {
+    flex: none;
+  }
+
   .page-title.page-title-sans {
     font: 600 24px/1.25 var(--font-sans);
     letter-spacing: 0;

@@ -304,7 +304,7 @@ function reportHtml(parts: ReportHtmlParts): string {
   const content = parts.findings === null ? `<p style="${STYLE.p}">${escapeHtml(NO_FINDINGS)}</p>` : markdownHtml(parts.findings);
   const button = parts.footer.link === undefined ? "" : buttonLink(parts.footer.link, "Open the run");
   const footer = `${button}<p style="${STYLE.footerLine}">${parts.footer.lines.map((line) => escapeHtml(line)).join("<br>")}</p>`;
-  return mailHtml({ subject: parts.subject, project: parts.project, preview: parts.subject, content, footer, hasLogo: parts.hasLogo });
+  return mailHtml({ subject: parts.subject, project: parts.project, preview: parts.subject, content, footer, hasLogo: parts.hasLogo, mark: "ritual" });
 }
 
 // --- the sample and the doctor note --------------------------------------------------------

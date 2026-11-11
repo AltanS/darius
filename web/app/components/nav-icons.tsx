@@ -2,10 +2,12 @@
  * The icons of the frame: the brand gem, the marks of Places (the settings gear, the status
  * pulse, the profile, the overview house, the shield of a finding, the candle, the event list of Activity, the two marks of the scopes,
  * the milestone flag), the chevron, check and close marks, the lock of a setting the environment sets, and the lens of the finder.
- * The eye and the two arrows of the vigil and ritual tabs are in `kind.tsx`.
+ * The candle comes from the shared glyphs (`lib/glyphs.ts`), as do the eye and the two arrows of the vigil and ritual tabs (`kind.tsx`).
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
  * from the text colour around them.
  */
+
+import { GLYPHS } from "../lib/glyphs.ts";
 
 const GEAR = "M6.54 2.91L6.78 1.11L9.22 1.11L9.46 2.91L10.57 3.36L12.02 2.27L13.73 3.98L12.64 5.43L13.09 6.54L14.89 6.78L14.89 9.22L13.09 9.46L12.64 10.57L13.73 12.02L12.02 13.73L10.57 12.64L9.46 13.09L9.22 14.89L6.78 14.89L6.54 13.09L5.43 12.64L3.98 13.73L2.27 12.02L3.36 10.57L2.91 9.46L1.11 9.22L1.11 6.78L2.91 6.54L3.36 5.43L2.27 3.98L3.98 2.27L5.43 3.36Z";
 
@@ -20,7 +22,7 @@ const PATHS = {
   status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],
   overview: ["M1.8 7.6L8 2.3L14.2 7.6", "M3.6 6.6V13.7H12.4V6.6", "M6.6 13.7V9.6H9.4V13.7"],
   finding: ["M8 1.8L13 3.6V7.8C13 10.9 10.9 13.2 8 14.4C5.1 13.2 3 10.9 3 7.8V3.6Z", "M8 5.3V8.5", "M8 10.8H8.01"],
-  candle: ["M8 1.4C9.2 2.7 9.9 3.6 9.9 4.6A1.9 1.9 0 0 1 6.1 4.6C6.1 3.6 6.8 2.7 8 1.4Z", "M8 6.6V8.2", "M5.2 8.2H10.8V14.6H5.2Z"],
+  candle: GLYPHS.candle,
   run: ["M5.2 3.2L12.6 8L5.2 12.8Z"],
   activity: ["M4.2 2.6V13.4", "M4.2 4.6H4.21", "M4.2 8H4.21", "M4.2 11.4H4.21", "M7.4 4.6H13", "M7.4 8H11", "M7.4 11.4H13"],
   profile: ["M8 2.6A2.6 2.6 0 1 0 8 7.8A2.6 2.6 0 1 0 8 2.6Z", "M2.8 14C3.2 11.2 5.2 9.8 8 9.8C10.8 9.8 12.8 11.2 13.2 14"],

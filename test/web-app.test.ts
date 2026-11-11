@@ -601,6 +601,23 @@ test("a late manual ritual sits in the quiet Off group of Coming up, not in Over
   assert.ok(runs.includes(imported.run), "the runs page shows them on request");
 });
 
+test("the Candles, Vigils and Rituals titles start with the mark of their kind, the same glyph as the tab (0.134.0)", async () => {
+  const marks = [
+    ["/candles", "Candles", "candle-ico"],
+    ["/w/demo/candles", "Candles", "candle-ico"],
+    ["/vigils", "Vigils", "kind-vigil"],
+    ["/w/demo/vigils", "Vigils", "kind-vigil"],
+    ["/rituals", "Rituals", "kind-ritual"],
+    ["/w/demo/rituals", "Rituals", "kind-ritual"],
+  ] as const;
+  for (const [path, title, mark] of marks) {
+    const body = (await get(path)).body.replaceAll("<!-- -->", "");
+    const h1 = /<h1 class="page-title has-title-icon">(.*?)<\/h1>/su.exec(body)?.[1] ?? "";
+    assert.match(h1, new RegExp(`^<svg class="[^"]*${mark}[^"]*" width="24" height="24" viewBox="0 0 16 16"[^>]*aria-hidden="true"`, "u"), `${path}: the mark leads the title`);
+    assert.ok(h1.endsWith(`</svg>${title}`), `${path}: the title stays text`);
+  }
+});
+
 test("the ritual page of a repo ritual shows where git defines it, the schedule and the warnings, and points edits to git", async () => {
   const repo = { ...RITUAL.row, mode: "off", heldRun: null, source: "repo" as const, defCommit: "abcdef123456", defHost: "host-a", defAt: "2026-09-28T07:00:00.000Z", defDirty: true, at: "07:00", zone: "Europe/Berlin", args: "--site acme", timeout: "30m", nextDueAt: "2026-09-29T05:00:00.000Z", warnings: ["mirror is from host-b, this checkout differs: darius ritual reconcile"] };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: repo } : null) };

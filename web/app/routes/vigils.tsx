@@ -1,8 +1,9 @@
 import type { Route } from "./+types/vigils";
 import { ComingUp, Waiting } from "../components/agenda.tsx";
 import { KindWord } from "../components/chip.tsx";
+import { KindIcon } from "../components/kind.tsx";
 import { Row, RowList } from "../components/row.tsx";
-import { SectionPageHead } from "../components/section.tsx";
+import { SectionPageHead, TITLE_ICON } from "../components/section.tsx";
 import { Fold } from "../components/ui.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
 import { checkKey } from "../lib/check-poll.ts";
@@ -47,7 +48,7 @@ export default function Vigils({ loaderData }: Route.ComponentProps): React.Reac
   const closedTarget = closed.some(({ vigil }) => vigilAnchor(vigil.slug) === target);
   return (
     <div className="proj">
-      <SectionPageHead title="Vigils" workspace={workspace} fact={`${agenda.armed} armed, ${closedCount} closed`} />
+      <SectionPageHead title="Vigils" icon={<KindIcon kind="vigil" size={TITLE_ICON} />} workspace={workspace} fact={`${agenda.armed} armed, ${closedCount} closed`} />
       <div className="proj-body">
         <div className="board">
           <div className="board-main">

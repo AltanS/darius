@@ -88,7 +88,7 @@ test("the html escapes a title with a script tag and quotes, and holds no active
   for (const banned of ["<script", "<img src=x", "<link", "<style", "@import", "url(", "border-radius", "border-left", "http://", "\u2014"]) {
     assert.equal(html.toLowerCase().includes(banned), false, `the html holds ${banned}`);
   }
-  assert.deepEqual(html.match(/<img [^>]*>/gu)?.length, 1, "one image: the logo");
+  assert.deepEqual(html.match(/<img [^>]*>/gu)?.length, 2, "two images: the logo and the candle mark");
   assert.equal(message.text.includes("\u2014"), false, "no em dash in the text");
 });
 

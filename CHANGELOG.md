@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.134.0] - 2026-11-11
+
+### Added
+
+- **Kind marks in the mails.** The project line under the wordmark starts with the mark of what the mail is about: the candle for a candle mail, the two arrows of a ritual for a run report. They are PNGs next to the logo in `assets/email/` (`candle-40.png`, `ritual-40.png`, shown at 20 px), rendered by `web/scripts/mail-logo.ts` and pinned to the release tag like the logo, so they show wherever the logo shows. `alt=""` and a fixed size: with images blocked the line reads as before. `"logo": false` sends neither image. The text part does not change.
+- **One set of glyphs.** The candle, vigil, ritual and manual strokes live in `web/app/lib/glyphs.ts`. The app's icons and the mail marks draw from it, so the mail shows the same marks as the app.
+- The Candles, Vigils and Rituals pages show their mark before the page title, in the colour of the kind, as the tabs in Places already do.
+
 ## [0.133.0] - 2026-11-11
 
 ### Added
