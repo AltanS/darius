@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.136.0] - 2026-11-19
+
+### Added
+
+- **A stop hook nudges a session that forgot to hand in.** The run's `settings.json` now wires Claude Code's `Stop` hook to `darius policy-check --stop`. While the run is still running, the hook blocks the first stop and tells the session to run `darius run complete` (or `--outcome failed`, or `darius run hold`). A second stop is let through, so it never loops. A held or closed run stops freely, and an error in the hook lets the session stop. Each block is a line in `<run>/gate.jsonl` with tool `Stop`. Seen on a real ritual: 3 of 7 mornings, the session wrote its findings and a valid result block as a chat message and ended, and darius closed the run as failed and lost the findings.
+
+### Fixed
+
+- **The run prompt asks for the command, not a chat reply.** Step 3 said "finish with your findings in plain markdown ... This is your last action", which a model could read as "write the findings in the chat". It now says: hand in your findings by running this command with the Bash tool, and do not write them as a chat message.
+- **A run that fails on the harness login has its own reason.** A run whose harness got an HTTP 401 or 403 (Claude Code's `api_error_status`, or its "Failed to authenticate" text when the run ended on an error) closes failed with the reason `auth-failed: claude could not log in, so the ritual did not run. Log in to claude on this host, then start it with darius run now.`, followed by the harness's words. Before, it read "claude exited without completing or holding the run", as if the ritual were at fault.
+
 ## [0.135.0] - 2026-11-11
 
 ### Fixed

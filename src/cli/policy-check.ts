@@ -29,6 +29,16 @@
  * writes nothing. An error (no policy, a bad regex) exits 1 instead of
  * denying, so the launcher refuses a run whose gate would deny every call.
  *
+ * STOP (0.136.0). `--stop` is the harness's stop hook (Claude Code `Stop`).
+ * While the run is still running (not held, not closed), it blocks the first
+ * stop and tells the session to hand in with `darius run complete`: a
+ * session that wrote its findings as a chat message gets one more turn to
+ * run the command. A stop that comes after such a block (`stop_hook_active`)
+ * is always let through, so the hook never loops. Each block is a line in
+ * `<run>/gate.jsonl` (tool `Stop`, verdict deny): the box lets a run write
+ * only that file. This hook fails open: on any error it lets the session
+ * stop, and the runner closes the run as failed as before.
+ *
  * FAIL CLOSED. Per the Claude Code hook docs, exit 2 blocks the tool call
  * whatever stdout says, while exit 1 or unparsable output lets it proceed.
  * So every error here (no policy file, bad stdin, bad regex) also prints a
@@ -262,9 +272,42 @@ function check(args: ParsedArgs, harness: HarnessAdapter): number {
   return deny(harness, decision.reason);
 }
 
+/** The text a blocked stop sends back to the session. */
+export function stopReason(policy: RunPolicy): string {
+  return [
+    `darius: run ${policy.run} is still open. Nothing was handed in: a findings text in the chat does not count.`,
+    `If the procedure is done, run \`darius run complete ${policy.run} --project ${policy.project} --outcome complete --findings-stdin\` with the Bash tool now, as the protocol in your system prompt shows, with your findings and the darius-result block.`,
+    "If the procedure cannot be done, run the same command with `--outcome failed`. If you need a person, run `darius run hold`.",
+  ].join(" ");
+}
+
+/** The stop hook fails open: an error lets the session stop, and the runner closes the run as before. */
+function stopOrAllow(args: ParsedArgs, harness: HarnessAdapter): number {
+  try {
+    return stopCheck(args, harness);
+  } catch (cause) {
+    console.error(`darius policy-check --stop: ${errorMessage(cause)}`);
+    return EXIT_ALLOW;
+  }
+}
+
+/** The stop hook: blocks the first stop of a run that is still running. Prints nothing when it lets the session stop. */
+function stopCheck(args: ParsedArgs, harness: HarnessAdapter): number {
+  if (harness.id !== "claude") return EXIT_ALLOW;
+  const payload = parseJsonText(args.stdin ?? readStdin(), "hook input");
+  if (isJsonRecord(payload) && payload.stop_hook_active === true) return EXIT_ALLOW;
+  const policyFile = policyPath(args);
+  const policy = parseRunPolicy(readPolicyText(policyFile), policyFile);
+  const phase = viewRun(readLedger(openProject(policy.project)), policy.run).phase;
+  if (phase !== "running") return EXIT_ALLOW;
+  logDecision(policyFile, { class: "internal", name: "Stop" }, { verdict: "deny", reason: "stop blocked: the run is still open" });
+  console.log(JSON.stringify({ decision: "block", reason: stopReason(policy) }));
+  return EXIT_ALLOW;
+}
+
 export const policyCheckCommand: Command = {
   name: "policy-check",
-  flags: ["preflight", "harness", "policy"],
+  flags: ["preflight", "harness", "policy", "stop"],
   summary: "pre-tool hook for unattended runs: deny held or write commands (reads hook JSON on stdin)",
   async run(args: ParsedArgs): Promise<number> {
     // An unknown harness still gets a deny; exit 2 blocks in every harness darius knows.
@@ -274,6 +317,7 @@ export const policyCheckCommand: Command = {
       const known = harnessById(id);
       if (known === undefined) throw new Error(`unknown harness "${id}" (known: ${HARNESS_IDS.join(", ")})`);
       harness = known;
+      if (args.flags.stop === true) return stopOrAllow(args, harness);
       return check(args, harness);
     } catch (cause) {
       console.error(`darius policy-check: ${errorMessage(cause)}`);

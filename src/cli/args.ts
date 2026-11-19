@@ -55,6 +55,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "pull-only",
   "reseed",
   "preflight",
+  "stop",
   "check",
   "major",
   "help",

@@ -190,7 +190,7 @@ export function buildPrompt(input: PromptInput): string {
     `darius run hold ${run} ${scope} --question "<one question, no $ or backticks>"`,
     "```",
     "",
-    "3. When the procedure is done, finish with your findings in plain markdown, ending with the darius-result block (see Result). This is your last action:",
+    "3. When the procedure is done, hand in your findings by running this command with the Bash tool. Do not write the findings or the result block as a chat message: darius reads only what this command hands in. Put your findings in plain markdown, ending with the darius-result block (see Result):",
     "",
     "```bash",
     `darius run complete ${run} ${scope} --outcome complete --findings-stdin <<'FINDINGS'`,

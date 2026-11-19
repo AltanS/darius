@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseArgs } from "../src/cli/args.ts";
-import { installedDarius, policyCheckCommand, readRunPolicy } from "../src/cli/policy-check.ts";
+import { installedDarius, policyCheckCommand, readRunPolicy, stopReason } from "../src/cli/policy-check.ts";
 import { profileCommand } from "../src/cli/profile.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
@@ -40,7 +40,7 @@ import { localToday } from "../src/core/sweep.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
-import { failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
+import { authFailure, failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
 import { findingCommand } from "../src/cli/finding.ts";
 import { candleCommand } from "../src/cli/candle.ts";
 import { followUpReadiness } from "../src/runner/follow-up-ready.ts";
@@ -132,6 +132,9 @@ case "\${FAKE_CLAUDE_MODE:-complete}" in
     darius run hold "$DARIUS_RUN" --project "$DARIUS_PROJECT" --question "may I push?" --who claude:fake-session >/dev/null ;;
   sleep) sleep 31.7 ;;
   silent) : ;;
+  auth)
+    printf '{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":401,"session_id":"fake-session","total_cost_usd":0,"result":"Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue."}\\n'
+    exit 1 ;;
 esac
 printf '{"type":"result","is_error":false,"session_id":"fake-session","total_cost_usd":0.0012,"result":"done"}\\n'
 `,
@@ -368,10 +371,14 @@ test("run-due starts one run with the policy's model, turns and tools; the run c
   assert.equal(hook.matcher, "*", "permissions skipped: the hook sees every tool");
   assert.equal(hook.hooks[0].command, join(REPO, "bin", "darius"));
   assert.deepEqual(hook.hooks[0].args, ["policy-check", "--policy", join(runDir, "policy.json")]);
+  const stop = settings.hooks.Stop[0];
+  assert.equal(stop.matcher, undefined, "the stop hook has no matcher");
+  assert.deepEqual(stop.hooks[0].args, ["policy-check", "--policy", join(runDir, "policy.json"), "--stop"], "the stop hook is the gate with --stop (0.136.0)");
   assert.deepEqual(flagValues(argv, "--settings"), [join(runDir, "settings.json")]);
   const prompt = readFileSync(join(runDir, "prompt.md"), "utf8");
   assert.match(prompt, new RegExp(`darius run complete ${run} --project ${project} --outcome complete --findings-stdin`));
   assert.match(prompt, new RegExp(`darius run hold ${run} --project ${project} --question`));
+  assert.match(prompt, /hand in your findings by running this command with the Bash tool\. Do not write the findings or the result block as a chat message/u, "step 3 asks for the command, not a chat reply (0.136.0)");
   assert.ok(prompt.indexOf("## Style") > 0 && prompt.indexOf("## Style") < prompt.indexOf("## Result"), "the style section comes before Result");
   assert.match(prompt, /At most 4000 characters\./u);
   assert.match(prompt, /## Shell commands\n\nThe policy hook checks every shell call\./u, "a full-gate run gets the shell forms section (0.66.0)");
@@ -3572,5 +3579,77 @@ test("the mask in a herdr tab: bwrap not in the foreground leaves a line in the 
     assert.match(log, /UNMASKED.*herdr shows no bwrap in the tab's foreground/u);
   } finally {
     rmSync(join(FAKE_HERDR_DIR, "foreground"), { force: true });
+  }
+});
+
+// --- stop hook and auth failure (0.136.0) -------------------------------------------
+
+function stopPayload(active: boolean): string {
+  return JSON.stringify({ session_id: "sess-1", hook_event_name: "Stop", stop_hook_active: active });
+}
+
+test("policy-check --stop blocks the first stop of a running run, then lets it stop", async () => {
+  const project = "pc-stop";
+  const { policyFile, run } = seedRunningRun(project, "act");
+  const first = await runCli(policyCheckCommand, ["--policy", policyFile, "--stop"], stopPayload(false));
+  assert.equal(first.code, 0);
+  const block = JSON.parse(first.stdout);
+  assert.equal(block.decision, "block");
+  assert.equal(block.reason, stopReason(readRunPolicy(policyFile)));
+  assert.match(block.reason, new RegExp(`darius run complete ${run} --project ${project} --outcome complete --findings-stdin`));
+  const logged = readFileSync(join(dirname(policyFile), "gate.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(logged.filter((line) => line.tool === "Stop").map((line) => [line.class, line.verdict]), [["internal", "deny"]]);
+
+  const again = await runCli(policyCheckCommand, ["--policy", policyFile, "--stop"], stopPayload(true));
+  assert.deepEqual([again.code, again.stdout], [0, ""], "a stop after a block is let through: no loop");
+
+  appendLine(openProject(project), { who: "claude:sess-1", type: "run.completed", item: "ritual/heartbeat", run, outcome: "complete" });
+  const done = await runCli(policyCheckCommand, ["--policy", policyFile, "--stop"], stopPayload(false));
+  assert.deepEqual([done.code, done.stdout], [0, ""], "a closed run stops freely");
+  assert.equal(linesOf(project, "run.held").length, 0, "the stop hook never holds a run");
+});
+
+test("policy-check --stop lets a held run stop, and fails open on a bad policy", async () => {
+  const project = "pc-stop-held";
+  const { policyFile, run } = seedRunningRun(project, "act");
+  appendLine(openProject(project), { who: "claude:sess-1", type: "run.held", item: "ritual/heartbeat", run, questions: ["may I?"] });
+  const payload = JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false });
+  const held = await runCli(policyCheckCommand, ["--policy", policyFile, "--stop"], payload);
+  assert.deepEqual([held.code, held.stdout], [0, ""]);
+  const missing = await runCli(policyCheckCommand, ["--policy", join(SANDBOX, "no-such-policy.json"), "--stop"], payload);
+  assert.deepEqual([missing.code, missing.stdout], [0, ""], "an error lets the session stop");
+});
+
+test("authFailure names a 401 from Claude Code's result JSON, and nothing else", () => {
+  const expired = "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.";
+  const launch = { stdout: "", stderrTail: "" };
+  const result = { type: "result", is_error: true, terminal_reason: "api_error", api_error_status: 401, result: expired };
+  assert.equal(authFailure(launch, { result }), expired);
+  assert.equal(authFailure(launch, { result: { ...result, api_error_status: 403 } }), expired);
+  assert.equal(authFailure(launch, { result: { ...result, api_error_status: 529, result: "API Error: 529 overloaded" } }), undefined);
+  // No status field: the error text alone.
+  const noStatus = { is_error: true, result: expired };
+  assert.match(authFailure(launch, { result: noStatus }) ?? "", /401 OAuth access token has expired/u);
+  assert.match(authFailure({ stdout: `noise ${expired}`, stderrTail: "" }, { result: null }) ?? "", /Failed to authenticate/u);
+  // A session that did its work and quotes the words is no auth failure.
+  assert.equal(authFailure({ stdout: expired, stderrTail: "" }, { result: { is_error: false, result: `found: ${expired}` } }), undefined);
+  assert.equal(authFailure(launch, { result: { is_error: false, result: "all done" } }), undefined);
+});
+
+test("a run that fails on the harness login is closed failed as auth-failed, not as a forgotten hand-in", async () => {
+  const project = "rd-auth";
+  seedRitual(project);
+  process.env.FAKE_CLAUDE_MODE = "auth";
+  try {
+    const first = await runDueJson(project);
+    assert.equal(ritualsOf(first.report)[0]?.end, "failed");
+    const completed = linesOf(project, "run.completed");
+    assert.equal(completed.length, 1);
+    const blob = JSON.parse(getBlobText(openProject(project), String(completed[0]?.findings_sha)) ?? "{}");
+    assert.match(blob.reason, /^auth-failed: claude could not log in, so the ritual did not run\. Log in to claude on this host/u);
+    assert.match(blob.reason, /401 OAuth access token has expired/u);
+    assert.equal(blob.exit_code, 1);
+  } finally {
+    process.env.FAKE_CLAUDE_MODE = "complete";
   }
 });

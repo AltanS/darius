@@ -554,10 +554,34 @@ function brokenAction(surface: SurfaceId): string {
   return surface === "hc" ? "the hc terminal was killed" : "the herdr tab was closed";
 }
 
+/** The harness's own words for a bad login, for a result without `api_error_status`. */
+const AUTH_TEXT = /\b401\b[^\n]{0,80}\b(?:OAuth|token|authenticat)|Failed to authenticate|Invalid API key|Please run \/login/iu;
+
+/**
+ * The harness's error text when the run failed on its login (0.136.0), else
+ * undefined. Claude Code's result JSON carries `api_error_status`; stdout
+ * and stderr are read too, for a harness or version that has no such field.
+ */
+export function authFailure(launch: Pick<LaunchResult, "stdout" | "stderrTail">, facts: ResultFacts): string | undefined {
+  const result = facts.result;
+  const status = result?.api_error_status;
+  const text = isJsonText(result?.result) ? result.result : "";
+  if (status === 401 || status === 403) return text !== "" ? text : `API error ${String(status)}`;
+  // A session that did its work may quote such words; only a run that ended on an error is read for them.
+  if (result !== null && result.is_error !== true) return undefined;
+  for (const source of [text, launch.stdout.slice(-8192), launch.stderrTail ?? ""]) {
+    const match = AUTH_TEXT.exec(source);
+    if (match !== null) return source.slice(Math.max(0, match.index - 40), match.index + 160).trim();
+  }
+  return undefined;
+}
+
 function failureBlob(launch: LaunchResult, facts: ResultFacts, ran: { harness: string; surface: SurfaceId }, runDir: string): string {
   const { harness } = ran;
   let reason = `${harness} exited without completing or holding the run`;
-  if (launch.boxBroken !== undefined) reason = `box-broken: ${launch.boxBroken}; ${brokenAction(ran.surface)}`;
+  const auth = launch.boxBroken === undefined && launch.spawnError === undefined ? authFailure(launch, facts) : undefined;
+  if (auth !== undefined) reason = `auth-failed: ${harness} could not log in, so the ritual did not run. Log in to ${harness} on this host, then start it with darius run now. ${harness} said: ${auth.slice(0, 300)}`;
+  else if (launch.boxBroken !== undefined) reason = `box-broken: ${launch.boxBroken}; ${brokenAction(ran.surface)}`;
   else if (launch.spawnError !== undefined) reason = launch.spawnError.includes("is not on PATH") ? launch.spawnError : `${harness} did not start: ${launch.spawnError}`;
   else if (launch.exitCode === 127) reason = `${harness} is not on PATH: install it or set the profile's command`;
   else if (launch.timedOut) reason = `${harness} was stopped after the run timeout (${String(launch.durationMs)} ms)`;

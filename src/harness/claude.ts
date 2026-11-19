@@ -165,13 +165,18 @@ export function disallowedTools(policy: Policy, permissions: ResolvedProfile["pe
  */
 export const SHELL_SCOPE_MATCHER = "Bash|Read|Grep|Glob|NotebookRead|LS";
 
-/** Scope shell: the hook sees Bash and the read tools, as the allowlist handles the rest. Scope full: it sees every tool. */
+/**
+ * Scope shell: the hook sees Bash and the read tools, as the allowlist handles the rest. Scope full: it sees every tool.
+ * The Stop hook (0.136.0) is the same gate with `--stop`: while the run is still open, it blocks the first stop
+ * and tells the session to hand in with `darius run complete` (src/cli/policy-check.ts, "STOP").
+ */
 function hookSettings(gate: readonly string[], scope: GateScope): JsonValue {
   const [command = "", ...args] = gate;
   const matcher = scope === "full" ? "*" : SHELL_SCOPE_MATCHER;
   return {
     hooks: {
       PreToolUse: [{ matcher, hooks: [{ type: "command", command, args }] }],
+      Stop: [{ hooks: [{ type: "command", command, args: [...args, "--stop"] }] }],
     },
   };
 }
