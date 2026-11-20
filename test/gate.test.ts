@@ -1400,3 +1400,14 @@ test("the gate denies ritual reconcile --force in every form and mode, and leave
   for (const line of plain) assert.equal(forcesReconcile(line), false, line);
   assert.equal(decide(shell("darius ritual reconcile --dry-run"), policy({ may: ["Bash(*)"] })), undefined);
 });
+
+test("a run complete heredoc with lines after its delimiter is denied with that reason, not 'quote the delimiter' (0.136.2)", () => {
+  const scoped = policy({ gate: "full", may: [], hold: [] });
+  const head = `darius run complete ${RUN} --project p --outcome complete --findings-stdin <<'FINDINGS'\n# Sweep\n\n- 25450 retried. Attempt 1/2.\n`;
+  const tail = decide(shell(`${head}FINDINGS\n\`\`\`\n\n\n<invoke name="Bash">\n<parameter name="command">echo`), scoped) ?? "";
+  assert.match(tail, /the heredoc ends at the line FINDINGS, but 5 more line\(s\) follow it/u);
+  assert.doesNotMatch(tail, /quote the heredoc delimiter/u);
+  assert.match(decide(shell(head), scoped) ?? "", /the heredoc has no closing FINDINGS line/u);
+  assert.equal(decide(shell(`${head}FINDINGS`), scoped), undefined, "the same command ending at the delimiter is the protocol");
+  assert.match(decide(shell(`darius run complete OTHERRUN --project p --findings-stdin <<'F'\nx\nF\necho`), scoped) ?? "", /input redirection/u, "another run's line gets the usual reason");
+});

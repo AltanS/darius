@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.136.2] - 2026-11-20
+
+### Fixed
+
+- **A `run complete` heredoc with lines after its delimiter gets a reason the run can act on.** A run's model pasted a code fence and tool-call markup after the closing `FINDINGS` line. The gate denied it, as it must: the shell runs those lines. But the reason said to quote the delimiter, which the line already did, so the run held with a question instead of trying again. Now the reason says the heredoc ends at the `FINDINGS` line and N more lines follow it, and asks for the command to end at that line. A heredoc with no closing line says so. A worse problem in those lines (a candle, a follow-up, a secret path) keeps its own reason.
+
 ## [0.136.1] - 2026-11-20
 
 ### Fixed

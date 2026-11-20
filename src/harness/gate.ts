@@ -204,6 +204,25 @@ function protocolVerb(command: string, run: string, isDariusBin: DariusBinCheck)
   return verb === "complete" ? verb : undefined;
 }
 
+/**
+ * Why a `run complete` heredoc of THIS run is not the protocol, when only its
+ * end is wrong: no delimiter line, or lines after it (the shell runs them).
+ * Undefined for anything else, which gets the usual verdict. Seen on a real
+ * run (0.136.2): the model pasted a code fence and tool-call markup after the
+ * delimiter, and the generic deny told it to quote the delimiter it had quoted.
+ */
+function heredocEndProblem(command: string, run: string, isDariusBin: DariusBinCheck): string | undefined {
+  const lines = command.replace(/\n+$/u, "").split("\n");
+  const first = (lines[0] ?? "").replace(CD_PREFIX, "");
+  const heredoc = lines.length > 1 ? HEREDOC_HEAD.exec(first) : null;
+  if (heredoc === null || protocolHead(heredoc[1] ?? "", run, isDariusBin) !== "complete") return undefined;
+  const delimiter = heredoc[3] ?? "";
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === delimiter);
+  if (end === -1) return `the heredoc has no closing ${delimiter} line; end the findings with a line that is only ${delimiter}`;
+  const after = lines.length - 1 - end;
+  return `the heredoc ends at the line ${delimiter}, but ${String(after)} more line(s) follow it, which the shell would run as commands. Make the ${delimiter} line the last line of the command, with nothing after it, and run it again`;
+}
+
 // --- `may` rules ---------------------------------------------------------------------
 
 /**
@@ -1163,6 +1182,9 @@ function decideShell(command: string, policy: RunPolicy, scope: GateScope, call:
   if (forwardsRun(command)) return deny(`a run never forwards a run to another host: ${clip(command)}`);
   if (forcesReconcile(command)) return deny(`a run never forces a reconcile; a person does, outside the run: ${clip(command)}`);
   if (clearsRunMarker(command)) return deny(`a run keeps DARIUS_RUN and DARIUS_RUN_POLICY as they are: ${clip(command)}`);
+  // After the denies above, which name a worse problem in the lines after the body.
+  const heredocEnd = heredocEndProblem(command, policy.run, isDariusBin);
+  if (heredocEnd !== undefined) return deny(`${heredocEnd}: ${clip(command)}`);
   if (isGranted(command, policy, call)) return ALLOW;
   const held = holdMatch(command, policy.hold);
   if (held?.quotedOnly === true) return quotedOnlyDeny(held.pattern, command);
