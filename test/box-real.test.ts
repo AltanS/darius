@@ -17,10 +17,10 @@ import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, r
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { boxPlan, type BoxPlan, type BoxPlanInput } from "../src/core/box.ts";
+import { boxPlan, RUN_REBINDS, type BoxPlan, type BoxPlanInput } from "../src/core/box.ts";
 import { boxEnterPlanFields, boxFiles, hostBoxFiles, writeBoxFiles } from "../src/core/box-files.ts";
 import { hostBoxFacts, prepareBox, removeBox } from "../src/core/box-host.ts";
 import { decide, startBoxProxy, type Decide } from "../src/core/box-proxy.ts";
@@ -307,7 +307,9 @@ test("real bwrap: the box refuses store, run policy, harness settings, .git, the
   for (const [name, result] of Object.entries(outcome.connects)) assert.equal(result, "ENOENT", `${name} cannot be reached`);
   assert.equal(outcome.homeConnects.home, "ECONNREFUSED", "a socket in the home folder is masked: a connect is refused");
 
-  assert.deepEqual(outcome.run, ["darius"], "/run holds only the box dir; no docker, tailscale or dbus socket");
+  // On NixOS the box binds back the system links it needs (RUN_REBINDS); nothing else.
+  const rebinds = RUN_REBINDS.filter((path) => existsSync(path)).map((path) => basename(path));
+  assert.deepEqual(outcome.run.toSorted(), ["darius", ...rebinds].toSorted(), "/run holds only the box dir and the NixOS links; no docker, tailscale, nscd or dbus socket");
   assert.deepEqual(outcome.runtime, [], "the runtime dir is empty: no session bus");
   assert.deepEqual(outcome.interfaces, ["lo"], "no network but loopback");
   for (const name of ["GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "DBUS_SESSION_BUS_ADDRESS", "DARIUS_BWRAP", "DARIUS_RUN_SANDBOX"]) {

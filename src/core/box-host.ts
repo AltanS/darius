@@ -109,7 +109,10 @@ export function scanSockets(input: SocketScanInput): SocketScan {
   const pruned = [...input.prune, ...(input.tmpfs ?? [])].map((path) => normalize(path));
   const found = procUnixPaths(text).filter((path) => {
     // A home under a tmpfs root (a throwaway test home) is bound back into the box.
-    if (!isUnder(path, home) && TMPFS_ROOTS.some((dir) => isUnder(path, dir))) return false;
+    // The real path too: the kernel names /var/run/nscd/socket, and /var/run links to /run (NixOS).
+    const real = normalize(realOr(path));
+    const inHome = isUnder(path, home) || isUnder(real, home);
+    if (!inHome && TMPFS_ROOTS.some((dir) => isUnder(path, dir) || isUnder(real, dir))) return false;
     if (pruned.some((dir) => isUnder(path, dir))) return false;
     return lstatOf(path)?.isSocket() === true;
   });

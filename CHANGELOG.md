@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.136.3] - 2026-11-20
+
+### Fixed
+
+- **The box no longer masks a socket it already hides.** The socket scan skips sockets under `/run`, `/tmp` and the other roots the box replaces with an empty tmpfs. It compared the path as the kernel lists it, and NixOS lists the name cache as `/var/run/nscd/socket`, where `/var/run` links to `/run`. So the box bound `/dev/null` over a socket it did not show, which left an empty `/run/nscd` folder in the box. The scan now checks the real path too. Nothing leaked: the socket was never reachable in the box.
+- The real-bwrap test expects the NixOS links the box binds into `/run` on purpose (`current-system`, `wrappers`, `opengl-driver`, `booted-system`) when the host has them. It failed on NixOS before.
+
 ## [0.136.2] - 2026-11-20
 
 ### Fixed
