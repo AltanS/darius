@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.136.1] - 2026-11-20
+
+### Fixed
+
+- **A POST through a proxy no longer fails as a 502.** darius serve closed an idle connection after 5 s, the Node and Bun default. A reverse proxy keeps idle upstream connections for up to 90 s (Traefik's default) and reused one that darius had just closed. A proxy retries a GET on its own but not a POST, so the phone's push subscribe got a 502 that never reached darius and left no line in its journal. darius now keeps idle connections for 120 s.
+
 ## [0.136.0] - 2026-11-19
 
 ### Added

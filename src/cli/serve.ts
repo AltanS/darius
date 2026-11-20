@@ -87,6 +87,14 @@ import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
 export const DEFAULT_WEB_BIND = "auto";
 const LOOPBACK = "127.0.0.1";
 const TAILNET_RETRY_MS = 30_000;
+/**
+ * How long an idle keep-alive connection stays open. A reverse proxy keeps idle upstream
+ * connections for up to 90 s (Traefik's and Go's default). Node and Bun close them after 5 s,
+ * so the proxy could send a request down a socket we had just closed. A proxy retries a GET on
+ * its own but not a POST, so the POST failed as a 502 and never reached us (the 0.136.0 phone
+ * push subscribe). We must outlast the proxy.
+ */
+export const IDLE_KEEP_ALIVE_MS = 120_000;
 
 function noRetry(): void {
   // Nothing to stop: no tailnet retry is pending.
@@ -470,10 +478,18 @@ async function handle(request: IncomingMessage, response: ServerResponse, gate: 
   }
 }
 
+/** Keep idle connections open longer than a proxy in front does; see IDLE_KEEP_ALIVE_MS. */
+export function keepIdleConnections(server: Server): void {
+  server.keepAliveTimeout = IDLE_KEEP_ALIVE_MS;
+  // Node wants the header timeout above the keep-alive one, or it may cut a slow next request.
+  server.headersTimeout = IDLE_KEEP_ALIVE_MS + 1_000;
+}
+
 function listen(address: string, port: number, gate: Gate, app: WebApp): Promise<Server> {
   const server = createServer((request, response) => {
     void handle(request, response, gate, app);
   });
+  keepIdleConnections(server);
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, address, () => {
