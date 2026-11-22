@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { JsonValue } from "../src/core/model.ts";
-import { cutResult, HANDOFF_MAX, parseResult, readSummary, summarizeResult, type RunResult } from "../src/core/result.ts";
+import { cutResult, DECISION_LIMITS, HANDOFF_MAX, parseResult, readSummary, summarizeResult, type RunResult } from "../src/core/result.ts";
 
 function block(json: string): string {
   return ["# Findings", "", "All fine.", "", "```darius-result", json, "```", ""].join("\n");
@@ -252,4 +252,97 @@ test("the candle flag needs a key and a state of needs-decision or fixed", () =>
   assert.equal(errorsOf(withItem({ key: "k", state: "needs-code", candle: true })).length, 1);
   assert.equal(errorsOf(withItem({ state: "open", candle: true })).length, 2, "both problems are listed");
   assert.deepEqual(errorsOf(withItem({ key: "k", state: "needs-decision", candle: "yes" })), ["items[0].candle: must be true when set"]);
+});
+
+// --- decision (0.137.0) ---------------------------------------------------------------------
+
+const OK_DECISION = {
+  what: "3 of 40 articles show a dash in the title, for example article 12.",
+  impact: "not known",
+  done: "Omitted the section from the digest.",
+  options: [
+    { choice: "Publish", effect: "The digest goes out with the dashes." },
+    { choice: "Hold", effect: "The digest waits." },
+  ],
+  recommend: "Hold, because the dash comes from the feed.",
+};
+
+/** The check `run complete` makes: a needs-decision candle item must carry a decision. */
+function strictErrors(json: string): string[] {
+  const result = parseResult(json, { requireDecision: true });
+  return "errors" in result ? result.errors : [];
+}
+
+test("a candle item carries a decision, and it is kept as written", () => {
+  const item = parsed(withItem({ key: "k", state: "needs-decision", candle: true, decision: OK_DECISION })).items[0];
+  assert.deepEqual(item?.decision, OK_DECISION);
+  assert.deepEqual(strictErrors(withItem({ key: "k", state: "needs-decision", candle: true, decision: OK_DECISION })), []);
+});
+
+test("run complete refuses a needs-decision candle item without a decision, and says what to add", () => {
+  const errors = strictErrors(withItem({ key: "k", state: "needs-decision", candle: true }));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0] ?? "", /^items\[0\]\.decision: a candle item in the state needs-decision must carry a decision: what /u);
+  assert.match(errors[0] ?? "", /impact .*done .*options .*recommend/u);
+  assert.deepEqual(errorsOf(withItem({ key: "k", state: "needs-decision", candle: true })), [], "a stored result from before 0.137.0 is still read");
+});
+
+test("a fixed candle item needs no decision, and may carry one", () => {
+  assert.deepEqual(strictErrors(withItem({ key: "k", state: "fixed", candle: true })), []);
+  assert.deepEqual(strictErrors(withItem({ key: "k", state: "fixed", candle: true, decision: OK_DECISION })), []);
+});
+
+test("only a candle item may carry a decision", () => {
+  assert.deepEqual(strictErrors(withItem({ key: "k", state: "needs-decision", decision: OK_DECISION })), [
+    'items[0].decision: only a candle item ("candle": true) carries a decision',
+  ]);
+  assert.equal(strictErrors(withItem({ key: "k", state: "open", decision: OK_DECISION })).length, 1);
+  assert.equal("decision" in (parsed(withItem({ key: "k", state: "open", decision: null })).items[0] ?? {}), false, "null is no decision");
+});
+
+test("every field of a decision is required, and a longer text is refused and never cut", () => {
+  const flagged = { key: "k", state: "needs-decision", candle: true };
+  for (const field of ["what", "impact", "done", "recommend", "options"]) {
+    const rest = Object.fromEntries(Object.entries(OK_DECISION).filter(([name]) => name !== field));
+    assert.equal(strictErrors(withItem({ ...flagged, decision: rest })).length, 1, field);
+  }
+  const limits: [string, number][] = [["what", DECISION_LIMITS.what], ["impact", DECISION_LIMITS.impact], ["done", DECISION_LIMITS.done], ["recommend", DECISION_LIMITS.recommend]];
+  for (const [field, max] of limits) {
+    assert.deepEqual(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, [field]: "x".repeat(max) } })), [], `${field} at the limit`);
+    assert.deepEqual(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, [field]: "x".repeat(max + 1) } })), [
+      `items[0].decision.${field}: at most ${String(max)} characters, got ${String(max + 1)}; make it shorter`,
+    ]);
+  }
+  const tooLong = { choice: "x".repeat(DECISION_LIMITS.choice + 1), effect: "y".repeat(DECISION_LIMITS.effect + 1) };
+  assert.deepEqual(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: [tooLong] } })), [
+    `items[0].decision.options[0].choice: at most ${String(DECISION_LIMITS.choice)} characters, got ${String(DECISION_LIMITS.choice + 1)}; make it shorter`,
+    `items[0].decision.options[0].effect: at most ${String(DECISION_LIMITS.effect)} characters, got ${String(DECISION_LIMITS.effect + 1)}; make it shorter`,
+  ]);
+});
+
+test("a decision has one to four options, each with a choice and an effect, and its texts are one line", () => {
+  const flagged = { key: "k", state: "needs-decision", candle: true };
+  const option = { choice: "A", effect: "B" };
+  assert.equal(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: [] } })).length, 1);
+  assert.equal(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: [option, option, option, option, option] } })).length, 1);
+  assert.deepEqual(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: [option, option, option, option] } })), []);
+  assert.equal(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: [{ choice: "A" }] } })).length, 1);
+  assert.equal(strictErrors(withItem({ ...flagged, decision: { ...OK_DECISION, options: "Hold" } })).length, 1);
+  const lines = parsed(withItem({ ...flagged, decision: { ...OK_DECISION, what: "one\ntwo\n  three" } })).items[0]?.decision;
+  assert.equal(lines?.what, "one two three", "a newline becomes a space");
+});
+
+test("a stored result keeps its items when its decision breaks a rule: the bad decision is dropped", () => {
+  // A darius before 0.137.0 stored any decision it got; reading that blob must not lose the run.
+  const stored = withItems([
+    { key: "k", state: "needs-decision", candle: true, title: "t", severity: "high", decision: { ...OK_DECISION, what: "x".repeat(DECISION_LIMITS.what + 1) } },
+    { key: "o", state: "open", title: "u", severity: "low", decision: OK_DECISION },
+  ]);
+  assert.deepEqual(errorsOf(stored), []);
+  const items = parsed(stored).items;
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.candle, true);
+  assert.equal("decision" in (items[0] ?? {}), false);
+  assert.equal("decision" in (items[1] ?? {}), false);
+  assert.equal(strictErrors(stored).length, 2, "run complete still refuses both");
 });

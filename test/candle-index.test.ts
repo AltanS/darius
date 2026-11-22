@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { collectCandles, candleOpenings, CLEAN_RUNS, foreignFixes, foreignFixLine, type Candle, type CandleOpening } from "../src/core/candle-index.ts";
 import { appendLine, readLedger, type LedgerLineInput } from "../src/core/ledger.ts";
-import type { Severity } from "../src/core/result.ts";
+import type { ResultDecision, Severity } from "../src/core/result.ts";
 import { Seeder, type Item } from "./helpers/finding-seed.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-candle-index-"));
@@ -69,7 +69,7 @@ class CandleSeeder extends Seeder {
 
 test("a flagged item in a run opens a candle with the ritual and the run", () => {
   const seed = new CandleSeeder("fl-open");
-  const run = seed.run("audit", [candle("cve-1", "critical", { target: "package a", detail: "not kept" })]);
+  const run = seed.run("audit", [candle("cve-1", "critical", { target: "package a" })]);
   const [only] = seed.candles();
   assert.equal(seed.candles().length, 1);
   assert.equal(only?.key, "cve-1");
@@ -425,4 +425,57 @@ test("ledger lines of the old feature name are unknown types: ignored, with no t
   seed.operator("flare.cleared", "new");
   assert.equal(seed.candle("new").status, "lit", "an old clear line does not touch a candle");
   assert.equal(seed.candles().length, 1);
+});
+
+// --- the detail and the decision of a run report (0.137.0) ----------------------------------------
+
+function decision(what: string): ResultDecision {
+  return {
+    what,
+    impact: "not known",
+    done: "Held the article.",
+    options: [
+      { choice: "Publish", effect: "The article goes out as it is." },
+      { choice: "Hold", effect: "The article waits for a fix." },
+    ],
+    recommend: "Hold, because the sample is wrong.",
+  };
+}
+
+test("the detail and the decision of the newest run report reach the candle", () => {
+  const seed = new CandleSeeder("fl-decision");
+  seed.run("audit", [candle("k", "high", { detail: "first line\nsecond line", decision: decision("one sample, 3 articles") })]);
+  const found = seed.candle("k");
+  assert.equal(found.detail, "first line\nsecond line");
+  assert.deepEqual(found.decision, decision("one sample, 3 articles"));
+});
+
+test("the newest report wins; a report without them clears them, as it clears a body", () => {
+  const seed = new CandleSeeder("fl-decision-newest");
+  seed.run("audit", [candle("k", "high", { detail: "old", decision: decision("old what") })]);
+  seed.run("audit", [candle("k", "high", { detail: "new", decision: decision("new what") })]);
+  assert.equal(seed.candle("k").detail, "new");
+  assert.equal(seed.candle("k").decision?.what, "new what");
+  seed.run("audit", [candle("k", "high")]);
+  assert.equal(seed.candle("k").detail, undefined);
+  assert.equal(seed.candle("k").decision, undefined);
+});
+
+test("a candle with a stored run result from before 0.137.0 (no decision) is still there", () => {
+  const seed = new CandleSeeder("fl-decision-old");
+  seed.run("audit", [candle("k", "high", { detail: "kept now" })]);
+  const found = seed.candle("k");
+  assert.equal(found.status, "lit", "a result without a decision still lights the candle");
+  assert.equal(found.decision, undefined);
+  assert.equal(found.detail, "kept now");
+});
+
+test("a script report carries neither, and a closed candle keeps what its last report in force said", () => {
+  const seed = new CandleSeeder("fl-decision-script");
+  seed.light("scan");
+  assert.equal(seed.candle("scan").detail, undefined);
+  assert.equal(seed.candle("scan").decision, undefined);
+  seed.run("audit", [candle("k", "high", { detail: "d", decision: decision("w") })]);
+  seed.answer("k");
+  assert.equal(seed.candle("k").decision?.what, "w", "an answer does not drop the text the operator answered");
 });

@@ -214,7 +214,8 @@ function closedEntry(line: LedgerLine): Built {
   const by = text(line.by) === null ? null : shown(text(line.by) ?? "");
   const reason = text(line.reason);
   const tail = [...(by === null || by === line.who ? [] : [`by ${by}`]), ...(reason === null ? [] : [shown(reason)])];
-  return { kind: "vigil-closed", text: `Closed ${verdict} by ${line.who}${tail.length > 0 ? `: ${tail.join("; ")}` : ""}`, tone: verdict === "held" ? "ok" : "idle" };
+  const lead = text(line.amends) === null ? "Closed" : "Amended to";
+  return { kind: "vigil-closed", text: `${lead} ${verdict} by ${line.who}${tail.length > 0 ? `: ${tail.join("; ")}` : ""}`, tone: verdict === "held" ? "ok" : "idle" };
 }
 
 function findingEntry(line: LedgerLine, kind: "finding-closed" | "finding-reopened"): Built {

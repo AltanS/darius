@@ -17,6 +17,8 @@ import { parseArgs } from "../src/cli/args.ts";
 import { candleCommand } from "../src/cli/candle.ts";
 import { vigilCommand } from "../src/cli/vigil.ts";
 import { collectCandles, candleOpenings, type Candle } from "../src/core/candle-index.ts";
+import { ifACheckFailsSection } from "../src/core/vigil-candle.ts";
+import { getBlobText } from "../src/core/store.ts";
 import { appendLine, linesFor, readLedger } from "../src/core/ledger.ts";
 import { UsageError, type LedgerLine, type Vigil } from "../src/core/model.ts";
 import { dueFromIn } from "../src/core/relative-date.ts";
@@ -71,7 +73,7 @@ function fresh(name: string): string {
 }
 
 function checklist(command: string): string {
-  return `# checks\n\n## Verification Checklist\n\n- [ ] it holds\n  - Command: \`${command}\`\n  - Expected: \`exit 0\`\n`;
+  return `# checks\n\n## Verification Checklist\n\n- [ ] it holds\n  - Command: \`${command}\`\n  - Expected: \`exit 0\`\n\n## If a check fails\n\nRestart the worker by hand, then run the check again.\n`;
 }
 
 function yesterday(): string {
@@ -440,7 +442,7 @@ test("candle accept reports the vigil in --json", async () => {
   await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
   await sweep(project);
   const accept = await candle(project, ["accept", "vigil:guard", "--json"]);
-  assert.deepEqual(JSON.parse(accept.stdout), { ok: true, project, key: "vigil:guard", vigil: "guard", vigilClose: "closed" });
+  assert.deepEqual(JSON.parse(accept.stdout), { ok: true, project, key: "vigil:guard", vigil: "guard", vigilClose: "closed", vigilVerdict: "failed" });
 });
 
 test("candle answer keeps the vigil armed", async () => {
@@ -528,4 +530,183 @@ test("the legacy route refuses the new flags and drops none of them", () => {
 
   const set = run(["vigil", "set", "x", "--candle", "high"]);
   assert.equal(set.status, 2, set.stderr);
+});
+
+// --- the body of a vigil's candle (0.137.0) -----------------------------------------------
+
+test("a failed sweep gives the candle a body with the failed check, its output and the vigil's If a check fails section", async () => {
+  const project = fresh("fv-body");
+  const command = "echo boom-line; echo api_key=abcd1234efgh5678ijkl9012; exit 3";
+  const body = `${checklist(command)}\n## Notes\n\nunrelated\n`.replace(
+    "## If a check fails\n\nRestart the worker by hand, then run the check again.\n",
+    "## If a check fails\n\n1. Restart the worker by hand.\n2. Run the check again.\n\n## Notes\n",
+  );
+  assert.equal((await vigil(project, ["add", "guard", "--due", yesterday(), "--candle", "high", "--stdin"], body)).code, 0);
+  await sweep(project);
+  const found = candleOf(project, "vigil:guard");
+  assert.ok(found?.bodySha, "the candle has a body");
+  const text = getBlobText(openProject(project), found.bodySha);
+  assert.ok(text !== null);
+  assert.match(text, /^## What failed$/mu);
+  assert.match(text, /- Step 1: it holds/u);
+  assert.match(text, /- Command: echo boom-line/u);
+  assert.match(text, /- Expected: exit 0/u);
+  assert.match(text, /- Result: failed, exit 3/u);
+  assert.match(text, /^boom-line$/mu, "the output tail is in the body");
+  assert.doesNotMatch(text, /abcd1234efgh5678ijkl9012/u, "an obvious secret is masked");
+  assert.match(text, /^## If a check fails$/mu);
+  assert.match(text, /1\. Restart the worker by hand\.\n2\. Run the check again\./u, "the section is verbatim");
+  assert.doesNotMatch(text, /unrelated/u, "the section ends at the next heading");
+  assert.equal(found.target, "A check failed, step 1: it holds", "the target is as before");
+
+  const shown = await candle(project, ["show", "vigil:guard"]);
+  assert.match(shown.stdout, /body:\n    ## What failed/u);
+});
+
+test("a vigil that was given a candle before 0.137.0 has no section: the sweep still lights it, with the failure only", async () => {
+  const project = fresh("fv-body-old");
+  await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
+  const file = join(SANDBOX, "state", project, "items", "vigils", "guard.md");
+  writeFileSync(file, readFileSync(file, "utf8").replace(/\n## If a check fails[\s\S]*$/u, "\n"));
+  assert.equal(ifACheckFailsSection(openProject(project).readItem<Vigil>("vigil", "guard")?.body ?? ""), undefined);
+  await sweep(project);
+  const found = candleOf(project, "vigil:guard");
+  assert.equal(found?.status, "lit");
+  const text = getBlobText(openProject(project), found?.bodySha ?? "");
+  assert.match(text ?? "", /## What failed/u);
+  assert.doesNotMatch(text ?? "", /If a check fails/u);
+});
+
+test("--candle is refused on a vigil whose body has no If a check fails section, by vigil add and by vigil set", async () => {
+  const project = fresh("fv-need-section");
+  const bare = checklist("test 1 = 1").replace(/\n## If a check fails[\s\S]*$/u, "\n");
+  const add = await vigil(project, ["add", "bare", "--due", yesterday(), "--candle", "high", "--stdin"], bare).catch((cause: unknown) => cause);
+  assert.ok(add instanceof UsageError);
+  assert.match(add.message, /## If a check fails/u);
+  assert.match(add.message, /Add that section/u);
+  assert.equal(openProject(project).readItem("vigil", "bare"), null, "nothing was written");
+
+  const empty = `${bare}\n## If a check fails\n\n`;
+  const blank = await vigil(project, ["add", "blank", "--due", yesterday(), "--candle", "high", "--stdin"], empty).catch((cause: unknown) => cause);
+  assert.ok(blank instanceof UsageError, "a heading with no text under it does not count");
+
+  assert.equal((await vigil(project, ["add", "bare", "--due", yesterday(), "--stdin"], bare)).code, 0, "no --candle, no refusal");
+  const set = await vigil(project, ["set", "bare", "--candle", "high"]).catch((cause: unknown) => cause);
+  assert.ok(set instanceof UsageError);
+  assert.equal(header(project, "bare").candle, undefined);
+
+  const ok = await vigil(project, ["add", "good", "--due", yesterday(), "--candle", "high", "--stdin"], checklist("test 1 = 1"));
+  assert.equal(ok.code, 0, ok.stderr);
+});
+
+test("the section runs to the next heading of level 1 or 2, and a # line in a code block does not end it", () => {
+  const body = "# t\n\n## If a check fails\n\nrun:\n\n```sh\n# not a heading\nrestart\n```\n\n### Sub heading stays\n\n## Next\n\nother\n";
+  const section = ifACheckFailsSection(body);
+  assert.ok(section?.includes("# not a heading"));
+  assert.ok(section?.includes("### Sub heading stays"));
+  assert.ok(!section?.includes("other"));
+  assert.equal(ifACheckFailsSection("## if a check fails\ntext\n"), "## if a check fails\ntext", "the heading is matched without case");
+  assert.equal(ifACheckFailsSection("# t\n\nno section\n"), undefined);
+});
+
+// --- accept with a verdict for the vigil ------------------------------------------------------
+
+test("candle accept --vigil-verdict held closes the vigil held, with the note as the reason, and puts the candle out", async () => {
+  const project = fresh("fv-held");
+  await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
+  await sweep(project);
+  const accept = await candle(project, ["accept", "vigil:guard", "--vigil-verdict", "held", "--note", "the check read the wrong file"]);
+  assert.equal(accept.code, 0, accept.stderr);
+  assert.match(accept.stdout, /closed vigil 'guard' as held/u);
+  const closed = lines(project, "vigil.closed");
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0]?.verdict, "held");
+  assert.equal(closed[0]?.by, "candle");
+  assert.equal(closed[0]?.reason, "the check read the wrong file");
+  assert.equal(statusOf(project, "guard").verdict, "held");
+  assert.equal(lines(project, "candle.accepted").length, 1, "the accept is on record first");
+  assert.equal(candleOf(project, "vigil:guard")?.status, "out", "a held close ends the candle, as it always did");
+});
+
+test("without a note a held accept gives the default reason, and --json names the verdict", async () => {
+  const project = fresh("fv-held-default");
+  await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
+  await sweep(project);
+  const accept = await candle(project, ["accept", "vigil:guard", "--vigil-verdict", "held", "--json"]);
+  assert.deepEqual(JSON.parse(accept.stdout), { ok: true, project, key: "vigil:guard", vigil: "guard", vigilClose: "closed", vigilVerdict: "held" });
+  assert.equal(lines(project, "vigil.closed")[0]?.reason, "candle accepted: the check was wrong");
+});
+
+test("--vigil-verdict failed is the default; it is refused on a candle that no vigil lit, and on any other verb or word", async () => {
+  const project = fresh("fv-verdict-refused");
+  await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
+  await sweep(project);
+  const failed = await candle(project, ["accept", "vigil:guard", "--vigil-verdict", "failed"]);
+  assert.equal(failed.code, 0, failed.stderr);
+  assert.equal(lines(project, "vigil.closed")[0]?.verdict, "failed");
+
+  appendLine(openProject(project), { who: "t", type: "candle.lit", key: "plain-key", title: "Plain", severity: "high", source: "cli" });
+  const plain = await candle(project, ["accept", "plain-key", "--vigil-verdict", "held"]);
+  assert.equal(plain.code, 1);
+  assert.match(plain.stdout, /not the candle of a vigil/u);
+  assert.equal(candleOf(project, "plain-key")?.status, "lit", "the refusal wrote no accept");
+
+  const verb = await candle(project, ["answer", "plain-key", "--note", "x", "--vigil-verdict", "held"]).catch((cause: unknown) => cause);
+  assert.ok(verb instanceof UsageError);
+  const word = await candle(project, ["accept", "plain-key", "--vigil-verdict", "maybe"]).catch((cause: unknown) => cause);
+  assert.ok(word instanceof UsageError);
+});
+
+// --- vigil close --amend ----------------------------------------------------------------------
+
+test("vigil close --amend corrects a closed vigil: the newest close wins and the old line stays", async () => {
+  const project = fresh("fv-amend");
+  await addCandleVigil(project, "guard", ["--due", yesterday(), "--candle", "high"]);
+  await sweep(project);
+  assert.equal((await vigil(project, ["close", "guard", "--verdict", "failed", "--reason", "gave up"])).code, 0);
+  const first = lines(project, "vigil.closed")[0];
+  assert.equal(statusOf(project, "guard").verdict, "failed");
+
+  const plain = await vigil(project, ["close", "guard", "--verdict", "held", "--reason", "again"]).catch((cause: unknown) => cause);
+  assert.ok(plain instanceof Error);
+  assert.match(plain.message, /already closed failed/u);
+  assert.match(plain.message, /--amend/u, "the refusal names --amend");
+
+  const noReason = await vigil(project, ["close", "guard", "--amend", "--verdict", "held"]).catch((cause: unknown) => cause);
+  assert.ok(noReason instanceof UsageError);
+  assert.match(noReason.message, /--reason/u);
+
+  const amend = await vigil(project, ["close", "guard", "--amend", "--verdict", "held", "--reason", "the check was wrong"]);
+  assert.equal(amend.code, 0, amend.stderr);
+  assert.match(amend.stdout, /amended vigil guard/u);
+  const all = lines(project, "vigil.closed");
+  assert.equal(all.length, 2, "the old line stays");
+  assert.equal(all[1]?.amends, first?.id);
+  assert.equal(first?.amends, undefined);
+  const status = statusOf(project, "guard");
+  assert.equal(status.state, "closed");
+  assert.equal(status.verdict, "held", "the newest close wins");
+  assert.equal(status.closedReason, "the check was wrong");
+  assert.equal(candleOf(project, "vigil:guard")?.status, "out", "an amend to held ends the candle as a held close does");
+
+  const back = await vigil(project, ["close", "guard", "--amend", "--verdict", "failed", "--reason", "it was real after all"]);
+  assert.equal(back.code, 0, back.stderr);
+  assert.equal(statusOf(project, "guard").verdict, "failed");
+  assert.equal(candleOf(project, "vigil:guard")?.status, "out", "an amend never lights a candle again");
+  assert.equal(lines(project, "candle.lit").length, 1);
+});
+
+test("vigil close --amend refuses an open vigil and a backdated amendment", async () => {
+  const project = fresh("fv-amend-open");
+  await addCandleVigil(project, "guard", ["--due", yesterday()]);
+  const open = await vigil(project, ["close", "guard", "--amend", "--verdict", "held", "--reason", "x"]).catch((cause: unknown) => cause);
+  assert.ok(open instanceof Error);
+  assert.match(open.message, /is not closed/u);
+  assert.equal(lines(project, "vigil.closed").length, 0);
+
+  assert.equal((await vigil(project, ["close", "guard", "--verdict", "held", "--reason", "ok"])).code, 0);
+  const dated = await vigil(project, ["close", "guard", "--amend", "--verdict", "failed", "--reason", "x", "--date", "2020-01-01"]).catch((cause: unknown) => cause);
+  assert.ok(dated instanceof UsageError);
+  assert.match(dated.message, /--date/u);
+  assert.equal(lines(project, "vigil.closed").length, 1);
 });

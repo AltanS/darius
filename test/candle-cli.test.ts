@@ -208,6 +208,41 @@ test("candle show prints the candle and its history; an unknown key exits as not
   await assert.rejects(candle(project, ["show"]), /candle show: missing <key>/u);
 });
 
+test("candle show prints the detail and the decision of a run report, and --json carries them as new fields", async () => {
+  const project = "fl-show-decision";
+  const seed = new Seeder(project);
+  seed.run("audit", [
+    flagged("k", {
+      detail: "Sample: article 12.\nCount: 3.",
+      decision: {
+        what: "3 of 40 titles show a dash.",
+        impact: "not known",
+        done: "Held the digest.",
+        options: [
+          { choice: "Publish", effect: "Goes out as it is." },
+          { choice: "Hold", effect: "Waits for a fix." },
+        ],
+        recommend: "Hold, because the feed is wrong.",
+      },
+    }),
+  ]);
+  const text = (await candle(project, ["show", "k"])).stdout;
+  assert.match(text, /\n {2}detail:\n {4}Sample: article 12\.\n {4}Count: 3\.\n/u);
+  assert.match(
+    text,
+    /\n {2}decision:\n {4}what happened: 3 of 40 titles show a dash\.\n {4}impact: not known\n {4}what the system did: Held the digest\.\n {4}options:\n {6}- Publish: Goes out as it is\.\n {6}- Hold: Waits for a fix\.\n {4}recommended: Hold, because the feed is wrong\.\n/u,
+  );
+  const json = JSON.parse((await candle(project, ["show", "k", "--json"])).stdout);
+  assert.equal(json.candle.detail, "Sample: article 12.\nCount: 3.");
+  assert.equal(json.candle.decision.options.length, 2);
+  for (const old of ["key", "title", "severity", "status", "source", "firstSeen", "lastSeen", "reports", "stillReported", "history"]) assert.ok(old in json.candle, old);
+  const bare = fresh("fl-show-bare");
+  await light(bare, "k");
+  const plain = (await candle(bare, ["show", "k"])).stdout;
+  assert.equal(plain.includes("decision:"), false);
+  assert.equal(plain.includes("detail:"), false);
+});
+
 test("candle answer needs a note, writes the severity it closed at, and refuses a second answer", async () => {
   const project = fresh("fl-answer");
   await light(project, "k");

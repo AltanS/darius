@@ -11,9 +11,10 @@
 
 import { collectCandles, CANDLE_BLOWN_OUT, CANDLE_LIT } from "./candle-index.ts";
 import { appendLine } from "./ledger.ts";
+import { maskSecrets } from "./mask-secrets.ts";
 import { UsageError, type Vigil } from "./model.ts";
 import { clean, KEY_MAX, normalizeKey, SEVERITIES, TEXT_LIMITS, type Severity } from "./result.ts";
-import type { Project } from "./store.ts";
+import { putBlob, type Project } from "./store.ts";
 
 /** The key and the source of a vigil's candle are `vigil:<slug>`. */
 const PREFIX = "vigil:";
@@ -71,10 +72,63 @@ export function assertCandleCanFire(header: Pick<Vigil, "slug" | "due" | "gate_c
   );
 }
 
+/** The heading a vigil with a candle must have (0.137.0): what the operator does when a check fails. */
+export const IF_A_CHECK_FAILS = "If a check fails";
+
+const SECTION_HEADING = /^##[ \t]+if a check fails[ \t]*$/iu;
+const ANY_TOP_HEADING = /^#{1,2}[ \t]/u;
+const FENCE_LINE = /^[ \t]*```/u;
+
+/**
+ * The "## If a check fails" section of a vigil body, verbatim from its heading to
+ * the next heading of level 1 or 2 (a `#` inside a fenced block does not end it).
+ * Undefined when the heading is missing or the section has no text under it.
+ */
+export function ifACheckFailsSection(body: string): string | undefined {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => SECTION_HEADING.test(line.trimEnd()));
+  if (start === -1) return undefined;
+  let inFence = false;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (FENCE_LINE.test(line)) inFence = !inFence;
+    if (!inFence && ANY_TOP_HEADING.test(line)) {
+      end = index;
+      break;
+    }
+  }
+  const section = lines.slice(start, end).join("\n").trimEnd();
+  return lines.slice(start + 1, end).some((line) => line.trim() !== "") ? section : undefined;
+}
+
+/**
+ * Refuses `--candle` on a vigil whose body has no "## If a check fails" section
+ * (0.137.0): a candle that says only "a check failed" gives the operator nothing to
+ * act on. Called where `--candle` is set; a vigil that already has a candle is not
+ * refused when the sweep runs.
+ */
+export function assertCandleBody(slug: string, body: string): void {
+  if (ifACheckFailsSection(body) !== undefined) return;
+  throw new UsageError(
+    `vigil '${slug}' has no "## ${IF_A_CHECK_FAILS}" section, so its candle would tell the operator nothing to do. ` +
+      `Add that section to the vigil body, with the steps to take when a check fails, then use --candle again, or drop --candle`,
+  );
+}
+
 /** What a failing sweep tells the operator: the kind of failure and the step that failed. */
 export interface CandleFailure {
   failKind: string;
   step: { index: number; text: string } | undefined;
+  /** The Command and the Expected of the failing check, as it ran. */
+  command?: string;
+  expected?: string;
+  /** `fail` or `timeout`. */
+  outcome?: string;
+  /** The exit code; null when a signal ended the check. */
+  exit?: number | null;
+  /** The last lines of the check output, plain text; null or absent when the blob is not on this host. */
+  output?: string | null;
 }
 
 /** The kind in words: `unknown` only means no rule named the failure, and that is the plain case. */
@@ -93,6 +147,59 @@ export interface LightInput {
   header: Vigil;
   failure: CandleFailure;
   who: string;
+  /** The vigil body: its "## If a check fails" section goes into the candle body (0.137.0). */
+  vigilBody?: string;
+}
+
+/** Most characters of one output line and of all the output in a candle body. */
+const OUTPUT_LINE_MAX = 400;
+const OUTPUT_MAX = 4000;
+
+function kindWords(failKind: string): string {
+  if (failKind === "pending") return "pending: the result is the one the Pending clause names";
+  if (failKind === "broken") return "broken: the check itself did not work";
+  return "unknown: no rule says why it failed";
+}
+
+function resultWords(failure: CandleFailure): string {
+  const how = failure.outcome === "timeout" ? "timed out" : "failed";
+  if (failure.exit === undefined) return how;
+  return failure.exit === null ? `${how}, ended by a signal` : `${how}, exit ${String(failure.exit)}`;
+}
+
+/** The output as the body shows it: control characters out, secrets masked, lines and total cut, and no fence a line of it could close. */
+function outputBlock(output: string | null | undefined): string[] {
+  if (output === undefined) return [];
+  if (output === null) return ["Output: not stored on this host.", ""];
+  const cut = clean(maskSecrets(output), Number.MAX_SAFE_INTEGER, true)
+    .split("\n")
+    .map((line) => (line.length > OUTPUT_LINE_MAX ? `${line.slice(0, OUTPUT_LINE_MAX - 1)}…` : line))
+    .join("\n")
+    .replaceAll("```", "'''");
+  if (cut === "") return ["Output: none.", ""];
+  const text = cut.length > OUTPUT_MAX ? `…${cut.slice(-(OUTPUT_MAX - 1))}` : cut;
+  return ["Output, last 20 lines at most, obvious secrets masked:", "", "```", text, "```", ""];
+}
+
+/**
+ * The body of a vigil's candle (0.137.0): what failed, then what the vigil says
+ * to do about it. Markdown in plain sentences. The check text, command, expected
+ * and output are masked (the body syncs to other hosts); the "If a check fails"
+ * section is the vigil's own text and stays verbatim.
+ */
+export function vigilCandleBody(failure: CandleFailure, vigilBody: string | undefined): string {
+  const { step } = failure;
+  const facts = [
+    ...(step === undefined ? [] : [`- Step ${String(step.index + 1)}: ${clean(maskSecrets(step.text), TEXT_LIMITS.detail)}`]),
+    ...(failure.command === undefined ? [] : [`- Command: ${clean(maskSecrets(failure.command), TEXT_LIMITS.detail)}`]),
+    ...(failure.expected === undefined ? [] : [`- Expected: ${clean(maskSecrets(failure.expected), TEXT_LIMITS.detail)}`]),
+    `- Result: ${resultWords(failure)}`,
+    `- Kind: ${kindWords(failure.failKind)}`,
+  ];
+  const lines = ["## What failed", "", ...facts, "", ...outputBlock(failure.output)];
+  const section = vigilBody === undefined ? undefined : ifACheckFailsSection(vigilBody);
+  if (section !== undefined) lines.push(section, "");
+  return `${lines.join("\n").trimEnd()}\n`;
 }
 
 /**
@@ -104,6 +211,7 @@ export function lightVigilCandle(project: Project, input: LightInput): void {
   const { header, failure, who } = input;
   if (header.candle === undefined) throw new Error(`vigil '${header.slug}' has no candle to light`);
   assertCandleKey(header.slug);
+  const bodySha = putBlob(project, vigilCandleBody(failure, input.vigilBody));
   appendLine(project, {
     who,
     type: CANDLE_LIT,
@@ -113,6 +221,7 @@ export function lightVigilCandle(project: Project, input: LightInput): void {
     source: vigilCandleKey(header.slug),
     deliver: header.candle_deliver,
     target: targetOf(failure),
+    body_sha: bodySha,
   });
 }
 

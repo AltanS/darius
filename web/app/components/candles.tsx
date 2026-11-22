@@ -3,11 +3,13 @@
  * two buttons that settle a lit candle. Every text in a candle comes from a run,
  * a script or a person, so it is drawn as plain text only.
  *
- * "Answer" asks for a note (required) and, when the newest report came from a
- * run, offers "And start a follow-up run". "Accept risk" asks for an optional
- * note; before the tap it says when the candle belongs to a vigil that the
- * accept also closes. Both post to `/api/candle/answer` and
- * `/api/candle/accept`. The reply is the news: the buttons give way to one
+ * "Reply and close" asks for a note (required) and, when the newest report came
+ * from a run, offers "And start a follow-up run". "Accept risk" asks for an
+ * optional note. A candle that a vigil lit also gets "Close as held" (0.137.0):
+ * the check was wrong, so the vigil closes as held. Under the buttons, one line
+ * each says what the button does, as the code does it. Reply posts to
+ * `/api/candle/answer`; the other two post to `/api/candle/accept`, the last
+ * with `vigilVerdict: "held"`. The reply is the news: the buttons give way to one
  * line at once, and one load in the background brings the new state. Only the
  * button that was tapped shows the busy gem; the wait line after it is text.
  * A refusal shows the server's sentence and leaves the candle, and the note,
@@ -20,7 +22,28 @@ import { Link, useRevalidator } from "react-router";
 import type { CandleRow } from "../../../src/web/api.ts";
 import { startNotice, type RunNowNotice } from "../lib/ask.ts";
 import { useClock } from "../lib/clock.tsx";
-import { acceptBody, acceptWarning, answerBody, cameFromRun, canAccept, canAnswer, firstSeenText, NO_WRITE_TEXT, NOTE_MAX, RECEIPTS, ritualOfSource, seenText, statusBadge, vigilOfSource } from "../lib/candles.ts";
+import {
+  ACCEPT_LABEL,
+  acceptBody,
+  acceptLine,
+  answerBody,
+  cameFromRun,
+  canAccept,
+  canAnswer,
+  canCloseHeld,
+  firstSeenText,
+  HELD_LABEL,
+  heldLine,
+  NO_WRITE_TEXT,
+  NOTE_MAX,
+  RECEIPTS,
+  replyLine,
+  REPLY_LABEL,
+  ritualOfSource,
+  seenText,
+  statusBadge,
+  vigilOfSource,
+} from "../lib/candles.ts";
 import { href } from "../lib/paths.ts";
 import { postJson } from "../lib/post.ts";
 import { severityTone } from "../lib/result.ts";
@@ -48,7 +71,7 @@ export function SeverityTag({ row }: { row: Pick<CandleRow, "severity"> }): Reac
   return <Tag tag={{ text: row.severity, tone: severityTone(row.severity) }} />;
 }
 
-type Mode = "answer" | "accept";
+type Mode = "answer" | "accept" | "held";
 
 interface DoneLine {
   text: string;
@@ -62,7 +85,7 @@ interface CandleActionsProps {
   canWrite: boolean;
 }
 
-/** Answer and Accept risk for a lit candle (Accept risk also for an answered one). Draws nothing for a candle nobody can settle here. */
+/** Reply and close, Accept risk and, for a vigil's candle, Close as held. Accept risk and Close as held also fit an answered candle. Draws nothing for a candle nobody can settle here. */
 export function CandleActions({ row, canWrite }: CandleActionsProps): React.ReactNode {
   const { revalidate } = useRevalidator();
   const id = useId();
@@ -75,7 +98,8 @@ export function CandleActions({ row, canWrite }: CandleActionsProps): React.Reac
   const [notice, setNotice] = useState<RunNowNotice | null>(null);
   const offersAnswer = canAnswer(row);
   const offersAccept = canAccept(row);
-  const warning = acceptWarning(row);
+  const offersHeld = canCloseHeld(row);
+  const held = heldLine(row);
   const canFollowUp = cameFromRun(row);
   const isLocked = busy !== null;
 
@@ -104,7 +128,8 @@ export function CandleActions({ row, canWrite }: CandleActionsProps): React.Reac
     setBusy(verb);
     setError(null);
     const withFollowUp = verb === "answer" && followUp;
-    const result = await postJson(`/api/candle/${verb}`, verb === "answer" ? answerBody(row, note, withFollowUp) : acceptBody(row, note));
+    const body = verb === "answer" ? answerBody(row, note, withFollowUp) : acceptBody(row, note, verb === "held" ? "held" : undefined);
+    const result = await postJson(`/api/candle/${verb === "answer" ? "answer" : "accept"}`, body);
     setBusy(null);
     if (!result.ok) {
       // The sentence is the server's. A refused follow-up leaves the candle lit and the form open, with the note as typed.
@@ -123,17 +148,38 @@ export function CandleActions({ row, canWrite }: CandleActionsProps): React.Reac
     <div className="candle-acts">
       <div className="fu-acts">
         {offersAnswer ? (
-          <button type="button" className="st-btn st-btn-main" aria-expanded={mode === "answer"} aria-label={`Answer the candle: ${row.title}`} disabled={isLocked} onClick={() => open("answer")}>
-            Answer
+          <button type="button" className="st-btn st-btn-main" aria-expanded={mode === "answer"} aria-label={`${REPLY_LABEL}, the candle: ${row.title}`} disabled={isLocked} onClick={() => open("answer")}>
+            {REPLY_LABEL}
           </button>
         ) : null}
         {offersAccept ? (
           <button type="button" className="st-btn" aria-expanded={mode === "accept"} aria-label={`Accept the risk of the candle: ${row.title}`} disabled={isLocked} onClick={() => open("accept")}>
-            Accept risk
+            {ACCEPT_LABEL}
+          </button>
+        ) : null}
+        {offersHeld ? (
+          <button type="button" className="st-btn" aria-expanded={mode === "held"} aria-label={`Close the vigil as held, for the candle: ${row.title}`} disabled={isLocked} onClick={() => open("held")}>
+            {HELD_LABEL}
           </button>
         ) : null}
       </div>
-      {offersAccept && warning !== null ? <p className="fu-off">{warning}</p> : null}
+      <ul className="candle-lines">
+        {offersAnswer ? (
+          <li className="fu-off">
+            <b>{REPLY_LABEL}.</b> {replyLine(row)}
+          </li>
+        ) : null}
+        {offersAccept ? (
+          <li className="fu-off">
+            <b>{ACCEPT_LABEL}.</b> {acceptLine(row)}
+          </li>
+        ) : null}
+        {offersHeld && held !== null ? (
+          <li className="fu-off">
+            <b>{HELD_LABEL}.</b> {held}
+          </li>
+        ) : null}
+      </ul>
       {mode === null ? null : (
         <form
           className="candle-form"
@@ -143,7 +189,7 @@ export function CandleActions({ row, canWrite }: CandleActionsProps): React.Reac
           }}
         >
           <label className="fu-label" htmlFor={id}>
-            {mode === "answer" ? "What did you decide? (required)" : "Note (optional)"}
+            {mode === "answer" ? "What should happen? (required)" : "Note (optional)"}
           </label>
           <input id={id} className="st-input" type="text" maxLength={NOTE_MAX} value={note} disabled={isLocked} onChange={(event) => setNote(event.currentTarget.value)} />
           {mode === "answer" && canFollowUp ? (
@@ -153,8 +199,22 @@ export function CandleActions({ row, canWrite }: CandleActionsProps): React.Reac
             </label>
           ) : null}
           <div className="fu-acts">
-            <BusyButton busy={busy === mode} type="submit" className={mode === "answer" ? "st-btn st-btn-main" : "st-btn st-btn-danger"} disabled={isLocked || !canSend}>
-              {mode === "answer" ? (busy === "answer" ? (followUp ? "Starting…" : "Sending…") : followUp ? "Answer and start follow-up" : "Send answer") : busy === "accept" ? "Accepting…" : "Accept this risk"}
+            <BusyButton busy={busy === mode} type="submit" className={mode === "answer" ? "st-btn st-btn-main" : mode === "held" ? "st-btn" : "st-btn st-btn-danger"} disabled={isLocked || !canSend}>
+              {mode === "answer"
+                ? busy === "answer"
+                  ? followUp
+                    ? "Starting…"
+                    : "Sending…"
+                  : followUp
+                    ? "Close and start follow-up"
+                    : "Send and close"
+                : mode === "held"
+                  ? busy === "held"
+                    ? "Closing…"
+                    : "Close as held"
+                  : busy === "accept"
+                    ? "Accepting…"
+                    : "Accept this risk"}
             </BusyButton>
             <button type="button" className="st-btn" disabled={isLocked} onClick={() => setMode(null)}>
               Cancel

@@ -161,7 +161,7 @@
  *                             | 202 { ok: true, run, host, id, at }  (followUp: the run started)
  *                             | 202 { ok: true, pending: true, host, id, at, message }
  *                             | 409 or 503 { ok: false, error }
- *   POST /api/candle/accept    body { project, key, note? }
+ *   POST /api/candle/accept    body { project, key, note?, vigilVerdict? }  (vigilVerdict held|failed, only for a candle of a vigil; default failed)
  *                             200 { ok: true } | 409 { ok: false, error }
  *   POST /api/candle/light     body { project, key, title, severity, target?, body?, deliver?, source? }
  *                             200 { ok: true } | 400, 403, 409, 413 or 415 { ok: false, error }
@@ -213,6 +213,7 @@ import { hostId, linesFor, readLedger } from "../core/ledger.ts";
 import { clean, KEY_MAX, normalizeKey, SEVERITIES, TEXT_LIMITS, type Severity } from "../core/result.ts";
 import { isSlug, itemRef, listProjects, openProject } from "../core/store.ts";
 import { SWEEP_COOLDOWN_MS, vigilStatus } from "../core/sweep.ts";
+import { vigilOfSource } from "../core/vigil-candle.ts";
 import { ritualHost } from "../core/workdir.ts";
 import { ITEMS_MAX } from "../runner/follow-up.ts";
 import { followUpReadiness, lastSentence } from "../runner/follow-up-ready.ts";
@@ -1220,7 +1221,7 @@ export const LOOPBACK_CANDLE_SETTLE = "settling a candle needs a tailnet identit
 export const LOOPBACK_CANDLE_LIGHT = "lighting a candle over HTTP needs a tailnet identity; on this host use darius candle light";
 
 const ANSWER_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "followUp"]);
-const ACCEPT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note"]);
+const ACCEPT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "vigilVerdict"]);
 const LIGHT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "title", "severity", "target", "body", "deliver", "source"]);
 /** Push, email, both with a comma, or none (the app only): what `--deliver` takes, in the form it takes. */
 const CANDLE_DELIVER = /^(?:none|(?:push|email)(?:,(?:push|email))*)$/u;
@@ -1335,7 +1336,7 @@ function unknownField(parsed: { readonly [key: string]: JsonValue }, known: Read
   return extra === undefined ? undefined : `unknown field ${extra.slice(0, 40)}`;
 }
 
-type SettleBody = { project: string; key: string; note?: string; followUp: boolean } | { error: string };
+type SettleBody = { project: string; key: string; note?: string; followUp: boolean; vigilVerdict?: "held" | "failed" } | { error: string };
 
 function readSettleBody(parsed: JsonValue, known: ReadonlySet<string>): SettleBody {
   if (!isRecord(parsed)) return { error: `send { ${[...known].join(", ")} }` };
@@ -1348,7 +1349,11 @@ function readSettleBody(parsed: JsonValue, known: ReadonlySet<string>): SettleBo
   const note = readNote(parsed.note);
   if ("error" in note) return note;
   if (followUp !== undefined && followUp !== true && followUp !== false) return { error: "followUp must be true or false" };
-  return { project, key: named.key, ...note, followUp: followUp === true };
+  const { vigilVerdict } = parsed;
+  if (vigilVerdict !== undefined && vigilVerdict !== "held" && vigilVerdict !== "failed") return { error: "vigilVerdict must be held or failed" };
+  const settle: SettleBody = { project, key: named.key, ...note, followUp: followUp === true };
+  if (vigilVerdict !== undefined) settle.vigilVerdict = vigilVerdict;
+  return settle;
 }
 
 interface LightBody {
@@ -1400,9 +1405,10 @@ function cliReply(answer: CliAnswer): PushApiReply {
 }
 
 /** The argv of `answer` and `accept`. Every value through `flagArg`, the key after `--`. */
-function settleArgv(verb: "answer" | "accept", body: { project: string; key: string; note?: string }, viewer: ActionViewer): string[] {
+function settleArgv(verb: "answer" | "accept", body: { project: string; key: string; note?: string; vigilVerdict?: "held" | "failed" }, viewer: ActionViewer): string[] {
   const argv = ["candle", verb, flagArg("project", body.project), flagArg("who", `web:${viewer.who}`), "--json"];
   if (body.note !== undefined) argv.push(flagArg("note", body.note));
+  if (body.vigilVerdict !== undefined) argv.push(flagArg("vigil-verdict", body.vigilVerdict));
   argv.push("--", body.key);
   return argv;
 }
@@ -1417,6 +1423,9 @@ async function acceptCandle(request: ActionRequest, viewer: ActionViewer, deps: 
   if (found === null) return fail(400, `no candle '${body.key}' in ${body.project}`);
   const refused = candleSettleRefusal("accept", found.row);
   if (refused !== undefined) return fail(409, refused);
+  if (body.vigilVerdict !== undefined && vigilOfSource(found.row.source) === undefined) {
+    return fail(409, `candle '${body.key}' is not the candle of a vigil, so there is no vigil to close as ${body.vigilVerdict}`);
+  }
   return cliReply(await deps.run(settleArgv("accept", body, viewer)));
 }
 

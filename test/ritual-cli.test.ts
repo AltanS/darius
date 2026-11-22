@@ -33,7 +33,7 @@ import { ritualCommand } from "../src/cli/ritual.ts";
 import { runCommand } from "../src/cli/run.ts";
 import { appendLine, readLedger } from "../src/core/ledger.ts";
 import { UsageError } from "../src/core/model.ts";
-import type { Ritual } from "../src/core/model.ts";
+import type { JsonValue, Ritual } from "../src/core/model.ts";
 import { openProject, putBlob } from "../src/core/store.ts";
 import { handoffLines, latestHandoff } from "../src/core/handoff.ts";
 import { writeLink } from "../src/core/links.ts";
@@ -554,6 +554,33 @@ test("by hand: run start, ritual show and run show print the handoff of the late
   assert.equal(plain.code, 0, "a by-hand run may skip the block");
   const third = JSON.parse((await runCli(runCommand, project, ["start", "heartbeat", "--json"])).stdout);
   assert.equal(third.handoff.run, first, "a run without a result leaves the note in place");
+});
+
+/** Findings that end with a darius-result block holding any JSON value. */
+function blockOf(json: JsonValue): string {
+  return `done\n\`\`\`darius-result\n${JSON.stringify(json)}\n\`\`\`\n`;
+}
+
+test("run complete refuses a needs-decision candle item without a decision, and takes one with it (0.137.0)", async () => {
+  const project = "candle-decision";
+  await addRitual(project, "heartbeat");
+  const run = await startRun(project, "heartbeat");
+  const item = { key: "feed-dash", title: "Dash in titles", severity: "high", state: "needs-decision", candle: true };
+  const bare = { v: 1, status: "attention", summary: "one candle", items: [item] };
+  const refused = await runCli(runCommand, project, ["complete", run, "--outcome", "complete", "--findings-stdin"], blockOf(bare));
+  assert.equal(refused.code, 1, refused.stdout);
+  assert.match(refused.stdout, /items\[0\]\.decision: a candle item in the state needs-decision must carry a decision/u);
+
+  const decision = {
+    what: "3 of 40 titles show a dash.",
+    impact: "not known",
+    done: "Held the digest.",
+    options: [{ choice: "Publish", effect: "Goes out as it is." }],
+    recommend: "Hold.",
+  };
+  const given = { ...bare, items: [{ ...item, decision }] };
+  const done = await runCli(runCommand, project, ["complete", run, "--outcome", "complete", "--findings-stdin"], blockOf(given));
+  assert.equal(done.code, 0, done.stdout);
 });
 
 interface AskBlock {

@@ -6,7 +6,7 @@
 
 import { appendLine, readLedger, type LedgerLineInput } from "../../src/core/ledger.ts";
 import { collectFindings, type Finding } from "../../src/core/finding-index.ts";
-import type { ItemState, Severity } from "../../src/core/result.ts";
+import type { ItemState, ResultDecision, Severity } from "../../src/core/result.ts";
 import { openProject, putBlob, type Project } from "../../src/core/store.ts";
 import assert from "node:assert/strict";
 
@@ -19,6 +19,7 @@ export interface Item {
   target?: string;
   detail?: string;
   candle?: true;
+  decision?: ResultDecision;
 }
 
 /** A project whose clock starts on 2026-10-01 and moves one hour per line, so ledger order is time order. */

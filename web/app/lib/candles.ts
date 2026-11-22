@@ -10,7 +10,7 @@
  * are no other filters in this version.
  */
 
-import type { CandleDelivery, CandleRow, CandleRowStatus, CandleStep } from "../../../src/web/api.ts";
+import type { CandleDecisionRow, CandleDelivery, CandleRow, CandleRowStatus, CandleStep } from "../../../src/web/api.ts";
 import type { PostBody } from "./post.ts";
 import { hostDate, shortDate, whenText } from "./format.ts";
 import { href } from "./paths.ts";
@@ -121,10 +121,40 @@ export function canAccept(row: Pick<CandleRow, "status">): boolean {
   return row.status === "lit" || row.status === "answered";
 }
 
-/** The sentence shown before the tap on "Accept risk" when the candle belongs to a vigil; null for any other candle. */
-export function acceptWarning(row: Pick<CandleRow, "source">): string | null {
+/** The names of the three buttons. */
+export const REPLY_LABEL = "Reply and close";
+export const ACCEPT_LABEL = "Accept risk";
+export const HELD_LABEL = "Close as held";
+
+/**
+ * The line under the buttons for Reply and close (0.137.0). It says what the
+ * button does in the code: the note goes on the candle and closes it, and a
+ * candle that came from a run offers one run of that ritual with the note as its task.
+ */
+export function replyLine(row: Pick<CandleRow, "run" | "ritual">): string {
+  const base = "Your note goes on the candle and closes it.";
+  return row.ritual !== undefined && cameFromRun(row) ? `${base} Tick the box to run ${row.ritual} once with your note as its task.` : base;
+}
+
+/**
+ * The line under the buttons for Accept risk. A vigil's candle also closes the
+ * vigil as failed, and the vigil stops watching, so the candle does not light again by itself.
+ */
+export function acceptLine(row: Pick<CandleRow, "source">): string {
   const slug = vigilOfSource(row.source);
-  return slug === null ? null : `Accepting this risk also closes the vigil ${slug}.`;
+  if (slug !== null) return `The vigil ${slug} closes as failed. The problem stays.`;
+  return "Closes the candle with no change. It lights again only at a higher severity, or if it goes out and comes back.";
+}
+
+/** The line under Close as held; null for a candle that no vigil lit, which has no such button. */
+export function heldLine(row: Pick<CandleRow, "source">): string | null {
+  const slug = vigilOfSource(row.source);
+  return slug === null ? null : `The check was wrong, or the problem is not real. The vigil ${slug} closes as held.`;
+}
+
+/** True when the candle has a vigil to close as held. */
+export function canCloseHeld(row: Pick<CandleRow, "source" | "status">): boolean {
+  return vigilOfSource(row.source) !== null && canAccept(row);
 }
 
 /** What the loopback viewer reads where the buttons would be. */
@@ -133,7 +163,7 @@ export const NO_WRITE_TEXT = "No buttons here: this page was opened from this ho
 export const NOTE_MAX = 500;
 
 /** The line that replaces the buttons after the reply. */
-export const RECEIPTS = { answer: "Answer saved.", accept: "Risk accepted." } as const satisfies Record<"answer" | "accept", string>;
+export const RECEIPTS = { answer: "Reply saved. The candle is closed.", accept: "Risk accepted.", held: "Vigil closed as held." } as const satisfies Record<"answer" | "accept" | "held", string>;
 
 /** The body of `POST /api/candle/answer`. */
 export function answerBody(row: Pick<CandleRow, "project" | "key">, note: string, followUp: boolean): PostBody {
@@ -141,12 +171,29 @@ export function answerBody(row: Pick<CandleRow, "project" | "key">, note: string
   return followUp ? { ...base, followUp: true } : base;
 }
 
-/** The body of `POST /api/candle/accept`; an empty note is left out. */
-export function acceptBody(row: Pick<CandleRow, "project" | "key">, note: string): PostBody {
+/** The body of `POST /api/candle/accept`; an empty note is left out. `vigilVerdict` is sent only for Close as held. */
+export function acceptBody(row: Pick<CandleRow, "project" | "key">, note: string, vigilVerdict?: "held"): PostBody {
   const trimmed = note.trim();
   const base = { project: row.project, key: row.key };
-  return trimmed === "" ? base : { ...base, note: trimmed };
+  const noted = trimmed === "" ? base : { ...base, note: trimmed };
+  return vigilVerdict === undefined ? noted : { ...noted, vigilVerdict };
 }
+
+// --- what the candle says (0.137.0) ---------------------------------------------------------
+
+/** The sentence when a candle has no decision: it does not say what the operator needs to decide. */
+export const NO_DECISION_TEXT = "This candle does not say the impact, what was done or the options.";
+
+/** The line that names what is missing: the sentence above, and for a run candle, which run adds it. */
+export function missingDecisionText(row: Pick<CandleRow, "run" | "ritual">): string {
+  return row.ritual !== undefined && cameFromRun(row) ? `${NO_DECISION_TEXT} The next ${row.ritual} run adds them.` : NO_DECISION_TEXT;
+}
+
+/** "Recommended: <text>" under the options. */
+export function recommendText(decision: Pick<CandleDecisionRow, "recommend">): string {
+  return `Recommended: ${decision.recommend}`;
+}
+
 
 // --- the words of the detail page -----------------------------------------------------------
 

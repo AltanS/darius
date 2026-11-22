@@ -7,7 +7,7 @@ import { Markdown } from "../components/markdown.tsx";
 import { StateWord } from "../components/row.tsx";
 import { Empty, Facts, Section, Time, TitleText } from "../components/ui.tsx";
 import { useClock } from "../lib/clock.tsx";
-import { APP_ONLY_TEXT, canAccept, canAnswer, decisionLines, deliveryText, followUpRun, outText, seenText, statusBadge, stepKey, stepText, stillReportedText } from "../lib/candles.ts";
+import { APP_ONLY_TEXT, canAccept, canAnswer, decisionLines, deliveryText, followUpRun, missingDecisionText, outText, recommendText, seenText, statusBadge, stepKey, stepText, stillReportedText } from "../lib/candles.ts";
 import { shortRun } from "../lib/format.ts";
 import { href } from "../lib/paths.ts";
 
@@ -53,6 +53,43 @@ export default function Candle({ loaderData }: Route.ComponentProps): React.Reac
 
       <div className="board">
         <div className="board-main">
+          {row.decision === undefined ? null : (
+            <>
+              <Section title="What happened">
+                <p className="ritem-detail">{row.decision.what}</p>
+              </Section>
+              <Section title="Impact">
+                <p className="ritem-detail">{row.decision.impact}</p>
+              </Section>
+              <Section title="What the system did">
+                <p className="ritem-detail">{row.decision.done}</p>
+              </Section>
+              <Section title="Options">
+                <ul className="candle-options">
+                  {row.decision.options.map((option) => (
+                    <li key={`${option.choice}/${option.effect}`} className="break-words">
+                      <span className="candle-option-choice">{option.choice}</span>: {option.effect}
+                    </li>
+                  ))}
+                </ul>
+                <p className="break-words">{recommendText(row.decision)}</p>
+              </Section>
+            </>
+          )}
+
+          {row.decision !== undefined ? null : (
+            <Section title="Detail">
+              {row.detail === undefined && blocks === null ? <Empty>This candle has no detail text.</Empty> : null}
+              {row.detail === undefined ? null : <p className="ritem-detail">{row.detail}</p>}
+              {blocks === null ? null : (
+                <div className="measure">
+                  <Markdown blocks={blocks} />
+                </div>
+              )}
+              <p className="fu-off">{missingDecisionText(row)}</p>
+            </Section>
+          )}
+
           {isOpenToAction ? (
             <Section title="Decide">
               <div className={row.status === "lit" ? "card card-accent edge-wait" : "card"}>
@@ -62,7 +99,7 @@ export default function Candle({ loaderData }: Route.ComponentProps): React.Reac
           ) : null}
 
           {decisions.length === 0 && out === null ? null : (
-            <Section title="Decision">
+            <Section title="What was decided">
               <div className="card">
                 {decisions.map((line) => (
                   <p key={line} className="break-words">
@@ -79,15 +116,16 @@ export default function Candle({ loaderData }: Route.ComponentProps): React.Reac
             </Section>
           )}
 
-          <Section title="Detail">
-            {blocks === null ? (
-              <Empty>This candle has no detail text.</Empty>
-            ) : (
-              <div className="measure">
-                <Markdown blocks={blocks} />
-              </div>
-            )}
-          </Section>
+          {row.decision === undefined || (row.detail === undefined && blocks === null) ? null : (
+            <Section title="Detail">
+              {row.detail === undefined ? null : <p className="ritem-detail">{row.detail}</p>}
+              {blocks === null ? null : (
+                <div className="measure">
+                  <Markdown blocks={blocks} />
+                </div>
+              )}
+            </Section>
+          )}
         </div>
 
         <aside className="board-rail">

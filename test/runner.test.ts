@@ -3033,7 +3033,7 @@ const CANDLE_RESULT = {
   v: 1,
   status: "attention",
   summary: "one candle",
-  items: [{ title: "Vulnerable dependency", severity: "high", state: "needs-decision", target: "web/package.json", key: "dep/cve-1", candle: true, proposal: { proposed: "Update it." } }],
+  items: [{ title: "Vulnerable dependency", severity: "high", state: "needs-decision", target: "web/package.json", key: "dep/cve-1", candle: true, proposal: { proposed: "Update it." }, decision: { what: "One dependency has a known hole.", impact: "not known", done: "Nothing yet.", options: [{ choice: "Update", effect: "The hole closes." }], recommend: "Update." } }],
 };
 
 test("the run prompt documents the candle field and lists the open candles of this ritual", async () => {

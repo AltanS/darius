@@ -26,6 +26,7 @@ const { CANDLE_ACCEPTED, CANDLE_LIT } = await import("../src/core/candle-index.t
 const { appendLine } = await import("../src/core/ledger.ts");
 const { openProject, putBlob } = await import("../src/core/store.ts");
 const { webContext } = await import("../src/web/context.ts");
+const { Seeder } = await import("./helpers/finding-seed.ts");
 
 import type { CandleDelivery, CandleRow, CandleStep } from "../src/web/api.ts";
 
@@ -120,10 +121,25 @@ test("what the person can do: answer a lit candle, accept a lit or an answered o
   );
 });
 
-test("the accept of a vigil's candle says before the tap that it also closes the vigil; any other candle says nothing", () => {
-  assert.equal(words.acceptWarning({ source: "vigil:cache-flip" }), "Accepting this risk also closes the vigil cache-flip.");
-  assert.equal(words.acceptWarning({ source: "ritual:site-report" }), null);
-  assert.equal(words.acceptWarning({ source: "ci:nightly" }), null);
+test("the lines under the buttons say what each does, from the code: reply, accept risk and, for a vigil, close as held", () => {
+  assert.equal(words.REPLY_LABEL, "Reply and close");
+  assert.equal(words.replyLine({}), "Your note goes on the candle and closes it.");
+  assert.equal(words.replyLine({ run: "01R", ritual: "site-report" }), "Your note goes on the candle and closes it. Tick the box to run site-report once with your note as its task.");
+  assert.equal(words.acceptLine({ source: "ritual:site-report" }), "Closes the candle with no change. It lights again only at a higher severity, or if it goes out and comes back.");
+  assert.equal(words.acceptLine({ source: "ci:nightly" }), words.acceptLine({ source: "ritual:site-report" }));
+  assert.equal(words.acceptLine({ source: "vigil:cache-flip" }), "The vigil cache-flip closes as failed. The problem stays.");
+  assert.equal(words.heldLine({ source: "vigil:cache-flip" }), "The check was wrong, or the problem is not real. The vigil cache-flip closes as held.");
+  assert.equal(words.heldLine({ source: "ritual:site-report" }), null);
+  assert.equal(words.canCloseHeld({ source: "vigil:cache-flip", status: "lit" }), true);
+  assert.equal(words.canCloseHeld({ source: "vigil:cache-flip", status: "answered" }), true);
+  assert.equal(words.canCloseHeld({ source: "vigil:cache-flip", status: "accepted" }), false);
+  assert.equal(words.canCloseHeld({ source: "ci:nightly", status: "lit" }), false);
+});
+
+test("a candle without a decision names what is missing, and the ritual that adds it", () => {
+  assert.equal(words.missingDecisionText({ run: "01R", ritual: "site-report" }), "This candle does not say the impact, what was done or the options. The next site-report run adds them.");
+  assert.equal(words.missingDecisionText({}), "This candle does not say the impact, what was done or the options.");
+  assert.equal(words.recommendText({ recommend: "Hold, because the feed is wrong." }), "Recommended: Hold, because the feed is wrong.");
 });
 
 test("the bodies of the two writes: the note is trimmed, an empty accept note and a false follow-up are left out", () => {
@@ -131,6 +147,8 @@ test("the bodies of the two writes: the note is trimmed, an empty accept note an
   assert.deepEqual(words.answerBody(LIT, "patched", true), { project: "shop", key: "lit-high", note: "patched", followUp: true });
   assert.deepEqual(words.acceptBody(LIT, "   "), { project: "shop", key: "lit-high" });
   assert.deepEqual(words.acceptBody(LIT, " known "), { project: "shop", key: "lit-high", note: "known" });
+  assert.deepEqual(words.acceptBody(LIT, "", "held"), { project: "shop", key: "lit-high", vigilVerdict: "held" });
+  assert.deepEqual(words.acceptBody(LIT, " wrong file ", "held"), { project: "shop", key: "lit-high", note: "wrong file", vigilVerdict: "held" });
 });
 
 test("the words of the detail: decisions, still reported, out, history steps", () => {
@@ -171,7 +189,7 @@ test("delivery, one sentence per channel: sent, waiting, not set up, failed and 
 });
 
 test("no sentence of the Candles place names a path, a flag, or an internal key", () => {
-  const all = [words.NO_WRITE_TEXT, words.APP_ONLY_TEXT, words.RECEIPTS.answer, words.RECEIPTS.accept, words.emptyText("lit", true), words.viewText("lit", "demo"), words.acceptWarning({ source: "vigil:x" }) ?? ""];
+  const all = [words.NO_WRITE_TEXT, words.APP_ONLY_TEXT, words.RECEIPTS.answer, words.RECEIPTS.accept, words.RECEIPTS.held, words.emptyText("lit", true), words.viewText("lit", "demo"), words.replyLine({ run: "01R", ritual: "x" }), words.acceptLine({ source: "ritual:x" }), words.acceptLine({ source: "vigil:x" }), words.heldLine({ source: "vigil:x" }) ?? "", words.missingDecisionText({ run: "01R", ritual: "x" })];
   for (const sentence of all) {
     assert.equal(/--|\.ts\b|\/api\/|\bruns\/|ledger|alert\.(?:sent|failed)|—/u.test(sentence), false, sentence);
   }
@@ -255,4 +273,30 @@ test("a broken email file is a problem on the context, with the reason and no va
   } finally {
     rmSync(emailSettingsFile(), { force: true });
   }
+});
+
+test("the host hands the page the detail and the decision a run reported, and a candle with neither has neither (0.137.0)", () => {
+  const seed = new Seeder("web-decision");
+  seed.run("site-report", [
+    {
+      key: "dash",
+      title: "Dash in titles",
+      severity: "high",
+      state: "needs-decision",
+      candle: true,
+      detail: "Sample: article 12.",
+      decision: { what: "3 of 40 titles.", impact: "not known", done: "Held the digest.", options: [{ choice: "Hold", effect: "Waits." }], recommend: "Hold." },
+    },
+    { key: "plain", title: "Plain", severity: "low", state: "needs-decision", candle: true },
+  ]);
+  const context = webContext("owner");
+  const withDecision = context.candle("web-decision", "dash");
+  assert.equal(withDecision?.row.detail, "Sample: article 12.");
+  assert.equal(withDecision?.row.decision?.what, "3 of 40 titles.");
+  assert.deepEqual(withDecision?.row.decision?.options, [{ choice: "Hold", effect: "Waits." }]);
+  assert.equal(withDecision?.row.ritual, "site-report");
+  const bare = context.candle("web-decision", "plain");
+  assert.equal(bare?.row.decision, undefined);
+  assert.equal(bare?.row.detail, undefined);
+  assert.equal(bare?.body, null);
 });

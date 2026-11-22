@@ -29,7 +29,8 @@
  * Evidence and outcomes are ledger lines, never edits of the vigil file:
  * `evidence{check,exit,outcome,output_sha,duration_ms}` per executed check
  * (output tail stored as a blob), `vigil.swept{outcome,checks[],gate}` per
- * vigil, `vigil.closed{verdict,by,reason?}` on a close. A pause is
+ * vigil, `vigil.closed{verdict,by,reason?,amends?}` on a close (`amends` names the
+ * close line a later one corrects, 0.137.0; the newest close wins). A pause is
  * `vigil.paused{reason,until?}` and `vigil.resumed`: a paused vigil lands in the
  * `paused` bucket and nothing runs. A snooze (`until`) ends after that local date.
  *
@@ -58,7 +59,7 @@ import { UsageError, type Document, type JsonValue, type LedgerLine, type Vigil 
 import type { Severity } from "./result.ts";
 import { getBlobText, itemRef, putBlob, type Project } from "./store.ts";
 import { ulid } from "./ulid.ts";
-import { assertCandleCanFire, blowOutVigilCandle, lightVigilCandle } from "./vigil-candle.ts";
+import { assertCandleBody, assertCandleCanFire, blowOutVigilCandle, lightVigilCandle, type CandleFailure } from "./vigil-candle.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -609,7 +610,10 @@ export function addVigil(project: Project, input: VigilInput): Document<Vigil> {
   if (input.gate_command !== undefined) header.gate_command = input.gate_command;
   if (input.candle !== undefined) header.candle = input.candle;
   if (input.candle_deliver !== undefined) header.candle_deliver = input.candle_deliver;
-  if (header.candle !== undefined) assertCandleCanFire(header);
+  if (header.candle !== undefined) {
+    assertCandleCanFire(header);
+    assertCandleBody(header.slug, input.body);
+  }
   const doc: Document<Vigil> = { header, body: input.body };
   project.writeItem(doc, { who: input.who });
   return doc;
@@ -622,20 +626,42 @@ export interface CloseInput {
   who: string;
   /** The instant of the `vigil.closed` line, ISO. Default now. */
   at?: string;
-  /** Why the vigil is closed. Optional for the legacy callers. */
+  /** Why the vigil is closed. Optional for the legacy callers; required with `amend`. */
   reason?: string;
+  /**
+   * Correct the verdict of a vigil that is already closed (0.137.0). Writes a new
+   * `vigil.closed` line with `amends` set to the id of the line it corrects. The
+   * newest close wins (`vigilStatus` reads the last one); the old line stays.
+   */
+  amend?: boolean;
 }
 
-/** Appends `vigil.closed`. Refuses (throws) a missing or already closed vigil. */
+/** The sentence that refuses a close of a closed vigil. It names `--amend`. */
+function alreadyClosedMessage(slug: string, verdict: string | undefined): string {
+  return `vigil '${slug}' is already closed ${verdict ?? ""}`.trimEnd() + `; to correct the verdict, run: darius vigil close ${slug} --amend --verdict held|failed --reason <text>`;
+}
+
+/**
+ * Appends `vigil.closed`. Refuses (throws) a missing vigil, and a closed one unless
+ * `amend` is set. An amend refuses an open vigil and needs a reason. An amend to
+ * held ends the vigil's candle as any held close does; an amend never lights one.
+ */
 export function closeVigil(project: Project, input: CloseInput): LedgerLine {
   if (project.readItem("vigil", input.slug) === null) {
     throw new Error(`no vigil '${input.slug}' in ${project.name}`);
   }
+  const isAmend = input.amend === true;
+  if (isAmend && (input.reason === undefined || input.reason.trim() === "")) {
+    throw new UsageError("vigil close --amend needs --reason: say why the verdict changes");
+  }
   return project.withLock(() => {
-    const status = vigilStatus(input.slug, linesFor(readLedger(project), itemRef("vigil", input.slug)));
-    if (status.state === "closed") {
-      throw new Error(`vigil '${input.slug}' is already closed ${status.verdict ?? ""}`.trimEnd());
+    const lines = linesFor(readLedger(project), itemRef("vigil", input.slug));
+    const status = vigilStatus(input.slug, lines);
+    if (status.state === "closed" && !isAmend) throw new Error(alreadyClosedMessage(input.slug, status.verdict));
+    if (status.state !== "closed" && isAmend) {
+      throw new Error(`vigil '${input.slug}' is not closed; --amend only corrects the verdict of a closed vigil. Close it with --verdict`);
     }
+    const earlier = lines.findLast((line) => line.type === "vigil.closed");
     const line = appendLine(project, {
       who: input.who,
       type: "vigil.closed",
@@ -644,6 +670,7 @@ export function closeVigil(project: Project, input: CloseInput): LedgerLine {
       by: input.by,
       reason: input.reason,
       at: input.at,
+      amends: isAmend ? earlier?.id : undefined,
     });
     // A held close ends the problem the candle reported. A failed close leaves it for a person.
     if (input.verdict === "held") blowOutVigilCandle(project, { slug: input.slug, who: input.who, note: `vigil '${input.slug}' closed held by ${input.by}` });
@@ -652,17 +679,21 @@ export function closeVigil(project: Project, input: CloseInput): LedgerLine {
 }
 
 /**
- * Closes a vigil as failed because its candle was accepted: nothing is left to
- * wait for. Tolerates a vigil that is gone or already closed, as a second
+ * Closes a vigil because its candle was accepted: nothing is left to wait for. The
+ * verdict is failed unless the operator says the check was wrong (held, 0.137.0). Tolerates a vigil that is gone or already closed, as a second
  * close can race this one. Returns what happened.
  */
-export function closeVigilForCandle(project: Project, input: { slug: string; candleKey: string; who: string }): "closed" | "already-closed" | "no-vigil" {
+export function closeVigilForCandle(
+  project: Project,
+  input: { slug: string; candleKey: string; who: string; verdict?: "held" | "failed"; reason?: string },
+): "closed" | "already-closed" | "no-vigil" {
   const { slug, candleKey, who } = input;
+  const verdict = input.verdict ?? "failed";
   const isClosed = (): boolean => vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug))).state === "closed";
   if (project.readItem("vigil", slug) === null) return "no-vigil";
   if (isClosed()) return "already-closed";
   try {
-    closeVigil(project, { slug, verdict: "failed", by: "candle", who, reason: `candle '${candleKey}' accepted` });
+    closeVigil(project, { slug, verdict, by: "candle", who, reason: input.reason ?? `candle '${candleKey}' accepted` });
   } catch (cause) {
     if (isClosed()) return "already-closed";
     throw cause;
@@ -935,6 +966,17 @@ async function sweepDue(
   return swept;
 }
 
+/** What the candle body says about the failing check: its text, Command, Expected, result and the output tail (0.137.0). */
+function failureOf(ctx: SweepContext, plan: VigilPlan, failKind: FailKind, step: SweptCheck | undefined): CandleFailure {
+  if (step === undefined) return { failKind, step: undefined };
+  const failure: CandleFailure = { failKind, step: { index: step.index, text: step.text }, outcome: step.outcome, exit: step.exit };
+  const ran = plan.classified.find((one) => one.check.index === step.index)?.check;
+  if (ran?.command !== undefined) failure.command = ran.command;
+  if (ran?.expected !== undefined) failure.expected = ran.expected;
+  if (step.output_sha !== undefined) failure.output = outputTail(ctx.project, step.output_sha);
+  return failure;
+}
+
 /** A failed sweep of a vigil that names a candle lights it (0.110.0). A dry run and a classify never get here. */
 function lightCandle(ctx: SweepContext, plan: VigilPlan, swept: SweptVigil): void {
   const { header } = plan.doc;
@@ -943,8 +985,9 @@ function lightCandle(ctx: SweepContext, plan: VigilPlan, swept: SweptVigil): voi
   const step = bad.find((check) => check.fail_kind === swept.fail_kind) ?? bad[0];
   lightVigilCandle(ctx.project, {
     header,
-    failure: { failKind: swept.fail_kind ?? "unknown", step: step === undefined ? undefined : { index: step.index, text: step.text } },
+    failure: failureOf(ctx, plan, swept.fail_kind ?? "unknown", step),
     who: ctx.who,
+    vigilBody: plan.doc.body,
   });
   swept.candleLit = true;
 }

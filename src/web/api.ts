@@ -221,6 +221,15 @@ export interface CandleStep {
   note?: string;
 }
 
+/** What the operator needs to decide a candle (0.137.0): the `decision` a run reported. Every text is one line of untrusted plain text. */
+export interface CandleDecisionRow {
+  what: string;
+  impact: string;
+  done: string;
+  options: { choice: string; effect: string }[];
+  recommend: string;
+}
+
 /**
  * One candle, as `darius candle list --json` gives it, with the project it
  * belongs to. Every text is untrusted plain text: anyone who lights a candle
@@ -244,6 +253,10 @@ export interface CandleRow {
   /** A report came in since the candle was closed, at the same or a lower severity. */
   stillReported: boolean;
   bodySha?: string;
+  /** The `detail` of the item a run reported (0.137.0); plain text, lines kept. Absent when the report had none. */
+  detail?: string;
+  /** The `decision` of the item a run reported (0.137.0). Absent when the report had none. */
+  decision?: CandleDecisionRow;
   /** The channels the report named; an empty list means the app only. Absent for a report from a run. */
   deliver?: string[];
   /** Each only while it is in force. */

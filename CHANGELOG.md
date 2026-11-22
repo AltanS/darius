@@ -2,6 +2,27 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.137.0] - 2026-11-22
+
+### Added
+
+- **A candle shows what the run said about it.** A candle that a run lit now carries the `detail` and the `decision` of the item of the newest run report. `darius candle show` prints both, and `--json` adds them to `candle`. No existing field changed. It works for candles lit before this release, because candles are read from the result blobs.
+- **A candle item has a `decision` block.** `what` (what happened, with the sample and the count), `impact`, `done` (what the system already did), `options` (1 to 4, each with `choice` and `effect`) and `recommend`. Each is one line, and a longer text is refused, not cut. `run complete` refuses a `needs-decision` candle item without it, and says what to add. The run prompt describes the fields. A result stored before this release is still read without it.
+- **A vigil's candle has a body.** It says which check failed (step, text, Command, Expected, result, kind), the last 20 lines of its output with obvious secrets masked, and the vigil's own "## If a check fails" section. `vigil add --candle` and `vigil set --candle` refuse a vigil with no such section. A vigil that already has a candle is not refused when it is swept.
+- **`darius candle accept <key> --vigil-verdict held|failed`.** A candle of a vigil can close the vigil as held, when the check was wrong. The default stays failed. The web action API takes `vigilVerdict` in the accept body.
+- **`darius vigil close <slug> --amend --verdict held|failed --reason TEXT`** corrects the verdict of a closed vigil. It writes a new `vigil.closed` line with `amends`, and the newest close wins. The old line stays. Older hosts read the newest close as well.
+
+### Changed
+
+- **The candle page leads with the decision.** What happened, Impact, What the system did and Options come first, then the buttons. A candle with no decision shows its detail and body, and says what is missing and which run adds it.
+- **"Answer" is "Reply and close".** Under the buttons, one line each says what the button does. A candle of a vigil also has "Close as held". The warning about the vigil is now part of the Accept risk line.
+- **A close of a closed vigil names `--amend`** in its refusal.
+- **The reply form says "Send and close" and "Close and start follow-up".** The receipt says "Reply saved. The candle is closed."
+
+### Fixed
+
+- **A stored result keeps its items when its `decision` breaks a rule.** A darius before 0.137.0 stored any decision it got. When 0.137.0 reads such a result, it drops the bad decision and keeps the rest, so the run's candles and findings stay. `run complete` still refuses a bad decision.
+
 ## [0.136.3] - 2026-11-20
 
 ### Fixed

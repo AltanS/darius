@@ -10,6 +10,7 @@
  *   vigil list [--all] [--json]
  *   vigil show <slug> [--json]
  *   vigil close <slug> --verdict held|failed [--date YYYY-MM-DD] [--reason TEXT]
+ *   vigil close <slug> --amend --verdict held|failed --reason TEXT
  *   vigil pause <slug> [--until YYYY-MM-DD] --reason TEXT
  *   vigil resume <slug>
  *   vigil sweep [SLUG] [--all-projects] [--only SLUG] [--include-heavy] [--daily]
@@ -86,7 +87,7 @@ import { projectWorkdir } from "../core/workdir.ts";
 import { flushAlerts } from "../core/alerts.ts";
 import type { Severity } from "../core/result.ts";
 import { dueFromIn } from "../core/relative-date.ts";
-import { assertCandleCanFire, parseCandleDeliver, parseCandleSeverity } from "../core/vigil-candle.ts";
+import { assertCandleBody, assertCandleCanFire, parseCandleDeliver, parseCandleSeverity } from "../core/vigil-candle.ts";
 import {
   addVigil,
   assertNotNested,
@@ -364,6 +365,7 @@ function runSet(args: ParsedArgs): number {
       changes.push(`candle_deliver=${candle.deliver.length === 0 ? "none" : candle.deliver.join(",")}`);
     }
     if (header.candle !== undefined) assertCandleCanFire(header);
+    if (candle.severity !== undefined) assertCandleBody(slug, current.body);
     const next: Document<Vigil> = { header, body: current.body };
     project.writeItem(next, { who });
     return next;
@@ -517,21 +519,28 @@ function runClose(args: ParsedArgs): number {
   const verdict = stringFlag(args, "verdict");
   if (verdict !== "held" && verdict !== "failed") throw new UsageError("vigil close needs --verdict held|failed");
   const date = dateFlag(args, "date");
+  const isAmend = isFlagSet(args, "amend");
+  const reason = textFlag(args, "reason");
+  if (isAmend && reason === undefined) throw new UsageError("vigil close --amend needs --reason TEXT: say why the verdict changes");
+  if (isAmend && date !== undefined) throw new UsageError("vigil close --amend takes no --date: the amendment is dated now, so it stays the newest close");
   const project = currentProject(args);
   const who = stringFlag(args, "who") ?? defaultWho();
   if (project.readItem("vigil", slug) === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
   const status = vigilStatus(slug, linesFor(readLedger(project), itemRef("vigil", slug)));
-  if (status.state === "closed" && status.verdict === verdict) {
+  if (!isAmend && status.state === "closed" && status.verdict === verdict) {
     if (args.json) printJson({ project: project.name, slug, alreadyClosed: true, verdict });
     else console.log(`already closed: ${slug} (${verdict}), not overwritten`);
     return 0;
   }
-  const reason = textFlag(args, "reason");
   if (reason === undefined) console.error("darius: warning: vigil close without --reason; say why it closes (a later major release will require it)");
-  const line = closeVigil(project, { slug, verdict, by: who, who, reason, at: date === undefined ? undefined : localNoonIso(date) });
+  const line = closeVigil(project, { slug, verdict, by: who, who, reason, at: date === undefined ? undefined : localNoonIso(date), amend: isAmend });
   refreshProjection(project);
   if (args.json) {
     printJson({ project: project.name, closed: line });
+    return 0;
+  }
+  if (isAmend) {
+    console.log(`amended vigil ${slug} in ${project.name}: the verdict is now ${verdict} (was ${status.verdict ?? "unknown"}); the earlier close stays in the ledger`);
     return 0;
   }
   console.log(`closed vigil ${slug} in ${project.name} (verdict ${verdict}, resolved ${date ?? localToday()})`);

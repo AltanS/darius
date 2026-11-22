@@ -850,6 +850,28 @@
     gap: 10px;
   }
 
+  .candle-lines {
+    display: grid;
+    gap: 4px;
+    list-style: none;
+  }
+
+  .candle-lines b {
+    color: var(--color-parchment);
+    font-weight: 600;
+  }
+
+  .candle-options {
+    display: grid;
+    gap: 8px;
+    list-style: none;
+  }
+
+  .candle-option-choice {
+    font-weight: 600;
+    color: var(--color-parchment);
+  }
+
   .candle-delivery {
     display: grid;
     gap: 6px;

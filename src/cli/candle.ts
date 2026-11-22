@@ -21,10 +21,13 @@
  *                  `--on HOST` runs this verb on HOST over ssh, the host of the
  *                  ritual (0.111.0), as `run follow-up --on` does. The answer is
  *                  then written there, and only when the run started there.
- *   candle accept <key> [--note N] [--who W]
+ *   candle accept <key> [--note N] [--vigil-verdict held|failed] [--who W]
  *                  on a candle whose newest report came from `vigil:<slug>` it
- *                  also closes that vigil as failed, when the vigil exists and
- *                  is open (0.110.0). The accept line comes first.
+ *                  also closes that vigil, when the vigil exists and is open
+ *                  (0.110.0). The accept line comes first. The vigil closes as
+ *                  failed, or with `--vigil-verdict held` (0.137.0) as held, for
+ *                  a check that was wrong; the flag is refused on any other
+ *                  candle.
  *   candle blow-out <key> [--note N] [--who W]
  *   candle relight <key> [--note N] [--who W]
  *
@@ -186,6 +189,27 @@ function deliverLine(candle: Candle): string[] {
   return [`  deliver: ${candle.deliver.length === 0 ? "none, the app only" : candle.deliver.join(", ")}`];
 }
 
+/** The detail of the newest run report, lines kept, indented under a label. */
+function detailLines(candle: Candle): string[] {
+  if (candle.detail === undefined) return [];
+  return ["  detail:", ...candle.detail.split("\n").map((line) => `    ${line}`)];
+}
+
+/** The decision of the newest run report: what happened, the impact, what was done, the options and the recommendation. */
+function decisionLines(candle: Candle): string[] {
+  const { decision } = candle;
+  if (decision === undefined) return [];
+  return [
+    "  decision:",
+    `    what happened: ${decision.what}`,
+    `    impact: ${decision.impact}`,
+    `    what the system did: ${decision.done}`,
+    "    options:",
+    ...decision.options.map((option) => `      - ${option.choice}: ${option.effect}`),
+    `    recommended: ${decision.recommend}`,
+  ];
+}
+
 function bodyLines(candle: Candle, body: string | null): string[] {
   if (candle.bodySha === undefined) return [];
   if (body === null) return [`  body: ${candle.bodySha} is not on this host yet`];
@@ -199,6 +223,8 @@ function describeCandle(candle: Candle, body: string | null): string[] {
     ...deliverLine(candle),
     `  first seen ${candle.firstSeen.at}, last seen ${candle.lastSeen.at}`,
     ...closeLines(candle),
+    ...detailLines(candle),
+    ...decisionLines(candle),
     ...bodyLines(candle, body),
     "  history, oldest first:",
     ...candle.history.map((step) => `    ${historyLine(step)}`),
@@ -318,6 +344,16 @@ const SETTLE = {
   relight: { type: CANDLE_RELIT, done: "relit" },
 } as const satisfies Record<CandleSettle, { type: string; done: string }>;
 
+/** `--vigil-verdict`: how an accept closes the vigil of the candle. Absent means failed, as before 0.137.0. */
+type VigilVerdict = "held" | "failed";
+
+function vigilVerdictFlag(args: ParsedArgs): VigilVerdict | undefined {
+  const raw = stringFlag(args, "vigil-verdict");
+  if (raw === undefined) return undefined;
+  if (raw === "held" || raw === "failed") return raw;
+  throw new UsageError(`--vigil-verdict takes held or failed, got '${raw}'`);
+}
+
 interface SettleInput {
   verb: CandleSettle;
   candle: Candle;
@@ -344,12 +380,17 @@ interface SettledJson {
   /** Only for an accepted candle of a vigil: the slug, and what happened to it. */
   vigil?: string;
   vigilClose?: string;
+  /** The verdict the vigil was closed with, when this call closed it. */
+  vigilVerdict?: VigilVerdict;
 }
 
 interface Settled {
   refused: string | undefined;
   candle: Candle;
 }
+
+/** The reason of a vigil that `candle accept --vigil-verdict held` closes, when the accept has no note. */
+const HELD_REASON = "candle accepted: the check was wrong";
 
 /** What accepting a candle did to its vigil. `none`: the candle is not a vigil's. */
 type VigilClose = { slug: string; done: "closed" | "already-closed" | "no-vigil" | "failed" } | { done: "none" };
@@ -360,15 +401,18 @@ type VigilClose = { slug: string; done: "closed" | "already-closed" | "no-vigil"
  * failure here leaves the decision on record; it says so on stderr. A vigil
  * that is gone or already closed is fine. An answer leaves the vigil armed.
  */
-function closeVigilOfAccept(project: Project, candle: Candle, who: string): VigilClose {
+function closeVigilOfAccept(project: Project, candle: Candle, input: { who: string; verdict: VigilVerdict; note: string | undefined }): VigilClose {
+  const { who, verdict } = input;
   const slug = vigilOfSource(candle.source);
   if (slug === undefined) return { done: "none" };
+  // A held close says the check was wrong: the note is the reason, or this default.
+  const reason = verdict === "held" ? (input.note ?? HELD_REASON) : undefined;
   try {
-    return { slug, done: closeVigilForCandle(project, { slug, candleKey: candle.key, who }) };
+    return { slug, done: closeVigilForCandle(project, { slug, candleKey: candle.key, who, verdict, reason }) };
   } catch (cause) {
     console.error(
       `darius candle accept: candle '${candle.key}' is accepted and stays accepted, but vigil '${slug}' was not closed: ${errorMessage(cause)}. ` +
-        `Close it yourself: darius vigil close ${slug} --verdict failed --reason "candle accepted"`,
+        `Close it yourself: darius vigil close ${slug} --verdict ${verdict} --reason "candle accepted"`,
     );
     return { slug, done: "failed" };
   }
@@ -379,26 +423,30 @@ function candleSettle(args: ParsedArgs, verb: CandleSettle): number {
   const key = requireKey(args, verb);
   const note = noteFlag(args);
   if (verb === "answer" && note === undefined) throw new UsageError("candle answer: missing --note");
+  const vigilVerdict = vigilVerdictFlag(args);
   const project = currentProject(args);
   const who = stringFlag(args, "who") ?? defaultWho();
   const { refused, candle } = project.withLock((): Settled => {
     const found = lookup(project, key);
-    const reason = candleSettleRefusal(verb, found);
+    const reason = vigilVerdict !== undefined && vigilOfSource(found.source) === undefined
+      ? `candle '${key}' is not the candle of a vigil (its source is ${found.source}); --vigil-verdict only fits a candle that a vigil lit`
+      : candleSettleRefusal(verb, found);
     if (reason === undefined) appendLine(project, settleLine({ verb, candle: found, who, note }));
     return { refused: reason, candle: found };
   });
   if (refused !== undefined) return refuse(args, refused);
-  const vigil: VigilClose = verb === "accept" ? closeVigilOfAccept(project, candle, who) : { done: "none" };
+  const vigil: VigilClose = verb === "accept" ? closeVigilOfAccept(project, candle, { who, verdict: vigilVerdict ?? "failed", note }) : { done: "none" };
   if (args.json) {
     const settled: SettledJson = { ok: true, project: project.name, key };
     if (vigil.done !== "none") {
       settled.vigil = vigil.slug;
       settled.vigilClose = vigil.done;
+      if (vigil.done === "closed") settled.vigilVerdict = vigilVerdict ?? "failed";
     }
     printJson(settled);
   } else {
     console.log(`✓ ${SETTLE[verb].done} candle '${key}'`);
-    if (vigil.done === "closed") console.log(`  closed vigil '${vigil.slug}' as failed`);
+    if (vigil.done === "closed") console.log(`  closed vigil '${vigil.slug}' as ${vigilVerdict ?? "failed"}`);
   }
   return vigil.done === "failed" ? 1 : 0;
 }
@@ -476,6 +524,7 @@ async function candleWrite(args: ParsedArgs, verb: CandleSettle | "light"): Prom
   if (refused !== undefined) return refused;
   if (args.flags["follow-up"] === true && verb !== "answer") throw new UsageError(`candle ${verb} takes no --follow-up; candle answer does`);
   if (args.flags.on !== undefined && args.flags["follow-up"] !== true) throw new UsageError(`candle ${verb} takes no --on; only candle answer --follow-up does`);
+  if (args.flags["vigil-verdict"] !== undefined && verb !== "accept") throw new UsageError(`candle ${verb} takes no --vigil-verdict; only candle accept does`);
   if (verb === "light") return candleLight(args);
   if (args.flags["follow-up"] === true) return candleAnswerFollowUp(args);
   return candleSettle(args, verb);
@@ -483,7 +532,7 @@ async function candleWrite(args: ParsedArgs, verb: CandleSettle | "light"): Prom
 
 export const candleCommand: Command = {
   name: "candle",
-  flags: ["all", "status", "who", "note", "title", "severity", "target", "deliver", "source", "follow-up", "on"],
+  flags: ["all", "status", "who", "note", "title", "severity", "target", "deliver", "source", "follow-up", "on", "vigil-verdict"],
   summary: "light, list, show and settle candles: problems that need the operator, kept by key",
   usage: `candle ${VERBS.replaceAll(" | ", "|")}`,
   async run(args: ParsedArgs): Promise<number> {

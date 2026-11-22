@@ -16,7 +16,8 @@
  * there, is skipped: a newer host may write a shape this host does not know.
  *
  * STATUS. `lit` until someone closes it. A report while lit counts and moves
- * `lastSeen`; the newest report names the title, severity and target. An
+ * `lastSeen`; the newest report names the title, severity, target and, from a
+ * run, the detail and the decision (0.137.0). An
  * answer or an accept closes the candle at the severity it had. A later report
  * at the same or a lower severity leaves it closed and sets `stillReported`.
  * A higher severity lights it again. A flagged item in the state `fixed`, in
@@ -36,7 +37,7 @@
 import { followUpRuns } from "./due.ts";
 import { readLedger } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
-import { parseResult, SEVERITIES, type ResultItem, type RunResult, type Severity } from "./result.ts";
+import { parseResult, SEVERITIES, type ResultDecision, type ResultItem, type RunResult, type Severity } from "./result.ts";
 import { getBlobText, type Project } from "./store.ts";
 
 export const CANDLE_LIT = "candle.lit";
@@ -52,6 +53,9 @@ export const CLEAN_RUNS = 2;
 export const CANDLE_HISTORY_MAX = 30;
 
 const RITUAL_PREFIX = "ritual/";
+
+/** What the operator needs to decide a candle (0.137.0): the `decision` of the newest run report. */
+export type CandleDecision = ResultDecision;
 
 export type CandleStatus = "lit" | "answered" | "accepted" | "out";
 
@@ -129,6 +133,10 @@ export interface Candle {
   /** A report came in since the candle was closed, at the same or a lower severity. */
   stillReported: boolean;
   bodySha?: string;
+  /** The `detail` text of the item of the newest run report (0.137.0); absent when the report had none. */
+  detail?: string;
+  /** The `decision` of the item of the newest run report (0.137.0); absent when the report had none. */
+  decision?: CandleDecision;
   /** The channels `candle.lit` named; absent for a report from a run. */
   deliver?: string[];
   /** Only while the answer is in force. */
@@ -201,6 +209,8 @@ interface Report {
   source: string;
   ritual?: string;
   bodySha?: string;
+  detail?: string;
+  decision?: CandleDecision;
   deliver?: string[];
   seen: CandleSeen;
   who: string;
@@ -217,6 +227,8 @@ interface Track {
   ritual?: string;
   run?: string;
   bodySha?: string;
+  detail?: string;
+  decision?: CandleDecision;
   deliver?: string[];
   status: CandleStatus;
   firstSeen: CandleSeen;
@@ -251,6 +263,10 @@ function adopt(track: Track, report: Report): void {
   else track.target = report.target;
   if (report.bodySha === undefined) delete track.bodySha;
   else track.bodySha = report.bodySha;
+  if (report.detail === undefined) delete track.detail;
+  else track.detail = report.detail;
+  if (report.decision === undefined) delete track.decision;
+  else track.decision = report.decision;
   if (report.deliver === undefined) delete track.deliver;
   else track.deliver = report.deliver;
 }
@@ -301,6 +317,8 @@ function newTrack(report: Report): Track {
   if (report.ritual !== undefined) track.ritual = report.ritual;
   if (report.seen.run !== undefined) track.run = report.seen.run;
   if (report.bodySha !== undefined) track.bodySha = report.bodySha;
+  if (report.detail !== undefined) track.detail = report.detail;
+  if (report.decision !== undefined) track.decision = report.decision;
   if (report.deliver !== undefined) track.deliver = report.deliver;
   return track;
 }
@@ -475,6 +493,8 @@ function reportOfItem(item: ResultItem, at: { ritual: string; seen: CandleSeen; 
     who: at.who,
   };
   if (item.target !== undefined) report.target = item.target;
+  if (item.detail !== undefined) report.detail = item.detail;
+  if (item.decision !== undefined) report.decision = item.decision;
   return report;
 }
 
@@ -562,7 +582,7 @@ function walk(project: Project, ledger: readonly LedgerLine[]): Walked {
 export const PROMPT_CANDLES_MAX = 40;
 
 export const CANDLES_LEAD =
-  'These candles of this ritual are open. Check each one again. While the problem stands, report it with the same key and `"candle": true`, state needs-decision. When the problem is fixed, report it with state fixed and the flag: that puts the candle out. An answered or accepted candle stays closed unless it gets worse. The key is the text in braces.';
+  'These candles of this ritual are open. Check each one again. While the problem stands, report it with the same key and `"candle": true`, state needs-decision, and a `decision` block. When the problem is fixed, report it with state fixed and the flag: that puts the candle out. An answered or accepted candle stays closed unless it gets worse. The key is the text in braces.';
 
 /** The lines of the `## Open candles` section: the candles of `ritual` that are not out. Empty when there are none. */
 export function candlePromptLines(candles: readonly Candle[], ritual: string): string[] {
@@ -611,6 +631,8 @@ function toCandle(track: Track): Candle {
   if (track.ritual !== undefined) candle.ritual = track.ritual;
   if (track.run !== undefined) candle.run = track.run;
   if (track.bodySha !== undefined) candle.bodySha = track.bodySha;
+  if (track.detail !== undefined) candle.detail = track.detail;
+  if (track.decision !== undefined) candle.decision = track.decision;
   if (track.deliver !== undefined) candle.deliver = track.deliver;
   if (track.answered !== undefined) candle.answered = track.answered;
   if (track.accepted !== undefined) candle.accepted = track.accepted;

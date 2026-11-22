@@ -73,6 +73,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "skip-commit-first",
   "follow-up",
   "report",
+  "amend",
 ]);
 
 /** Flags every command accepts: `src/cli.ts` reads them before the command runs. */

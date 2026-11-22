@@ -377,11 +377,30 @@ const CANDLES: CandleRow[] = [
   candleRow("out-one", { status: "out", severity: "info" }),
 ];
 
+/** A lit candle with a decision. It is not in the list, so the counts of the list tests stay; its page is served by `candleDetailOf`. */
+const DECIDED: CandleRow = candleRow("decided", {
+  title: "Dash in titles",
+  source: "ritual:daily-report",
+  ritual: "daily-report",
+  run: DONE,
+  detail: `Sample: article 12 ${EVIL}`,
+  decision: {
+    what: `3 of 40 titles show a dash ${EVIL}`,
+    impact: "not known",
+    done: "Held the digest.",
+    options: [
+      { choice: "Publish", effect: "Goes out as it is." },
+      { choice: `Hold ${EVIL}`, effect: "Waits for a fix." },
+    ],
+    recommend: "Hold, because the feed is wrong.",
+  },
+});
+
 const CANDLE_BODY = `The report says **bad** ${EVIL}`;
 
 /** The detail of a fake candle: the row, its body parsed to one paragraph, and its delivery. */
 function candleDetailOf(project: string, key: string): CandleDetail | null {
-  const row = project === "demo" ? CANDLES.find((candidate) => candidate.key === key) : undefined;
+  const row = project === "demo" ? [...CANDLES, DECIDED].find((candidate) => candidate.key === key) : undefined;
   if (row === undefined) return null;
   const hasBody = row.bodySha !== undefined;
   return {
@@ -2771,25 +2790,48 @@ test("Candle detail: text as text, the body, the source, the delivery per channe
   assert.ok(page.body.includes('href="/w/demo/rituals/daily-report"') && page.text.includes("ritual daily-report"), "the source is the ritual");
   assert.ok(page.body.includes(`href="/w/demo/runs/${DONE}"`), "the run link");
   assert.ok(page.text.includes("lit at high"), "the history");
-  assert.ok(page.text.includes("Answer") && page.text.includes("Accept risk"), "the two buttons");
-  assert.equal(page.text.includes("Accepting this risk also closes the vigil"), false, "a ritual candle does not close a vigil");
-  assert.ok(page.body.includes(`aria-label="Answer the candle: Certificate &lt;script&gt;`), "the button names its candle");
+  assert.ok(page.text.includes("Reply and close") && page.text.includes("Accept risk"), "the two buttons");
+  assert.equal(page.text.includes("Close as held"), false, "a ritual candle has no vigil to close");
+  assert.ok(page.text.includes("Your note goes on the candle and closes it. Tick the box to run daily-report once with your note as its task."), "the line under the reply button");
+  assert.ok(page.text.includes("Closes the candle with no change. It lights again only at a higher severity, or if it goes out and comes back."), "the line under accept");
+  assert.ok(page.text.includes("This candle does not say the impact, what was done or the options. The next daily-report run adds them."), "a candle with no decision names what is missing");
+  assert.ok(page.body.includes(`aria-label="Reply and close, the candle: Certificate &lt;script&gt;`), "the button names its candle");
 });
 
-test("Candle detail: a candle of a vigil links to the vigil and says before the tap that an accept closes it", async () => {
+test("Candle detail: a candle of a vigil links to the vigil, says what accept and close as held do, and has no decision", async () => {
   const page = await candlePage(`/w/demo/candles/${encodeURIComponent("vigil:soak")}`);
   assert.equal(page.status, 200);
   assert.ok(page.body.includes('href="/w/demo/vigils/soak"') && page.text.includes("vigil soak"));
-  assert.ok(page.text.includes("Accepting this risk also closes the vigil soak."));
+  assert.ok(page.text.includes("The vigil soak closes as failed. The problem stays."));
+  assert.ok(page.text.includes("Close as held") && page.text.includes("The check was wrong, or the problem is not real. The vigil soak closes as held."));
+  assert.equal(page.text.includes("Tick the box"), false, "a vigil candle has no run to follow up");
+  assert.ok(page.text.includes("This candle does not say the impact, what was done or the options."));
+  assert.equal(page.text.includes("run adds them"), false, "no ritual, no promise");
+  assert.ok(page.text.includes("This candle has no detail text."), "no decision, no detail, no body: the empty line stays");
   assert.equal(page.text.includes("And start a follow-up run"), false, "the checkbox shows only after the tap, and only for a candle from a run");
+});
+
+test("Candle detail: a decision comes first as text: what happened, impact, what the system did, the options and the recommendation", async () => {
+  const page = await candlePage("/w/demo/candles/decided");
+  assert.equal(page.status, 200);
+  assert.equal(page.body.includes(EVIL), false, "no raw markup anywhere");
+  const order = ["What happened", "Impact", "What the system did", "Options", "Decide"].map((title) => page.text.indexOf(title));
+  assert.ok(order.every((at) => at >= 0), "every section is there");
+  assert.deepEqual(order, order.toSorted((left, right) => left - right), "the sections come before the buttons, in order");
+  assert.ok(page.body.includes("3 of 40 titles show a dash &lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.ok(page.text.includes("not known") && page.text.includes("Held the digest."));
+  assert.ok(page.body.includes("Hold &lt;script&gt;alert(1)&lt;/script&gt;") && page.text.includes("Waits for a fix."));
+  assert.ok(page.text.includes("Recommended: Hold, because the feed is wrong."));
+  assert.ok(page.body.includes("Sample: article 12 &lt;script&gt;"), "the detail still shows, as text");
+  assert.equal(page.text.includes("This candle does not say the impact"), false, "nothing is missing");
 });
 
 test("Candle detail: an answered candle says who answered, and that it was reported again; accepted and out have no buttons", async () => {
   const answered = await candlePage("/w/demo/candles/answered-one");
   assert.ok(answered.body.includes("Answered by web:op on 28 Sep: fix &lt;script&gt;alert(1)&lt;/script&gt;"), "the decision");
   assert.ok(answered.text.includes("reported again after you closed this candle"), "stillReported in words");
-  assert.equal(answered.text.includes(">Answer<"), false);
-  assert.ok(answered.body.includes("Accept risk") && !/>Answer</u.test(answered.body), "an answered candle can still be accepted, not answered again");
+  assert.equal(answered.text.includes(">Reply and close<"), false);
+  assert.ok(answered.body.includes("Accept risk") && !/>Reply and close</u.test(answered.body), "an answered candle can still be accepted, not answered again");
   const accepted = await candlePage("/w/demo/candles/accepted-one");
   assert.ok(accepted.text.includes("Risk accepted by web:op on 28 Sep: known"));
   assert.equal(accepted.body.includes("Accept risk") || accepted.body.includes("Send answer"), false, "nothing left to do");

@@ -36,6 +36,7 @@ const { serveCommand } = await import("../src/cli/serve.ts");
 const { collectCandles, CANDLE_LIT } = await import("../src/core/candle-index.ts");
 const { appendLine, readLedger } = await import("../src/core/ledger.ts");
 const { getBlobText, openProject } = await import("../src/core/store.ts");
+const { addVigil } = await import("../src/core/sweep.ts");
 const { candleApi, isCandlePath, LOOPBACK_CANDLE_LIGHT, LOOPBACK_CANDLE_SETTLE, runCli, startDetachedFollowUp } = await import("../src/web/action-api.ts");
 const { webContext } = await import("../src/web/context.ts");
 const { collectStatus } = await import("../src/web/status.ts");
@@ -553,6 +554,47 @@ test("accept: a refused status is 409 and the CLI does not run; a CLI refusal co
   const fromCli = await candleApi(post(ACCEPT_PATH, { project: name, key: "k2" }), TAILNET, stub({ code: 1, error: "vigil 'x' was not closed" }));
   assert.equal(fromCli.status, 409);
   assert.equal(errorOf(fromCli.body), "vigil 'x' was not closed");
+});
+
+// --- accept with a verdict for the vigil (0.137.0) ---------------------------------------------
+
+test("accept takes vigilVerdict held or failed, only on accept, and builds one --vigil-verdict=value word", async () => {
+  const name = "settle-verdict-argv";
+  const store = openProject(name, { create: true });
+  addVigil(store, { slug: "guard", title: "Guard", body: "# g\n\n## If a check fails\n\nLook.\n", due: "2026-01-01", heavy: false, candle: "high", who: "t" });
+  appendLine(store, { who: "t", type: CANDLE_LIT, key: "vigil:guard", title: "Guard", severity: "high", source: "vigil:guard" });
+  const deps = stub();
+  const held = await candleApi(post(ACCEPT_PATH, { project: name, key: "vigil:guard", note: "wrong file", vigilVerdict: "held" }), TAILNET, deps);
+  assert.equal(held.status, 200);
+  assert.deepEqual(deps.runs[0], { argv: ["candle", "accept", `--project=${name}`, "--who=web:owner on phone", "--json", "--note=wrong file", "--vigil-verdict=held", "--", "vigil:guard"], input: undefined });
+  const bad = await candleApi(post(ACCEPT_PATH, { project: name, key: "vigil:guard", vigilVerdict: "maybe" }), TAILNET, deps);
+  assert.equal(bad.status, 400);
+  assert.match(errorOf(bad.body), /vigilVerdict must be held or failed/u);
+  const answer = await candleApi(post(ANSWER_PATH, { project: name, key: "vigil:guard", note: "n", vigilVerdict: "held" }), TAILNET, deps);
+  assert.equal(answer.status, 400, "answer takes no vigilVerdict");
+  assert.match(errorOf(answer.body), /unknown field vigilVerdict/u);
+  assert.equal(deps.runs.length, 1);
+});
+
+test("accept with vigilVerdict on a candle that no vigil lit is 409 and the CLI does not run", async () => {
+  const deps = stub();
+  const refused = await candleApi(post(ACCEPT_PATH, { project: SETTLING, key: "open-1", vigilVerdict: "held" }), TAILNET, deps);
+  assert.equal(refused.status, 409);
+  assert.match(errorOf(refused.body), /not the candle of a vigil/u);
+  assert.deepEqual(deps.runs, []);
+});
+
+test("real CLI: accept with vigilVerdict held closes the vigil held", async () => {
+  const name = "settle-verdict-real";
+  const store = openProject(name, { create: true });
+  addVigil(store, { slug: "guard", title: "Guard", body: "# g\n\n## If a check fails\n\nLook.\n", due: "2026-01-01", heavy: false, candle: "high", who: "t" });
+  appendLine(store, { who: "t", type: CANDLE_LIT, key: "vigil:guard", title: "Guard", severity: "high", source: "vigil:guard" });
+  const accepted = await candleApi(post(ACCEPT_PATH, { project: name, key: "vigil:guard", vigilVerdict: "held" }), TAILNET, REAL_RUN);
+  assert.equal(accepted.status, 200, errorOf(accepted.body));
+  const closed = readLedger(store).filter((line) => line.type === "vigil.closed");
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0]?.verdict, "held");
+  assert.equal(closed[0]?.by, "candle");
 });
 
 // --- answer with a follow-up --------------------------------------------------------------

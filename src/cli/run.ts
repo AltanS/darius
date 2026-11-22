@@ -313,7 +313,7 @@ function intakeFindings(findings: string | undefined, outcome: Outcome, isRequir
     const errors = [...(isRequired ? [MISSING_RESULT] : []), ...(length > FINDINGS_MAX ? [tooLong(length)] : [])];
     return strict && errors.length > 0 ? { errors } : { findings };
   }
-  const parsed = parseResult(cut.block);
+  const parsed = parseResult(cut.block, { requireDecision: true });
   const length = cut.findings.trim().length;
   const errors = [...("errors" in parsed ? parsed.errors : []), ...(strict && length > FINDINGS_MAX ? [tooLong(length)] : [])];
   if (strict && errors.length > 0) return { errors };

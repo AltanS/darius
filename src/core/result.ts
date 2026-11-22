@@ -32,6 +32,12 @@
  * and the state `needs-decision`, or `fixed`, which puts the candle out. Any
  * other state is an error, so a candle never hides behind an open item.
  *
+ * `decision` (0.137.0) is what the operator needs to decide a candle: what
+ * happened, the impact, what the system already did, the options and a
+ * recommendation. A candle item in the state `needs-decision` must carry it;
+ * any other item must not. Each text is one line. Like the proposal texts, a
+ * longer text is an error, never a clip: a cut sentence can lose its meaning.
+ *
  * `handoff` (0.26.0) is a note of at most HANDOFF_MAX characters for the
  * next run of the same ritual (src/core/handoff.ts). It is the one text
  * darius does not clip: a cut note can lose its meaning, so a longer one is
@@ -81,6 +87,28 @@ export interface ResultItem {
   proposal?: ResultProposal;
   /** True when the item lights a candle (0.106.0); needs a `key`. Absent otherwise, never false. */
   candle?: true;
+  /** What the operator needs to decide the candle (0.137.0). Only a candle item carries it; a needs-decision candle item must. */
+  decision?: ResultDecision;
+}
+
+/** One choice of a decision and what it causes (0.137.0). */
+export interface DecisionOption {
+  choice: string;
+  effect: string;
+}
+
+/** What the operator reads before deciding a candle (0.137.0). Every text is one line of plain text. */
+export interface ResultDecision {
+  /** What happened, with the concrete sample and the count. */
+  what: string;
+  /** Who sees it and how bad; "not known" when the data does not say. */
+  impact: string;
+  /** What the system already did, for example omitted a section or held an article. */
+  done: string;
+  /** The choices (1 to 4) and what each causes. */
+  options: DecisionOption[];
+  /** The choice the run recommends and why. */
+  recommend: string;
 }
 
 /** The change a `needs-decision` item proposes (0.69.0). Plain text; newlines stay. */
@@ -167,6 +195,12 @@ export const KEY_MAX = 120;
 
 /** The longest proposal texts, in characters (0.69.0). Longer is an error, not a clip. */
 export const PROPOSAL_LIMITS = { current: 1500, proposed: 1500, why: 400, effect: 400 } as const;
+
+/** The longest decision texts, in characters (0.137.0). Longer is an error, not a clip. */
+export const DECISION_LIMITS = { what: 300, impact: 300, done: 300, choice: 120, effect: 240, recommend: 240 } as const;
+
+/** The most options a decision holds (0.137.0); at least one is needed. */
+export const DECISION_OPTIONS_MAX = 4;
 
 /** More entries than these are an error, not a clip: the page could not show them. */
 const COUNT_LIMITS = { metrics: 12, items: 100, questions: 10, actions: 100, commands: 20 } as const;
@@ -269,6 +303,13 @@ function zeroCounts(): SeverityCounts {
 class Checker {
   readonly errors: string[] = [];
 
+  /** True when a needs-decision candle item must carry a decision: `run complete` only (see ParseOptions). */
+  readonly requiresDecision: boolean;
+
+  constructor(requiresDecision: boolean) {
+    this.requiresDecision = requiresDecision;
+  }
+
   text(record: JsonRecord, key: string, where: string, max: number, keepNewlines = false): string {
     const value = record[key];
     if (!isText(value) || value.trim() === "") {
@@ -346,7 +387,91 @@ function item(check: Checker, record: JsonRecord, where: string): ResultItem {
   const change = proposal(check, record, where, out.state);
   if (change !== undefined) out.proposal = change;
   if (candleFlag(check, record, where, out)) out.candle = true;
+  const decided = decision(check, record, where, out);
+  if (decided !== undefined) out.decision = decided;
   return out;
+}
+
+/** One decision text: one line, control characters out, never clipped; empty or longer than `max` is an error. */
+function decisionText(check: Checker, record: JsonRecord, at: { name: string; key: string; max: number }): string {
+  const name = `${at.name}.${at.key}`;
+  const value = record[at.key];
+  if (!isText(value)) {
+    check.errors.push(`${name}: needs a non-empty one-line string`);
+    return "";
+  }
+  const text = clean(value, Number.MAX_SAFE_INTEGER).replaceAll(/\s+/gu, " ");
+  const length = [...text].length;
+  if (text === "") check.errors.push(`${name}: needs a non-empty one-line string`);
+  if (length > at.max) check.errors.push(`${name}: at most ${String(at.max)} characters, got ${String(length)}; make it shorter`);
+  return text;
+}
+
+function decisionOption(check: Checker, record: JsonRecord, name: string): DecisionOption {
+  return {
+    choice: decisionText(check, record, { name, key: "choice", max: DECISION_LIMITS.choice }),
+    effect: decisionText(check, record, { name, key: "effect", max: DECISION_LIMITS.effect }),
+  };
+}
+
+/** The options of a decision: 1 to DECISION_OPTIONS_MAX entries, each with a choice and its effect. */
+function decisionOptions(check: Checker, record: JsonRecord, name: string): DecisionOption[] {
+  const value = record.options;
+  const field = `${name}.options`;
+  if (!Array.isArray(value)) {
+    check.errors.push(`${field}: needs a list of 1 to ${String(DECISION_OPTIONS_MAX)} options, each with choice and effect`);
+    return [];
+  }
+  if (value.length < 1 || value.length > DECISION_OPTIONS_MAX) {
+    check.errors.push(`${field}: needs 1 to ${String(DECISION_OPTIONS_MAX)} options, got ${String(value.length)}`);
+  }
+  return value.flatMap((entry, index) => {
+    if (isRecord(entry)) return [decisionOption(check, entry, `${field}[${String(index)}]`)];
+    check.errors.push(`${field}[${String(index)}]: must be an object with choice and effect`);
+    return [];
+  });
+}
+
+/**
+ * An item's `decision` (0.137.0). Only a candle item carries one, and a candle
+ * item in the state needs-decision must. Every field is required.
+ */
+function decision(check: Checker, record: JsonRecord, where: string, entry: ResultItem): ResultDecision | undefined {
+  if (check.requiresDecision) return checkedDecision(check, record, where, entry);
+  // A stored blob is read leniently: a darius before 0.137.0 kept any decision it got. A bad
+  // one is dropped, so it cannot take the rest of the result, and its candles, with it.
+  const scratch = new Checker(false);
+  const found = checkedDecision(scratch, record, where, entry);
+  return scratch.errors.length === 0 ? found : undefined;
+}
+
+function checkedDecision(check: Checker, record: JsonRecord, where: string, entry: ResultItem): ResultDecision | undefined {
+  const value = record.decision;
+  const name = `${where}.decision`;
+  const isGiven = value !== undefined && value !== null;
+  if (!isGiven) {
+    if (check.requiresDecision && entry.candle === true && entry.state === "needs-decision") {
+      check.errors.push(
+        `${name}: a candle item in the state needs-decision must carry a decision: what (what happened, with the sample and the count), impact (who sees it and how bad, or "not known"), done (what the system already did), options (1 to ${String(DECISION_OPTIONS_MAX)}, each with choice and effect) and recommend. Write each as one plain line.`,
+      );
+    }
+    return undefined;
+  }
+  if (entry.candle !== true) {
+    check.errors.push(`${name}: only a candle item ("candle": true) carries a decision`);
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    check.errors.push(`${name}: must be an object with what, impact, done, options and recommend`);
+    return undefined;
+  }
+  return {
+    what: decisionText(check, value, { name, key: "what", max: DECISION_LIMITS.what }),
+    impact: decisionText(check, value, { name, key: "impact", max: DECISION_LIMITS.impact }),
+    done: decisionText(check, value, { name, key: "done", max: DECISION_LIMITS.done }),
+    options: decisionOptions(check, value, name),
+    recommend: decisionText(check, value, { name, key: "recommend", max: DECISION_LIMITS.recommend }),
+  };
 }
 
 /**
@@ -469,8 +594,17 @@ function derivedStatus(stated: ResultStatus, result: Omit<RunResult, "status">):
 
 export type Parsed = { result: RunResult } | { errors: string[] };
 
+export interface ParseOptions {
+  /**
+   * A needs-decision candle item must carry `decision` (0.137.0). Only the check
+   * at `run complete` sets this. A stored result is read without it: a blob
+   * written before 0.137.0 has no decision, and its candle must stay.
+   */
+  requireDecision?: boolean;
+}
+
 /** Parses and checks the block's JSON. Every problem is listed, so the model can fix all at once. */
-export function parseResult(block: string): Parsed {
+export function parseResult(block: string, options: ParseOptions = {}): Parsed {
   let raw: JsonValue;
   try {
     raw = JSON.parse(block);
@@ -478,7 +612,7 @@ export function parseResult(block: string): Parsed {
     return { errors: [`the darius-result block is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`] };
   }
   if (!isRecord(raw)) return { errors: ["the darius-result block must be one JSON object"] };
-  const check = new Checker();
+  const check = new Checker(options.requireDecision === true);
   if (raw.v !== 1) check.errors.push("v: must be 1");
   const stated = check.choice(raw, "status", "result", RESULT_STATUSES) ?? "attention";
   const summary = check.text(raw, "summary", "result", TEXT_LIMITS.summary);
@@ -538,12 +672,12 @@ export const RESULT_PROMPT: readonly string[] = [
   "",
   "End your findings with exactly one fenced block whose info string is `darius-result`, holding one JSON object. darius checks it: `darius run complete` refuses findings without a valid block and prints every error, so you can fix them and run it again. The web page and the TUI draw the block; the markdown above it holds only what the block cannot, at most 4000 characters, and a longer text is refused.",
   "",
-  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `candle` (optional, only ever true) lights a candle; see below. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
+  "Fields: `v` is 1. `status` is ok, attention or failed. `summary` is one or two plain sentences, at most 240 characters. `metrics` (up to 12) are counts worth a tile: `label`, `value` (number or short text), optional `unit` and `tone` (ok, warn, bad). `items` (up to 100) are the problems you found: `title`, `severity` (critical, high, medium, low, info), `state` (open, fixed, needs-decision, needs-code, not-verified), optional `key`, optional `group` (for example the site), `target` (for example the page) and `detail` (at most 400 characters). `key` (at most 120 characters, one line; a longer key is refused, not cut) is a stable id for the finding: reuse the key from the open findings above when you re-check one; same finding, same key, across runs. `needs-code` means the item needs a code or mapping fix; it is not a question. A `needs-decision` item may carry `proposal`, the exact change you propose: `proposed` (required, at most 1500 characters), optional `current` (the text there now, at most 1500), `why` and `effect` (the expected effect), at most 400 each. Newlines stay; a longer text is refused, not cut. Give such an item a `key`: the operator approves a proposal by its key, and a follow-up run carries out exactly the approved ones. Only a needs-decision item may carry a proposal. `candle` (optional, only ever true) lights a candle, and a candle item carries `decision`; see below. `questions` (up to 10) are what the operator must decide: `text` (at most 300 characters), optional `recommendation` (at most 200), optional `commands`. `actions` (up to 100) are changes you made: `text` (at most 200 characters), `state` (done, failed, skipped), optional `target`. `handoff` (optional, at most 200 characters, one line) is a note for the next run of this ritual: what it must check again, what waits for someone, what not to repeat. darius puts it at the top of that run's prompt. A longer note is refused, not cut. Longer texts in the other fields are cut without a warning, so keep them inside the numbers.",
   "",
   "`commands` (up to 20 lines, each at most 300 characters) are the exact lines a yes would run. The operator may approve them for a follow-up run, which then runs them as written.",
   "Each line is one plain command: no &&, ||, ;, |, no redirection, no $ or backticks. A command that needs another dir uses a dir flag (`pnpm -C tools cli ...`), not `cd tools && ...`.",
   "",
-  "`\"candle\": true` on an item lights a candle: a record that alerts the operator and stays open until they decide. Use it for a problem that needs the operator and must not be lost. It needs a `key`, and the state needs-decision, or fixed when the problem is fixed, which puts the candle out. A candle item is no finding. A candle replaces a question about the same matter: do not ask both. Reuse the key of an open candle listed above, with the flag, in every run while the problem stands. A run lights a candle only this way: it cannot run `darius candle light` or settle a candle, and it does not choose how the alert goes out.",
+  "`\"candle\": true` on an item lights a candle: a record that alerts the operator and stays open until they decide. Use it for a problem that needs the operator and must not be lost. It needs a `key`, and the state needs-decision, or fixed when the problem is fixed, which puts the candle out. A candle item is no finding. A candle item in the state needs-decision MUST carry `decision`, which is what the operator reads before they decide: an object with `what`, `impact`, `done`, `options` and `recommend`. `what` is what happened, with the concrete sample and the count (at most 300 characters). `impact` is who sees it and how bad it is; write \"not known\" when the data does not say (at most 300). `done` is what the system already did, for example omitted a section or held an article (at most 300). `options` are the choices, 1 to 4 entries, each with `choice` (at most 120) and `effect`, what that choice causes (at most 240). `recommend` is the choice you recommend and why (at most 240). Every field is required and is one line of plain text. A longer text is refused, not cut. A fixed candle item needs no `decision`, and no other item may carry one. A candle replaces a question about the same matter: do not ask both. Reuse the key of an open candle listed above, with the flag, in every run while the problem stands. A run lights a candle only this way: it cannot run `darius candle light` or settle a candle, and it does not choose how the alert goes out.",
   "",
   "Plain text only in every field: no markdown, no links. Put every question for the operator in `questions`, not only in the prose: that is how it reaches them. Put in `questions` only what needs a decision. A fix you made, or an item that needs code, is never a question. darius raises `status` to attention when there is a question, an open high or critical item, or an item not verified.",
   "",

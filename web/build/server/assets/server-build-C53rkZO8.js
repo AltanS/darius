@@ -11737,17 +11737,44 @@ function canAnswer(row) {
 function canAccept(row) {
 	return row.status === "lit" || row.status === "answered";
 }
-/** The sentence shown before the tap on "Accept risk" when the candle belongs to a vigil; null for any other candle. */
-function acceptWarning(row) {
+/** The names of the three buttons. */
+var REPLY_LABEL = "Reply and close";
+var ACCEPT_LABEL = "Accept risk";
+var HELD_LABEL = "Close as held";
+/**
+* The line under the buttons for Reply and close (0.137.0). It says what the
+* button does in the code: the note goes on the candle and closes it, and a
+* candle that came from a run offers one run of that ritual with the note as its task.
+*/
+function replyLine(row) {
+	const base = "Your note goes on the candle and closes it.";
+	return row.ritual !== void 0 && cameFromRun(row) ? `${base} Tick the box to run ${row.ritual} once with your note as its task.` : base;
+}
+/**
+* The line under the buttons for Accept risk. A vigil's candle also closes the
+* vigil as failed, and the vigil stops watching, so the candle does not light again by itself.
+*/
+function acceptLine(row) {
 	const slug = vigilOfSource(row.source);
-	return slug === null ? null : `Accepting this risk also closes the vigil ${slug}.`;
+	if (slug !== null) return `The vigil ${slug} closes as failed. The problem stays.`;
+	return "Closes the candle with no change. It lights again only at a higher severity, or if it goes out and comes back.";
+}
+/** The line under Close as held; null for a candle that no vigil lit, which has no such button. */
+function heldLine(row) {
+	const slug = vigilOfSource(row.source);
+	return slug === null ? null : `The check was wrong, or the problem is not real. The vigil ${slug} closes as held.`;
+}
+/** True when the candle has a vigil to close as held. */
+function canCloseHeld(row) {
+	return vigilOfSource(row.source) !== null && canAccept(row);
 }
 /** What the loopback viewer reads where the buttons would be. */
 var NO_WRITE_TEXT = "No buttons here: this page was opened from this host. To answer or accept, open the page by its tailnet name.";
 /** The line that replaces the buttons after the reply. */
 var RECEIPTS$1 = {
-	answer: "Answer saved.",
-	accept: "Risk accepted."
+	answer: "Reply saved. The candle is closed.",
+	accept: "Risk accepted.",
+	held: "Vigil closed as held."
 };
 /** The body of `POST /api/candle/answer`. */
 function answerBody(row, note, followUp) {
@@ -11761,17 +11788,31 @@ function answerBody(row, note, followUp) {
 		followUp: true
 	} : base;
 }
-/** The body of `POST /api/candle/accept`; an empty note is left out. */
-function acceptBody(row, note) {
+/** The body of `POST /api/candle/accept`; an empty note is left out. `vigilVerdict` is sent only for Close as held. */
+function acceptBody(row, note, vigilVerdict) {
 	const trimmed = note.trim();
 	const base = {
 		project: row.project,
 		key: row.key
 	};
-	return trimmed === "" ? base : {
+	const noted = trimmed === "" ? base : {
 		...base,
 		note: trimmed
 	};
+	return vigilVerdict === void 0 ? noted : {
+		...noted,
+		vigilVerdict
+	};
+}
+/** The sentence when a candle has no decision: it does not say what the operator needs to decide. */
+var NO_DECISION_TEXT = "This candle does not say the impact, what was done or the options.";
+/** The line that names what is missing: the sentence above, and for a run candle, which run adds it. */
+function missingDecisionText(row) {
+	return row.ritual !== void 0 && cameFromRun(row) ? `${NO_DECISION_TEXT} The next ${row.ritual} run adds them.` : NO_DECISION_TEXT;
+}
+/** "Recommended: <text>" under the options. */
+function recommendText(decision) {
+	return `Recommended: ${decision.recommend}`;
 }
 /** The note of an event as a tail: ": known issue", or nothing. */
 function noteTail$1(note) {
@@ -16384,11 +16425,13 @@ function ResultPanel({ project, row, result, canWrite, nextRun, canRunNow, after
 * two buttons that settle a lit candle. Every text in a candle comes from a run,
 * a script or a person, so it is drawn as plain text only.
 *
-* "Answer" asks for a note (required) and, when the newest report came from a
-* run, offers "And start a follow-up run". "Accept risk" asks for an optional
-* note; before the tap it says when the candle belongs to a vigil that the
-* accept also closes. Both post to `/api/candle/answer` and
-* `/api/candle/accept`. The reply is the news: the buttons give way to one
+* "Reply and close" asks for a note (required) and, when the newest report came
+* from a run, offers "And start a follow-up run". "Accept risk" asks for an
+* optional note. A candle that a vigil lit also gets "Close as held" (0.137.0):
+* the check was wrong, so the vigil closes as held. Under the buttons, one line
+* each says what the button does, as the code does it. Reply posts to
+* `/api/candle/answer`; the other two post to `/api/candle/accept`, the last
+* with `vigilVerdict: "held"`. The reply is the news: the buttons give way to one
 * line at once, and one load in the background brings the new state. Only the
 * button that was tapped shows the busy gem; the wait line after it is text.
 * A refusal shows the server's sentence and leaves the candle, and the note,
@@ -16409,7 +16452,7 @@ function SeverityTag({ row }) {
 		tone: severityTone(row.severity)
 	} });
 }
-/** Answer and Accept risk for a lit candle (Accept risk also for an answered one). Draws nothing for a candle nobody can settle here. */
+/** Reply and close, Accept risk and, for a vigil's candle, Close as held. Accept risk and Close as held also fit an answered candle. Draws nothing for a candle nobody can settle here. */
 function CandleActions({ row, canWrite }) {
 	const { revalidate } = useRevalidator();
 	const id = (0, import_react.useId)();
@@ -16422,7 +16465,8 @@ function CandleActions({ row, canWrite }) {
 	const [notice, setNotice] = (0, import_react.useState)(null);
 	const offersAnswer = canAnswer(row);
 	const offersAccept = canAccept(row);
-	const warning = acceptWarning(row);
+	const offersHeld = canCloseHeld(row);
+	const held = heldLine(row);
 	const canFollowUp = cameFromRun(row);
 	const isLocked = busy !== null;
 	if (done !== null && done.status === row.status) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -16449,7 +16493,8 @@ function CandleActions({ row, canWrite }) {
 		setBusy(verb);
 		setError(null);
 		const withFollowUp = verb === "answer" && followUp;
-		const result = await postJson(`/api/candle/${verb}`, verb === "answer" ? answerBody(row, note, withFollowUp) : acceptBody(row, note));
+		const body = verb === "answer" ? answerBody(row, note, withFollowUp) : acceptBody(row, note, verb === "held" ? "held" : void 0);
+		const result = await postJson(`/api/candle/${verb === "answer" ? "answer" : "accept"}`, body);
 		setBusy(null);
 		if (!result.ok) {
 			setError(result.error);
@@ -16470,28 +16515,65 @@ function CandleActions({ row, canWrite }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fu-acts",
-				children: [offersAnswer ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "st-btn st-btn-main",
-					"aria-expanded": mode === "answer",
-					"aria-label": `Answer the candle: ${row.title}`,
-					disabled: isLocked,
-					onClick: () => open("answer"),
-					children: "Answer"
-				}) : null, offersAccept ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "st-btn",
-					"aria-expanded": mode === "accept",
-					"aria-label": `Accept the risk of the candle: ${row.title}`,
-					disabled: isLocked,
-					onClick: () => open("accept"),
-					children: "Accept risk"
-				}) : null]
+				children: [
+					offersAnswer ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn st-btn-main",
+						"aria-expanded": mode === "answer",
+						"aria-label": `${REPLY_LABEL}, the candle: ${row.title}`,
+						disabled: isLocked,
+						onClick: () => open("answer"),
+						children: REPLY_LABEL
+					}) : null,
+					offersAccept ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn",
+						"aria-expanded": mode === "accept",
+						"aria-label": `Accept the risk of the candle: ${row.title}`,
+						disabled: isLocked,
+						onClick: () => open("accept"),
+						children: ACCEPT_LABEL
+					}) : null,
+					offersHeld ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "st-btn",
+						"aria-expanded": mode === "held",
+						"aria-label": `Close the vigil as held, for the candle: ${row.title}`,
+						disabled: isLocked,
+						onClick: () => open("held"),
+						children: HELD_LABEL
+					}) : null
+				]
 			}),
-			offersAccept && warning !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "fu-off",
-				children: warning
-			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "candle-lines",
+				children: [
+					offersAnswer ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "fu-off",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [REPLY_LABEL, "."] }),
+							" ",
+							replyLine(row)
+						]
+					}) : null,
+					offersAccept ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "fu-off",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [ACCEPT_LABEL, "."] }),
+							" ",
+							acceptLine(row)
+						]
+					}) : null,
+					offersHeld && held !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "fu-off",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [HELD_LABEL, "."] }),
+							" ",
+							held
+						]
+					}) : null
+				]
+			}),
 			mode === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 				className: "candle-form",
 				onSubmit: (event) => {
@@ -16502,7 +16584,7 @@ function CandleActions({ row, canWrite }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
 						className: "fu-label",
 						htmlFor: id,
-						children: mode === "answer" ? "What did you decide? (required)" : "Note (optional)"
+						children: mode === "answer" ? "What should happen? (required)" : "Note (optional)"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						id,
@@ -16527,9 +16609,9 @@ function CandleActions({ row, canWrite }) {
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BusyButton, {
 							busy: busy === mode,
 							type: "submit",
-							className: mode === "answer" ? "st-btn st-btn-main" : "st-btn st-btn-danger",
+							className: mode === "answer" ? "st-btn st-btn-main" : mode === "held" ? "st-btn" : "st-btn st-btn-danger",
 							disabled: isLocked || !canSend,
-							children: mode === "answer" ? busy === "answer" ? followUp ? "Starting…" : "Sending…" : followUp ? "Answer and start follow-up" : "Send answer" : busy === "accept" ? "Accepting…" : "Accept this risk"
+							children: mode === "answer" ? busy === "answer" ? followUp ? "Starting…" : "Sending…" : followUp ? "Close and start follow-up" : "Send and close" : mode === "held" ? busy === "held" ? "Closing…" : "Close as held" : busy === "accept" ? "Accepting…" : "Accept this risk"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "st-btn",
@@ -20717,6 +20799,67 @@ var candle_default = withComponentProps(function Candle({ loaderData }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "board-main",
 			children: [
+				row.decision === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+						title: "What happened",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "ritem-detail",
+							children: row.decision.what
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+						title: "Impact",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "ritem-detail",
+							children: row.decision.impact
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+						title: "What the system did",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "ritem-detail",
+							children: row.decision.done
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
+						title: "Options",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+							className: "candle-options",
+							children: row.decision.options.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+								className: "break-words",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "candle-option-choice",
+										children: option.choice
+									}),
+									": ",
+									option.effect
+								]
+							}, `${option.choice}/${option.effect}`))
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "break-words",
+							children: recommendText(row.decision)
+						})]
+					})
+				] }),
+				row.decision !== void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
+					title: "Detail",
+					children: [
+						row.detail === void 0 && blocks === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "This candle has no detail text." }) : null,
+						row.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "ritem-detail",
+							children: row.detail
+						}),
+						blocks === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "measure",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks })
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "fu-off",
+							children: missingDecisionText(row)
+						})
+					]
+				}),
 				isOpenToAction ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
 					title: "Decide",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -20728,7 +20871,7 @@ var candle_default = withComponentProps(function Candle({ loaderData }) {
 					})
 				}) : null,
 				decisions.length === 0 && out === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
-					title: "Decision",
+					title: "What was decided",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "card",
 						children: [
@@ -20748,12 +20891,15 @@ var candle_default = withComponentProps(function Candle({ loaderData }) {
 						]
 					})
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Section, {
+				row.decision === void 0 || row.detail === void 0 && blocks === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, {
 					title: "Detail",
-					children: blocks === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "This candle has no detail text." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					children: [row.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ritem-detail",
+						children: row.detail
+					}), blocks === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "measure",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { blocks })
-					})
+					})]
 				})
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
@@ -24056,7 +24202,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-BirUgsuX.js",
+			"module": "/assets/root-B1A0CaYJ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -24069,13 +24215,13 @@ var server_manifest_default = {
 				"/assets/view-CNjW187-.js",
 				"/assets/agenda-CSrg2YI9.js",
 				"/assets/use-after-DRbZO8yh.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js",
 				"/assets/settings-B8BOLj2z.js",
 				"/assets/sw-CgNx-cBG.js",
 				"/assets/ask-kQxC4ygO.js"
 			],
-			"css": ["/assets/root-DLTf1ntn.css"],
+			"css": ["/assets/root-C5l8Fsuz.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -24115,7 +24261,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-YbEKeMi4.js",
+			"module": "/assets/overview-D2uMdzKH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -24123,7 +24269,7 @@ var server_manifest_default = {
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-Adxf1cCH.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/chip-Db4lZtQm.js",
@@ -24133,11 +24279,11 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -24159,7 +24305,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-YbEKeMi4.js",
+			"module": "/assets/overview-D2uMdzKH.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -24167,7 +24313,7 @@ var server_manifest_default = {
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-Adxf1cCH.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/chip-Db4lZtQm.js",
@@ -24177,11 +24323,11 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -24277,14 +24423,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-PXrwMsDq.js",
+			"module": "/assets/rituals-EZrtU7a3.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-Adxf1cCH.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/agenda-B9tilT3P.js",
 				"/assets/section-DzwxAK8D.js",
@@ -24295,12 +24441,12 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js",
 				"/assets/agenda-CSrg2YI9.js"
 			],
@@ -24323,14 +24469,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/rituals-PXrwMsDq.js",
+			"module": "/assets/rituals-EZrtU7a3.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-Adxf1cCH.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/agenda-B9tilT3P.js",
 				"/assets/section-DzwxAK8D.js",
@@ -24341,12 +24487,12 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js",
 				"/assets/agenda-CSrg2YI9.js"
 			],
@@ -24441,14 +24587,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/candles-dbrlON82.js",
+			"module": "/assets/candles-CEmhNSfM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
-				"/assets/candles-Bs-RDl31.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-7iGxvKy-.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/section-DzwxAK8D.js",
 				"/assets/chip-row-xw7f8RvK.js",
 				"/assets/row-Adxf1cCH.js",
@@ -24480,14 +24626,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/candles-dbrlON82.js",
+			"module": "/assets/candles-CEmhNSfM.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
-				"/assets/candles-Bs-RDl31.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-7iGxvKy-.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/section-DzwxAK8D.js",
 				"/assets/chip-row-xw7f8RvK.js",
 				"/assets/row-Adxf1cCH.js",
@@ -24645,14 +24791,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DlChqEpi.js",
+			"module": "/assets/runs-BwmmaDDD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/view-CNjW187-.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/chip-row-xw7f8RvK.js",
 				"/assets/crumbs-BHQsLaVT.js",
 				"/assets/state-words-HTPo334q.js",
@@ -24662,13 +24808,13 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -24690,7 +24836,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/ritual-CYlaCoq_.js",
+			"module": "/assets/ritual-D658oUp_.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -24700,7 +24846,7 @@ var server_manifest_default = {
 				"/assets/chip-Db4lZtQm.js",
 				"/assets/state-words-HTPo334q.js",
 				"/assets/view-CNjW187-.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/result-msjh6Hhs.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/activity-FffEF5VN.js",
@@ -24708,12 +24854,12 @@ var server_manifest_default = {
 				"/assets/ask-kQxC4ygO.js",
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -24775,15 +24921,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/candle-D4ITv92O.js",
+			"module": "/assets/candle-Dqoj2dTS.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-Adxf1cCH.js",
-				"/assets/candles-Bs-RDl31.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-7iGxvKy-.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/crumbs-BHQsLaVT.js",
 				"/assets/chip-Db4lZtQm.js",
@@ -24814,7 +24960,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/run-h0mHgphh.js",
+			"module": "/assets/run-DyTNHvED.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -24825,7 +24971,7 @@ var server_manifest_default = {
 				"/assets/view-CNjW187-.js",
 				"/assets/ask-kQxC4ygO.js",
 				"/assets/busy-button-BUzgzowo.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
 				"/assets/result-msjh6Hhs.js",
 				"/assets/markdown-_v7OcaRU.js",
@@ -24834,10 +24980,10 @@ var server_manifest_default = {
 				"/assets/state-words-HTPo334q.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/check-now-YcEN28NC.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -25051,14 +25197,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/runs-DlChqEpi.js",
+			"module": "/assets/runs-BwmmaDDD.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CwvUUCIy.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/view-CNjW187-.js",
-				"/assets/runs-DzigGYts.js",
+				"/assets/runs-CWS03P2f.js",
 				"/assets/chip-row-xw7f8RvK.js",
 				"/assets/crumbs-BHQsLaVT.js",
 				"/assets/state-words-HTPo334q.js",
@@ -25068,13 +25214,13 @@ var server_manifest_default = {
 				"/assets/busy-button-BUzgzowo.js",
 				"/assets/check-now-YcEN28NC.js",
 				"/assets/result-msjh6Hhs.js",
-				"/assets/candles-BW7KwAWL.js",
+				"/assets/candles-zXi2Vf84.js",
 				"/assets/markdown-_v7OcaRU.js",
 				"/assets/pulse-Dwws2oys.js",
 				"/assets/ritual-activity-CW9ELT2E.js",
 				"/assets/use-after-DRbZO8yh.js",
 				"/assets/wait-line-Bq_Sh_Vo.js",
-				"/assets/candles-Bs-RDl31.js",
+				"/assets/candles-7iGxvKy-.js",
 				"/assets/receipt-CT1zB_fI.js"
 			],
 			"css": [],
@@ -25219,8 +25365,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-6eb86754.js",
-	"version": "6eb86754",
+	"url": "/assets/manifest-ddb42c52.js",
+	"version": "ddb42c52",
 	"sri": void 0
 };
 //#endregion
