@@ -22,6 +22,7 @@ import { readLedger } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { projectDir, resolveProject } from "./paths.ts";
 import { GLOBAL_PROJECT, openProject, type Project } from "./store.ts";
+import { staleLinkLine } from "./stale-link.ts";
 import { HOST_VERSION_TYPE } from "./sync.ts";
 
 /** A host whose newest line is older than this is retired for the comparison. */
@@ -141,5 +142,6 @@ export function syncGuardLines(cwd: string, now: Date = new Date()): SyncGuardLi
   const ledgers = [project, storeOf(GLOBAL_PROJECT)].flatMap((store) => (store === null ? [] : [readLedger(store)]));
   const hosts = hostVersionLines(compareHostVersions(ledgers, now));
   const lines = project === null ? [] : [staleDoctorLine(readStaleRecord(project)), heldDoctorLine(readHeldRecord(project)), behindDoctorLine(project.name, readBehindRecord(project))];
-  return { hosts, checkout: lines.filter((line) => line !== null) };
+  const stale = staleLinkLine(cwd);
+  return { hosts, checkout: [...(stale === null ? [] : [stale]), ...lines.filter((line) => line !== null)] };
 }

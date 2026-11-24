@@ -43,8 +43,10 @@ export type VerificationMethod = "executed" | "manual";
  * that (it sees one item, not its history), and it must not be filed as a plain
  * `fail`: a fail is "this never passed", a regression is "this passed once and
  * stopped", and only the second one means something broke after the tick.
+ * `skipped` (0.138.0) is `mark --skipped --evidence "<why>"`: it says why an
+ * item was skipped, and it is neither a pass nor a failure.
  */
-export type LedgerOutcome = RunOutcome | "regression" | "manual-override";
+export type LedgerOutcome = RunOutcome | "regression" | "manual-override" | "skipped";
 
 export type LedgerEntry = {
   /** Spec path relative to the repo root (the parent of `.tracker/`). */
@@ -266,10 +268,11 @@ export function readLedger(trackerRoot: string): LedgerEntry[] {
   return entries;
 }
 
-/** Set of `<spec>#<index>` keys with at least one ledger entry. */
+/** Set of `<spec>#<index>` keys with at least one ledger entry. A skip note vouches for nothing, so it does not count. */
 export function ledgerKeys(trackerRoot: string): Set<string> {
   const keys = new Set<string>();
   for (const entry of readLedger(trackerRoot)) {
+    if (entry.outcome === "skipped") continue;
     keys.add(ledgerKey(entry.spec, entry.index));
   }
   return keys;

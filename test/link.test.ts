@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,10 +15,12 @@ import { importCommand } from "../src/cli/import.ts";
 import { linkCommand } from "../src/cli/link.ts";
 import { UsageError, type Command } from "../src/cli/registry.ts";
 import { ritualCommand } from "../src/cli/ritual.ts";
+import { writeBehindRecord } from "../src/core/checkout-behind.ts";
 import { readLedger } from "../src/core/ledger.ts";
-import { readLinks } from "../src/core/links.ts";
+import { readLinks, writeLink } from "../src/core/links.ts";
 import type { Ritual } from "../src/core/model.ts";
 import { openProject } from "../src/core/store.ts";
+import { staleLinkLine } from "../src/core/stale-link.ts";
 import { LINKED_LINE } from "../src/core/workdir.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-link-"));
@@ -94,6 +96,45 @@ test("link refuses to move a project to a second checkout without --force, and a
   rmSync(next, { recursive: true });
   assert.equal((await runCli(linkCommand, [third])).code, 0);
   assert.equal(readLinks().get("ln-move"), third);
+});
+
+test("link --force that moves the path deletes behind.json, and a rerun at the same path keeps it", async () => {
+  const old = checkout("ws-c1", 'project = "ln-behind"\n');
+  const next = checkout("ws-c2", 'project = "ln-behind"\n');
+  assert.equal((await runCli(linkCommand, [old])).code, 0);
+  const project = openProject("ln-behind");
+  const record = join(project.root, "behind.json");
+  writeBehindRecord(project, { at: new Date().toISOString(), checkout: old, check: { state: "unchecked", reason: "test" } });
+  assert.equal((await runCli(linkCommand, [old, "--force"])).code, 0);
+  assert.ok(existsSync(record), "the same path keeps the record");
+  assert.equal((await runCli(linkCommand, [next, "--force"])).code, 0);
+  assert.ok(!existsSync(record), "a moved path drops the record");
+});
+
+test("a stale link is named: a symlinked linked path warns, a real one does not", async () => {
+  const real = checkout("ws-d-real", 'project = "ln-stale"\n');
+  const old = join(SANDBOX, "ws-d-old");
+  assert.equal((await runCli(linkCommand, [real])).code, 0);
+  assert.equal(staleLinkLine(real), null);
+  rmSync(real, { recursive: true });
+  const moved = checkout("ws-d-new", 'project = "ln-stale"\n');
+  symlinkSync(moved, old);
+  writeLink("ln-stale", old);
+  const line = staleLinkLine(moved);
+  assert.match(line ?? "", /WARN: the link of ln-stale .*ws-d-old.*darius link --force/u);
+  assert.match(line ?? "", new RegExp(moved));
+  const outside = staleLinkLine(SANDBOX);
+  assert.equal(outside, null, "no project at a cwd with no marker");
+  assert.equal((await runCli(linkCommand, [moved, "--force"])).code, 0);
+  assert.equal(staleLinkLine(moved), null);
+});
+
+test("a cwd checkout with another real path than the link warns", async () => {
+  const one = checkout("ws-e1", 'project = "ln-two"\n');
+  const two = checkout("ws-e2", 'project = "ln-two"\n');
+  assert.equal((await runCli(linkCommand, [one])).code, 0);
+  const line = staleLinkLine(two);
+  assert.match(line ?? "", /this checkout of ln-two is .*ws-e2.*link on this host is .*ws-e1.*darius link --force/u);
 });
 
 test("link without a .darius.toml is a usage error that names darius init", async () => {

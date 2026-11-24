@@ -497,6 +497,10 @@ darius link          # writes <project> = "<checkout>" to ~/.config/darius/links
 darius link --list   # every link on this host, and whether its dir still exists
 ```
 
+When a checkout moves and the old path becomes a symlink, the link keeps the old path.
+`darius doctor` warns about that, and `darius link --force` run in the real checkout path fixes it.
+A `--force` that changes the path also deletes the project's `behind.json`, so no record of the old path stays.
+
 Vigil Commands and unattended claude sessions run in the linked checkout, allowing commands
 like `cd app && ...`. A host without a checkout of a linked project skips that work
 (`no-workdir`) rather than running it in the wrong directory.
@@ -636,7 +640,8 @@ each one with a real check.
 
 Item indexes are 0-based: the first item is `0`.
 `mark <spec> <index> --verified|--in-progress|--blocked|--skipped|--pending` sets a state by hand,
-and a tick on a no-op Command needs `--evidence`. `verify-item <spec> <index>` runs the item's
+and a tick on a no-op Command needs `--evidence`. `--skipped` takes `--evidence "<why>"` too: the reason goes
+into `.verification-log.jsonl` with outcome `skipped`, and it counts as no pass. `verify-item <spec> <index>` runs the item's
 Command and ticks the item when it passes. `verify <spec>` does this for every item.
 `darius spec check <spec>` checks the spec itself, with no model.
 

@@ -32,7 +32,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JsonValue } from "./model.ts";
@@ -206,6 +206,11 @@ export function writeBehindRecord(project: Project, record: BehindRecord): void 
   const temp = `${file}.tmp-${String(process.pid)}`;
   writeFileSync(temp, `${JSON.stringify({ v: 1, ...record })}\n`);
   renameSync(temp, file);
+}
+
+/** Deletes `behind.json`, so no record of an old checkout path survives a `darius link --force` that moves the link (0.138.0). */
+export function clearBehindRecord(project: Project): void {
+  rmSync(recordFile(project), { force: true });
 }
 
 function isJsonRecord(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {

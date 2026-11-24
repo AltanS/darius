@@ -2,6 +2,27 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.138.0] - 2026-11-24
+
+### Added
+
+- **`darius doctor` warns about a stale link.** It warns when the link of this project on this host is a symlink, or has another real path than the one recorded, or when the checkout you run it in has another real path than the link. The line says: run `darius link --force` in the real checkout path.
+- **`darius doctor --json` has a `darius` field.** It holds `channels`, `box`, `hosts`, `checkout`, `notes` and `treeConflicts`, each a list of lines. No existing field changed.
+- **`mark --skipped` takes `--evidence "<why>"`.** The reason goes into `.verification-log.jsonl` as a line with outcome `skipped`. No reader counts that line as a pass.
+- **The "no tracker here" message names a project below.** When a direct child folder (at most five, no dot folders, no `node_modules`) holds a `.darius.toml`, the message says so and gives the `cd` command.
+
+### Changed
+
+- **`darius link --force` that moves the link deletes `behind.json`** of the project, so no record of the old path stays. The same path keeps it.
+- **`mark --skipped --override` says what to run:** a skip takes `--evidence "<why it is skipped>"` alone, with that command as the next step.
+- **`mark --evidence` is refused for `--in-progress`, `--blocked` and `--pending` only.** The refusal now reads "only applies to --verified or --skipped".
+
+### Fixed
+
+- **`doctor --json` no longer breaks its JSON.** The tree conflicts were written as text on stdout, and the other parts went to stderr. The parts are now in the `darius` field. When the legacy output is not JSON, it passes through unchanged and the old stderr lines stay. The exit code is the legacy one, also when the legacy doctor ends the process itself.
+- **`doctor --json` is complete for a slow reader.** A report over 64 KB was cut at 65536 bytes when the reader was slow, because the process ended before the pipe was empty. The report is now written in full first.
+- **A closed reader no longer prints a stack trace.** `darius list milestones --json | head -1` ends quietly, with the exit code set so far (0 when none is), under Bun and Node. Only a broken pipe on stdout is handled; other errors stay loud.
+
 ## [0.137.0] - 2026-11-22
 
 ### Added

@@ -15,7 +15,7 @@
 
 import { format } from "node:util";
 
-import { errorMessage } from "../runtime.ts";
+import { errorMessage, writeStdoutSync } from "../runtime.ts";
 
 /** The `--json` flag among `argv`, before a bare `--`. */
 export function wantsJson(argv: readonly string[]): boolean {
@@ -52,6 +52,14 @@ function textOf(chunk: string | Uint8Array): string {
   return chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : chunk;
 }
 
+let wroteDirect = false;
+
+/** Writes a whole JSON answer to stdout, past the stream, and counts it as output of the run (0.138.0). */
+export function writeJsonAnswer(text: string): void {
+  if (text !== "") wroteDirect = true;
+  writeStdoutSync(text);
+}
+
 /**
  * Runs `run`; with `json` set, turns a failure that printed no JSON into the
  * error object above. Returns the exit code `run` returned.
@@ -67,7 +75,7 @@ export async function withJsonErrors(json: boolean, run: () => Promise<number>):
   let emitted = false;
 
   const emit = (code: number): void => {
-    if (emitted || code === 0 || outBytes > 0) return;
+    if (emitted || code === 0 || outBytes > 0 || wroteDirect) return;
     emitted = true;
     realOut(`${JSON.stringify({ ok: false, error: messageFrom(errText, code), code })}\n`);
   };

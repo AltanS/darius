@@ -17,10 +17,10 @@
  * never a link that points anywhere else.
  */
 
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import { findMarker } from "./marker.ts";
+import { findMarker, MARKER_FILE } from "./marker.ts";
 import { findTrackerDir, projectDir } from "./paths.ts";
 import { sandboxWarning } from "./sandbox.ts";
 import { treeDir } from "./tree.ts";
@@ -261,10 +261,43 @@ export function missingTreePathMessage(input: string, kind: string, cwd: string,
   return `${kind} not found: ${rel} (tracker root ${where.trackerRoot}; paths are tracker-relative, e.g. M1-x/01-y.md)\n  next: darius list specs`;
 }
 
+/** The most direct child folders `noTreeReason` names. */
+const UMBRELLA_MAX = 5;
+
+/**
+ * The direct child folders of `cwd` that hold a `.darius.toml`, sorted, at
+ * most `UMBRELLA_MAX` (0.138.0). Dot folders and `node_modules` are skipped.
+ * An agent started in an umbrella folder above the repos finds its way down.
+ */
+function projectsBelow(cwd: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(resolve(cwd)).toSorted();
+  } catch {
+    return [];
+  }
+  const found: string[] = [];
+  for (const name of names) {
+    if (found.length === UMBRELLA_MAX) break;
+    if (name.startsWith(".") || name === "node_modules") continue;
+    if (statSync(join(resolve(cwd), name, MARKER_FILE), { throwIfNoEntry: false })?.isFile() === true) found.push(name);
+  }
+  return found;
+}
+
+/** `a darius project is below: klaracase/ (cd klaracase); ` for the folders `cwd` holds, or an empty text. */
+function belowHint(cwd: string): string {
+  const below = projectsBelow(cwd);
+  if (below.length === 0) return "";
+  const list = below.map((name) => `${name}/ (cd ${name})`).join(", ");
+  return `${below.length === 1 ? "a darius project is" : "darius projects are"} below: ${list}; or `;
+}
+
 /**
  * Why `cwd` has no tracker, in one sentence with the fix (0.101.0). The case
  * of an agent that runs from a directory outside the project: no marker
- * above it, or a marker of a project whose tracker lives elsewhere.
+ * above it, or a marker of a project whose tracker lives elsewhere. When a
+ * direct child folder holds a `.darius.toml`, the sentence names it (0.138.0).
  */
 export function noTreeReason(cwd: string): string {
   let marker: ReturnType<typeof findMarker> = null;
@@ -273,10 +306,11 @@ export function noTreeReason(cwd: string): string {
   } catch {
     // A marker that does not parse is reported by the verbs that need it.
   }
+  const hint = belowHint(cwd);
   if (marker === null) {
-    return `${resolve(cwd)} has no .darius.toml and no .tracker/ above it, so this is not a darius project; cd into the repo that holds the tracker, then run: darius root`;
+    return `${resolve(cwd)} has no .darius.toml and no .tracker/ above it, so this is not a darius project; ${hint}cd into the repo that holds the tracker, then run: darius root`;
   }
-  return `${marker.dir} is the darius project ${marker.project} but has no tracker: no .tracker/ folder and "milestone" is not in kinds; cd into the repo that holds the tracker (a clone below this directory?), then run: darius root`;
+  return `${marker.dir} is the darius project ${marker.project} but has no tracker: no .tracker/ folder and "milestone" is not in kinds; ${hint}cd into the repo that holds the tracker (a clone below this directory?), then run: darius root`;
 }
 
 /**

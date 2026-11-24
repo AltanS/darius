@@ -12,6 +12,9 @@
  * checkout, so a host without one skips its work instead of running it in
  * the wrong dir.
  *
+ * A link that moves to another path deletes `<store>/<project>/behind.json`
+ * (0.138.0), so no record of the old path survives.
+ *
  * A project already linked to another dir that still exists is refused
  * unless `--force`. Exit codes: 0 linked or unchanged, 1 refused, 2 usage
  * (no `.darius.toml` found).
@@ -20,6 +23,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { clearBehindRecord } from "../core/checkout-behind.ts";
 import { appendLine, defaultWho, hostId, readLedger } from "../core/ledger.ts";
 import { linksFile, readLinks, writeLink } from "../core/links.ts";
 import { findMarker, readMarker, MARKER_FILE } from "../core/marker.ts";
@@ -114,6 +118,8 @@ export function linkCheckout(name: string, dir: string, force: boolean): LinkOut
   }
   if (old !== dir) writeLink(name, dir);
   const project = openProject(name, { create: true });
+  // The record names the old path. Only a real move drops it.
+  if (old !== undefined && old !== dir) clearBehindRecord(project);
   const recorded = !isRecorded(project, dir);
   if (recorded) appendLine(project, { who: defaultWho(), type: LINKED_LINE, path: dir });
   const result: LinkOutcome = { outcome: old === dir ? "unchanged" : "linked", recorded };

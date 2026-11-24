@@ -27,7 +27,7 @@ delete process.env.DARIUS_PROJECT;
 mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
 writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), 'host = "tracker-root"\n\n[run]\nsandbox = "off"\n');
 
-const { doctorNotes, removeOwnTreeLink, resolveTrackerRoot, resolveTreeArg, specKey, treeLinkState, treeRelative } = await import("../src/core/tracker-root.ts");
+const { doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, resolveTreeArg, specKey, treeLinkState, treeRelative } = await import("../src/core/tracker-root.ts");
 
 const BIN = join(import.meta.dirname, "..", "bin", "darius");
 let dirs = 0;
@@ -62,6 +62,31 @@ test("resolveTrackerRoot: store mode from the marker, git mode from a folder, no
   const bare = join(SANDBOX, "bare");
   mkdirSync(bare);
   assert.equal(resolveTrackerRoot(bare).mode, "none");
+});
+
+test("noTreeReason names the direct child folders that hold a .darius.toml, at most 5, and is unchanged when none", () => {
+  const umbrella = join(SANDBOX, "umbrella");
+  mkdirSync(umbrella, { recursive: true });
+  const plain = noTreeReason(umbrella);
+  assert.match(plain, /so this is not a darius project; cd into the repo that holds the tracker, then run: darius root$/u);
+  for (const name of ["klaracase", ".hidden", "node_modules", "plain"]) mkdirSync(join(umbrella, name), { recursive: true });
+  for (const name of ["klaracase", ".hidden", "node_modules"]) writeFileSync(join(umbrella, name, ".darius.toml"), 'v = 3\nproject = "x"\ntz = "UTC"\n');
+  mkdirSync(join(umbrella, "klaracase", "deep", "inner"), { recursive: true });
+  writeFileSync(join(umbrella, "klaracase", "deep", "inner", ".darius.toml"), "");
+  assert.match(noTreeReason(umbrella), /not a darius project; a darius project is below: klaracase\/ \(cd klaracase\); or cd into the repo that holds the tracker, then run: darius root$/u);
+  for (const name of ["a1", "a2", "a3", "a4", "a5", "a6"]) {
+    mkdirSync(join(umbrella, name), { recursive: true });
+    writeFileSync(join(umbrella, name, ".darius.toml"), "");
+  }
+  const many = noTreeReason(umbrella);
+  assert.match(many, /darius projects are below: a1\/ \(cd a1\), a2\/ \(cd a2\), a3\/ \(cd a3\), a4\/ \(cd a4\), a5\/ \(cd a5\); or cd into/u);
+  assert.doesNotMatch(many, /a6|klaracase|hidden|node_modules/u, "five at most, sorted, no dot folders");
+  // A marker that has no tracker gets the hint too.
+  const marked = join(SANDBOX, "umbrella-marked");
+  mkdirSync(join(marked, "inner"), { recursive: true });
+  writeFileSync(join(marked, ".darius.toml"), 'v = 3\nproject = "umb"\ntz = "UTC"\n');
+  writeFileSync(join(marked, "inner", ".darius.toml"), 'v = 3\nproject = "inner"\ntz = "UTC"\n');
+  assert.match(noTreeReason(marked), /but has no tracker: .*; a darius project is below: inner\/ \(cd inner\); or cd into the repo that holds the tracker \(a clone below this directory\?\)/u);
 });
 
 test("migration removes only an own link: a real folder and a foreign link stay", () => {

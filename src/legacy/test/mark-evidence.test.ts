@@ -152,6 +152,50 @@ describe("mark --evidence", () => {
     expect(stderr).toContain("--evidence only applies to --verified");
   });
 
+  it("--skipped takes --evidence and records why in the ledger as a skipped line", () => {
+    const why = "the Slack report moved to the new tool; nothing left to check here";
+    const { exitCode, stdout } = runTracker(["mark", specPath, "1", "--skipped", "--evidence", why]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("marked as skipped");
+    expect(readFileSync(specPath, "utf-8")).toContain("- [-] Placeholder command");
+    const entries = ledger();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!["outcome"]).toBe("skipped");
+    expect(entries[0]!["evidence"]).toBe(why);
+    expect(entries[0]!["index"]).toBe(1);
+  });
+
+  it("--skipped without --evidence still works and writes no ledger line", () => {
+    const { exitCode } = runTracker(["mark", specPath, "1", "--skipped"]);
+    expect(exitCode).toBe(0);
+    expect(ledger()).toHaveLength(0);
+  });
+
+  it("refuses --evidence for --in-progress, --blocked and --pending, and names the allowed states", () => {
+    for (const flag of ["--in-progress", "--blocked", "--pending"]) {
+      const { exitCode, stderr } = runTracker(["mark", specPath, "0", flag, "--evidence", "nope"]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--evidence only applies to --verified or --skipped");
+    }
+    expect(ledger()).toHaveLength(0);
+  });
+
+  it("--skipped --override is refused with the one command that works: --evidence alone", () => {
+    const { exitCode, stderr } = runTracker(["mark", specPath, "0", "--skipped", "--override", "no network"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('a skip takes --evidence "<why it is skipped>" alone');
+    expect(stderr).toContain(`next: darius mark ${specPath} 0 --skipped --evidence "<why it is skipped>"`);
+    expect(stderr).not.toContain("verify-item");
+    expect(readFileSync(specPath, "utf-8")).toContain("- [ ] Real command");
+  });
+
+  it("a skipped line vouches for nothing: a later pending item has no passing line", () => {
+    runTracker(["mark", specPath, "1", "--skipped", "--evidence", "not needed"]);
+    runTracker(["mark", specPath, "1", "--pending"]);
+    const entries = ledger();
+    expect(entries.every((entry) => entry["outcome"] !== "manual" && entry["outcome"] !== "pass")).toBe(true);
+  });
+
   it("non-verified marks write no ledger line", () => {
     runTracker(["mark", specPath, "0", "--in-progress"]);
     expect(ledger()).toHaveLength(0);

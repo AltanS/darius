@@ -11,7 +11,7 @@
  *   next                          Return the next uncompleted task
  *   verify <spec-path> [--dry-run] [--recheck] [--timeout <s>]      Run all Command/Expected pairs
  *   verify-item <spec-path> <idx> [--dry-run] [--recheck] [--timeout <s>]  Verify one item
- *   mark <spec-path> <idx> --verified [--evidence "..."]  Set a checklist state
+ *   mark <spec-path> <idx> --verified [--evidence "..."]  Set a checklist state (--skipped takes --evidence "<why>" too)
  *
  * Verification evidence:
  *   Every check appends one JSON line to <trackerRoot>/.verification-log.jsonl
@@ -1021,15 +1021,24 @@ function runMark(args: string[]): void {
 
   const evidence = values.evidence?.trim();
 
-  if (evidence !== undefined && evidence !== "" && state !== "verified") {
+  // 0.138.0: a skip may say why. --evidence is for --verified and --skipped only.
+  if (evidence !== undefined && evidence !== "" && state !== "verified" && state !== "skipped") {
     process.stderr.write(
-      `darius mark: --evidence only applies to --verified (got --${state})\n` +
+      `darius mark: --evidence only applies to --verified or --skipped (got --${state})\n` +
         `  next: darius mark ${specPath} ${taskIdxStr} --${state}\n`,
     );
     process.exit(1);
   }
 
   const override = values.override?.trim();
+  // 0.138.0: a skip has no check to override. It takes --evidence "<why>" alone.
+  if (override !== undefined && state === "skipped") {
+    process.stderr.write(
+      'darius mark: --override applies to --verified only; a skip takes --evidence "<why it is skipped>" alone\n' +
+        `  next: darius mark ${specPath} ${taskIdxStr} --skipped --evidence "<why it is skipped>"\n`,
+    );
+    process.exit(1);
+  }
   if (override !== undefined && (override === "" || state !== "verified")) {
     process.stderr.write(
       'darius mark: --override needs a non-empty reason and applies to --verified only: --override "<why the check cannot run>"\n' +
@@ -1109,7 +1118,10 @@ function runMark(args: string[]): void {
       method: "manual",
     });
 
-    if (state === "verified") {
+    // A skip with --evidence leaves one line too (0.138.0), outcome "skipped": it says why,
+    // and no reader counts it as a passing check. A skip without evidence writes none.
+    const skipWithWhy = state === "skipped" && evidence !== undefined && evidence !== "";
+    if (state === "verified" || skipWithWhy) {
       const logged = appendLedgerEntry({
         trackerRoot,
         specPath: absSpecPath,
@@ -1118,7 +1130,7 @@ function runMark(args: string[]): void {
         command: targetItem?.command ?? null,
         expected: targetItem?.expected ?? null,
         exitCode: null,
-        outcome: override !== undefined ? "manual-override" : "manual",
+        outcome: state === "skipped" ? "skipped" : override !== undefined ? "manual-override" : "manual",
         evidence,
         ...(override !== undefined ? { override } : {}),
       });

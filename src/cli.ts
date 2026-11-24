@@ -20,7 +20,7 @@ import { commandHelp, getCommand, listCommands, register, UsageError, type Comma
 import { isInteractive } from "./cli/tui.ts";
 import { DEFAULT_KINDS, kindOfVerb, LEGACY_VERBS, routeVerb } from "./core/kinds.ts";
 import { rebuildTrackerIndex, runLegacy } from "./core/legacy-entry.ts";
-import { withJsonErrors, wantsJson } from "./core/json-errors.ts";
+import { writeJsonAnswer, withJsonErrors, wantsJson } from "./core/json-errors.ts";
 import { readLedger } from "./core/ledger.ts";
 import { findTrackerDir, isUnlinkedTrackerRepo, ownedKinds, type OwnedKinds } from "./core/paths.ts";
 import { openProject, type Project } from "./core/store.ts";
@@ -30,10 +30,11 @@ import { channelProblems } from "./core/alerts.ts";
 import { reportChannelNote } from "./core/report-email.ts";
 import { boxDoctorLines } from "./runner/box-check.ts";
 import { syncGuardLines, type SyncGuardLines } from "./core/host-versions.ts";
+import { holdStdout, mergeDoctorJson, type DoctorParts, type StdoutHold } from "./core/doctor-json.ts";
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
-import { errorMessage, isBun } from "./runtime.ts";
+import { errorMessage, exitQuietlyOnBrokenPipe, isBun } from "./runtime.ts";
 import { VERSION } from "./version.ts";
 
 const HELP_INTRO = `darius ${VERSION}: rituals, vigils and milestones for agent-driven projects`;
@@ -356,98 +357,117 @@ async function openTree(route: { project: Project }): Promise<{ finish: () => vo
 }
 
 /**
- * After the legacy `doctor` (not `--quick`) on a tree in the store: the open
- * tree conflicts as warnings, each with the commands that end it
- * (src/core/tree-conflicts.ts). A warning never changes the exit code.
+ * The open tree conflicts of a tree in the store, as warning lines, each with
+ * the commands that end it (src/core/tree-conflicts.ts). A warning never
+ * changes the exit code. The advice lines after the first are indented.
  */
-function printTreeConflicts(project: Project): void {
-  try {
-    const open = readTreeConflicts(readLedger(project)).open;
-    if (open.length === 0) return;
-    const lines = ["", "## Tree conflicts", ""];
-    for (const conflict of open) {
-      const [first = "", ...rest] = conflictAdvice(conflict);
-      lines.push(`  WARN: ${first}`, ...rest.map((line) => `    ${line}`));
-    }
-    process.stdout.write(`${lines.join("\n")}\n`);
-  } catch (cause) {
-    console.error(`darius: cannot read the tree conflicts: ${errorMessage(cause)}`);
+function treeConflictLines(project: Project): string[] {
+  const lines: string[] = [];
+  for (const conflict of readTreeConflicts(readLedger(project)).open) {
+    const [first = "", ...rest] = conflictAdvice(conflict);
+    lines.push(`WARN: ${first}`, ...rest.map((line) => `  ${line}`));
   }
+  return lines;
 }
 
 function isFullDoctor(argv: readonly string[]): boolean {
   return argv[0] === "doctor" && !argv.includes("--quick") && !argv.includes("--help") && !argv.includes("-h");
 }
 
-/**
- * After a full `doctor`: a push or email file that cannot be read is a
- * problem. It names the file and the reason, and never a value. So is a
- * marker that asks for report mail on a host with no email channel
- * (0.127.0), in one line. It is a warning, as the tree conflicts are: the
- * exit code stays the legacy one.
- */
-function printChannelProblems(argv: readonly string[]): void {
-  const problems = channelProblems();
+/** The alert channel problems, as `[problem, text line]` pairs. */
+function channelFindings(): { problem: string; text: string }[] {
+  const found = channelProblems().map((problem) => ({ problem: `alert channel: ${problem}`, text: `WARN: ${problem}. Alerts on that channel wait until the file is fixed.` }));
   const report = reportChannelNote(process.cwd());
-  if (problems.length === 0 && report === null) return;
-  if (argv.includes("--json")) {
-    for (const problem of problems) console.error(`darius: WARN: alert channel: ${problem}`);
-    if (report !== null) console.error(`darius: WARN: alert channel: ${report}`);
-    return;
-  }
-  const lines = problems.map((problem) => `  WARN: ${problem}. Alerts on that channel wait until the file is fixed.`);
-  if (report !== null) lines.push(`  WARN: ${report}.`);
-  process.stdout.write(`\n## Alert channels\n\n${lines.join("\n")}\n`);
+  return report === null ? found : [...found, { problem: `alert channel: ${report}`, text: `WARN: ${report}.` }];
 }
 
-/** After a full `doctor`: the box state and the newest box check on this host (0.121.0). A warning only: the exit code stays the legacy one. */
-function printBoxState(argv: readonly string[]): void {
-  let lines: string[];
+/** The box state and the newest box check on this host (0.121.0), as lines. */
+function boxLines(): string[] {
   try {
-    lines = boxDoctorLines();
+    return boxDoctorLines();
   } catch (cause) {
-    lines = [`WARN: cannot read the box state: ${errorMessage(cause)}`];
+    return [`WARN: cannot read the box state: ${errorMessage(cause)}`];
   }
-  if (lines.length === 0) return;
-  if (argv.includes("--json")) {
-    for (const line of lines) console.error(`darius: box: ${line}`);
-    return;
+}
+
+/** Which darius each host synced with, and how far this checkout was behind at the last run-due (0.126.0). */
+function syncLines(): SyncGuardLines {
+  try {
+    return syncGuardLines(process.cwd());
+  } catch (cause) {
+    return { hosts: [`WARN: cannot read the host versions: ${errorMessage(cause)}`], checkout: [] };
   }
-  process.stdout.write(`\n## Box\n\n${lines.map((line) => `  ${line}`).join("\n")}\n`);
+}
+
+function section(title: string, lines: readonly string[]): string {
+  return lines.length === 0 ? "" : `\n## ${title}\n\n${lines.map((line) => `  ${line}`).join("\n")}\n`;
 }
 
 /**
- * After a full `doctor`: which darius each host synced with, and how far
- * this project's checkout was behind at the last run-due (0.126.0). A
- * problem is printed, never an exit code: the exit code stays the legacy one.
+ * After a full text `doctor`: the tree conflicts, alert channels, box, hosts,
+ * checkout and tracker location sections. A problem is printed, never an exit
+ * code: the exit code stays the legacy one.
  */
-function printSyncGuards(argv: readonly string[]): void {
-  let found: SyncGuardLines;
+function printDoctorText(project: Project | null): void {
+  let conflicts: string[] = [];
   try {
-    found = syncGuardLines(process.cwd());
+    conflicts = project === null ? [] : treeConflictLines(project);
   } catch (cause) {
-    found = { hosts: [`WARN: cannot read the host versions: ${errorMessage(cause)}`], checkout: [] };
+    console.error(`darius: cannot read the tree conflicts: ${errorMessage(cause)}`);
   }
-  if (argv.includes("--json")) {
-    for (const line of found.hosts) console.error(`darius: hosts: ${line}`);
-    for (const line of found.checkout) console.error(`darius: checkout: ${line}`);
-    return;
-  }
-  if (found.hosts.length > 0) process.stdout.write(`\n## Hosts\n\n${found.hosts.map((line) => `  ${line}`).join("\n")}\n`);
-  if (found.checkout.length > 0) process.stdout.write(`\n## Checkout\n\n${found.checkout.map((line) => `  ${line}`).join("\n")}\n`);
+  const sync = syncLines();
+  process.stdout.write(
+    [
+      conflicts.length === 0 ? "" : `\n## Tree conflicts\n\n${conflicts.map((line) => `  ${line}`).join("\n")}\n`,
+      section("Alert channels", channelFindings().map((finding) => finding.text)),
+      section("Box", boxLines()),
+      section("Hosts", sync.hosts),
+      section("Checkout", sync.checkout),
+      section("Tracker location", doctorNotes(process.cwd())),
+    ].join(""),
+  );
 }
 
-function printDoctorNotes(argv: readonly string[]): void {
-  printChannelProblems(argv);
-  printBoxState(argv);
-  printSyncGuards(argv);
-  const notes = doctorNotes(process.cwd());
-  if (notes.length === 0) return;
-  if (argv.includes("--json")) {
-    for (const note of notes) console.error(`darius: ${note}`);
+/** The parts of a full `doctor --json`, the new `darius` field (0.138.0). */
+function doctorParts(project: Project | null): DoctorParts {
+  let treeConflicts: string[] = [];
+  try {
+    treeConflicts = project === null ? [] : treeConflictLines(project);
+  } catch (cause) {
+    treeConflicts = [`WARN: cannot read the tree conflicts: ${errorMessage(cause)}`];
+  }
+  const sync = syncLines();
+  return {
+    channels: channelFindings().map((finding) => `WARN: ${finding.problem}`),
+    box: boxLines(),
+    hosts: sync.hosts,
+    checkout: sync.checkout,
+    notes: doctorNotes(process.cwd()),
+    treeConflicts,
+  };
+}
+
+/** When the legacy stdout is not a JSON object: the parts go to stderr, as before 0.138.0. */
+function printPartsToStderr(parts: DoctorParts): void {
+  for (const line of parts.channels) console.error(`darius: ${line}`);
+  for (const line of parts.box) console.error(`darius: box: ${line}`);
+  for (const line of parts.hosts) console.error(`darius: hosts: ${line}`);
+  for (const line of parts.checkout) console.error(`darius: checkout: ${line}`);
+  for (const line of parts.notes) console.error(`darius: ${line}`);
+  for (const line of parts.treeConflicts) console.error(`darius: tree conflicts: ${line}`);
+}
+
+/** Releases the held legacy stdout and writes it once: merged with the `darius` field, or unchanged when it is no JSON object. */
+function writeDoctorJson(hold: StdoutHold, project: Project | null): void {
+  const captured = hold.release();
+  const parts = doctorParts(project);
+  const merged = mergeDoctorJson(captured, parts);
+  if (merged !== null) {
+    writeJsonAnswer(merged);
     return;
   }
-  process.stdout.write(`\n## Tracker location\n\n${notes.map((note) => `  ${note}`).join("\n")}\n`);
+  writeJsonAnswer(captured);
+  printPartsToStderr(parts);
 }
 
 /**
@@ -473,29 +493,33 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
   let finish = noop;
   let doctorDone = false;
   const fullDoctor = isFullDoctor(argv);
+  // In `--json` mode the legacy stdout is held until the parts are added (0.138.0).
+  const json = fullDoctor && argv.includes("--json");
+  let hold: StdoutHold | null = null;
+  let doctorProject: Project | null = null;
+  const afterDoctor = (): void => {
+    if (doctorDone) return;
+    doctorDone = true;
+    if (hold !== null) writeDoctorJson(hold, doctorProject);
+    else printDoctorText(doctorProject);
+  };
   if (route.mode === "tree") {
     const opened = await openTree(route);
     if ("error" in opened) {
       console.error(`darius: ${opened.error}`);
       return 1;
     }
-    const project = route.project;
+    doctorProject = route.project;
     finish = fullDoctor
       ? (): void => {
           opened.finish();
-          if (doctorDone) return;
-          doctorDone = true;
-          printTreeConflicts(project);
-          printDoctorNotes(argv);
+          afterDoctor();
         }
       : opened.finish;
   } else if (fullDoctor) {
-    finish = (): void => {
-      if (doctorDone) return;
-      doctorDone = true;
-      printDoctorNotes(argv);
-    };
+    finish = afterDoctor;
   }
+  if (json) hold = holdStdout(finish);
   const storeTree = route.where !== null;
   process.once("exit", (code) => {
     finish();
@@ -513,4 +537,5 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
   }
 }
 
+exitQuietlyOnBrokenPipe();
 process.exitCode = await main(process.argv.slice(2));

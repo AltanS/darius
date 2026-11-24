@@ -8,6 +8,8 @@
  * cheap. Nothing else in `src/` may reach for a runtime-specific global.
  */
 
+import { writeSync } from "node:fs";
+
 export const isBun = "Bun" in globalThis;
 
 /**
@@ -37,6 +39,51 @@ export function sleepSync(ms: number): void {
     const until = Date.now() + ms;
     while (Date.now() < until) {
       // spin
+    }
+  }
+}
+
+function isBrokenPipe(cause: Error): boolean {
+  return "code" in cause && cause.code === "EPIPE";
+}
+
+/**
+ * Ends the process quietly, with the exit code set so far (0 when none is), when the reader of stdout has gone
+ * (`darius list milestones --json | head -1`, 0.138.0). Node reports the broken
+ * pipe as an `error` event on `process.stdout`, and Bun as a throw from the
+ * stream write; both end as an unhandled stdout error, and a stack trace. Only
+ * EPIPE on stdout is handled: any other stdout error is thrown again, loud.
+ */
+export function exitQuietlyOnBrokenPipe(): void {
+  process.stdout.on("error", (cause: Error) => {
+    if (!isBrokenPipe(cause)) throw cause;
+    process.exit();
+  });
+}
+
+/** How long `writeStdoutSync` waits before it tries a full pipe again. */
+const FULL_PIPE_WAIT_MS = 5;
+
+function isFullPipe(cause: Error): boolean {
+  return "code" in cause && cause.code === "EAGAIN";
+}
+
+/**
+ * Writes all of `text` to stdout before it returns (0.138.0). A stream write
+ * that `process.exit` follows loses what does not fit in the pipe: a slow
+ * reader got the first 65536 bytes only. A full pipe is tried again, and a
+ * reader that has gone ends the write.
+ */
+export function writeStdoutSync(text: string): void {
+  const bytes = new TextEncoder().encode(text);
+  let offset = 0;
+  while (offset < bytes.length) {
+    try {
+      offset += writeSync(1, bytes, offset);
+    } catch (cause) {
+      if (cause instanceof Error && isBrokenPipe(cause)) return;
+      if (!(cause instanceof Error) || !isFullPipe(cause)) throw cause;
+      sleepSync(FULL_PIPE_WAIT_MS);
     }
   }
 }
