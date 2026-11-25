@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.138.1] - 2026-11-25
+
+### Fixed
+
+- **`darius vigil show` lists results only for the checks of the current body.** After `vigil set-body` removed a check, `show` still printed that check's last result from an older sweep, for example an old `fail` next to a vigil whose current checks all pass. `--json` drops those lines from `evidence` too. The ledger keeps them.
+
 ## [0.138.0] - 2026-11-24
 
 ### Added

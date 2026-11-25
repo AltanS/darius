@@ -446,13 +446,20 @@ export function vigilStatus(slug: string, lines: readonly LedgerLine[], today: s
   return status;
 }
 
-/** The latest `evidence` line per check of one vigil, by check index. */
-export function latestEvidence(slug: string, lines: readonly LedgerLine[]): Map<number, LedgerLine> {
+/**
+ * The latest `evidence` line per check of one vigil, by check index. With `body`, only the checks
+ * of that body: a check that `set-body` removed keeps its old lines in the ledger, and they must
+ * not read as a current result.
+ */
+export function latestEvidence(slug: string, lines: readonly LedgerLine[], body?: string): Map<number, LedgerLine> {
   const prefix = `${itemRef("vigil", slug)}#`;
+  const current = body === undefined ? null : new Set(parseChecklist(body).map((check) => check.index));
   const latest = new Map<number, LedgerLine>();
   for (const line of lines) {
     if (line.type !== "evidence" || !isText(line.check) || !line.check.startsWith(prefix)) continue;
-    latest.set(Number(line.check.slice(prefix.length)), line);
+    const index = Number(line.check.slice(prefix.length));
+    if (current !== null && !current.has(index)) continue;
+    latest.set(index, line);
   }
   return latest;
 }

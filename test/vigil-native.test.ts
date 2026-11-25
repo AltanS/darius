@@ -155,6 +155,19 @@ test("set-body replaces the body, validates it, and refuses a closed vigil", () 
   assert.equal(darius(["vigil", "set-body", "ghost", "--stdin"], repo, BODY).status, 1);
 });
 
+test("show lists evidence only for the checks of the current body", () => {
+  const repo = ownedRepo("nv-show-body");
+  assert.equal(darius(["vigil", "add", "soak", "--name", "Soak", "--until", "x", "--stdin"], repo, BODY_TWO).status, 0);
+  const swept = darius(["vigil", "sweep", "soak"], repo);
+  assert.equal(swept.status, 0, swept.stderr);
+  assert.equal(lines("nv-show-body", "soak", "evidence").length, 2, "the sweep recorded both checks");
+
+  assert.equal(darius(["vigil", "set-body", "soak", "--stdin"], repo, BODY).status, 0);
+  const shown: { evidence: Row[] } = JSON.parse(darius(["vigil", "show", "soak", "--json"], repo).stdout);
+  assert.deepEqual(shown.evidence.map((line) => line.check), ["vigil/soak#0"], "check 1 left the body, so its old line is not shown");
+  assert.doesNotMatch(darius(["vigil", "show", "soak"], repo).stdout, /vigil\/soak#1/u);
+});
+
 test("list: text lines, the open filter, and --all in file-name order", () => {
   const repo = ownedRepo("nv-list");
   assert.equal(darius(["vigil", "list"], repo).stdout, "No open vigils\n");

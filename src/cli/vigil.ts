@@ -467,7 +467,7 @@ function runShow(args: ParsedArgs): number {
   if (doc === null) throw new Error(`no vigil '${slug}' in ${project.name}`);
   const lines = linesFor(readLedger(project), itemRef("vigil", slug));
   const status = vigilStatus(slug, lines);
-  const evidence = [...latestEvidence(slug, lines).values()];
+  const evidence = [...latestEvidence(slug, lines, doc.body).values()];
   const failure = status.flagged ? lastFailure(slug, lines, doc.body) : null;
   const tail = failure?.output_sha === undefined ? null : outputTail(project, failure.output_sha);
   if (args.json) {
