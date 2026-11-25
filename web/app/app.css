@@ -5995,6 +5995,17 @@
       gap: 4px;
       padding-inline: 6px;
     }
+
+    /* A phone keeps each host name whole: the chips scroll sideways inside the bar instead of shrinking. */
+
+    .hs-list {
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .hs-list > li {
+      flex: none;
+    }
   }
 
   /* More than 3 hosts below 480 px: dots, with the name in the accessible label. */
@@ -6103,7 +6114,7 @@
 
   .fl-row {
     display: grid;
-    grid-template-columns: 7rem minmax(8rem, 1fr) minmax(12rem, 2.2fr) minmax(7rem, 1.2fr) 5rem 5rem 4.5rem 6rem;
+    grid-template-columns: 7rem minmax(9rem, 1.2fr) minmax(12rem, 2fr) minmax(11rem, 1.4fr) 4.5rem 5.5rem 4.5rem 6rem;
     gap: 12px;
     align-items: center;
     padding: 10px 12px;
@@ -6135,10 +6146,11 @@
     font-weight: 600;
   }
 
+  /* A workspace name wraps at a hyphen rather than losing its end. */
+
   .fl-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   /* Why wraps to at most two lines; the full list is also in the title. */
@@ -6150,6 +6162,16 @@
     line-clamp: 2;
     overflow: hidden;
     overflow-wrap: anywhere;
+  }
+
+  /* The host chips of a row stack in their own column and never run into the counts beside it. */
+
+  .fl-c-where {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    overflow: hidden;
   }
 
   .fl-c-num {
@@ -6240,6 +6262,7 @@
   /* The placement matrix: short cells; long names end in an ellipsis with the full name in the title. */
 
   .fl-matrix-wrap {
+    position: relative;
     max-width: 100%;
     overflow-x: auto;
   }
