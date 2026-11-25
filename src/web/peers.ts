@@ -73,6 +73,15 @@ export interface PeerProbeOptions {
   ttlMs?: number;
 }
 
+/**
+ * A host id the probe may turn into `http://<id>:<port>` without an override: one label of letters,
+ * digits and `-`, as a tailnet short name is. An id with a dot could name a host outside the
+ * tailnet, and the ids come from the synced ledgers, so such a host needs a `[web.peers]` entry.
+ */
+export function isShortHostName(host: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/iu.test(host);
+}
+
 /** The URL of a host's `/api/host.json`: its override, else `http://<host>:<port>`. */
 export function peerUrl(host: string, port: number, overrides: ReadonlyMap<string, string>): string {
   const base = overrides.get(host);
@@ -255,11 +264,16 @@ export class PeerProbe {
     const value = await Promise.all(
       known.map((host): Promise<PeerHost> => {
         if (host.self) return Promise.resolve({ host: host.host, self: true, state: "self", live, lastSeen: host.lastSeen, version: live.version, reason: null, checkedAt });
+        if (!overrides.has(host.host) && !isShortHostName(host.host)) return Promise.resolve(this.unprobed(host, checkedAt, "needs a [web.peers] entry"));
         return this.probeOne(host, peerUrl(host.host, port, overrides), checkedAt, configProblem);
       }),
     );
     this.cache = { at: started, value };
     return value;
+  }
+
+  private unprobed(host: KnownHost, checkedAt: string, reason: string): PeerHost {
+    return { host: host.host, self: false, state: failedState(host.lastSeen, this.now()), live: null, lastSeen: host.lastSeen, version: host.version, reason, checkedAt };
   }
 
   private async probeOne(host: KnownHost, url: string, checkedAt: string, configProblem: string | null): Promise<PeerHost> {

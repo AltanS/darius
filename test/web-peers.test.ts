@@ -17,7 +17,7 @@ process.env.DARIUS_TAILSCALE = join(SANDBOX, "no-tailscale");
 mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
 writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), 'host = "host-a"\n');
 
-const { PeerProbe, failedState, peerUrl, scrubReason, parseHostLive, peerHosts, enablePeerProbe, SYNCING_WITHIN_MS } = await import("../src/web/peers.ts");
+const { PeerProbe, failedState, isShortHostName, peerUrl, scrubReason, parseHostLive, peerHosts, enablePeerProbe, SYNCING_WITHIN_MS } = await import("../src/web/peers.ts");
 const { readWebPeers } = await import("../src/core/config.ts");
 const { respond, WebApp } = await import("../src/cli/serve.ts");
 const { appendLine } = await import("../src/core/ledger.ts");
@@ -131,6 +131,24 @@ test("probe: [web.peers] overrides the URL of one host, and the Host header stil
   await probeWith(fetcher, { known: KNOWN.slice(0, 2), overrides: new Map([["host-b", "http://peer-b.example:8080/"]]) }).hosts();
   assert.deepEqual(fetcher.asked, [{ url: "http://peer-b.example:8080/api/host.json", host: "host-b" }]);
   assert.equal(peerUrl("host-c", 4748, new Map([["host-b", "http://x"]])), "http://host-c:4748/api/host.json");
+});
+
+test("probe: a host id with a dot is asked only through a [web.peers] entry", async () => {
+  const [self] = KNOWN;
+  assert.ok(self !== undefined);
+  const dotted: KnownHost = { host: "peer.example", self: false, lastSeen: new Date(NOW - MINUTE).toISOString(), version: "1.0.0" };
+  const fetcher = fakeFetch({ "peer.example": () => Promise.resolve(answer(200, JSON.stringify(live("peer.example")))) });
+  const [, shown] = await probeWith(fetcher, { known: [self, dotted] }).hosts();
+  assert.deepEqual(fetcher.asked, [], "no override: nobody is asked");
+  assert.equal(shown?.state, "unreachable");
+  assert.equal(shown?.reason, "needs a [web.peers] entry");
+
+  const withEntry = fakeFetch({ "peer.example": () => Promise.resolve(answer(200, JSON.stringify(live("peer.example")))) });
+  const [, online] = await probeWith(withEntry, { known: [self, dotted], overrides: new Map([["peer.example", "http://peer.example:4747"]]) }).hosts();
+  assert.equal(online?.state, "online");
+  assert.equal(isShortHostName("host-b"), true);
+  assert.equal(isShortHostName("evil.example.com"), false);
+  assert.equal(isShortHostName("-x"), false);
 });
 
 test("probe: refusals, bad bodies and a host that answers with another name are failures with short reasons", async () => {
