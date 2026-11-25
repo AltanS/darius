@@ -1,10 +1,14 @@
 /**
- * The machine bar (0.139.0, labelled in 0.141.0): the label "Machines", then
- * one chip per machine of the synced store, in a sticky one-line bar at the
- * head of `<main>`. A chip has a square in the state colour, the machine
- * name, "n running" when it has open runs, and links to the machine page.
- * The state is in words for a screen reader and in the title; this machine
- * carries a small "this" mark and a gold edge. The version lives on
+ * The machine bar (0.139.0, labelled in 0.141.0, lit by the page in
+ * 0.141.1): the label "Machines", then one chip per machine of the synced
+ * store, in a sticky one-line bar at the head of `<main>`. A chip has a
+ * square in the state colour, the machine name, "n running" when it has open
+ * runs, and links to the machine page. The state is in words for a screen
+ * reader and in the title. A chip is lit (a gold edge, `aria-current`) only
+ * while the page of its machine is open; on every other page no chip is lit.
+ * This machine carries a small muted "this" mark and nothing else. A machine
+ * with things to check shows a small amber count after its name ("2 to
+ * check"); the bar counts what the probe data holds. The version lives on
  * Machines: the bar only marks "versions differ". A chip name is cut at about
  * 10 characters. On a phone a chip shows the run count without the word,
  * and below 480 px with more than 3 machines the chips are dots, with the
@@ -18,18 +22,25 @@ import { Link } from "react-router";
 
 import type { PeerHost } from "../../../src/web/api.ts";
 import { href } from "../lib/paths.ts";
-import { differentVersions, openRunCount, peerMeaning, peerWord } from "../lib/peers.ts";
+import { peerAttentionCount } from "../lib/machines.ts";
+import { chipLit, differentVersions, openRunCount, peerMeaning, peerWord } from "../lib/peers.ts";
 
 interface ChipProps {
   peer: PeerHost;
+  /** The page on screen (or the page a tap opens): its machine is the one lit chip. */
+  pathname: string;
+  /** The darius of this machine, for the version check. */
+  selfVersion: string | null;
 }
 
-function MachineChip({ peer }: ChipProps): React.ReactNode {
+function MachineChip({ peer, pathname, selfVersion }: ChipProps): React.ReactNode {
   const word = peerWord(peer.state);
   const runs = openRunCount(peer) ?? 0;
+  const check = peerAttentionCount(peer, selfVersion);
+  const lit = chipLit(pathname, peer.host);
   return (
     <li>
-      <Link to={href({ to: "machine", host: peer.host })} className={`hs-chip tone-${word.tone}${peer.self ? " is-self" : ""}`} title={`${peer.host}: ${peerMeaning(peer)}`}>
+      <Link to={href({ to: "machine", host: peer.host })} className={`hs-chip tone-${word.tone}${lit ? " is-lit" : ""}`} aria-current={lit ? "page" : undefined} title={`${peer.host}: ${peerMeaning(peer)}`}>
         <span className={peer.state === "offline" || peer.state === "checking" ? "hs-dot is-hollow" : "hs-dot"} aria-hidden="true" />
         <span className="hs-name">{peer.host}</span>
         {peer.self ? (
@@ -38,6 +49,12 @@ function MachineChip({ peer }: ChipProps): React.ReactNode {
           </span>
         ) : null}
         <span className="sr-only">{`, ${word.label}${peer.self ? ", this machine" : ""}`}</span>
+        {check === 0 ? null : (
+          <span className="hs-check" title={`${String(check)} to check`}>
+            <span aria-hidden="true">{check}</span>
+            <span className="sr-only">{`, ${String(check)} to check`}</span>
+          </span>
+        )}
         {runs === 0 ? null : (
           <span className="hs-runs">
             <span aria-hidden="true">{runs}</span>
@@ -54,6 +71,8 @@ function MachineChip({ peer }: ChipProps): React.ReactNode {
 
 interface HostStripProps {
   peers: readonly PeerHost[];
+  /** The path of the page on screen, or of the page a tap opens. */
+  pathname: string;
   /** "Opening Workspaces…" while a navigation is slow, else empty. */
   loading: string;
 }
@@ -61,16 +80,17 @@ interface HostStripProps {
 /** More machines than this, and a phone under 480 px shows dots. */
 const NAMED_CHIPS_MAX = 3;
 
-export function HostStrip({ peers, loading }: HostStripProps): React.ReactNode {
+export function HostStrip({ peers, pathname, loading }: HostStripProps): React.ReactNode {
   if (peers.length === 0 && loading === "") return null;
   const versions = differentVersions(peers);
+  const selfVersion = peers.find((peer) => peer.self)?.version ?? null;
   const className = `hs${peers.length > NAMED_CHIPS_MAX ? " hs-many" : ""}${loading === "" ? "" : " is-loading"}`;
   return (
     <nav aria-label="Machines" className={className}>
       {peers.length === 0 ? null : <span className="hs-label">Machines</span>}
       <ul className="hs-list">
         {peers.map((peer) => (
-          <MachineChip key={peer.host} peer={peer} />
+          <MachineChip key={peer.host} peer={peer} pathname={pathname} selfVersion={selfVersion} />
         ))}
       </ul>
       <span className="busy-text hs-loading" aria-live="polite">

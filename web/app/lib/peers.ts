@@ -7,6 +7,7 @@
 import type { AppLoadContext } from "react-router";
 
 import type { PeerHost, PeerState } from "../../../src/web/api.ts";
+import { machineOfPath } from "./paths.ts";
 import type { Badge } from "./tone.ts";
 
 const cache = new WeakMap<AppLoadContext, Promise<PeerHost[]>>();
@@ -57,4 +58,9 @@ export function differentVersions(peers: readonly PeerHost[]): string[] {
 /** The open runs of a host: running and held. Unknown (null) when the host did not answer. */
 export function openRunCount(peer: PeerHost): number | null {
   return peer.live === null ? null : peer.live.openRuns.length;
+}
+
+/** A chip of the machine bar is lit only while the page of its machine is open (`/machines/<name>`). */
+export function chipLit(pathname: string, host: string): boolean {
+  return machineOfPath(pathname) === host;
 }

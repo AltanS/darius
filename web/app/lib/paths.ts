@@ -243,6 +243,13 @@ export function placeOf(pathname: string): Place {
   return { scope: null, kind: "unknown", section: null };
 }
 
+/** The machine whose page a path opens (`/machines/<name>`, with or without a closing slash); null for every other path, the Machines list included. */
+export function machineOfPath(pathname: string): string | null {
+  const [first, second, ...rest] = pathname.split("/").filter((part) => part !== "");
+  if (first !== "machines" || second === undefined || rest.length > 0) return null;
+  return decoded(second);
+}
+
 const SECTION_LABELS = {
   vigils: "Vigils",
   rituals: "Rituals",

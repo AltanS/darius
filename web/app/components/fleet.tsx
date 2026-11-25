@@ -84,7 +84,7 @@ function DjinnRow({ ws, djinn, self }: DjinnRowProps): React.ReactNode {
           <span className="text-muted">any machine</span>
         ) : (
           <>
-            {djinn.host === self ? <span>runs here</span> : <span className="fl-runs-on">{`runs on ${djinn.host}`}</span>}
+            {djinn.host === self ? <span>lives here</span> : <span className="fl-runs-on">{`lives on ${djinn.host}`}</span>}
             {djinn.why === "pinned" ? <span className="text-muted"> (pinned)</span> : null}
           </>
         )}
@@ -168,7 +168,7 @@ export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNo
             {workspace.djinns.length > HEADER_DJINNS ? <Link to={ritualsHref}>{`Show all ${String(workspace.djinns.length)}`}</Link> : null}
           </p>
           {djinns.length === 0 ? (
-            <p className="text-muted">darius runs no djinn here.</p>
+            <p className="text-muted">No djinn works for this workspace.</p>
           ) : (
             <ul className="fl-djinn-list">
               {djinns.map((djinn) => (

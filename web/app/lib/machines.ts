@@ -1,13 +1,16 @@
 /**
  * The machines of the synced store as the pages say them (0.141.0): the
  * facts of one machine from its live answer, its ledger lines and the
- * workspaces; the sentence at the top of its page; what needs attention;
- * the row of the Machines table; and the split of states for the Machines
- * page, the Overview and Places. Pure.
+ * workspaces; the sentence at the top of its page; what needs attention
+ * (on the page, in a block of the Machines page and as the count on a chip
+ * of the machine bar); the block of the Machines page; and the split of
+ * states for the Machines page, the Overview and Places. Pure.
  */
 
-import type { FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState, WorkspaceHealth } from "../../../src/web/api.ts";
+import type { FleetDjinn, FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState, WorkspaceHealth } from "../../../src/web/api.ts";
+import { healthWord } from "./fleet.ts";
 import { age, counted, link, plain, time, type Part } from "./sentence.ts";
+import { outcomeTone, type Badge } from "./tone.ts";
 
 /** At most this many workspace names in a machine sentence, then "and n more". */
 export const SENTENCE_NAMES = 4;
@@ -36,7 +39,7 @@ export interface MachineFacts {
   openRuns: HostOpenRun[] | null;
   djinns: number;
   djinnsLate: number;
-  /** When the newest djinn run here started; null when none ran. */
+  /** When the newest run of a djinn that lives here started; null when none ran. */
   lastDjinnAt: string | null;
 }
 
@@ -121,8 +124,8 @@ function openRunParts(facts: MachineFacts): Part[] {
 }
 
 function djinnParts(facts: MachineFacts): Part[] {
-  if (facts.djinns === 0) return [plain(" No djinn runs here.")];
-  const lead = facts.djinns === 1 ? " 1 djinn runs here" : ` ${String(facts.djinns)} djinns run here`;
+  if (facts.djinns === 0) return [plain(" No djinn lives here.")];
+  const lead = facts.djinns === 1 ? " 1 djinn lives here" : ` ${String(facts.djinns)} djinns live here`;
   if (facts.lastDjinnAt === null) return [plain(`${lead}; none has run yet.`)];
   return [plain(`${lead}; the last one ran `), time(facts.lastDjinnAt), plain(".")];
 }
@@ -131,7 +134,7 @@ function djinnParts(facts: MachineFacts): Part[] {
  * The sentence at the top of a machine page: its state, the workspaces it
  * runs and shows, its open runs (only when it answered) and its djinns.
  * "host-b is online. It runs 2 workspaces (infra-notes, archive-2025) and
- * shows a copy of 1. No run is open now. 2 djinns run here; the last one ran 25 min ago."
+ * shows a copy of 1. No run is open now. 2 djinns live here; the last one ran 25 min ago."
  */
 export function machineSentence(facts: MachineFacts): Part[] {
   return [...stateParts(facts), ...workspaceParts(facts), ...openRunParts(facts), ...djinnParts(facts)];
@@ -154,6 +157,62 @@ export function machineAttention(facts: MachineFacts, selfVersion: string | null
   if (facts.backup?.state === "stale") items.push({ text: `Its backup is stale${facts.backup.reason === null ? "" : `: ${facts.backup.reason}`}.`, command: null });
   if (facts.backup?.state === "failed") items.push({ text: `Its last backup failed${facts.backup.error === null ? "" : `: ${facts.backup.error}`}.`, command: null });
   return items;
+}
+
+/** The attention count of a chip of the machine bar. The bar has only the probe data, so it counts the items that data holds: a machine that did not answer, another darius version, a box check from its live facts. The backup, the retired mark and a box check of the ledgers need the ledgers, which the bar does not read. */
+export function peerAttentionCount(peer: PeerHost, selfVersion: string | null): number {
+  return machineAttention(machineFacts({ name: peer.host, peer, host: undefined, workspaces: [], selfVersion }), selfVersion).length;
+}
+
+// --- the block of the Machines page ----------------------------------------------------------------
+
+/** At most this many djinns in a block, then "and n more". */
+export const BLOCK_DJINNS = 8;
+
+/** The state word of a djinn: running, held, late, due today, or its last outcome when it is idle ("no run yet" when it never ran). */
+export function djinnWord(djinn: FleetDjinn): Badge {
+  if (djinn.state === "running") return { tone: "run", label: "running" };
+  if (djinn.state === "held") return { tone: "wait", label: "held" };
+  if (djinn.state === "late") return { tone: "late", label: "late" };
+  if (djinn.state === "due") return { tone: "wait", label: "due today" };
+  if (djinn.lastOutcome === null) return { tone: "idle", label: "no run yet" };
+  return { tone: outcomeTone(djinn.lastOutcome), label: djinn.lastOutcome };
+}
+
+const DJINN_RANK = { running: 0, held: 1, late: 2, due: 3, idle: 4 } as const satisfies Record<FleetDjinn["state"], number>;
+
+export interface BlockWorkspace {
+  name: string;
+  health: Badge;
+}
+
+export interface BlockDjinn {
+  workspace: string;
+  slug: string;
+  title: string;
+  word: Badge;
+}
+
+export interface MachineBlock {
+  facts: MachineFacts;
+  attention: Attention[];
+  /** The workspaces that run here. */
+  runs: BlockWorkspace[];
+  /** The djinns that live here, the ones that act first (running, held, late, due), at most `BLOCK_DJINNS`. */
+  djinns: BlockDjinn[];
+  /** How many djinns the block does not list. */
+  moreDjinns: number;
+}
+
+/** Everything the block of one machine shows on the Machines page. */
+export function machineBlock(input: MachineInput): MachineBlock {
+  const facts = machineFacts(input);
+  const runs = input.workspaces.filter((workspace) => workspace.places.some((place) => place.host === input.name && place.kind === "checkout")).map((workspace) => ({ name: workspace.name, health: healthWord(workspace.health) }));
+  const djinns = input.workspaces
+    .flatMap((workspace) => workspace.djinns.filter((djinn) => djinn.host === input.name).map((djinn) => ({ workspace: workspace.name, djinn })))
+    .toSorted((left, right) => DJINN_RANK[left.djinn.state] - DJINN_RANK[right.djinn.state] || left.workspace.localeCompare(right.workspace) || left.djinn.title.localeCompare(right.djinn.title));
+  const shown = djinns.slice(0, BLOCK_DJINNS).map(({ workspace, djinn }) => ({ workspace, slug: djinn.slug, title: djinn.title, word: djinnWord(djinn) }));
+  return { facts, attention: machineAttention(facts, input.selfVersion), runs, djinns: shown, moreDjinns: djinns.length - shown.length };
 }
 
 // --- the split of states ---------------------------------------------------------------------------

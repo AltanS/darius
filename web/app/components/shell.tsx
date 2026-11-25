@@ -140,7 +140,7 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
       <ConnectionStrip generatedAt={data.generatedAt} />
       <Places data={data} lit={nav.lit} branch={nav.branch} busy={busy} finder={data.finder === null ? null : finder} />
       <main className="wa page-main">
-        <HostStrip peers={data.peers} loading={loading} />
+        <HostStrip peers={data.peers} pathname={shown.pathname} loading={loading} />
         {children}
       </main>
       <nav aria-label="Tabs" className="tabbar">

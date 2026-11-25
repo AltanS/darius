@@ -4,7 +4,7 @@
  * one sentence built from variables (what it runs and shows, its open runs,
  * its djinns); what needs attention, only when something does; one line of
  * facts; the table of its workspaces; what runs there now; the djinns that
- * run there. The page of this machine adds "Store and disks" (what the
+ * live there. The page of this machine adds "Store and disks" (what the
  * Status page showed up to 0.140.0; `/status` redirects here). Then the
  * details fold. Every list is grouped by workspace and shows at most five
  * rows per group, then "show all". A page in no workspace. Read-only.
@@ -113,7 +113,7 @@ function RunGroups({ groups }: { groups: readonly Group<TitledRun>[] }): React.R
 }
 
 function DjinnGroups({ groups }: { groups: readonly Group<FleetDjinn & { workspace: string }>[] }): React.ReactNode {
-  if (groups.length === 0) return <Empty>No djinn runs here.</Empty>;
+  if (groups.length === 0) return <Empty>No djinn lives here.</Empty>;
   return groups.map((group) => (
     <div key={group.workspace} className="fl-group">
       <h3 className="fl-group-name">
@@ -311,7 +311,7 @@ export default function MachinePage({ loaderData }: Route.ComponentProps): React
       <Section title={runningFrom === "live" ? "Running now" : "Running now, from the ledgers"} id="running">
         <RunGroups groups={running} />
       </Section>
-      <Section title="Djinns that run here" id="djinns">
+      <Section title="Djinns that live here" id="djinns">
         <DjinnGroups groups={djinns} />
       </Section>
       {store === null ? null : <StoreAndDisks store={store} />}

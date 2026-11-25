@@ -105,7 +105,28 @@ test("the machine bar: the label Machines, then state dot, name, this mark and n
     assert.match(strip, /versions differ/u, "host-b runs another darius");
     const chips = strip.slice(0, strip.indexOf("</ul>"));
     assert.doesNotMatch(chips, /demo-next|hs-ver/u, "no version on a chip");
+    assert.doesNotMatch(strip, /aria-current|is-lit|is-self/u, `${path}: no chip is lit`);
+    assert.match(strip, /class="hs-check" title="1 to check"><span aria-hidden="true">1<\/span><span class="sr-only">, 1 to check<\/span>/u, `${path}: a machine with things to check says how many`);
   }
+});
+
+/** The opening tags of the lit chips of a machine bar. */
+function lit(strip: string): string[] {
+  return [...strip.matchAll(/<a [^>]*class="hs-chip[^"]* is-lit"[^>]*>/gu)].map((match) => match[0]);
+}
+
+test("the machine bar lights the chip of the machine whose page is open, and only that one", async () => {
+  const strip = stripOf((await page("/machines/host-b")).body);
+  const chips = lit(strip);
+  assert.equal(chips.length, 1);
+  assert.match(chips[0] ?? "", /href="\/machines\/host-b"/u);
+  assert.match(chips[0] ?? "", /aria-current="page"/u);
+  assert.equal([...strip.matchAll(/aria-current="page"/gu)].length, 1);
+  const own = stripOf((await page("/machines/demo")).body);
+  assert.match(lit(own).join(""), /href="\/machines\/demo"/u, "this machine is lit on its own page");
+  assert.equal(lit(own).length, 1);
+  const demo = own.slice(own.indexOf('href="/machines/demo"'), own.indexOf('href="/machines/host-b"'));
+  assert.match(demo, /class="hs-this"/u, "this machine keeps its mark");
 });
 
 test("Places: three primary rows in order, one lit row, one open branch, one-line workspaces worst first, a foot", async () => {
@@ -192,8 +213,9 @@ test("the workspace page: trail, the name as the title with its health, the stat
   assert.match(textOf(html), /Failing: 2 high candles lit, 2 vigils flagged, 1 run failed and 4 more\. Runs on demo\. Copies on host-b and host-c\./u);
   assert.ok(html.indexOf("ws-sentence") < html.indexOf("fl-counts"), "the counts follow the sentence");
   for (const label of ["Rituals", "Vigils", "Candles", "Findings"]) assert.ok(html.includes(`fl-count-label">${label}<`), label);
-  assert.match(html, /runs on host-b<\/span><span class="text-muted"> \(pinned\)/u, "a pinned djinn names its machine");
-  assert.match(html, /<span>runs here<\/span><\/span>/u, "a djinn of this machine says runs here, and nothing about a checkout");
+  assert.match(html, /lives on host-b<\/span><span class="text-muted"> \(pinned\)/u, "a pinned djinn names its machine");
+  assert.match(html, /<span>lives here<\/span><\/span>/u, "a djinn of this machine says lives here, and nothing about a checkout");
+  assert.doesNotMatch(textOf(html), /runs here|runs on host-b/u, "a djinn lives on a machine; it does not run there");
   assert.doesNotMatch(html, /verdict-h|\(checkout\)|Lives on/u);
   assert.match(html, /Needs you, \d+/u);
   const copy = textOf(markup((await page("/w/infra-notes")).body));
@@ -202,24 +224,43 @@ test("the workspace page: trail, the name as the title with its health, the stat
   assert.match(list, /href="\/workspaces"[^>]*>Workspaces<\/a>/u, "a section page starts its trail with Workspaces");
 });
 
-test("/machines: the sentence, the versions warning, one linked row per machine", async () => {
+test("/machines: the sentence, the versions warning, one block per machine with what runs and what lives there", async () => {
   const { status, body } = await page("/machines");
   assert.equal(status, 200);
   const html = markup(body);
   assert.match(textOf(html), /3 machines: 2 online, 1 unreachable\. 3 runs are open now on the machines that answered\./u);
   assert.match(html, /The machines run different darius versions: demo, demo-next\./u);
-  assert.equal([...html.matchAll(/<a class="mt-row"/gu)].length, 3);
-  for (const head of ["State", "Machine", "Runs", "Running now", "Djinns", "darius", "Up", "Box check", "Last seen"]) assert.ok(html.includes(`<span>${head}</span>`), head);
-  assert.match(html, /<span class="mt-this">this machine<\/span>/u);
-  assert.match(html, /demo-next, differs/u);
+  const blocks = html.split('<li class="mb panel">').slice(1);
+  assert.equal(blocks.length, 3, "one block per machine");
+  assert.doesNotMatch(html, /mt-row|fl-thead|<th/u, "no table");
+  const [demo = "", hostB = "", hostC = ""] = blocks;
+  assert.match(demo, /<h2 class="mb-name"><a href="\/machines\/demo"[^>]*>demo<\/a><\/h2><span class="mt-this">this machine<\/span>/u, "the name links to the page, with the mark");
+  assert.match(hostB, /<h2 class="mb-name"><a href="\/machines\/host-b"/u);
+  assert.match(hostB, /<a class="mb-check" href="\/machines\/host-b#attention"[^>]*>3 to check<\/a>/u, "the count links to the list on the machine page");
+  assert.doesNotMatch(demo, /to check/u, "nothing to check on this machine");
+  assert.match(textOf(hostB), /host-b is online\. It runs 2 workspaces \(infra-notes, archive-2025\) and shows a copy of 1\./u, "the machine sentence");
+  assert.match(hostB, /<h3 class="label mb-label">Runs<\/h3>/u);
+  assert.match(hostB, /<h3 class="label mb-label">Djinns that live here<\/h3>/u);
+  assert.match(hostB, /<a class="mb-ws tone-wait" title="infra-notes: Needs you" href="\/w\/infra-notes"[^>]*><span class="fl-dot" aria-hidden="true"><\/span><span class="mb-ws-name">infra-notes<\/span><span class="sr-only">, Needs you<\/span><\/a>/u, "a workspace with its health dot and word");
+  assert.match(hostB, /\+1 copy/u);
+  assert.match(hostB, /<a class="mb-djinn-name"[^>]*href="\/w\/demo-shop\/rituals\/[^"]+"[^>]*>Price sync \(djinn\)<\/a><span class="status tone-wait">held<\/span>/u, "a djinn links to its ritual with its state word");
+  assert.match(hostB, /<span class="status tone-ok">complete<\/span>/u, "an idle djinn shows its last outcome");
+  assert.doesNotMatch(hostB, /and \d+ more/u, "two djinns fit");
+  assert.match(demo, /and \d+ more<\/a>/u, "this machine has more than eight djinns");
+  assert.match(demo, /href="\/machines\/demo#djinns"/u);
+  assert.match(textOf(hostC), /host-c did not answer/u);
+  assert.match(hostC, /class="mb-ws tone-[a-z]+"[^>]*>.*?status-page/u, "host-c runs one workspace");
+  assert.match(demo, /<dt>darius<\/dt><dd><span>demo<\/span><\/dd>/u, "a version that matches is plain");
+  assert.match(hostB, /<span class="ink-late">demo-next, differs<\/span>/u);
   assert.match(html, /title="did not answer"/u, "an unknown value is a muted dash");
-  assert.match(html, /href="\/machines\/host-c"/u);
+  assert.match(html, /<dt>Last ledger line<\/dt>/u);
+  assert.equal(blocks.filter((one) => one.includes("<dt>Load</dt>")).length, 3);
 });
 
 test("/machines/:host: trail, title, the sentence, needs attention, facts, the workspace table; this machine adds Store and disks", async () => {
   const b = markup((await page("/machines/host-b")).body);
   assert.match(b, /<a href="\/machines"[^>]*>Machines<\/a>/u);
-  assert.match(textOf(b), /host-b is online\. It runs 2 workspaces \(infra-notes, archive-2025\) and shows a copy of 1\. No run is open now\. 2 djinns run here; the last one ran /u);
+  assert.match(textOf(b), /host-b is online\. It runs 2 workspaces \(infra-notes, archive-2025\) and shows a copy of 1\. No run is open now\. 2 djinns live here; the last one ran /u);
   assert.match(b, /Needs attention/u);
   assert.match(textOf(b), /It runs darius demo-next, and this machine runs demo\. Run darius update --hosts\./u);
   assert.match(textOf(b), /Its backup is stale: no upload for 50 h\./u);
@@ -239,7 +280,7 @@ test("/machines/:host: trail, title, the sentence, needs attention, facts, the w
   const html = markup(self.body);
   assert.match(textOf(html), /demo is this machine, the one that serves this page\./u);
   assert.doesNotMatch(html, /Needs attention/u, "nothing needs attention on this machine");
-  for (const text of ["Store and disks", "Store disk", "Backups disk", "Projects and syncs", "Open the backups", "Running now", "Djinns that run here", "Details: live facts, ledgers, versions", "demo-old", "bun 1.3.0"]) assert.ok(html.includes(text), text);
+  for (const text of ["Store and disks", "Store disk", "Backups disk", "Projects and syncs", "Open the backups", "Running now", "Djinns that live here", "Details: live facts, ledgers, versions", "demo-old", "bun 1.3.0"]) assert.ok(html.includes(text), text);
   assert.match(html, /<h3 class="fl-group-name"><a href="\/w\/demo-shop"[^>]*>demo-shop<\/a><\/h3>/u, "grouped by workspace");
   assert.doesNotMatch(html, /host-a|0\.44\.0/u, "the store facts are of the same demo machine");
   assert.equal((await page("/machines/nowhere")).status, 404);
