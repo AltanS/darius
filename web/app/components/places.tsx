@@ -186,12 +186,17 @@ interface PlacesProps {
   finder: FinderState | null;
 }
 
+/** The server names the loopback viewer "this host" (src/web/auth.ts, and the CLI and the ledgers keep it); the app says "machine". */
+function viewerWord(viewer: string): string {
+  return viewer === "this host" ? "this machine" : viewer;
+}
+
 /** The host line: where this runs, the version, when the data is from, who looks. The self-test lines follow. */
 function HostLine({ data }: { data: RootData }): React.ReactNode {
   return (
     <>
       <p className="places-hostline">
-        {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}.
+        {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {viewerWord(data.viewer)}.
       </p>
       {data.selftest.map((line) => (
         <Link key={line.href} to={line.href} className="places-selftest">

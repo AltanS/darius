@@ -10099,7 +10099,8 @@ function openRunCount(peer) {
 * and below 480 px with more than 3 machines the chips are dots, with the
 * name in their accessible label. While a page loads, a desktop shows the
 * loading text ("Opening Machines…") at the right, before "versions
-* differ"; a phone shows it in the top bar instead.
+* differ"; a phone shows it in the top bar instead. Below 640 px the label
+* is visually hidden (screen readers keep it), so the chips get the room.
 */
 function MachineChip({ peer }) {
 	const word = peerWord(peer.state);
@@ -14474,6 +14475,10 @@ function WorkspaceRow$1({ entry, open }) {
 		]
 	});
 }
+/** The server names the loopback viewer "this host" (src/web/auth.ts, and the CLI and the ledgers keep it); the app says "machine". */
+function viewerWord(viewer) {
+	return viewer === "this host" ? "this machine" : viewer;
+}
 /** The host line: where this runs, the version, when the data is from, who looks. The self-test lines follow. */
 function HostLine({ data }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -14488,7 +14493,7 @@ function HostLine({ data }) {
 				children: clockTime(data.generatedAt, data.utcOffset)
 			}),
 			", seen by ",
-			data.viewer,
+			viewerWord(data.viewer),
 			"."
 		]
 	}), data.selftest.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
@@ -18723,7 +18728,7 @@ function WorkspaceList({ rows }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		id: "workspaces",
 		className: "section sec-workspaces",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Workspaces" }), rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No workspace is linked on this host. Run darius link in a checkout." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectHead, { title: "Workspaces" }), rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, { children: "No workspace is linked on this machine. Run darius link in a checkout." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "panel",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowList, {
 				bare: true,
@@ -25435,16 +25440,12 @@ function DiskRow({ disk }) {
 		]
 	});
 }
-/** The machine facts and the disk bars of this machine. */
+/** The machine facts and the disk bars of this machine. The facts row at the head of the page already shows the name, the darius version, the uptime and the load. */
 function Machine({ system }) {
 	const used = system.memory.totalBytes - system.memory.freeBytes;
 	const rows = [
-		["Machine", system.host],
-		["darius", system.version],
 		["Runtime", system.runtime],
 		["Platform", system.platform],
-		["Up for", uptimeText(system.uptimeSeconds)],
-		["Load 1, 5, 15 min", system.load.map((value) => value.toFixed(2)).join(", ")],
 		["Memory", `${byteSize(used)} used of ${byteSize(system.memory.totalBytes)}`]
 	];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -26152,7 +26153,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-BP-A0tZO.js",
+			"module": "/assets/root-Ce3567qc.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -26174,7 +26175,7 @@ var server_manifest_default = {
 				"/assets/sw-BVifTcPq.js",
 				"/assets/ask-kQxC4ygO.js"
 			],
-			"css": ["/assets/root-D5t1OA0N.css"],
+			"css": ["/assets/root-3LG2Xurl.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -26214,7 +26215,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-Cf4_VMi7.js",
+			"module": "/assets/overview-D7O1xdqK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -26262,7 +26263,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-Cf4_VMi7.js",
+			"module": "/assets/overview-D7O1xdqK.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -27202,7 +27203,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/machine-BaS7FzoO.js",
+			"module": "/assets/machine-CcLUz9iQ.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -27509,8 +27510,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-0a059941.js",
-	"version": "0a059941",
+	"url": "/assets/manifest-1e6a15ba.js",
+	"version": "1e6a15ba",
 	"sri": void 0
 };
 //#endregion

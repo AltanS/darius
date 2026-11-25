@@ -10,7 +10,8 @@
  * and below 480 px with more than 3 machines the chips are dots, with the
  * name in their accessible label. While a page loads, a desktop shows the
  * loading text ("Opening Machines…") at the right, before "versions
- * differ"; a phone shows it in the top bar instead.
+ * differ"; a phone shows it in the top bar instead. Below 640 px the label
+ * is visually hidden (screen readers keep it), so the chips get the room.
  */
 
 import { Link } from "react-router";

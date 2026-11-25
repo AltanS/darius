@@ -1910,6 +1910,13 @@ test("the frame: a drawer button naming the scope, Places, and six tabs: Overvie
   assert.match(navOf(rituals.body, "Tabs"), /<span class="tab-bdg tone-wait" title="2 need you">/u, "the Findings tab counts what needs you");
 });
 
+test("the host line says \"this machine\" for the loopback viewer, and the name of any other viewer as it is", async () => {
+  const local = textOf(await readPage("/all", { ...context, viewer: "this host" }));
+  assert.ok(local.includes("seen by this machine."), "the loopback viewer is this machine");
+  assert.equal(local.includes("seen by this host"), false, "the app does not say host");
+  assert.ok(textOf(await readPage("/all", context)).includes("seen by owner on phone."), "a tailnet viewer keeps its name");
+});
+
 test("both navs are in the HTML: the tab bar for a phone and Places for a desktop; the host line ends Places", async () => {
   const { body } = await readWith("/w/demo", {}, lateStatus());
   assert.ok(body.indexOf('aria-label="Places"') !== -1 && body.indexOf('aria-label="Tabs"') !== -1);
@@ -2294,7 +2301,7 @@ test("/all lists each workspace but the self-test one, the ones that need you fi
 
 test("/all with no workspace says how to link one", async () => {
   const { body } = await readWith("/all", {}, { ...STATUS, projects: [] });
-  assert.ok(sectionOf(body, "workspaces").includes("No workspace is linked on this host. Run darius link in a checkout."));
+  assert.ok(sectionOf(body, "workspaces").includes("No workspace is linked on this machine. Run darius link in a checkout."));
 });
 
 test("a workspace Overview has no Workspaces list; its facts end the rail and All runs opens its runs", async () => {

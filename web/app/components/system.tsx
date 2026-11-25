@@ -10,7 +10,7 @@ import { Link } from "react-router";
 import type { BackupsStatus, SystemDisk, SystemProject, SystemStatus } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { href } from "../lib/paths.ts";
-import { byteSize, momentText, relativeTime, uptimeText } from "../lib/format.ts";
+import { byteSize, momentText, relativeTime } from "../lib/format.ts";
 import type { Tone } from "../lib/tone.ts";
 import { Time } from "./ui.tsx";
 
@@ -132,16 +132,12 @@ interface MachineProps {
   system: SystemStatus;
 }
 
-/** The machine facts and the disk bars of this machine. */
+/** The machine facts and the disk bars of this machine. The facts row at the head of the page already shows the name, the darius version, the uptime and the load. */
 export function Machine({ system }: MachineProps): React.ReactNode {
   const used = system.memory.totalBytes - system.memory.freeBytes;
   const rows: ReadonlyArray<readonly [string, string]> = [
-    ["Machine", system.host],
-    ["darius", system.version],
     ["Runtime", system.runtime],
     ["Platform", system.platform],
-    ["Up for", uptimeText(system.uptimeSeconds)],
-    ["Load 1, 5, 15 min", system.load.map((value) => value.toFixed(2)).join(", ")],
     ["Memory", `${byteSize(used)} used of ${byteSize(system.memory.totalBytes)}`],
   ];
   return (

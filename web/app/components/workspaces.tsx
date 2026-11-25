@@ -60,7 +60,7 @@ export function WorkspaceList({ rows }: WorkspaceListProps): React.ReactNode {
     <section id="workspaces" className="section sec-workspaces">
       <SectHead title="Workspaces" />
       {rows.length === 0 ? (
-        <Empty>No workspace is linked on this host. Run darius link in a checkout.</Empty>
+        <Empty>No workspace is linked on this machine. Run darius link in a checkout.</Empty>
       ) : (
         <div className="panel">
           <RowList bare>

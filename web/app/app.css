@@ -6010,9 +6010,15 @@
       display: none;
     }
 
+    /* The label leaves the sight, not the screen reader: the chips get the room. */
+
     .hs-label {
-      font-size: 10px;
-      letter-spacing: 0.08em;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
   }
 
