@@ -36,7 +36,7 @@ import { Gem } from "./nav-icons.tsx";
 import { WaitLine } from "./wait-line.tsx";
 
 /** What the loopback viewer reads where the button would be. Avoids the words "Check now", which only a live button carries. */
-const NO_WRITE_HINT = "No button here: this page was opened from this host. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
+const NO_WRITE_HINT = "No button here: this page was opened from this machine. To run the checks, open the page by its tailnet name, or use darius vigil sweep.";
 
 /** The newest check of the vigil that ended, for the line "Checked 07:24: passed." and for the cooldown. */
 export interface LatestCheck {

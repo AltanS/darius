@@ -158,7 +158,7 @@ export function canCloseHeld(row: Pick<CandleRow, "source" | "status">): boolean
 }
 
 /** What the loopback viewer reads where the buttons would be. */
-export const NO_WRITE_TEXT = "No buttons here: this page was opened from this host. To answer or accept, open the page by its tailnet name.";
+export const NO_WRITE_TEXT = "No buttons here: this page was opened from this machine. To answer or accept, open the page by its tailnet name.";
 
 export const NOTE_MAX = 500;
 

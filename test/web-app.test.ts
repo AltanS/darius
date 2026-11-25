@@ -1156,7 +1156,7 @@ test("a run of a vigil has no Send and run now, and the loopback viewer sees no 
   const bare = cardOf(local, `asks-${ASK_ID(1)}`);
   assert.equal(bare.includes("<input"), false);
   assert.equal(bare.includes("Send answer"), false);
-  assert.ok(bare.includes("this page was opened from this host") && bare.includes("Answer from a terminal"), "a line says why, and the command stays");
+  assert.ok(bare.includes("this page was opened from this machine") && bare.includes("Answer from a terminal"), "a line says why, and the command stays");
 });
 
 const EARLIER: AskSeed[] = [
@@ -1664,13 +1664,13 @@ test("the loopback viewer sees no Acknowledge button, a line that says why, and 
     const page = await readPage(path, ctx);
     assert.equal(page.includes("Acknowledge"), false, `${path}: no button`);
     assert.equal(page.includes("Add a note"), false, `${path}: no note fold`);
-    assert.ok(page.includes("this page was opened from this host"), `${path}: a line says why there is no button`);
+    assert.ok(page.includes("this page was opened from this machine"), `${path}: a line says why there is no button`);
     assert.ok(page.includes(command), `${path}: the command stays`);
   }
   const failedHome = await readPage("/all", failed);
   assert.ok(failedHome.includes('id="failed-demo-daily-report"'), "the failed card is still there");
   assert.equal(failedHome.includes("Acknowledge"), false);
-  assert.ok(failedHome.includes("this page was opened from this host"), "the failed card says why too");
+  assert.ok(failedHome.includes("this page was opened from this machine"), "the failed card says why too");
 });
 
 test("an acknowledged run has no button: the card is plain and the run page says who", async () => {
@@ -2902,7 +2902,7 @@ test("Candle detail: an answered candle says who answered, and that it was repor
 
 test("Candle detail: the loopback viewer gets no buttons and a line that says why; an unknown candle is a 404", async () => {
   const local = await candlePage(`/w/demo/candles/${encodeURIComponent("vigil:soak")}`, { canWrite: false });
-  assert.ok(local.text.includes("No buttons here: this page was opened from this host."));
+  assert.ok(local.text.includes("No buttons here: this page was opened from this machine."));
   assert.equal(/<button[^>]*>Answer<\/button>/u.test(local.body), false);
   const missing = await candlePage("/w/demo/candles/nope");
   assert.equal(missing.status, 404);

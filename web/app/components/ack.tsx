@@ -20,7 +20,7 @@ import { BusyButton } from "./busy-button.tsx";
 import { Fold } from "./ui.tsx";
 
 /** What the loopback viewer reads where the button would be: the cause and the two ways on. Avoids the word "Acknowledge", which only a live button carries. */
-const NO_WRITE_HINT = "No button here: this page was opened from this host. To dismiss the card, open the page by its tailnet name, or use the command above.";
+const NO_WRITE_HINT = "No button here: this page was opened from this machine. To dismiss the card, open the page by its tailnet name, or use the command above.";
 
 interface AckButtonProps {
   project: string;

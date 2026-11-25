@@ -37,7 +37,7 @@ import { Fold } from "./ui.tsx";
 import { WaitLine } from "./wait-line.tsx";
 
 /** What the loopback viewer reads where the form would be. */
-const NO_WRITE_HINT = "No form here: this page was opened from this host. To answer, open the page by its tailnet name, or use the command below.";
+const NO_WRITE_HINT = "No form here: this page was opened from this machine. To answer, open the page by its tailnet name, or use the command below.";
 
 interface AskFormProps {
   project: string;
