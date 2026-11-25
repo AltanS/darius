@@ -80,7 +80,8 @@ test("noTreeReason names the direct child folders that hold a .darius.toml, at m
   }
   const many = noTreeReason(umbrella);
   assert.match(many, /darius projects are below: a1\/ \(cd a1\), a2\/ \(cd a2\), a3\/ \(cd a3\), a4\/ \(cd a4\), a5\/ \(cd a5\); or cd into/u);
-  assert.doesNotMatch(many, /a6|klaracase|hidden|node_modules/u, "five at most, sorted, no dot folders");
+  // Only the list: the random temp path before it can hold "a6" by chance.
+  assert.doesNotMatch(many.slice(many.indexOf("are below:")), /a6|klaracase|hidden|node_modules/u, "five at most, sorted, no dot folders");
   // A marker that has no tracker gets the hint too.
   const marked = join(SANDBOX, "umbrella-marked");
   mkdirSync(join(marked, "inner"), { recursive: true });

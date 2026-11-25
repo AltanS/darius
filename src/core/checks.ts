@@ -15,6 +15,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -513,9 +514,29 @@ const RESTORE_PARENT_PATH = [
   "unset __darius_dirs __darius_dir DARIUS_PARENT_PATH",
 ].join("\n");
 
+/**
+ * A login shell runs the operator's rc files before the Command, and those can print (nvm's
+ * "Now using node ..." from a `cd` hook, a motd). That text is not the Command's output: it broke
+ * every `stdout matches /^.../` check on such a host (0.138.2). The script prints a mark that
+ * names this run on both streams first; everything up to it is dropped. No mark (the shell died
+ * in its rc files) keeps the whole stream, so the cause stays visible.
+ */
+export function startMark(): string {
+  return `__darius_check_start_${randomUUID()}__`;
+}
+
+/** `text` after the first line that is `mark`, or `text` when no such line is in it. */
+export function afterStartMark(text: string, mark: string): string {
+  const line = `${mark}\n`;
+  const at = text.indexOf(line);
+  return at === -1 ? text : text.slice(at + line.length);
+}
+
 function spawnGroup(command: string, o: RunCheckOptions): Promise<GroupRun> {
+  const mark = startMark();
+  const printMark = `printf '%s\\n' '${mark}'; printf '%s\\n' '${mark}' >&2`;
   return new Promise((done) => {
-    const child = spawn("bash", ["-lc", `${RESTORE_PARENT_PATH}\n${command}`], {
+    const child = spawn("bash", ["-lc", `${printMark}\n${RESTORE_PARENT_PATH}\n${command}`], {
       cwd: o.cwd,
       // A process-group leader, which is what makes `process.kill(-pid)` legal.
       detached: true,
@@ -546,7 +567,7 @@ function spawnGroup(command: string, o: RunCheckOptions): Promise<GroupRun> {
       if (isSettled) return;
       isSettled = true;
       clearTimers(timers);
-      done({ stdout: stdout.text(), stderr: stderr.text() + spawnError, exit, isTimedOut });
+      done({ stdout: afterStartMark(stdout.text(), mark), stderr: afterStartMark(stderr.text(), mark) + spawnError, exit, isTimedOut });
     };
 
     timers.push(

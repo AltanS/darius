@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkVigilBody } from "../src/core/vigil-body.ts";
 import {
+  afterStartMark,
   classifyCommand,
   classifyFail,
   parseChecklist,
@@ -194,6 +195,25 @@ test("runCheck evaluates all four Expected forms", async () => {
   assert.equal((await runCheck(check("echo 0", "stdout matches /^[1-9]/"), options)).outcome, "fail");
   assert.equal((await runCheck(check("true", "file exists present.txt"), options)).outcome, "pass");
   assert.equal((await runCheck(check("true", "file exists absent.txt"), options)).outcome, "fail");
+});
+
+test("runCheck drops what the login rc files print before the Command", async () => {
+  const home = scratchDir();
+  // As nvm's cd hook does on a real host: text on both streams while the login shell starts.
+  writeFileSync(join(home, ".bash_profile"), "echo 'Now using node v24.0.0'\necho 'rc noise' >&2\n");
+  const options = { cwd: home, timeoutMs: 20_000, env: { HOME: home } };
+
+  const anchored = await runCheck(check("echo t", "stdout matches /^t$/"), options);
+  assert.equal(anchored.outcome, "pass", anchored.output);
+  assert.equal(anchored.output, "t\n");
+  assert.equal((await runCheck(check("echo 136", "stdout matches /^[1-9]/"), options)).outcome, "pass");
+  assert.equal((await runCheck(check("echo 0", 'stdout contains "Now using"'), options)).outcome, "fail");
+});
+
+test("afterStartMark keeps the text after the mark line, or all of it without one", () => {
+  assert.equal(afterStartMark("noise\nMARK\nreal\n", "MARK"), "real\n");
+  assert.equal(afterStartMark("no mark here\n", "MARK"), "no mark here\n");
+  assert.equal(afterStartMark("MARK\nMARK\nx", "MARK"), "MARK\nx");
 });
 
 test("runCheck passes extra env and reports the exit code", async () => {

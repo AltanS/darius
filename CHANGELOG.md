@@ -2,6 +2,13 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.138.2] - 2026-11-25
+
+### Fixed
+
+- **A check no longer sees what the login shell prints before its Command.** A check runs in `bash -lc`, and the rc files of a host can print, for example nvm's "Now using node ..." from a `cd` hook. That line came first in the output, so every `stdout matches /^.../` check failed on that host although the Command printed the right value. The check now prints a start mark on stdout and stderr, and darius drops everything before it. When the shell dies in its rc files, no mark is printed and the whole output stays.
+- **A test no longer fails by chance on its temp path.** The `noTreeReason` test checked the whole message for `a6`, and a random temp folder name can hold it.
+
 ## [0.138.1] - 2026-11-25
 
 ### Fixed
