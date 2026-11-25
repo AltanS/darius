@@ -159,9 +159,9 @@ export function machineAttention(facts: MachineFacts, selfVersion: string | null
   return items;
 }
 
-/** The attention count of a chip of the machine bar. The bar has only the probe data, so it counts the items that data holds: a machine that did not answer, another darius version, a box check from its live facts. The backup, the retired mark and a box check of the ledgers need the ledgers, which the bar does not read. */
-export function peerAttentionCount(peer: PeerHost, selfVersion: string | null): number {
-  return machineAttention(machineFacts({ name: peer.host, peer, host: undefined, workspaces: [], selfVersion }), selfVersion).length;
+/** Whether a chip of the machine bar shows the "something to check" mark. The bar has only the probe data, so it looks at the items that data holds: a machine that did not answer, another darius version, a box check from its live facts. The backup, the retired mark and a box check of the ledgers need the ledgers, which the bar does not read, so the bar shows no number: it would disagree with the count on Machines. */
+export function peerNeedsCheck(peer: PeerHost, selfVersion: string | null): boolean {
+  return machineAttention(machineFacts({ name: peer.host, peer, host: undefined, workspaces: [], selfVersion }), selfVersion).length > 0;
 }
 
 // --- the block of the Machines page ----------------------------------------------------------------

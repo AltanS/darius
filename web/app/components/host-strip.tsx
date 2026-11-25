@@ -7,8 +7,9 @@
  * reader and in the title. A chip is lit (a gold edge, `aria-current`) only
  * while the page of its machine is open; on every other page no chip is lit.
  * This machine carries a small muted "this" mark and nothing else. A machine
- * with things to check shows a small amber count after its name ("2 to
- * check"); the bar counts what the probe data holds. The version lives on
+ * with something to check shows a small amber "!" after its name (title and
+ * screen reader text "something to check"), never a number: the bar reads
+ * only the probe data, so a count could disagree with Machines. The version lives on
  * Machines: the bar only marks "versions differ". A chip name is cut at about
  * 10 characters. On a phone a chip shows the run count without the word,
  * and below 480 px with more than 3 machines the chips are dots, with the
@@ -22,7 +23,7 @@ import { Link } from "react-router";
 
 import type { PeerHost } from "../../../src/web/api.ts";
 import { href } from "../lib/paths.ts";
-import { peerAttentionCount } from "../lib/machines.ts";
+import { peerNeedsCheck } from "../lib/machines.ts";
 import { chipLit, differentVersions, openRunCount, peerMeaning, peerWord } from "../lib/peers.ts";
 
 interface ChipProps {
@@ -36,7 +37,7 @@ interface ChipProps {
 function MachineChip({ peer, pathname, selfVersion }: ChipProps): React.ReactNode {
   const word = peerWord(peer.state);
   const runs = openRunCount(peer) ?? 0;
-  const check = peerAttentionCount(peer, selfVersion);
+  const check = peerNeedsCheck(peer, selfVersion);
   const lit = chipLit(pathname, peer.host);
   return (
     <li>
@@ -49,12 +50,12 @@ function MachineChip({ peer, pathname, selfVersion }: ChipProps): React.ReactNod
           </span>
         ) : null}
         <span className="sr-only">{`, ${word.label}${peer.self ? ", this machine" : ""}`}</span>
-        {check === 0 ? null : (
-          <span className="hs-check" title={`${String(check)} to check`}>
-            <span aria-hidden="true">{check}</span>
-            <span className="sr-only">{`, ${String(check)} to check`}</span>
+        {check ? (
+          <span className="hs-check" title="something to check">
+            <span aria-hidden="true">!</span>
+            <span className="sr-only">, something to check</span>
           </span>
-        )}
+        ) : null}
         {runs === 0 ? null : (
           <span className="hs-runs">
             <span aria-hidden="true">{runs}</span>

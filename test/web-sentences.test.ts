@@ -215,13 +215,13 @@ test("the lit chip: no chip is lit on a page that is not a machine page; the rig
   assert.equal(peers.chipLit("/machines/host%2Db", "host-b"), true, "an escaped name reads back");
 });
 
-test("the attention count of a chip: what the probe data holds, and nothing for a machine that is fine", async () => {
-  assert.equal(machines.peerAttentionCount(peer(), "1.0.0"), 0);
-  assert.equal(machines.peerAttentionCount(peer({ self: true, state: "self" }), "1.0.0"), 0);
-  assert.equal(machines.peerAttentionCount(peer({ version: "0.9.0" }), "1.0.0"), 1, "another darius version");
-  assert.equal(machines.peerAttentionCount(peer({ state: "unreachable", reason: "timeout" }), "1.0.0"), 1, "did not answer");
-  assert.equal(machines.peerAttentionCount(peer({ state: "unreachable", reason: "timeout", version: "0.9.0" }), "1.0.0"), 2, "both");
-  assert.equal(machines.peerAttentionCount(peer({ version: "0.9.0" }), null), 0, "no version of this machine: nothing to compare");
+test("the mark of a chip: set when the probe data holds something to check, and not for a machine that is fine", async () => {
+  assert.equal(machines.peerNeedsCheck(peer(), "1.0.0"), false);
+  assert.equal(machines.peerNeedsCheck(peer({ self: true, state: "self" }), "1.0.0"), false);
+  assert.equal(machines.peerNeedsCheck(peer({ version: "0.9.0" }), "1.0.0"), true, "another darius version");
+  assert.equal(machines.peerNeedsCheck(peer({ state: "unreachable", reason: "timeout" }), "1.0.0"), true, "did not answer");
+  assert.equal(machines.peerNeedsCheck(peer({ state: "unreachable", reason: "timeout", version: "0.9.0" }), "1.0.0"), true, "both");
+  assert.equal(machines.peerNeedsCheck(peer({ version: "0.9.0" }), null), false, "no version of this machine: nothing to compare");
 });
 
 test("the block of the Machines page: the workspaces it runs with their health, the djinns that act first, at most eight", () => {

@@ -10396,15 +10396,15 @@ function machineAttention(facts, selfVersion) {
 	});
 	return items;
 }
-/** The attention count of a chip of the machine bar. The bar has only the probe data, so it counts the items that data holds: a machine that did not answer, another darius version, a box check from its live facts. The backup, the retired mark and a box check of the ledgers need the ledgers, which the bar does not read. */
-function peerAttentionCount(peer, selfVersion) {
+/** Whether a chip of the machine bar shows the "something to check" mark. The bar has only the probe data, so it looks at the items that data holds: a machine that did not answer, another darius version, a box check from its live facts. The backup, the retired mark and a box check of the ledgers need the ledgers, which the bar does not read, so the bar shows no number: it would disagree with the count on Machines. */
+function peerNeedsCheck(peer, selfVersion) {
 	return machineAttention(machineFacts({
 		name: peer.host,
 		peer,
 		host: void 0,
 		workspaces: [],
 		selfVersion
-	}), selfVersion).length;
+	}), selfVersion).length > 0;
 }
 /** The state word of a djinn: running, held, late, due today, or its last outcome when it is idle ("no run yet" when it never ran). */
 function djinnWord(djinn) {
@@ -10609,8 +10609,9 @@ function chipLit(pathname, host) {
 * reader and in the title. A chip is lit (a gold edge, `aria-current`) only
 * while the page of its machine is open; on every other page no chip is lit.
 * This machine carries a small muted "this" mark and nothing else. A machine
-* with things to check shows a small amber count after its name ("2 to
-* check"); the bar counts what the probe data holds. The version lives on
+* with something to check shows a small amber "!" after its name (title and
+* screen reader text "something to check"), never a number: the bar reads
+* only the probe data, so a count could disagree with Machines. The version lives on
 * Machines: the bar only marks "versions differ". A chip name is cut at about
 * 10 characters. On a phone a chip shows the run count without the word,
 * and below 480 px with more than 3 machines the chips are dots, with the
@@ -10622,7 +10623,7 @@ function chipLit(pathname, host) {
 function MachineChip({ peer, pathname, selfVersion }) {
 	const word = peerWord(peer.state);
 	const runs = openRunCount(peer) ?? 0;
-	const check = peerAttentionCount(peer, selfVersion);
+	const check = peerNeedsCheck(peer, selfVersion);
 	const lit = chipLit(pathname, peer.host);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
 		to: href({
@@ -10650,17 +10651,17 @@ function MachineChip({ peer, pathname, selfVersion }) {
 				className: "sr-only",
 				children: `, ${word.label}${peer.self ? ", this machine" : ""}`
 			}),
-			check === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			check ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "hs-check",
-				title: `${String(check)} to check`,
+				title: "something to check",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					"aria-hidden": "true",
-					children: check
+					children: "!"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sr-only",
-					children: `, ${String(check)} to check`
+					children: ", something to check"
 				})]
-			}),
+			}) : null,
 			runs === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "hs-runs",
 				children: [
@@ -26308,14 +26309,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-MKwnyAW9.js",
+			"module": "/assets/root-CaUy9JW8.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-BCpDF9tj.js",
 				"/assets/ui-CEU27QUH.js",
 				"/assets/fleet-DEEXj3n6.js",
-				"/assets/machines-D-3Z5t28.js",
+				"/assets/machines-CUWEKEnm.js",
 				"/assets/peers-Bi2CV9_1.js",
 				"/assets/row-ui80CYa3.js",
 				"/assets/milestones-BIwMc8Gj.js",
@@ -26370,7 +26371,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-M-uaRy_X.js",
+			"module": "/assets/overview-CwDzswRY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -26378,7 +26379,7 @@ var server_manifest_default = {
 				"/assets/ui-CEU27QUH.js",
 				"/assets/fleet-DEEXj3n6.js",
 				"/assets/fleet-BkBnrZaY.js",
-				"/assets/machines-D-3Z5t28.js",
+				"/assets/machines-CUWEKEnm.js",
 				"/assets/row-ui80CYa3.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
 				"/assets/runs-95sq-ZBZ.js",
@@ -26419,7 +26420,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-M-uaRy_X.js",
+			"module": "/assets/overview-CwDzswRY.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -26427,7 +26428,7 @@ var server_manifest_default = {
 				"/assets/ui-CEU27QUH.js",
 				"/assets/fleet-DEEXj3n6.js",
 				"/assets/fleet-BkBnrZaY.js",
-				"/assets/machines-D-3Z5t28.js",
+				"/assets/machines-CUWEKEnm.js",
 				"/assets/row-ui80CYa3.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
 				"/assets/runs-95sq-ZBZ.js",
@@ -27330,14 +27331,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/machines-COiFZEZ0.js",
+			"module": "/assets/machines-C-fKllqw.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-BCpDF9tj.js",
 				"/assets/ui-CEU27QUH.js",
 				"/assets/fleet-DEEXj3n6.js",
-				"/assets/machines-D-3Z5t28.js",
+				"/assets/machines-CUWEKEnm.js",
 				"/assets/peers-Bi2CV9_1.js",
 				"/assets/sentence-DP9dVkMN.js",
 				"/assets/machines-B_0UdpxV.js",
@@ -27362,7 +27363,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/machine-BJb_CrfW.js",
+			"module": "/assets/machine-B2ObLfho.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -27370,7 +27371,7 @@ var server_manifest_default = {
 				"/assets/ui-CEU27QUH.js",
 				"/assets/fleet-DEEXj3n6.js",
 				"/assets/fleet-BkBnrZaY.js",
-				"/assets/machines-D-3Z5t28.js",
+				"/assets/machines-CUWEKEnm.js",
 				"/assets/peers-Bi2CV9_1.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
 				"/assets/state-words-CWGPQ9oC.js",
@@ -27670,8 +27671,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-fdf01666.js",
-	"version": "fdf01666",
+	"url": "/assets/manifest-f348cfb1.js",
+	"version": "f348cfb1",
 	"sri": void 0
 };
 //#endregion

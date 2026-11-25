@@ -106,7 +106,7 @@ test("the machine bar: the label Machines, then state dot, name, this mark and n
     const chips = strip.slice(0, strip.indexOf("</ul>"));
     assert.doesNotMatch(chips, /demo-next|hs-ver/u, "no version on a chip");
     assert.doesNotMatch(strip, /aria-current|is-lit|is-self/u, `${path}: no chip is lit`);
-    assert.match(strip, /class="hs-check" title="1 to check"><span aria-hidden="true">1<\/span><span class="sr-only">, 1 to check<\/span>/u, `${path}: a machine with things to check says how many`);
+    assert.match(strip, /class="hs-check" title="something to check"><span aria-hidden="true">!<\/span><span class="sr-only">, something to check<\/span>/u, `${path}: a machine with something to check shows the mark, no number`);
   }
 });
 

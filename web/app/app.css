@@ -6001,7 +6001,7 @@
     color: var(--color-muted);
   }
 
-  /* Things to check on this machine: a small amber count in a square frame. The title and the screen reader text say "n to check". */
+  /* Things to check on this machine: a small amber "!" in a square frame. The title and the screen reader text say "something to check". */
 
   .hs-check {
     flex: none;
