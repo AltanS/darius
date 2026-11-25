@@ -66,7 +66,10 @@ export function HostStrip({ peers, loading }: HostStripProps): React.ReactNode {
       </span>
       {versions.length === 0 ? null : (
         <Link to={href({ to: "host", page: "hosts" })} className="hs-warn tone-late" title={`The hosts run different darius versions: ${versions.join(", ")}.`}>
-          versions differ
+          <span className="hs-warn-mark" aria-hidden="true">
+            ≠
+          </span>
+          <span className="hs-warn-text">versions differ</span>
         </Link>
       )}
     </nav>

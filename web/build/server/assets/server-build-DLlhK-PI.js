@@ -10059,14 +10059,21 @@ function HostStrip({ peers, loading }) {
 				"aria-live": "polite",
 				children: loading
 			}),
-			versions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+			versions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
 				to: href({
 					to: "host",
 					page: "hosts"
 				}),
 				className: "hs-warn tone-late",
 				title: `The hosts run different darius versions: ${versions.join(", ")}.`,
-				children: "versions differ"
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "hs-warn-mark",
+					"aria-hidden": "true",
+					children: "≠"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "hs-warn-text",
+					children: "versions differ"
+				})]
 			})
 		]
 	});
@@ -25701,7 +25708,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-BEgVvsYo.js",
+			"module": "/assets/root-Ch--5L3G.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -25721,7 +25728,7 @@ var server_manifest_default = {
 				"/assets/sw-BAanqJqG.js",
 				"/assets/ask-kQxC4ygO.js"
 			],
-			"css": ["/assets/root-C5bT_H_j.css"],
+			"css": ["/assets/root-f6tJ4Jzu.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -26980,8 +26987,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-9563f7b7.js",
-	"version": "9563f7b7",
+	"url": "/assets/manifest-c466ced4.js",
+	"version": "c466ced4",
 	"sri": void 0
 };
 //#endregion

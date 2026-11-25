@@ -5974,6 +5974,29 @@
     color: var(--tone);
   }
 
+  .hs-warn-mark {
+    display: none;
+    font-weight: 700;
+  }
+
+  /* A phone has no room for the words: a "≠" mark, with the words kept for screen readers and in the title. */
+
+  @media (max-width: 639px) {
+    .hs-warn-mark {
+      display: inline;
+      padding-inline: 4px;
+    }
+
+    .hs-warn-text {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+
   @media (max-width: 1023px) {
     .hs {
       top: calc(env(safe-area-inset-top) + 57px);
@@ -6114,7 +6137,7 @@
 
   .fl-row {
     display: grid;
-    grid-template-columns: 7rem minmax(9rem, 1.2fr) minmax(12rem, 2fr) minmax(11rem, 1.4fr) 4.5rem 5.5rem 4.5rem 6rem;
+    grid-template-columns: 6.5rem minmax(8rem, 1.2fr) minmax(10rem, 2fr) minmax(9rem, 1.4fr) 4rem 4.5rem 4rem 5.5rem;
     gap: 12px;
     align-items: center;
     padding: 10px 12px;
