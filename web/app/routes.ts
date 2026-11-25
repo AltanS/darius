@@ -36,6 +36,10 @@ export default [
   ]),
   // The machine, the store and the sync hosts of this host (0.44.0).
   route("status", "routes/status.tsx"),
+  // The machines of the synced store and what runs where (0.139.0): host pages, in no workspace.
+  route("hosts", "routes/hosts.tsx"),
+  route("hosts/:host", "routes/host.tsx"),
+  route("topology", "routes/topology.tsx"),
   route("runs", "routes/runs.tsx", { id: "runs-all" }),
   route("profiles", "routes/profiles.tsx"),
   // Old addresses, kept as 301 redirects: the first status page (0.9.0) and the /p/ project pages.

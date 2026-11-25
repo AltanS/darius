@@ -2,6 +2,17 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.139.0] - 2026-11-25
+
+### Added
+
+- **A host strip on every page.** It shows one chip per host of the synced store: a square in the state colour, the state in words, the host name, its darius version and its open runs. This host is marked. A chip links to the machine page. When the hosts run different darius versions, the strip says "versions differ".
+- **`GET /api/host.json` on every `darius serve`.** It gives this host's live facts: host id, darius version, runtime, when serve started, uptime, load, open runs, the newest box check and the rituals pinned to it. It holds no path, no environment and no secret, and it passes the same access check as every page.
+- **The probe of the other hosts.** `darius serve` asks each host the store knows at `http://<host id>:<its port>/api/host.json`, all at once, for at most 1.5 s each, and keeps the answer for 30 s. A host that does not answer is `unreachable` when its ledger lines are at most 20 minutes old, else `offline`. The reason is a few words, with no URL or address. Hosts silent for 30 days are left out.
+- **`[web.peers]` in config.toml.** It maps a host id to the base URL of its serve, for a host whose id is not its tailnet name. It is read per host, never from the repo.
+- **Machines: `/hosts` and `/hosts/<host>`.** The list shows each host with its live facts and its ledger facts: last seen, chunks, projects, backup and box check. A machine page adds its open runs, the rituals pinned to it, the rituals that last ran there, the vigils last swept there, its projects and its darius versions. The Hosts list on `/status` links to them.
+- **Topology: `/topology`.** A matrix with one column per host: which host holds a checkout or writes chunks of each project, the pin of each ritual and djinn ("any" when it has none) and the host of its last run, the host of each vigil's last sweep, and each host's state, darius version and box check. It scrolls sideways on a phone, and its first column stays.
+
 ## [0.138.2] - 2026-11-25
 
 ### Fixed

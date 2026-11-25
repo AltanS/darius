@@ -5845,6 +5845,173 @@
     overflow-wrap: anywhere;
   }
 
+  /* --- hosts: the host strip, Machines and Topology (0.139.0) ------------------------- */
+
+  /* One chip per host at the head of every page: a square in the state colour, square corners, no accent border. */
+
+  .hs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .hs-list {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hs-chip {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 2px 10px;
+    border: 1px solid var(--color-sand);
+    background: var(--color-surface);
+    font-size: 13px;
+    white-space: nowrap;
+    color: var(--color-parchment);
+  }
+
+  .hs-chip:hover {
+    border-color: var(--color-sand-hi);
+    text-decoration: none;
+  }
+
+  .hs-chip.is-self {
+    border-color: var(--color-gold);
+  }
+
+  .hs-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--tone);
+  }
+
+  .hs-dot.is-hollow {
+    background: none;
+    box-shadow: inset 0 0 0 1px var(--tone);
+  }
+
+  .hs-name {
+    font-weight: 600;
+  }
+
+  .hs-self,
+  .hs-ver,
+  .hs-runs {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+
+  .hs-runs {
+    color: var(--color-run);
+  }
+
+  .hs-warn {
+    flex: none;
+    font-size: 13px;
+    white-space: nowrap;
+    color: var(--tone);
+  }
+
+  @media (max-width: 1023px) {
+    .hs {
+      margin-inline: -4px;
+      padding-inline: 4px;
+    }
+
+    .hs-chip,
+    .hs-warn {
+      min-height: 44px;
+    }
+
+    .hs-warn {
+      display: inline-flex;
+      align-items: center;
+    }
+  }
+
+  .mh-state,
+  .mh-lede {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+  }
+
+  /* The topology matrix: it scrolls sideways on a phone, and its first column stays. */
+
+  .tp-wrap {
+    overflow-x: auto;
+  }
+
+  .tp {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .tp th,
+  .tp td {
+    padding: 8px 12px;
+    border-top: 1px solid var(--color-sand);
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+  }
+
+  .tp thead th {
+    border-top: 0;
+    font-weight: 600;
+    color: var(--color-muted);
+  }
+
+  .tp-first {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 12rem;
+    max-width: 22rem;
+    background: var(--color-surface);
+    font-weight: 600;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tp-sub {
+    display: block;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--color-muted);
+  }
+
+  .tp-self {
+    display: block;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--color-ok);
+  }
+
+  .tp-any,
+  .tp-none {
+    color: var(--color-faint);
+  }
+
+  .tp-cell {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
   /* --- ia: integration --------------------------------------------------------------- */
 
   /* Compact density for the shell and the milestones. Every target stays 44 px on a phone. */

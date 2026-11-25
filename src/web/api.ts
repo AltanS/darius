@@ -1209,6 +1209,124 @@ export interface PendingPollReply {
   starts: PendingPollEntry[];
 }
 
+// --- hosts, machines and topology (0.139.0) ------------------------------------------------
+
+/** A run that is open on a host: running, or held for an answer. */
+export interface HostOpenRun {
+  run: string;
+  project: string;
+  /** `ritual/<slug>` or `vigil/<slug>`. */
+  item: string;
+  phase: "running" | "held";
+  startedAt: string;
+}
+
+/** The newest box check of a host (`darius box check`): its outcome, when, and the darius it checked. */
+export interface HostBoxCheck {
+  outcome: string;
+  at: string;
+  darius: string;
+}
+
+/** A ritual pinned to a host, and when it is due next. */
+export interface HostDue {
+  project: string;
+  slug: string;
+  /** ISO; null when the ritual has no schedule. */
+  nextDueAt: string | null;
+}
+
+/**
+ * The live facts of one host: the body of `GET /api/host.json` on its
+ * `darius serve`. No path, no environment, no secret: only names, counts and times.
+ */
+export interface HostLive {
+  host: string;
+  version: string;
+  runtime: "bun" | "node";
+  /** The runtime's own version, such as `1.3.0`. */
+  runtimeVersion: string;
+  /** When this `darius serve` started; null when no serve answers (a CLI read). */
+  serveStartedAt: string | null;
+  /** The time on that host when it answered. */
+  now: string;
+  /** Seconds since the machine booted. */
+  uptimeSeconds: number;
+  load: [number, number, number];
+  openRuns: HostOpenRun[];
+  boxCheck: HostBoxCheck | null;
+  /** The active rituals pinned to this host, soonest first, at most 10. */
+  nextDue: HostDue[];
+}
+
+/**
+ * What the probe knows of a host. `self` is the host that serves the page.
+ * `online`: its serve answered. `unreachable`: it did not, but its ledger lines are fresh (it syncs,
+ * its serve is down or not reachable). `offline`: it did not answer and its lines are older.
+ */
+export type PeerState = "self" | "online" | "unreachable" | "offline";
+
+export interface PeerHost {
+  host: string;
+  self: boolean;
+  state: PeerState;
+  /** What its serve said; null unless `self` or `online`. */
+  live: HostLive | null;
+  /** Its newest ledger line or chunk in the store here; null when none. */
+  lastSeen: string | null;
+  /** The darius it runs: live when known, else its newest `host.version` line; null when neither says. */
+  version: string | null;
+  /** Why the probe failed, in a few words with no address in them; null when it did not fail. */
+  reason: string | null;
+  /** When the probe ran. */
+  checkedAt: string;
+}
+
+/** One `host.version` line: a host started to sync with this darius at this time. */
+export interface HostVersionStep {
+  version: string;
+  at: string;
+}
+
+/** A host as the synced ledgers know it: the system facts plus versions and box checks. */
+export interface FleetHost extends SystemHost {
+  /** Its newest `host.version`; null before 0.126.0 or with no line here. */
+  version: string | null;
+  /** Its `host.version` lines, newest first. */
+  versions: HostVersionStep[];
+  boxCheck: HostBoxCheck | null;
+  /** No line or chunk of it in 30 days: the strip and the topology leave it out. Never this host. */
+  retired: boolean;
+}
+
+/** Where an item last ran: the newest `run.started` of a ritual, or the newest sweep of a vigil. */
+export interface FleetLast {
+  project: string;
+  /** `ritual/<slug>` or `vigil/<slug>`. */
+  item: string;
+  host: string;
+  at: string;
+  /** The run outcome or the sweep outcome; null while the run is open. */
+  outcome: string | null;
+  /** The run id; absent for a sweep. */
+  run?: string;
+}
+
+/** The hosts of the synced store and where things ran, from the ledgers here. */
+export interface FleetView {
+  /** The host that serves the page. */
+  self: string;
+  generatedAt: string;
+  /** Every host the ledgers and snapshot lines here know, this host first; `retired` marks the ones silent for 30 days. */
+  hosts: FleetHost[];
+  /** The newest run of each ritual. */
+  lastRuns: FleetLast[];
+  /** The newest sweep of each vigil that is no skip. */
+  lastSweeps: FleetLast[];
+  /** Every open run, on any host. */
+  openRuns: (HostOpenRun & { host: string })[];
+}
+
 // --- the handler ---------------------------------------------------------------------------
 
 /**
@@ -1256,6 +1374,13 @@ export interface WebContext {
    * project or all: starting, started, refused or lost. Reads only. An unknown project gives an empty list.
    */
   pending(project: string | null): PendingStart[];
+  /**
+   * Every host of the synced store with its live state (0.139.0): this host as `self`, the others
+   * probed over their own `darius serve`. Cached for 30 s; a probe waits at most 1.5 s.
+   */
+  peers(): Promise<PeerHost[]>;
+  /** The hosts of the store with their versions and box checks, and where each ritual and vigil last ran (0.139.0). Reads only. */
+  fleet(): FleetView;
   /**
    * Whether the viewer may write through the page (0.68.0): false for the
    * loopback viewer, whose POSTs the server refuses. The page hides the

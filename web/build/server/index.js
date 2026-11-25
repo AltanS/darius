@@ -19,7 +19,9 @@ function loadContext(context) {
 		emailProblem: () => context.emailProblem(),
 		activity: (project, options) => context.activity(project, options),
 		pending: (project) => context.pending(project),
-		followUp: (project, run) => context.followUp(project, run)
+		followUp: (project, run) => context.followUp(project, run),
+		peers: () => context.peers(),
+		fleet: () => context.fleet()
 	};
 }
 //#endregion
@@ -30,7 +32,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-C53rkZO8.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-8Ubl-zXz.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

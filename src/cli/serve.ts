@@ -8,6 +8,10 @@
  *
  *   GET /healthz             "ok", without an access check
  *   GET /api/status.json     the status as JSON (always a fresh read)
+ *   GET /api/host.json       this host's live facts (0.139.0, src/web/fleet.ts):
+ *                            version, runtime, uptime, load, open runs, box
+ *                            check, pinned rituals. No path, no env. The host
+ *                            strip of the other hosts reads it (src/web/peers.ts)
  *   GET /api/pending?ids=a,b the states of those pending starts, nothing else
  *                            (0.104.0, src/web/action-api.ts, pendingApi)
  *   /api/push/...            the notification button's endpoints
@@ -76,6 +80,8 @@ import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, ta
 import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREFIX, actionApi, findingApi, candleApi, isCandlePath, pendingApi, vigilApi } from "../web/action-api.ts";
 import type { WebHandler } from "../web/api.ts";
 import { clearStatusCache, useStatusCache, webContext } from "../web/context.ts";
+import { collectHostLive, markServeStarted } from "../web/fleet.ts";
+import { enablePeerProbe, HOST_JSON_PATH } from "../web/peers.ts";
 import { plainPage, renderForbidden, renderWrongHost } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
@@ -289,6 +295,7 @@ export async function respond(method: string, url: URL, requestHeaders: Headers,
   const path = url.pathname;
   if (path === "/healthz") return reply(200, "text/plain", "ok\n");
   if (path === "/api/status.json") return reply(200, "application/json", `${JSON.stringify(collectStatus())}\n`, "default-src 'none'");
+  if (path === HOST_JSON_PATH) return reply(200, "application/json", `${JSON.stringify(collectHostLive())}\n`, "default-src 'none'");
   // The path names the project only; the file comes from its marker (src/web/workspace-icon.ts).
   if (path.startsWith(WORKSPACE_ICON_PREFIX)) return workspaceIconReply(path, requestHeaders.get("if-none-match"));
   const file = staticFile(app.build, path);
@@ -531,6 +538,8 @@ export const serveCommand: Command = {
     const app = new WebApp();
     const servers: Server[] = [];
     useStatusCache(true);
+    markServeStarted();
+    enablePeerProbe(port);
     let stopRetry: () => void = noRetry;
     try {
       if (binds === "auto") stopRetry = await listenAuto(port, gate, app, servers);
@@ -539,6 +548,7 @@ export const serveCommand: Command = {
       console.error(`darius serve: ${errorMessage(cause)}`);
       for (const server of servers) server.close();
       useStatusCache(false);
+      enablePeerProbe(null);
       return 1;
     }
     const loaded = await app.load();
@@ -555,6 +565,7 @@ export const serveCommand: Command = {
       const stop = (): void => {
         stopRetry();
         useStatusCache(false);
+        enablePeerProbe(null);
         const code = app.restart ? 75 : 0;
         let open = servers.length;
         if (open === 0) resolve(code);

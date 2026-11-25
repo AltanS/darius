@@ -1,0 +1,1 @@
+var e=new Set([`failed`,`refused`,`error`,`box-broken`,`gate-broken`,`harness-unchecked`,`profile-invalid`,`subagents-unproven`,`tool-missing`]);function t(t){return t===null?`idle`:t===`complete`||t===`done`||t===`ok`?`ok`:e.has(t)?`bad`:`idle`}export{t};

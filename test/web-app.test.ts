@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ActivityEntry, Acknowledgement, BackupsStatus, FindingRow, CandleDetail, CandleRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingPollEntry, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
+import type { ActivityEntry, Acknowledgement, BackupsStatus, FleetView, HostLive, PeerHost, FindingRow, CandleDetail, CandleRow, FollowUpReadiness, HostStatus, MilestoneDetail, PendingPollEntry, PendingStart, ProjectStatus, RitualDetail, RitualRow, RunDetail, RunResult, ResultQuestion, RunOrigin, RunResultSummary, RunRow, SystemStatus, VigilDetail, VigilRow, WebContext, WebHandler, WorkspaceIcon } from "../src/web/api.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-app-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
@@ -411,6 +411,39 @@ function candleDetailOf(project: string, key: string): CandleDetail | null {
   };
 }
 
+const PEER_LIVE: HostLive = {
+  host: "testhost",
+  version: "9.9.9",
+  runtime: "bun",
+  runtimeVersion: "1.3.0",
+  serveStartedAt: "2026-09-28T07:00:00.000Z",
+  now: "2026-09-28T09:00:00.000Z",
+  uptimeSeconds: 86_400,
+  load: [0.5, 0.4, 0.3],
+  openRuns: [{ run: HELD, project: "demo", item: "ritual/daily-report", phase: "held", startedAt: "2026-09-28T08:00:00.000Z" }],
+  boxCheck: { outcome: "pass", at: "2026-09-28T06:00:00.000Z", darius: "9.9.9" },
+  nextDue: [],
+};
+
+const PEERS: PeerHost[] = [
+  { host: "testhost", self: true, state: "self", live: PEER_LIVE, lastSeen: "2026-09-28T08:59:00.000Z", version: "9.9.9", reason: null, checkedAt: "2026-09-28T09:00:00.000Z" },
+  { host: "host-b", self: false, state: "unreachable", live: null, lastSeen: "2026-09-28T08:50:00.000Z", version: "9.8.0", reason: "connection refused", checkedAt: "2026-09-28T09:00:00.000Z" },
+];
+
+const FLEET: FleetView = {
+  self: "testhost",
+  generatedAt: "2026-09-28T09:00:00.000Z",
+  hosts: [
+    { host: "testhost", self: true, lastSeen: "2026-09-28T08:59:00.000Z", chunks: 3, projects: ["demo"], backup: null, version: "9.9.9", versions: [{ version: "9.9.9", at: "2026-09-27T10:00:00.000Z" }], boxCheck: { outcome: "pass", at: "2026-09-28T06:00:00.000Z", darius: "9.9.9" }, retired: false },
+    { host: "host-b", self: false, lastSeen: "2026-09-28T08:50:00.000Z", chunks: 2, projects: ["demo"], backup: null, version: "9.8.0", versions: [{ version: "9.8.0", at: "2026-09-20T10:00:00.000Z" }], boxCheck: null, retired: false },
+    { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: null, version: null, versions: [], boxCheck: null, retired: true },
+    { host: "third-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: null, version: null, versions: [], boxCheck: null, retired: true },
+  ],
+  lastRuns: [{ project: "demo", item: "ritual/daily-report", host: "host-b", at: "2026-09-28T08:00:00.000Z", outcome: "complete", run: DONE }],
+  lastSweeps: [{ project: "demo", item: "vigil/soak", host: "testhost", at: "2026-09-28T04:31:00.000Z", outcome: "failed" }],
+  openRuns: [{ run: HELD, project: "demo", item: "ritual/daily-report", phase: "held", startedAt: "2026-09-28T08:00:00.000Z", host: "testhost" }],
+};
+
 const context: WebContext = {
   viewer: "owner on phone",
   nonce: NONCE,
@@ -432,6 +465,8 @@ const context: WebContext = {
   activity: (_project, options) => (options?.run === DONE ? DONE_TRAIL : []),
   pending: () => [],
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
+  peers: () => Promise.resolve(PEERS),
+  fleet: () => FLEET,
   canWrite: true,
 };
 
@@ -1876,7 +1911,7 @@ test("Places lists All workspaces and each workspace with what needs you; the sc
   const { body } = await readWith("/w/demo/rituals", {}, status);
   const places = navOf(body, "Places");
   const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Machines", "Topology", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
   assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
   assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
   assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
@@ -2302,6 +2337,9 @@ const CRAWL: Crawl[] = [
   { path: `/w/demo/runs/${HELD}`, lit: "/w/demo/rituals" },
   { path: "/w/demo/milestones/M7", lit: "/w/demo/milestones" },
   { path: "/status", lit: null },
+  { path: "/hosts", lit: null },
+  { path: "/hosts/host-b", lit: null },
+  { path: "/topology", lit: null },
   { path: "/settings/backups", lit: null },
   { path: "/profiles", lit: null },
   { path: "/nope", lit: null },

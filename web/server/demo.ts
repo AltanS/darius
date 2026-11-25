@@ -11,7 +11,7 @@
  */
 
 import type { JsonValue } from "../../src/core/model.ts";
-import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, HostStatus, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, FleetHost, FleetLast, FleetView, HostLive, HostStatus, PeerHost, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 import { milestoneSummary } from "../../src/web/milestone-summary.ts";
@@ -328,7 +328,7 @@ function project(now: number): ProjectStatus {
     rituals: [
       ritual("site-report", "Nightly site report (djinn)", { skill: "site-report", nextDue: day(now, 0, 1) }),
       ritual("link-check", "Link checker (djinn)", { skill: "link-check", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
-      ritual("price-sync", "Price sync (djinn)", { skill: "price-sync", nextDue: day(now, 0, 0), heldRun: held.run }),
+      ritual("price-sync", "Price sync (djinn)", { skill: "price-sync", nextDue: day(now, 0, 0), heldRun: held.run, host: "host-b" }),
       ritual("backup-check", "Backup check (djinn)", { skill: "backup-check", nextDue: day(now, 0, 1), failedToday: { run: failed.run, acknowledged: null } }),
       ritual("uptime-review", "Uptime review", { mode: "off", cadence: "7d", nextDue: day(now, 0, -9), overdueDays: 9, lastCompleted: day(now, 0, -16) }),
       ritual("search-ranking", "Search ranking and content review", { mode: "off", cadence: "1w", nextDue: day(now, 0, -3), overdueDays: 3, lastCompleted: day(now, 0, -10) }),
@@ -375,7 +375,7 @@ function atlas(now: number): ProjectStatus {
     error: null,
     runs: [running, done],
     rituals: [
-      ritual("link-audit", "Docs link audit (djinn)", { skill: "link-audit", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
+      ritual("link-audit", "Docs link audit (djinn)", { skill: "link-audit", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run, host: "demo" }),
       ritual("release-notes", "Release notes draft (djinn)", { skill: "release-notes", nextDue: day(now, 0, 2) }),
       ritual("sitemap-check", "Sitemap check (djinn)", { skill: "sitemap-check", nextDue: day(now, 0, -2), isDue: true, overdueDays: 2 }),
       ritual("changelog-digest", "Changelog digest (djinn)", { skill: "changelog-digest", nextDue: day(now, 0, 0), isDue: true }),
@@ -605,6 +605,90 @@ function demoBackups(clock: number): BackupsStatus {
   };
 }
 
+// --- hosts, machines and topology (0.139.0) ---------------------------------------------
+
+/** The host that ritual runs of the demo ran on: its pin, else host-b for every third ritual, else this host. */
+function demoRunHost(pin: string | null, index: number): string {
+  if (pin !== null) return pin;
+  return index % 3 === 2 ? "host-b" : "demo";
+}
+
+/** This host's live facts in the demo: the open runs of the demo status, all on this host. */
+export function demoHostLive(now: number): HostLive {
+  const status = demoStatus(now);
+  return {
+    host: "demo",
+    version: "demo",
+    runtime: "bun",
+    runtimeVersion: "1.3.0",
+    serveStartedAt: ago(now, 26 * 60 * MINUTE),
+    now: new Date(now).toISOString(),
+    uptimeSeconds: 12 * 86_400 + 3 * 3600,
+    load: [0.42, 0.31, 0.27],
+    openRuns: status.projects.flatMap((one) => one.runs.flatMap((row) => (row.phase === "closed" ? [] : [{ run: row.run, project: one.name, item: row.item, phase: row.phase, startedAt: row.startedAt }]))),
+    boxCheck: { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" },
+    nextDue: [{ project: "atlas-docs", slug: "link-audit", nextDueAt: ago(now, -2 * 60 * MINUTE) }],
+  };
+}
+
+/** Two hosts besides this one: host-b answers and runs another darius, host-c syncs but its serve does not answer. */
+export function demoPeers(now: number): PeerHost[] {
+  const checkedAt = new Date(now).toISOString();
+  const hostB: HostLive = {
+    host: "host-b",
+    version: "demo-next",
+    runtime: "node",
+    runtimeVersion: "24.0.0",
+    serveStartedAt: ago(now, 3 * DAY),
+    now: checkedAt,
+    uptimeSeconds: 4 * 86_400,
+    load: [1.2, 0.9, 0.8],
+    openRuns: [],
+    boxCheck: { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" },
+    nextDue: [{ project: "demo-shop", slug: "price-sync", nextDueAt: ago(now, -5 * 60 * MINUTE) }],
+  };
+  return [
+    { host: "demo", self: true, state: "self", live: demoHostLive(now), lastSeen: ago(now, MINUTE), version: "demo", reason: null, checkedAt },
+    { host: "host-b", self: false, state: "online", live: hostB, lastSeen: ago(now, 4 * MINUTE), version: "demo-next", reason: null, checkedAt },
+    { host: "host-c", self: false, state: "unreachable", live: null, lastSeen: ago(now, 12 * MINUTE), version: "demo", reason: "connection refused", checkedAt },
+  ];
+}
+
+function demoFleetHost(host: string, self: boolean, lastSeen: string, versions: FleetHost["versions"], projects: string[], boxCheck: FleetHost["boxCheck"]): FleetHost {
+  return { host, self, lastSeen, chunks: projects.length * 7, projects, backup: null, version: versions[0]?.version ?? null, versions, boxCheck, retired: false };
+}
+
+/** The ledger view of the demo: three hosts, where each ritual and vigil last ran. */
+export function demoFleet(now: number): FleetView {
+  const status = demoStatus(now);
+  const lastRuns = status.projects.flatMap((one) =>
+    one.rituals.flatMap((row, index): FleetLast[] => {
+      const newest = one.runs.find((candidate) => candidate.item === `ritual/${row.slug}`);
+      if (newest === undefined) return [];
+      return [{ project: one.name, item: `ritual/${row.slug}`, host: demoRunHost(row.host, index), at: newest.startedAt, outcome: newest.outcome, run: newest.run }];
+    }),
+  );
+  // Every vigil but each third was swept; every fourth sweep ran on host-c.
+  const lastSweeps = status.projects.flatMap((one) =>
+    one.vigils.flatMap((row, index): FleetLast[] => {
+      if (index % 3 === 2) return [];
+      return [{ project: one.name, item: `vigil/${row.slug}`, host: index % 4 === 0 ? "host-c" : "demo", at: ago(now, (index + 1) * 60 * MINUTE), outcome: row.lastOutcome ?? "held" }];
+    }),
+  );
+  return {
+    self: "demo",
+    generatedAt: new Date(now).toISOString(),
+    hosts: [
+      demoFleetHost("demo", true, ago(now, MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }, { version: "demo-old", at: ago(now, 9 * DAY) }], ["atlas-docs", "demo-shop", "field-notes"], { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" }),
+      demoFleetHost("host-b", false, ago(now, 4 * MINUTE), [{ version: "demo-next", at: ago(now, 3 * DAY) }], ["demo-shop"], { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" }),
+      demoFleetHost("host-c", false, ago(now, 12 * MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }], ["atlas-docs", "demo-shop"], null),
+    ],
+    lastRuns,
+    lastSweeps,
+    openRuns: demoHostLive(now).openRuns.map((row) => Object.assign({}, row, { host: "demo" })),
+  };
+}
+
 // --- demo writes (0.104.0) ---------------------------------------------------------------
 
 /** How long a demo start stays `starting`. */
@@ -737,5 +821,7 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     activity: () => [],
     pending: (name) => starts.list(name),
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
+    peers: () => Promise.resolve(demoPeers(Date.now())),
+    fleet: () => demoFleet(Date.now()),
   };
 }

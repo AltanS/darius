@@ -129,7 +129,7 @@ export function activityQuery(filter: ActivityFilter) {
   return Object.fromEntries(entries.filter(([, value]) => value !== ""));
 }
 
-export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about";
+export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about" | "hosts" | "topology";
 
 export type Target =
   | { to: "overview"; ws: string | null }
@@ -139,7 +139,9 @@ export type Target =
   | { to: "milestone"; ws: string; ref: string }
   | { to: "vigil"; ws: string; slug: string }
   | { to: "candle"; ws: string; key: string }
-  | { to: "host"; page: HostPage; hash?: string };
+  | { to: "host"; page: HostPage; hash?: string }
+  /** One machine of the synced store (0.139.0). */
+  | { to: "machine"; host: string };
 
 function enc(text: string): string {
   return encodeURIComponent(text);
@@ -179,6 +181,8 @@ export function href(target: Target): string {
       return `/w/${enc(target.ws)}/candles/${enc(target.key)}`;
     case "host":
       return `/${target.page}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
+    case "machine":
+      return `/hosts/${enc(target.host)}`;
   }
 }
 
@@ -213,7 +217,7 @@ function isSection(text: string | undefined): text is Section {
   return SECTIONS.some((section) => section === text);
 }
 
-const HOST_ROOTS = new Set(["status", "profiles", "settings"]);
+const HOST_ROOTS = new Set(["status", "profiles", "settings", "hosts", "topology"]);
 
 function placeOfWorkspace(scope: string, rest: readonly string[]): Place {
   const [first, second] = rest;

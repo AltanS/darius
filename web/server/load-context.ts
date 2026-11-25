@@ -28,5 +28,7 @@ export function loadContext(context: WebContext): AppLoadContext {
     activity: (project, options) => context.activity(project, options),
     pending: (project) => context.pending(project),
     followUp: (project, run) => context.followUp(project, run),
+    peers: () => context.peers(),
+    fleet: () => context.fleet(),
   };
 }

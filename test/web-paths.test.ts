@@ -50,6 +50,10 @@ const CASES: { target: Target; place: Place }[] = [
   { target: { to: "host", page: "profiles", hash: "profile-fast" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "settings" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "settings/backups" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "host", page: "hosts" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "host", page: "topology" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "machine", host: "host-b" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "machine", host: "a b" }, place: { scope: null, kind: "host", section: null } },
 ];
 
 function pathnameOf(address: string): string {

@@ -10,6 +10,7 @@ import { ClockProvider } from "./lib/clock.tsx";
 import { connectionNow, isFreshAdvance, isNetworkError, markFresh, markStale, PROBE_MS, probeHost, useConnection } from "./lib/connection.ts";
 import { NonceContext } from "./lib/nonce.ts";
 import { finderOf } from "./lib/finder.ts";
+import { peersOf } from "./lib/peers.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { SPLASH_SIZES, splashFile, splashMedia } from "./lib/splash.ts";
@@ -17,11 +18,13 @@ import { statusOf } from "./lib/status.ts";
 import { shellData } from "./lib/scope.ts";
 import { useServiceWorker } from "./lib/sw.ts";
 
-export function loader({ context, request }: Route.LoaderArgs) {
+export async function loader({ context, request }: Route.LoaderArgs) {
   // --- settings block (theme, density, motion): read from the cookie, put on <html> by Layout ---
   const settings = readSettings(request.headers.get("cookie"));
   // --- end settings block ---
   const status = statusOf(context);
+  // The host strip (0.139.0): every host of the synced store, live; cached 30 s on the server, each probe at most 1.5 s.
+  const peers = await peersOf(context);
   return {
     // Also on the client, so hydration renders the same nonce attributes.
     nonce: context.nonce,
@@ -36,6 +39,7 @@ export function loader({ context, request }: Route.LoaderArgs) {
     ...shellData(status, request),
     // The milestones of the workspace the page is in, for the finder (0.125.0); null outside a workspace.
     finder: finderOf(status.projects, new URL(request.url).pathname),
+    peers,
   };
 }
 

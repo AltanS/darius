@@ -370,3 +370,26 @@ export function writeConfigSkeleton(): "written" | "exists" {
   }
   return "written";
 }
+
+/** A host id as the ledger accepts it (src/core/ledger.ts, isHostId); kept here so config needs no ledger import. */
+const PEER_HOST = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/u;
+
+/**
+ * The `[web.peers]` table of config.toml (0.139.0): host id = base URL of that
+ * host's `darius serve`, for a peer whose host id is not its tailnet name. The
+ * web host strip probes `<base URL>/api/host.json` for it. Empty without a
+ * config or a table. A key that is no host id, or a value that is no http or
+ * https URL, is an error that names it. Per host: never in the repo.
+ */
+export function readWebPeers(): ReadonlyMap<string, string> {
+  const file = configFilePath();
+  const peers = new Map<string, string>();
+  if (!existsSync(file)) return peers;
+  const table = parseToml(readFileSync(file, "utf8"), file).sections["web.peers"] ?? {};
+  for (const [host, value] of Object.entries(table)) {
+    if (!PEER_HOST.test(host)) throw new Error(`${file}: [web.peers] key "${host}" is not a host id`);
+    if (!isTomlString(value) || !/^https?:\/\/[^\s/]+/u.test(value)) throw new Error(`${file}: [web.peers] ${host} must be an http or https URL`);
+    peers.set(host, value.replace(/\/+$/u, ""));
+  }
+  return peers;
+}

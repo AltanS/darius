@@ -10,8 +10,11 @@
  * workspace, the milestone finder (`finder.tsx`) has a button in the phone top
  * bar and a row in the desktop sidebar.
  *
- * The scope is one workspace or all of them. A host page (Status, Profiles,
- * Settings) is in no scope, so the tabs and Places point at the last scope you
+ * The host strip (`host-strip.tsx`, 0.139.0) heads `<main>` on every page:
+ * one chip per host of the synced store, live, each a link to its machine page.
+ *
+ * The scope is one workspace or all of them. A host page (Status, Machines,
+ * Topology, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
  * were in: it is kept in the cookie `darius_scope`, written here.
  */
 
@@ -21,6 +24,7 @@ import { Link, useLocation, useNavigation, useRouteLoaderData } from "react-rout
 import type { RootData } from "../root.tsx";
 import type { loader as runLoader } from "../routes/run.tsx";
 import { ConnectionStrip } from "./connection-strip.tsx";
+import { HostStrip } from "./host-strip.tsx";
 import { FinderButton, FinderDialog, useFinder } from "./finder.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
 import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
@@ -43,6 +47,8 @@ function sectionOf(place: Place, runKind: Kind | undefined): Section | null {
 function hostRowOf(pathname: string): LitRow | null {
   if (pathname === "/status") return "status";
   if (pathname === "/profiles") return "profiles";
+  if (pathname === "/hosts" || pathname.startsWith("/hosts/")) return "hosts";
+  if (pathname === "/topology") return "topology";
   if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   return null;
 }
@@ -132,7 +138,10 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
       {data.finder === null ? null : <FinderButton finder={finder} className="finder-btn finder-btn-bar" />}
       <ConnectionStrip generatedAt={data.generatedAt} />
       <Places data={data} scope={scope} lit={lit} busy={busy} finder={data.finder === null ? null : finder} />
-      <main className="wa page-main">{children}</main>
+      <main className="wa page-main">
+        <HostStrip peers={data.peers} />
+        {children}
+      </main>
       <nav aria-label="Tabs" className="tabbar">
         <Link to={href({ to: "overview", ws: scope })} className={lit === "overview" ? "tab on" : "tab"} aria-current={lit === "overview" ? "page" : undefined}>
           <span className="tab-ico-wrap">

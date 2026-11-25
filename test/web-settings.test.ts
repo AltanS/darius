@@ -41,6 +41,8 @@ const context: WebContext = {
   milestone: () => null,
   activity: () => [],
   pending: () => [],
+  peers: () => Promise.resolve([]),
+  fleet: () => ({ self: "testhost", generatedAt: "2026-09-28T09:00:00.000Z", hosts: [], lastRuns: [], lastSweeps: [], openRuns: [] }),
 };
 
 async function page(path: string, settings: Settings | null): Promise<string> {

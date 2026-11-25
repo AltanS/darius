@@ -197,7 +197,9 @@ function HostRow({ host, differ }: HostRowProps): React.ReactNode {
   return (
     <li className="sy-item">
       <p className="sy-item-head">
-        <span className="sy-name">{host.host}</span>
+        <Link to={href({ to: "machine", host: host.host })} className="sy-name">
+          {host.host}
+        </Link>
         {host.self ? <span className="bk-mark tone-ok">this host</span> : null}
       </p>
       <p className="sy-meta">
@@ -222,7 +224,7 @@ interface HostsProps {
 
 export function Hosts({ hosts, bucketsDiffer }: HostsProps): React.ReactNode {
   return (
-    <Section title="Hosts">
+    <Section title="Hosts" aside={<Link to={href({ to: "host", page: "hosts" })}>Machines</Link>}>
       {hosts.length === 0 ? (
         <p className="panel-empty panel">No host has written to this store yet.</p>
       ) : (

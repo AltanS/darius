@@ -25,8 +25,10 @@ import { createServer as createVite } from "vite";
 import { actionApi, FOLLOW_UP_READY_PATH, PENDING_API_PATH, pendingApi } from "../../src/web/action-api.ts";
 import { allowedLogins, authorizeRequest, cachedWhois, proxyTrust, runTailscale, tailnetAddress, tailscaleWhois } from "../../src/web/auth.ts";
 import { webContext } from "../../src/web/context.ts";
+import { collectHostLive } from "../../src/web/fleet.ts";
+import { enablePeerProbe, HOST_JSON_PATH } from "../../src/web/peers.ts";
 import { collectStatus } from "../../src/web/status.ts";
-import { createDemoStarts, DEMO_REPLY_MS, DEMO_WRITE_PATHS, demoContext, demoStatus, demoWrite } from "./demo.ts";
+import { createDemoStarts, DEMO_REPLY_MS, DEMO_WRITE_PATHS, demoContext, demoHostLive, demoStatus, demoWrite } from "./demo.ts";
 import { sendResponse, toRequest } from "./http.ts";
 import { loadContext } from "./load-context.ts";
 
@@ -42,6 +44,8 @@ function flag(name: string): string | undefined {
 const demo = process.argv.includes("--demo");
 /** The demo's pending starts live here, so they outlive a request. */
 const demoStarts = createDemoStarts();
+// On real data the host strip asks the other hosts' `darius serve`, on their port (4747 unless DARIUS_WEB_PORT says otherwise).
+if (!demo) enablePeerProbe(Number(process.env.DARIUS_WEB_PORT ?? "4747"));
 
 /** The request body as text; the demo's writes are small. */
 async function bodyText(req: AsyncIterable<Buffer | string>): Promise<string> {
@@ -124,6 +128,11 @@ server.on("request", (req, res) => {
       if (url.pathname === "/api/status.json") {
         res.setHeader("content-type", "application/json; charset=utf-8");
         res.end(`${JSON.stringify(demo ? demoStatus() : collectStatus(), null, 2)}\n`);
+        return;
+      }
+      if (url.pathname === HOST_JSON_PATH) {
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.end(`${JSON.stringify(demo ? demoHostLive(Date.now()) : collectHostLive(), null, 2)}\n`);
         return;
       }
       if (url.pathname.startsWith("/api/snapshots/")) {

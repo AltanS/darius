@@ -144,7 +144,8 @@ function newer(current: number | null, time: number | null): number | null {
   return time !== null && (current === null || time > current) ? time : current;
 }
 
-function collectHosts(projects: readonly string[], self: string, states: readonly BackupState[]): SystemHost[] {
+/** The hosts that wrote chunks into these projects or a snapshot line, this host first, then the newest seen. */
+export function collectHosts(projects: readonly string[], self: string, states: readonly BackupState[]): SystemHost[] {
   const seen = new Map<string, { newest: number | null; chunks: number; projects: Set<string> }>();
   const entry = (host: string) => {
     let found = seen.get(host);

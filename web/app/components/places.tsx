@@ -3,7 +3,8 @@
  * desktop and the drawer of a phone (the shell opens it with a
  * `<details data-menu>`; the drawer is closed by a press outside, Escape or a
  * link). The tree: All workspaces; each workspace with what needs you there;
- * the scope you are in, expanded to its eight places; the host pages; and a
+ * the scope you are in, expanded to its eight places; the pages of all hosts
+ * (Machines, Topology); the pages of this host; and a
  * small host line at the end. At most one row is lit, and the row of the
  * scope you are in carries a check mark.
  */
@@ -44,7 +45,7 @@ const RUNS: SectionSpec = { section: "runs", label: "Runs", badge: NO_BADGE };
 const ACTIVITY: SectionSpec = { section: "activity", label: "Activity", badge: NO_BADGE };
 
 /** The row of a page that is lit in Places: the Overview, a section, or a host page. */
-export type LitRow = "overview" | Section | "status" | "profiles" | "settings";
+export type LitRow = "overview" | Section | "status" | "hosts" | "topology" | "profiles" | "settings";
 
 interface SectionIconProps {
   section: Section;
@@ -174,6 +175,12 @@ interface PlacesProps {
   finder: FinderState | null;
 }
 
+/** The pages of every host of the store (0.139.0). */
+const FLEET_ROWS: readonly { page: "hosts" | "topology"; label: string; icon: NavIconName }[] = [
+  { page: "hosts", label: "Machines", icon: "machine" },
+  { page: "topology", label: "Topology", icon: "topology" },
+];
+
 const HOST_ROWS: readonly { page: "status" | "profiles" | "settings"; label: string; icon: NavIconName }[] = [
   { page: "status", label: "Status", icon: "status" },
   { page: "profiles", label: "Profiles", icon: "profile" },
@@ -243,6 +250,12 @@ export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.R
             <ScopeRow to={href({ to: "overview", ws: entry.name })} name={entry.name} icon="workspace" workspaceIcon={entry.icon} needs={entry.needs} unreadable={entry.error} current={scope === entry.name} />
             {scope === entry.name ? <ScopePlaces scope={entry.name} tabs={tabsOf(entry.name)} lit={lit} /> : null}
           </li>
+        ))}
+      </ul>
+      <p className="places-group">All hosts</p>
+      <ul className="places-tree">
+        {FLEET_ROWS.map(({ page, label, icon }) => (
+          <Leaf key={page} to={href({ to: "host", page })} label={label} icon={<NavIcon name={icon} size={18} className="places-ico" />} lit={lit === page} />
         ))}
       </ul>
       <p className="places-group">This host</p>
