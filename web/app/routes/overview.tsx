@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import type { Route } from "./+types/overview";
+import { WorkspaceHeader } from "../components/fleet.tsx";
 import { CardView, DoneRows, NextUp, NowList, Pieces, StatusStrip } from "../components/board.tsx";
 import { PhoneMore } from "../components/pulse.tsx";
 import { RowList } from "../components/row.tsx";
@@ -44,6 +45,9 @@ export async function loader({ context, request, params }: Route.LoaderArgs) {
     home: homeView(status, read, scope, feed),
     workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
     extras: only === undefined ? null : workspaceExtras(only, read),
+    // The workspace header (0.140.0): health, where it lives, the counts and the djinns.
+    fleet: only === undefined ? null : (context.workspaces(only.name).workspaces[0] ?? null),
+    self: status.host,
     canWrite: context.canWrite,
   };
 }
@@ -150,12 +154,13 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
  * lately and the health line. Each run shows once.
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { home, extras, workspaces, canWrite, workspace } = loaderData;
+  const { home, extras, workspaces, canWrite, workspace, fleet, self } = loaderData;
   const { verdict, tone, sub, next, strip, now, starting, needs, doneLately, health } = home;
   // Every start that waits, in Now or in a flagged card: one light poll for all (`follow-starts.ts`). A card's own button follows its check too, and the ids are shared.
   useFollowStarts([...starting.map((start) => startIdOf(start.id)), ...needs.flatMap((card) => (card.check?.pending?.state === "starting" ? [card.check.pending.id] : []))]);
   return (
     <div className="proj ov">
+      {fleet === null ? null : <WorkspaceHeader workspace={fleet} self={self} />}
       <section className="verdict">
         <h1 className={`verdict-h ink-${tone}`}>{verdict}</h1>
         <p className="verdict-sub">{sub}</p>

@@ -43,6 +43,7 @@ const context: WebContext = {
   pending: () => [],
   peers: () => Promise.resolve([]),
   fleet: () => ({ self: "testhost", generatedAt: "2026-09-28T09:00:00.000Z", hosts: [], lastRuns: [], lastSweeps: [], openRuns: [] }),
+  workspaces: () => ({ self: "testhost", generatedAt: "2026-09-28T09:00:00.000Z", hosts: ["testhost"], workspaces: [], mirrorFailures: [] }),
 };
 
 async function page(path: string, settings: Settings | null): Promise<string> {

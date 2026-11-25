@@ -37,6 +37,8 @@ export default [
   // The machine, the store and the sync hosts of this host (0.44.0).
   route("status", "routes/status.tsx"),
   // The machines of the synced store and what runs where (0.139.0): host pages, in no workspace.
+  // Fleet (0.140.0): every workspace with its health and placement; /topology redirects to its #placement.
+  route("fleet", "routes/fleet.tsx"),
   route("hosts", "routes/hosts.tsx"),
   route("hosts/:host", "routes/host.tsx"),
   route("topology", "routes/topology.tsx"),

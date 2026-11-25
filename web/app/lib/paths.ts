@@ -129,7 +129,7 @@ export function activityQuery(filter: ActivityFilter) {
   return Object.fromEntries(entries.filter(([, value]) => value !== ""));
 }
 
-export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about" | "hosts" | "topology";
+export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about" | "hosts" | "fleet";
 
 export type Target =
   | { to: "overview"; ws: string | null }
@@ -139,9 +139,9 @@ export type Target =
   | { to: "milestone"; ws: string; ref: string }
   | { to: "vigil"; ws: string; slug: string }
   | { to: "candle"; ws: string; key: string }
-  | { to: "host"; page: HostPage; hash?: string }
+  | { to: "host"; page: HostPage; hash?: string; query?: Record<string, string> }
   /** One machine of the synced store (0.139.0). */
-  | { to: "machine"; host: string };
+  | { to: "machine"; host: string; hash?: string };
 
 function enc(text: string): string {
   return encodeURIComponent(text);
@@ -180,9 +180,9 @@ export function href(target: Target): string {
     case "candle":
       return `/w/${enc(target.ws)}/candles/${enc(target.key)}`;
     case "host":
-      return `/${target.page}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
+      return `/${target.page}${queryText(target.query)}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
     case "machine":
-      return `/hosts/${enc(target.host)}`;
+      return `/hosts/${enc(target.host)}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
   }
 }
 
@@ -217,7 +217,7 @@ function isSection(text: string | undefined): text is Section {
   return SECTIONS.some((section) => section === text);
 }
 
-const HOST_ROOTS = new Set(["status", "profiles", "settings", "hosts", "topology"]);
+const HOST_ROOTS = new Set(["status", "profiles", "settings", "hosts", "topology", "fleet"]);
 
 function placeOfWorkspace(scope: string, rest: readonly string[]): Place {
   const [first, second] = rest;
@@ -251,6 +251,45 @@ const SECTION_LABELS = {
   runs: "Runs",
   activity: "Activity",
 } satisfies Record<Section, string>;
+
+const HOST_LABELS = new Map([
+  ["status", "Status"],
+  ["profiles", "Profiles"],
+  ["settings", "Settings"],
+  ["hosts", "Machines"],
+  ["topology", "Fleet"],
+  ["fleet", "Fleet"],
+]);
+
+const DETAIL_WORDS = new Map<Section, string>([
+  ["rituals", "ritual"],
+  ["vigils", "vigil"],
+  ["runs", "run"],
+  ["milestones", "milestone"],
+  ["candles", "candle"],
+]);
+
+/**
+ * The label of the page a path opens, for the loading line (0.140.0): "Fleet", "Vigils",
+ * "vigil odds-empty-record", "machine host-b", "demo-shop" (a workspace Overview),
+ * "All workspaces". Null for a path that names no page.
+ */
+export function pageLabel(pathname: string): string | null {
+  const place = placeOf(pathname);
+  const parts = pathname.split("/").filter((part) => part !== "");
+  if (place.kind === "overview") return place.scope ?? "All workspaces";
+  if (place.kind === "section" && place.section !== null) return SECTION_LABELS[place.section];
+  if (place.kind === "detail" && place.section !== null) {
+    const word = DETAIL_WORDS.get(place.section) ?? place.section;
+    return `${word} ${decoded(parts.at(-1) ?? "")}`;
+  }
+  if (place.kind === "host") {
+    const [first = "", second] = parts;
+    if (first === "hosts" && second !== undefined) return `machine ${decoded(second)}`;
+    return HOST_LABELS.get(first) ?? null;
+  }
+  return null;
+}
 
 /** One step of the trail above a page. The last step is the current page and has no `href`. */
 export interface Crumb {

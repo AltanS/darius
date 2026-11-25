@@ -1,6 +1,7 @@
 /**
  * The parts of the Machines pages (0.139.0): a host's state, its live facts
- * from its own `darius serve`, and its facts from the synced ledgers. Read-only.
+ * from its own `darius serve`, and its facts from the synced ledgers. Since
+ * 0.140.0 a machine is an equal card (`MachineCard`). Read-only.
  */
 
 import { Link } from "react-router";
@@ -93,35 +94,83 @@ export function LedgerFacts({ host }: LedgerProps): React.ReactNode {
   );
 }
 
-interface RowProps {
+interface CardProps {
   name: string;
   peer: PeerHost | undefined;
   host: FleetHost | undefined;
+  /** This host's darius version: a card whose version differs shows it in amber. */
+  selfVersion: string | null;
+  /** The workspaces with a checkout on this host. */
+  checkouts: readonly string[];
+  /** The djinns pinned to this host. */
+  pinnedDjinns: number;
+  /** Link the name to the machine page (the list), or not (the machine page itself). */
+  linked?: boolean;
 }
 
-/** One machine in the list: name, state, version, then the live and the ledger facts. */
-export function MachineRow({ name, peer, host }: RowProps): React.ReactNode {
+/** One machine as an equal card: state, name, version, uptime, load, box check, last seen, and what it runs. */
+export function MachineCard({ name, peer, host, selfVersion, checkouts, pinnedDjinns, linked = true }: CardProps): React.ReactNode {
   const live = peer?.live ?? null;
   const version = peer?.version ?? host?.version ?? null;
+  const differs = version !== null && selfVersion !== null && version !== selfVersion;
+  const box = boxWord(live?.boxCheck ?? host?.boxCheck ?? null);
+  const self = peer?.self === true || host?.self === true;
+  const running = live?.openRuns.length ?? null;
   return (
-    <li className="sy-item">
-      <p className="sy-item-head">
-        <Link to={href({ to: "machine", host: name })} className="sy-name">
-          {name}
-        </Link>
-        {peer?.self === true || host?.self === true ? <span className="bk-mark tone-ok">this host</span> : null}
+    <article className="mc panel">
+      <header className="mc-head">
+        {linked ? (
+          <Link to={href({ to: "machine", host: name })} className="mc-name">
+            {name}
+          </Link>
+        ) : (
+          <span className="mc-name">{name}</span>
+        )}
+        {self ? <span className="bk-mark tone-ok">this host</span> : null}
         <HostState peer={peer} />
-        <span className="sy-size">{version === null ? "version unknown" : `darius ${version}`}</span>
-      </p>
-      {live === null ? null : (
-        <p className="sy-meta">
-          <span>{`${live.runtime} ${live.runtimeVersion}`}</span>
-          <span>up {uptimeText(live.uptimeSeconds)}</span>
-          <span>load {live.load[0].toFixed(2)}</span>
-          <span>{live.openRuns.length === 1 ? "1 open run" : `${String(live.openRuns.length)} open runs`}</span>
-        </p>
-      )}
-      {host === undefined ? <p className="sy-meta ink-idle">No ledger line of this host here.</p> : <LedgerFacts host={host} />}
-    </li>
+      </header>
+      <dl className="mc-facts">
+        <div>
+          <dt>darius</dt>
+          <dd className={differs ? "ink-late" : undefined}>{version === null ? "unknown" : differs ? `${version}, differs` : version}</dd>
+        </div>
+        <div>
+          <dt>Up</dt>
+          <dd>{live === null ? <span className="text-muted">unknown</span> : uptimeText(live.uptimeSeconds)}</dd>
+        </div>
+        <div>
+          <dt>Load</dt>
+          <dd className="mc-load">{live === null ? <span className="text-muted">unknown</span> : live.load.map((value) => value.toFixed(2)).join(" ")}</dd>
+        </div>
+        <div>
+          <dt>Box check</dt>
+          <dd>
+            <Status tone={box.tone} label={box.label.replace(/^box check /u, "")} />
+          </dd>
+        </div>
+        <div>
+          <dt>Last seen</dt>
+          <dd>
+            <Time iso={host?.lastSeen ?? null} />
+          </dd>
+        </div>
+        <div>
+          <dt>Running now</dt>
+          <dd>{running === null ? <span className="text-muted">unknown</span> : <Link to={href({ to: "machine", host: name, hash: "running" })}>{running}</Link>}</dd>
+        </div>
+        <div>
+          <dt>Checkouts here</dt>
+          <dd className="mc-trunc" title={checkouts.join(", ")}>
+            {checkouts.length === 0 ? <span className="text-muted">none</span> : `${String(checkouts.length)}: ${checkouts.join(", ")}`}
+          </dd>
+        </div>
+        <div>
+          <dt>Pinned djinns</dt>
+          <dd>
+            <Link to={href({ to: "machine", host: name, hash: "djinns" })}>{pinnedDjinns}</Link>
+          </dd>
+        </div>
+      </dl>
+    </article>
   );
 }

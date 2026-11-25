@@ -89,7 +89,7 @@ export function peerUrl(host: string, port: number, overrides: ReadonlyMap<strin
 }
 
 /** The state of a host whose probe failed, from how old its newest line is. */
-export function failedState(lastSeen: string | null, now: number): Exclude<PeerState, "self" | "online"> {
+export function failedState(lastSeen: string | null, now: number): Exclude<PeerState, "self" | "online" | "checking"> {
   if (lastSeen === null) return "offline";
   const age = now - Date.parse(lastSeen);
   return Number.isFinite(age) && age <= SYNCING_WITHIN_MS ? "unreachable" : "offline";
@@ -248,6 +248,35 @@ export class PeerProbe {
     return this.running;
   }
 
+  /**
+   * Every host with its state, at once (0.140.0): no page waits for a probe. A fresh cache
+   * answers; a stale one answers too and starts a new probe in the background; with no cache
+   * yet the probe starts in the background and the other hosts say `checking`. With the probe
+   * off (no fetch) the answer needs no network, so it is computed here and now.
+   */
+  current(): PeerHost[] {
+    const now = this.now();
+    const cached = this.cache;
+    if (cached !== null && now >= cached.at && now - cached.at < this.ttlMs) return cached.value;
+    if (this.options.fetch === null) return this.unprobedAll();
+    this.hosts().catch(() => undefined);
+    return cached?.value ?? this.checkingAll();
+  }
+
+  private unprobedAll(): PeerHost[] {
+    const checkedAt = new Date(this.now()).toISOString();
+    const live = this.options.self();
+    const value = this.options.known().map((host): PeerHost => (host.self ? { host: host.host, self: true, state: "self", live, lastSeen: host.lastSeen, version: live.version, reason: null, checkedAt } : this.unprobed(host, checkedAt, "not probed here")));
+    this.cache = { at: this.now(), value };
+    return value;
+  }
+
+  private checkingAll(): PeerHost[] {
+    const checkedAt = new Date(this.now()).toISOString();
+    const live = this.options.self();
+    return this.options.known().map((host): PeerHost => (host.self ? { host: host.host, self: true, state: "self", live, lastSeen: host.lastSeen, version: live.version, reason: null, checkedAt } : { host: host.host, self: false, state: "checking", live: null, lastSeen: host.lastSeen, version: host.version, reason: "first probe running", checkedAt }));
+  }
+
   private async probeAll(): Promise<PeerHost[]> {
     const started = this.now();
     const checkedAt = new Date(started).toISOString();
@@ -327,8 +356,7 @@ export function knownHosts(): KnownHost[] {
     .map((host) => ({ host: host.host, self: host.self, lastSeen: host.lastSeen, version: host.version }));
 }
 
-/** Every host of this store with its state, from the probe of this process. */
-export function peerHosts(): Promise<PeerHost[]> {
+function peerProbe(): PeerProbe {
   const key = `${stateDir()}\u0000${configDir()}\u0000${String(probePort)}`;
   if (probe?.key !== key) {
     const port = probePort;
@@ -337,5 +365,15 @@ export function peerHosts(): Promise<PeerHost[]> {
       probe: new PeerProbe({ self: () => collectHostLive(), known: knownHosts, port: () => port ?? 0, overrides: readWebPeers, fetch: port === null ? null : hostFetch }),
     };
   }
-  return probe.probe.hosts();
+  return probe.probe;
+}
+
+/** Every host of this store with its state, from the probe of this process; waits for a probe when the cache is old. */
+export function peerHosts(): Promise<PeerHost[]> {
+  return peerProbe().hosts();
+}
+
+/** Every host of this store with its state, at once: the cache, else `checking` while the first probe runs (0.140.0). */
+export function currentPeerHosts(): PeerHost[] {
+  return peerProbe().current();
 }

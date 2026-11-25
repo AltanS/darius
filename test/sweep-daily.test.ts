@@ -19,6 +19,7 @@ import { writeLink } from "../src/core/links.ts";
 import { itemRef, openProject } from "../src/core/store.ts";
 import { takeVigilSweepLease } from "../src/core/sweep-lease.ts";
 import { localToday } from "../src/core/sweep.ts";
+import { markMirrored } from "../src/core/mirror.ts";
 import { LINKED_LINE } from "../src/core/workdir.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-sweep-daily-"));
@@ -139,4 +140,29 @@ test("--daily leaves out a vigil whose one-vigil check runs on another host, and
   assert.equal(swept.closed, false);
   assert.equal(linesFor(readLedger(openProject(project)), itemRef("vigil", "here")).filter((line) => line.type === "vigil.swept" || line.type === "evidence").length, 0, "no line: the check on host A writes its own");
   await held.handle.release();
+});
+
+test("a mirrored copy with no link is skipped as no-workdir, even with an import path that exists here, and a link makes it run", async () => {
+  const project = "sd-mirrored";
+  await addHereVigil(project);
+  const repo = join(SANDBOX, `${project}-repo`);
+  mkdirSync(join(repo, ".tracker"), { recursive: true });
+  writeFileSync(join(repo, "here.txt"), "");
+  appendLine(openProject(project), { who: "test", type: "import", source: join(repo, ".tracker") });
+  markMirrored(openProject(project));
+
+  const all = await runVigil(["sweep", "--all-projects", "--daily", "--json"]);
+  assert.equal(all.code, 0, all.stderr);
+  const skip = JSON.parse(all.stdout).skipped.find((one: { project: string }) => one.project === project);
+  assert.equal(skip?.reason, "no-workdir", all.stdout);
+  assert.match(skip?.detail ?? "", /mirrored copy on this host/u);
+
+  const alone = await runVigil(["sweep", "--project", project]);
+  assert.equal(alone.code, 1);
+  assert.match(alone.stderr, /mirrored copy on this host/u);
+
+  const dir = linkedCheckout(project);
+  const linked = await runVigil(["sweep", "--project", project, "--json"]);
+  assert.equal(linked.code, 0, linked.stderr);
+  assert.equal(JSON.parse(linked.stdout).cwd, dir);
 });

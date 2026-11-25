@@ -129,11 +129,21 @@ export async function startFakeS3(bucket = "backups"): Promise<FakeS3> {
     }
     if (request.method === "GET" && url.searchParams.get("list-type") === "2") {
       const prefix = url.searchParams.get("prefix") ?? "";
-      const entries = [...objects]
-        .filter(([name]) => name.startsWith(prefix))
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([name, data]) => `<Contents><Key>${name}</Key><Size>${String(data.length)}</Size><ETag>"${etagOf(data)}"</ETag></Contents>`);
-      return send(response, 200, `<ListBucketResult><IsTruncated>false</IsTruncated>${entries.join("")}</ListBucketResult>`);
+      const delimiter = url.searchParams.get("delimiter") ?? "";
+      const matching = [...objects].filter(([name]) => name.startsWith(prefix)).toSorted(([a], [b]) => a.localeCompare(b));
+      // With a delimiter, a key with the delimiter after the prefix folds into one common prefix.
+      const folded = new Set<string>();
+      const entries: string[] = [];
+      for (const [name, data] of matching) {
+        const cut = delimiter === "" ? -1 : name.indexOf(delimiter, prefix.length);
+        if (cut !== -1) {
+          folded.add(name.slice(0, cut + delimiter.length));
+          continue;
+        }
+        entries.push(`<Contents><Key>${name}</Key><Size>${String(data.length)}</Size><ETag>"${etagOf(data)}"</ETag></Contents>`);
+      }
+      const prefixes = [...folded].map((one) => `<CommonPrefixes><Prefix>${one}</Prefix></CommonPrefixes>`);
+      return send(response, 200, `<ListBucketResult><IsTruncated>false</IsTruncated>${entries.join("")}${prefixes.join("")}</ListBucketResult>`);
     }
     const found = objects.get(key);
     if (request.method === "DELETE") {

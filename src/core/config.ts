@@ -101,7 +101,16 @@ export interface Config {
    * environment and the dashboard's file). Absent without the table.
    */
   snapshot?: Readonly<Record<string, TomlValue>>;
+  /**
+   * `[sync] mirror` (0.140.0): `darius sync --all-projects` also copies every bucket project this
+   * host lacks (src/core/mirror.ts). Off by default. `mirror_exclude` names the projects it never
+   * copies: `DEFAULT_MIRROR_EXCLUDE` when the key is absent.
+   */
+  sync: { mirror: boolean; mirrorExclude: readonly string[] };
 }
+
+/** The projects `[sync] mirror` leaves alone when `mirror_exclude` is absent. */
+export const DEFAULT_MIRROR_EXCLUDE: readonly string[] = ["demo", "darius-proof", "darius-selftest", "box", "_global"];
 
 /**
  * The units `[setup] units` may name, in the order setup lists them. All of
@@ -249,6 +258,22 @@ function boxSettings(table: Record<string, TomlValue>, file: string): Config["bo
   return { ...settings, writable: [...new Set(value)] };
 }
 
+const SYNC_KEYS: ReadonlySet<string> = new Set(["mirror", "mirror_exclude"]);
+
+/** The `[sync]` table. An unknown key or a bad type is an error that names it. */
+function syncSettings(table: Record<string, TomlValue>, file: string): Config["sync"] {
+  for (const key of Object.keys(table)) {
+    if (!SYNC_KEYS.has(key)) throw new Error(`${file}: [sync] has an unknown key "${key}" (known: ${[...SYNC_KEYS].join(", ")})`);
+  }
+  const mirror = optionalBoolean(table, "mirror", false, "sync", file);
+  const value = table.mirror_exclude;
+  if (value === undefined) return { mirror, mirrorExclude: DEFAULT_MIRROR_EXCLUDE };
+  const hint = 'mirror_exclude = ["demo", "box"]';
+  if (!Array.isArray(value)) throw new Error(`${file}: [sync] mirror_exclude must be a list of project names: ${hint}`);
+  if (value.includes("")) throw new Error(`${file}: [sync] mirror_exclude must not hold an empty name: ${hint}`);
+  return { mirror, mirrorExclude: [...new Set(value)] };
+}
+
 // --- allow_http rule ----------------------------------------------------------
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -348,8 +373,9 @@ export function loadConfig(): Config {
   const box = boxSettings(document.sections.box ?? {}, file);
 
   const snapshot = document.sections.snapshot;
+  const sync = syncSettings(document.sections.sync ?? {}, file);
 
-  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox, sandboxFrom, behind }, box, snapshot };
+  return { host, remote, notify: { webhook }, runner: { claude }, setup: { units }, run: { sandbox, sandboxFrom, behind }, box, snapshot, sync };
 }
 
 /** config.toml, or null when there is none (a fresh host, or a test). A malformed file throws. */

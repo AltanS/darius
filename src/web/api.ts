@@ -1264,7 +1264,8 @@ export interface HostLive {
  * `online`: its serve answered. `unreachable`: it did not, but its ledger lines are fresh (it syncs,
  * its serve is down or not reachable). `offline`: it did not answer and its lines are older.
  */
-export type PeerState = "self" | "online" | "unreachable" | "offline";
+/** `checking` (0.140.0): no probe answer yet; the first probe runs in the background, so no page waits for it. */
+export type PeerState = "self" | "online" | "unreachable" | "offline" | "checking";
 
 export interface PeerHost {
   host: string;
@@ -1327,6 +1328,80 @@ export interface FleetView {
   openRuns: (HostOpenRun & { host: string })[];
 }
 
+// --- the fleet of workspaces (0.140.0) -------------------------------------------------------
+
+/** One word per workspace (src/web/health.ts): the first rule that matches wins. */
+export type WorkspaceHealth = "unreadable" | "failing" | "needs-you" | "quiet" | "ok";
+
+/** A host that holds a workspace: `checkout` (a link or an import repo there), or `copy` (only the store). */
+export interface WorkspacePlace {
+  host: string;
+  kind: "checkout" | "copy";
+  /** Active rituals pinned to this host. */
+  pinned: number;
+}
+
+/** A ritual darius runs with a skill, as the workspace header lists it. */
+export interface FleetDjinn {
+  slug: string;
+  title: string;
+  state: "running" | "held" | "late" | "due" | "idle";
+  nextDueAt: string | null;
+  nextDue: string | null;
+  /** The host it runs on: its pin, else the checkout host; null when any host may. */
+  host: string | null;
+  why: "pinned" | "checkout" | null;
+  lastOutcome: string | null;
+  lastAt: string | null;
+  lastRun: string | null;
+}
+
+/** The counts of a workspace, each with its alarm part. */
+export interface WorkspaceCounts {
+  djinns: number;
+  djinnsLate: number;
+  rituals: number;
+  ritualsLate: number;
+  vigilsOpen: number;
+  vigilsFlagged: number;
+  candlesLit: number;
+  findingsOpen: number;
+  findingsNeedYou: number;
+}
+
+export interface FleetWorkspace {
+  name: string;
+  icon: WorkspaceIcon | null;
+  health: WorkspaceHealth;
+  /** Short counted phrases, worst first: "2 candles lit", "1 vigil flagged". */
+  reasons: string[];
+  places: WorkspacePlace[];
+  /** What this host holds of it. */
+  here: "checkout" | "copy";
+  /** This host's last sync of it. */
+  lastSync: string | null;
+  counts: WorkspaceCounts;
+  /** The newest ledger line that is not a version, alert or sync line. */
+  lastActivity: string | null;
+  djinns: FleetDjinn[];
+}
+
+/** A bucket project the mirror could not pull here; skipped for 24 h. */
+export interface FleetMirrorFailure {
+  project: string;
+  error: string;
+  at: string;
+}
+
+export interface FleetWorkspaces {
+  self: string;
+  generatedAt: string;
+  /** The hosts of the placement matrix: every host seen in 30 days, this host first. */
+  hosts: string[];
+  workspaces: FleetWorkspace[];
+  mirrorFailures: FleetMirrorFailure[];
+}
+
 // --- the handler ---------------------------------------------------------------------------
 
 /**
@@ -1381,6 +1456,8 @@ export interface WebContext {
   peers(): Promise<PeerHost[]>;
   /** The hosts of the store with their versions and box checks, and where each ritual and vigil last ran (0.139.0). Reads only. */
   fleet(): FleetView;
+  /** Every workspace of this host with its health and placement (0.140.0); `only` reads one workspace. */
+  workspaces(only?: string): FleetWorkspaces;
   /**
    * Whether the viewer may write through the page (0.68.0): false for the
    * loopback viewer, whose POSTs the server refuses. The page hides the

@@ -3,8 +3,8 @@
  * desktop and the drawer of a phone (the shell opens it with a
  * `<details data-menu>`; the drawer is closed by a press outside, Escape or a
  * link). The tree: All workspaces; each workspace with what needs you there;
- * the scope you are in, expanded to its eight places; the pages of all hosts
- * (Machines, Topology); the pages of this host; and a
+ * the scope you are in, expanded to its eight places; the Fleet group (Fleet,
+ * Machines); the pages of this host; and a
  * small host line at the end. At most one row is lit, and the row of the
  * scope you are in carries a check mark.
  */
@@ -45,7 +45,7 @@ const RUNS: SectionSpec = { section: "runs", label: "Runs", badge: NO_BADGE };
 const ACTIVITY: SectionSpec = { section: "activity", label: "Activity", badge: NO_BADGE };
 
 /** The row of a page that is lit in Places: the Overview, a section, or a host page. */
-export type LitRow = "overview" | Section | "status" | "hosts" | "topology" | "profiles" | "settings";
+export type LitRow = "overview" | Section | "status" | "hosts" | "fleet" | "profiles" | "settings";
 
 interface SectionIconProps {
   section: Section;
@@ -171,14 +171,16 @@ interface PlacesProps {
   lit: LitRow | null;
   /** The page is loading and has taken more than 300 ms: the brand gem blinks. */
   busy: boolean;
+  /** "Opening Fleet…" while busy, else empty: the text next to the gem (0.140.0). */
+  loading: string;
   /** The milestone finder of the workspace, for its row under the head (desktop only); null outside a workspace. */
   finder: FinderState | null;
 }
 
-/** The pages of every host of the store (0.139.0). */
-const FLEET_ROWS: readonly { page: "hosts" | "topology"; label: string; icon: NavIconName }[] = [
+/** The pages of every host of the store (0.139.0): Fleet answers "how many and how healthy" (0.140.0), Machines the hosts. */
+const FLEET_ROWS: readonly { page: "fleet" | "hosts"; label: string; icon: NavIconName }[] = [
+  { page: "fleet", label: "Fleet", icon: "topology" },
   { page: "hosts", label: "Machines", icon: "machine" },
-  { page: "topology", label: "Topology", icon: "topology" },
 ];
 
 const HOST_ROWS: readonly { page: "status" | "profiles" | "settings"; label: string; icon: NavIconName }[] = [
@@ -215,11 +217,12 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
   );
 }
 
-export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.ReactNode {
+export function Places({ data, scope, lit, busy, loading, finder }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
   const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: NO_TABS, icon: null }];
   const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? NO_TABS));
+  // The head (gem, name, host) is sticky inside the scrolling sidebar, so the gem and the loading text never scroll away (0.140.0).
   return (
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
       <div className="places-head">
@@ -227,7 +230,12 @@ export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.R
           <Gem size={28} busy={busy} />
           <span>darius</span>
         </Link>
-        <span className="places-hostname">{data.host}</span>
+        <span className="places-hostname" hidden={loading !== ""}>
+          {data.host}
+        </span>
+        <span className="busy-text" aria-live="polite">
+          {loading}
+        </span>
       </div>
       {finder === null ? null : (
         <div className="places-find">
@@ -252,7 +260,7 @@ export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.R
           </li>
         ))}
       </ul>
-      <p className="places-group">All hosts</p>
+      <p className="places-group">Fleet</p>
       <ul className="places-tree">
         {FLEET_ROWS.map(({ page, label, icon }) => (
           <Leaf key={page} to={href({ to: "host", page })} label={label} icon={<NavIcon name={icon} size={18} className="places-ico" />} lit={lit === page} />

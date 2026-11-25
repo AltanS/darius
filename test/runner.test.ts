@@ -39,6 +39,7 @@ import { getBlobText, openProject, sha256Hex } from "../src/core/store.ts";
 import { localToday } from "../src/core/sweep.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { writeLink } from "../src/core/links.ts";
+import { markMirrored } from "../src/core/mirror.ts";
 import { acknowledgeRun } from "../src/runner/hold.ts";
 import { authFailure, failedToday as failedTodayRun, runDue, takeRitualLease, type RunDueOptions } from "../src/runner/run-due.ts";
 import { findingCommand } from "../src/cli/finding.ts";
@@ -852,6 +853,22 @@ test("an imported ritual whose working dir is not on this host is skipped before
   assert.equal(linesOf(project, "run.started").length, 0);
 });
 
+test("a mirrored copy is skipped as no-workdir even when its import path exists here (0.140.0)", async () => {
+  const project = "rd-mirrored";
+  const slug = seedRitual(project, { slug: "mirrored", importedFrom: ".tracker/rituals/mirrored/ritual.md" });
+  const repo = join(SANDBOX, `${project}-repo`);
+  mkdirSync(join(repo, ".tracker"), { recursive: true });
+  appendLine(openProject(project), { who: "test", type: "import", source: join(repo, ".tracker") });
+  markMirrored(openProject(project));
+
+  const { report } = await runDueJson(project);
+  const entry = ritualsOf(report).find((ritual) => ritual.slug === slug);
+  assert.equal(entry?.action, "skipped", JSON.stringify(report));
+  assert.equal(entry?.reason, "no-workdir");
+  assert.match(entry?.detail ?? "", /mirrored copy on this host/u);
+  assert.equal(linesOf(project, "run.started").length, 0);
+});
+
 /** A linked checkout of `project` whose `.darius.toml` carries `marker`. */
 function linkedCheckout(project: string, marker: string): string {
   const dir = join(SANDBOX, `${project}-checkout`);
@@ -998,7 +1015,7 @@ test("a dirty .darius.toml skips unattended as marker-dirty and fails the batch,
 
 /** A host config for an injected batch: this host's id, no remote, `[run] behind` as given. */
 function hostConfig(behind: Config["run"]["behind"]): Config {
-  return { host: hostId(), notify: { webhook: "" }, runner: { claude: "" }, setup: { units: SETUP_UNITS }, run: { sandbox: "off", sandboxFrom: "key", behind }, box: { sshAgent: false } };
+  return { host: hostId(), notify: { webhook: "" }, runner: { claude: "" }, setup: { units: SETUP_UNITS }, run: { sandbox: "off", sandboxFrom: "key", behind }, box: { sshAgent: false }, sync: { mirror: false, mirrorExclude: [] } };
 }
 
 function gitIn(dir: string, args: readonly string[]): void {

@@ -259,6 +259,25 @@ units = ["sync"]   # any of "sync", "vigil-sweep", "run-due", "web", "snapshot"
 `darius setup --systemd` enables the listed units. It disables and removes the others, but
 touches only the unit files it wrote. `darius update` reruns it, preserving your choices.
 
+### Mirror every project on a host
+
+A host syncs the projects it has. To make it copy every project in the bucket, set `[sync] mirror`
+in `config.toml`. It is off by default, and a host with no `[sync]` table lists nothing.
+
+```toml
+[sync]
+mirror = true
+mirror_exclude = ["demo", "darius-proof", "darius-selftest", "box", "_global"]   # the default list
+```
+
+With `mirror = true`, `darius sync --all-projects` also lists the bucket once. It creates each
+project that is not in `mirror_exclude` and not on this host, and runs a normal full sync on it.
+`mirror_exclude` replaces the default list, so repeat the names you still want to leave out. A
+mirrored copy never runs work on this host until you run `darius link` inside a checkout of it: run-due
+and the vigil sweep skip it as `no-workdir`. A project that fails is skipped for 24 hours, then tried
+again, and the sync exits 1. `--pull-only` and `--reseed` skip the mirror. `darius sync --json` adds
+`mirrored` and `mirrorFailed` when the mirror is on.
+
 ### Unattended runs: the mask
 
 The mask is the older, weaker sandbox. A host with `sandbox = "mask"` starts each unattended run through

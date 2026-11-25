@@ -21,6 +21,7 @@ process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
 
 const built: { default: WebHandler } = await import("../web/build/server/index.js");
+const { buildWorkspaces } = await import("../src/web/workspaces.ts");
 const handler = built.default;
 
 const NONCE = "bm9uY2Utb2YtdGhlLXRlc3Q=";
@@ -467,6 +468,11 @@ const context: WebContext = {
   followUp: () => Promise.resolve({ ready: false, host: "host-a", reason: "no follow-up in this fake" }),
   peers: () => Promise.resolve(PEERS),
   fleet: () => FLEET,
+  // From the status of the context it is called on, so a test that swaps the status swaps the fleet too.
+  workspaces(only) {
+    const status = this.status();
+    return buildWorkspaces({ self: "testhost", now: Date.parse(status.generatedAt), today: status.today, generatedAt: status.generatedAt, projects: status.projects.filter((one) => only === undefined || one.name === only), ledgers: [], litCandles: [], hosts: ["testhost", "host-b"], mirrorFailures: [] });
+  },
   canWrite: true,
 };
 
@@ -1911,7 +1917,7 @@ test("Places lists All workspaces and each workspace with what needs you; the sc
   const { body } = await readWith("/w/demo/rituals", {}, status);
   const places = navOf(body, "Places");
   const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Machines", "Topology", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Fleet", "Machines", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
   assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
   assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
   assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
@@ -2339,7 +2345,7 @@ const CRAWL: Crawl[] = [
   { path: "/status", lit: null },
   { path: "/hosts", lit: null },
   { path: "/hosts/host-b", lit: null },
-  { path: "/topology", lit: null },
+  { path: "/fleet", lit: null },
   { path: "/settings/backups", lit: null },
   { path: "/profiles", lit: null },
   { path: "/nope", lit: null },

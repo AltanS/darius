@@ -109,6 +109,16 @@ export interface S3Copy {
   copy(from: string, to: string): Promise<void>;
 }
 
+/**
+ * Kept apart from `S3`, like `S3Upload`, so the sync code and its fakes need no change. The
+ * top-level folders of the bucket: with a delimiter, the server answers with the common prefixes
+ * and no objects.
+ */
+export interface S3Prefixes {
+  /** Every key prefix up to the first `/` (each ends with `/`), sorted as the server sorts them. */
+  listPrefixes(): Promise<string[]>;
+}
+
 /** Whether the bucket keeps old versions. `off` means it never had versioning; `unknown` means the backend does not say. */
 export type BucketVersioning = "enabled" | "suspended" | "off" | "unknown";
 
@@ -308,6 +318,18 @@ export interface ListPage {
   nextToken?: string;
 }
 
+/** The continuation token of a truncated page, or undefined. Throws when it is truncated but names none. */
+function continuationOf(xml: string): string | undefined {
+  // Only the top-level flag: strip the entries so nothing inside them can match.
+  const isTruncated = firstText(xml.replace(/<Contents>[\s\S]*?<\/Contents>/g, ""), "IsTruncated") === "true";
+  if (!isTruncated) return undefined;
+  const nextToken = firstText(xml, "NextContinuationToken");
+  if (nextToken === undefined || nextToken === "") {
+    throw new Error("S3 list: IsTruncated is true but NextContinuationToken is missing");
+  }
+  return nextToken;
+}
+
 /** One ListObjectsV2 response body. Throws when it is truncated but names no next token. */
 export function parseListPage(xml: string): ListPage {
   const objects = innerTexts(xml, "Contents").map((contents) => {
@@ -318,14 +340,18 @@ export function parseListPage(xml: string): ListPage {
     }
     return { key, etag: unquote(firstText(contents, "ETag") ?? ""), size };
   });
-  // Only the top-level flag: strip the entries so nothing inside them can match.
-  const isTruncated = firstText(xml.replace(/<Contents>[\s\S]*?<\/Contents>/g, ""), "IsTruncated") === "true";
-  if (!isTruncated) return { objects };
-  const nextToken = firstText(xml, "NextContinuationToken");
-  if (nextToken === undefined || nextToken === "") {
-    throw new Error("S3 list: IsTruncated is true but NextContinuationToken is missing");
-  }
-  return { objects, nextToken };
+  const nextToken = continuationOf(xml);
+  return nextToken === undefined ? { objects } : { objects, nextToken };
+}
+
+/** The `<CommonPrefixes>` of one ListObjectsV2 response that had a delimiter, and its next token. */
+export function parsePrefixPage(xml: string): { prefixes: string[]; nextToken?: string } {
+  const prefixes = innerTexts(xml, "CommonPrefixes").flatMap((entry) => {
+    const prefix = firstText(entry, "Prefix");
+    return prefix === undefined || prefix === "" ? [] : [prefix];
+  });
+  const nextToken = continuationOf(xml);
+  return nextToken === undefined ? { prefixes } : { prefixes, nextToken };
 }
 
 /** One GetBucketVersioning answer. No `<Status>` means versioning was never turned on. */
@@ -381,7 +407,7 @@ function requireKey(key: string): void {
   if (key === "") throw new Error("S3: object key is empty");
 }
 
-export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload & S3Versioning & S3Copy {
+export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload & S3Versioning & S3Copy & S3Prefixes {
   if (!cfg.path_style) throw new Error("S3: only path-style addressing is supported; set path_style = true");
   if (cfg.bucket === "") throw new Error("S3: bucket is empty");
   if (creds.accessKeyId === "" || creds.secretAccessKey === "") throw new Error("S3: credentials are empty");
@@ -439,16 +465,21 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload &
     return unquote(etag);
   }
 
-  async function listPage(prefix: string, token: string | undefined): Promise<ListPage> {
+  async function listPageText(prefix: string, token: string | undefined, delimiter?: string): Promise<string> {
     const query: QueryPair[] = [
       ["list-type", "2"],
       ["prefix", prefix],
     ];
+    if (delimiter !== undefined) query.push(["delimiter", delimiter]);
     if (token !== undefined) query.push(["continuation-token", token]);
     const spec: RequestSpec = { method: "GET", query };
     const response = await send(spec);
     if (!response.ok) throw await failure(response, spec);
-    return parseListPage(await response.text());
+    return response.text();
+  }
+
+  async function listPage(prefix: string, token: string | undefined): Promise<ListPage> {
+    return parseListPage(await listPageText(prefix, token));
   }
 
   /** The part size for a source: the asked one, never under 5 MiB, large enough for 10 000 parts. */
@@ -631,6 +662,18 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload &
         token = result.nextToken;
       }
       throw new Error(`S3 list ${prefix}: more than ${MAX_LIST_PAGES} pages`);
+    },
+
+    async listPrefixes() {
+      const prefixes: string[] = [];
+      let token: string | undefined;
+      for (let page = 1; page <= MAX_LIST_PAGES; page += 1) {
+        const result = parsePrefixPage(await listPageText("", token, "/"));
+        prefixes.push(...result.prefixes);
+        if (result.nextToken === undefined) return prefixes;
+        token = result.nextToken;
+      }
+      throw new Error(`S3 list: more than ${MAX_LIST_PAGES} pages of prefixes`);
     },
 
     async getBucketVersioning() {

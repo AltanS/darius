@@ -7,12 +7,14 @@
  *   2. The repo an import came from (the parent of the `.tracker` dir on the
  *      latest `import` line), when that path exists on this host. This keeps a
  *      host that imported before `darius link` existed working unchanged.
+ *      A mirrored copy (`[sync] mirror`, src/core/mirror.ts) skips this step.
  *   3. Nowhere, when another host linked or imported the project: its work
  *      needs a checkout this host does not have. Callers skip it here
  *      (`no-workdir`) instead of running repo-relative Commands in the wrong
  *      dir.
  *   4. The project's store dir, for a project with no repo at all (for
- *      example `darius-selftest`).
+ *      example `darius-selftest`). A mirrored copy never gets this: the mirror
+ *      made the project here, so its work belongs in a checkout (0.140.0).
  *
  * The checkout's `.darius.toml` comes back with the dir, for `max_mode`. A
  * marker that names another project is an error: the link points at the
@@ -24,6 +26,7 @@ import { dirname } from "node:path";
 
 import { hostId } from "./ledger.ts";
 import { linkedDir, linksFile } from "./links.ts";
+import { isMirroredHere } from "./mirror.ts";
 import { readMarker, type Marker } from "./marker.ts";
 import type { Document, JsonValue, LedgerLine, Ritual } from "./model.ts";
 import type { Project } from "./store.ts";
@@ -65,6 +68,7 @@ function linkedElsewhere(ledger: readonly LedgerLine[]): LedgerLine | undefined 
 export function checkoutDir(project: Project, ledger: readonly LedgerLine[]): string | undefined {
   const linked = linkedDir(project.name);
   if (linked !== undefined) return existsSync(linked) ? linked : undefined;
+  if (isMirroredHere(ledger)) return undefined;
   const imported = importedRepo(ledger);
   return imported !== undefined && existsSync(imported) ? imported : undefined;
 }
@@ -76,6 +80,12 @@ export function projectWorkdir(project: Project, ledger: readonly LedgerLine[]):
     return {
       missing: linked,
       detail: `${linked}, linked in ${linksFile()}, is gone: run \`darius link\` in a checkout of ${project.name}`,
+    };
+  }
+  if (isMirroredHere(ledger)) {
+    return {
+      missing: project.name,
+      detail: `${project.name} is a mirrored copy on this host: run \`darius link\` inside a checkout here to run its work`,
     };
   }
   const imported = importedRepo(ledger);
@@ -105,7 +115,7 @@ export interface RitualHost {
  *
  *   1. Its `host` pin, when it has one.
  *   2. This host, when the project has a checkout here: a link in
- *      links.toml, or the repo of its latest import.
+ *      links.toml, or the repo of its latest import (not for a mirrored copy).
  *   3. The host of the latest `project.linked` line from another host: the
  *      checkout is there.
  *   4. null: no pin and no checkout anywhere darius knows of. Any host may
@@ -118,7 +128,7 @@ export function ritualHost(project: Project, ledger: readonly LedgerLine[], doc:
   const pin = doc.header.host;
   if (pin !== undefined && pin !== "") return { host: pin, why: "pinned" };
   const here = hostId();
-  const imported = importedRepo(ledger);
+  const imported = isMirroredHere(ledger) ? undefined : importedRepo(ledger);
   if (linkedDir(project.name) !== undefined || (imported !== undefined && existsSync(imported))) return { host: here, why: "linked" };
   const other = ledger.findLast((one) => one.type === LINKED_LINE && isText(one.path) && one.host !== here);
   return other === undefined ? null : { host: other.host, why: "linked" };

@@ -16,6 +16,7 @@ import {
   canonicalQuery,
   createS3,
   parseListPage,
+  parsePrefixPage,
   parseVersioning,
   S3Error,
   S3NetworkError,
@@ -177,6 +178,29 @@ describe("ListObjectsV2 tag scanner", () => {
 
   test("truncated without a token is an error, not an endless loop", () => {
     assert.throws(() => parseListPage("<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>"), /NextContinuationToken/);
+  });
+});
+
+describe("top-level prefixes", () => {
+  test("the scanner reads the common prefixes and the continuation token, and ignores objects", () => {
+    const page = parsePrefixPage(
+      `<ListBucketResult><Contents><Key>root.txt</Key><ETag>"a"</ETag><Size>1</Size></Contents>` +
+        `<CommonPrefixes><Prefix>alpha/</Prefix></CommonPrefixes><CommonPrefixes><Prefix>b&amp;c/</Prefix></CommonPrefixes>` +
+        `<IsTruncated>true</IsTruncated><NextContinuationToken>t2</NextContinuationToken></ListBucketResult>`,
+    );
+    assert.deepEqual(page, { prefixes: ["alpha/", "b&c/"], nextToken: "t2" });
+  });
+
+  test("listPrefixes asks with a delimiter and returns each top-level folder once", async () => {
+    const fake = await startFakeS3();
+    try {
+      for (const key of ["alpha/ledger/h/1.jsonl", "alpha/manifest.json", "beta/manifest.json", "root.txt"]) fake.objects.set(key, Buffer.from("x"));
+      const s3 = createS3({ ...remoteFor(fake.endpoint), bucket: fake.bucket, sse: false }, AWS_EXAMPLE);
+      assert.deepEqual(await s3.listPrefixes(), ["alpha/", "beta/"]);
+      assert.equal(fake.log.filter((line) => line.includes("delimiter=%2F")).length, 1, fake.log.join("\n"));
+    } finally {
+      await fake.stop();
+    }
   });
 });
 

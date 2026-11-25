@@ -31,14 +31,31 @@
  * file is captured at once and a second sync pushes it, so both hosts hold
  * the same file after each has synced twice.
  *
+ * Mirror (0.140.0, `[sync] mirror = true` in config.toml, off by default): with
+ * `--all-projects` the run also lists the bucket's project prefixes once, and
+ * for each valid name that is not in `mirror_exclude`, not on this host and not
+ * in its 24 h failure backoff, it creates the project, appends one
+ * `project.mirrored` ledger line and runs the normal full sync (push too). The
+ * copy never runs work here until `darius link` names a checkout
+ * (src/core/mirror.ts, src/core/workdir.ts). A prefix that fails is removed
+ * again, recorded in `mirror-failures.json` in the state dir, and tried again
+ * after 24 h. A failure is an error of the run (exit 1). `--pull-only` and
+ * `--reseed` skip the mirror.
+ *
  * `--json` prints one object: {ok, projects: SyncReport[], errors: [{project, error}]}.
+ * With the mirror on it adds `mirrored: string[]` (projects created in this run)
+ * and `mirrorFailed: [{project, error}]`.
  */
+
+import { existsSync, rmSync } from "node:fs";
 
 import { loadConfig } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
-import { resolveProject } from "../core/paths.ts";
-import { createS3 } from "../core/s3.ts";
-import type { S3 } from "../core/s3.ts";
+import { chooseMirrorProjects, clearMirrorFailure, markMirrored, readMirrorFailures, recordMirrorFailure } from "../core/mirror.ts";
+import { projectDir, resolveProject } from "../core/paths.ts";
+import { scrubForLedger, stripUrlUserinfo } from "../core/redact.ts";
+import { createS3, S3NetworkError } from "../core/s3.ts";
+import type { S3, S3Prefixes } from "../core/s3.ts";
 import { isInsideMask } from "../core/sandbox.ts";
 import { GLOBAL_PROJECT, listProjects, openProject, type Project } from "../core/store.ts";
 import { flushAlerts } from "../core/alerts.ts";
@@ -77,9 +94,13 @@ interface ProjectSyncReport extends SyncReport {
   tree?: TreeSyncReport;
 }
 
-interface SyncRun {
+export interface SyncRun {
   reports: ProjectSyncReport[];
   errors: ProjectError[];
+  /** Set when the mirror ran: the projects it created in this run. */
+  mirrored?: string[];
+  /** Set when the mirror ran: the prefixes that failed in this run (each is also in `errors`). */
+  mirrorFailed?: ProjectError[];
 }
 
 interface ProjectSelection {
@@ -101,7 +122,7 @@ function projectNames(args: ParsedArgs): ProjectSelection {
   return { names: [resolveProject(flag)], isCreate: () => true };
 }
 
-function remoteClient(cfg: Config): S3 {
+function remoteClient(cfg: Config): S3 & S3Prefixes {
   if (cfg.remote === undefined) {
     throw new Error("no [remote] in config.toml: add the bucket settings, then run 'darius setup --remote'");
   }
@@ -160,6 +181,50 @@ async function syncOne(project: Project, s3: S3, cfg: Config, pullOnly: boolean,
   return report;
 }
 
+/** A failure as one short line for the report and the failure file: no userinfo in a URL, no long text. */
+function shortError(cause: unknown): string {
+  return scrubForLedger(stripUrlUserinfo(errorMessage(cause)));
+}
+
+/** The one project of a mirror run: create it, mark it, sync it in full. A failure removes what this run made. */
+async function mirrorOne(name: string, s3: S3, cfg: Config, run: SyncRun, now: number): Promise<void> {
+  const isNew = !existsSync(projectDir(name));
+  try {
+    const project = openProject(name, { create: true });
+    // Before the sync: whatever the sync leaves of the project, it is a mirrored copy on this host.
+    markMirrored(project);
+    run.reports.push(await syncOne(project, s3, cfg, false));
+    clearMirrorFailure(name);
+    run.mirrored?.push(name);
+  } catch (cause) {
+    // Nothing of this host's own is in a project the mirror just made, so the next try starts clean.
+    if (isNew) rmSync(projectDir(name), { recursive: true, force: true });
+    const error = shortError(cause);
+    recordMirrorFailure({ project: name, error, at: new Date(now).toISOString() });
+    run.mirrorFailed?.push({ project: name, error });
+    run.errors.push({ project: name, error: `mirror: ${error}` });
+  }
+}
+
+/**
+ * Mirrors the bucket's projects this host lacks (see the top of this file). One listing per run. An
+ * unreachable bucket adds nothing here: the project syncs report it as `offline` already.
+ */
+export async function mirrorMissing(s3: S3 & S3Prefixes, cfg: Config, run: SyncRun, now: number = Date.now()): Promise<void> {
+  run.mirrored = [];
+  run.mirrorFailed = [];
+  let prefixes: string[];
+  try {
+    prefixes = await s3.listPrefixes();
+  } catch (cause) {
+    if (cause instanceof S3NetworkError) return;
+    run.errors.push({ project: "(mirror)", error: `cannot list the bucket: ${shortError(cause)}` });
+    return;
+  }
+  const todo = chooseMirrorProjects({ prefixes, exclude: cfg.sync.mirrorExclude, local: listProjects(), failures: readMirrorFailures(), now });
+  for (const name of todo) await mirrorOne(name, s3, cfg, run, now);
+}
+
 async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   const { names, isCreate } = projectNames(args);
   const cfg = loadConfig();
@@ -174,6 +239,8 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
       run.errors.push({ project: name, error: errorMessage(cause) });
     }
   }
+  const isMirror = args.flags["all-projects"] === true && args.flags["pull-only"] !== true && args.flags.reseed !== true && cfg.sync.mirror;
+  if (isMirror) await mirrorMissing(s3, cfg, run);
   return run;
 }
 
@@ -236,12 +303,14 @@ export const syncCommand: Command = {
     const code = exitCode(run);
     await alertAfterSync();
     if (args.json) {
-      console.log(JSON.stringify({ ok: code === EXIT_OK, projects: run.reports, errors: run.errors }));
+      const mirror = run.mirrored === undefined ? {} : { mirrored: run.mirrored, mirrorFailed: run.mirrorFailed ?? [] };
+      console.log(JSON.stringify({ ok: code === EXIT_OK, projects: run.reports, errors: run.errors, ...mirror }));
       for (const failure of run.errors) console.error(`darius sync: ${failure.project}: ${failure.error}`);
       for (const report of run.reports) if (report.outdated !== undefined) console.error(`darius sync: ${outdatedLine(report.project, report.outdated)}`);
       return code;
     }
     for (const report of run.reports) console.log([describe(report), ...describeTree(report)].join("\n"));
+    if (run.mirrored !== undefined && run.mirrored.length > 0) console.log(`+ mirrored here: ${run.mirrored.join(", ")}`);
     for (const failure of run.errors) console.error(`! ${failure.project}: ${failure.error}`);
     if (run.reports.length === 0 && run.errors.length === 0) console.log("· no projects in the local store");
     return code;

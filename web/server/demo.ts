@@ -11,10 +11,11 @@
  */
 
 import type { JsonValue } from "../../src/core/model.ts";
-import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, FleetHost, FleetLast, FleetView, HostLive, HostStatus, PeerHost, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, FleetHost, FleetLast, FleetView, FleetWorkspaces, HostLive, HostStatus, PeerHost, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 import { milestoneSummary } from "../../src/web/milestone-summary.ts";
+import { buildWorkspaces, type RitualRuns, type WorkspaceLedgerFacts } from "../../src/web/workspaces.ts";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -410,6 +411,24 @@ function fieldNotes(now: number): ProjectStatus {
   };
 }
 
+/** A plain workspace of the fleet demo (0.140.0): its rituals and vigils, and how this host holds it. */
+function plainProject(now: number, name: string, extra: Partial<ProjectStatus>): ProjectStatus {
+  return { name, icon: null, checkout: `/home/user/projects/${name}`, maxMode: "report", lastSync: ago(now, 5 * MINUTE), error: null, runs: [], rituals: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, candles: { lit: 0 }, ...extra };
+}
+
+/** The extra workspaces of the fleet demo: one of each health that the first three do not show, and copies of workspaces that live on another host. */
+function fleetProjects(now: number): ProjectStatus[] {
+  return [
+    plainProject(now, "mail-relay", { icon: { kind: "emoji", text: "✉" }, rituals: [ritual("bounce-scan", "Bounce scan (djinn)", { skill: "bounce-scan", nextDue: day(now, 0, 1) }), ritual("dns-check", "DNS check (djinn)", { skill: "dns-check", nextDue: day(now, 0, 1), host: "host-c" })] }),
+    plainProject(now, "ledger-tools", { rituals: [ritual("import-check", "Import check (djinn)", { skill: "import-check", nextDue: day(now, 0, 1) })], vigils: [vigil("rate-limit", "Rate limit holds", { due: day(now, 0, 0) })], findings: { needsYou: 1, open: 2 } }),
+    plainProject(now, "infra-notes", { checkout: null, lastSync: ago(now, 3 * 60 * MINUTE), rituals: [ritual("cert-scan", "Certificate scan (djinn)", { skill: "cert-scan", nextDue: day(now, 0, 2) })] }),
+    plainProject(now, "status-page", { checkout: null, lastSync: ago(now, 9 * MINUTE), rituals: [ritual("probe-review", "Probe review (djinn)", { skill: "probe-review", nextDue: day(now, 0, 1) })], vigils: [vigil("uptime-soak", "Uptime soak", { due: day(now, 0, 5) })] }),
+    plainProject(now, "old-site", { rituals: [ritual("crawl", "Crawl", { lifecycle: "retired", mode: "off" })] }),
+    plainProject(now, "archive-2025", { checkout: null, lastSync: ago(now, 7 * MINUTE) }),
+    plainProject(now, "broken-store", { error: ".darius.toml: line 3: expected a value" }),
+  ];
+}
+
 export function demoStatus(now: number = Date.now()): HostStatus {
   return {
     host: "demo",
@@ -418,7 +437,7 @@ export function demoStatus(now: number = Date.now()): HostStatus {
     today: new Date(now - new Date(now).getTimezoneOffset() * MINUTE).toISOString().slice(0, 10),
     utcOffset: -new Date(now).getTimezoneOffset(),
     profiles: [],
-    projects: [project(now), atlas(now), fieldNotes(now)],
+    projects: [project(now), atlas(now), fieldNotes(now), ...fleetProjects(now)],
     hosts: [{ host: "demo", self: true, backup: null }],
   };
 }
@@ -689,6 +708,54 @@ export function demoFleet(now: number): FleetView {
   };
 }
 
+// --- the fleet of workspaces (0.140.0) ---------------------------------------------------
+
+function demoRuns(slug: string, last: { run: string; outcome: string | null; at: string } | null, failedStreak = 0): RitualRuns {
+  return { slug, last, failedStreak };
+}
+
+/** The places of a demo workspace: this host first, then the others. */
+function here(kind: "checkout" | "copy", ...others: Array<[string, "checkout" | "copy"]>): WorkspaceLedgerFacts["places"] {
+  return [{ host: "demo", kind }, ...others.map(([host, other]) => ({ host, kind: other }))];
+}
+
+/** What the ledgers say in the demo: where each workspace lives, its last activity, and the failed streaks that set its health. */
+function demoLedgers(now: number): WorkspaceLedgerFacts[] {
+  const plain = (name: string, places: WorkspaceLedgerFacts["places"], lastAgo: number, rituals: RitualRuns[] = [], extra: Partial<WorkspaceLedgerFacts> = {}): WorkspaceLedgerFacts => ({ name, lastActivity: ago(now, lastAgo), rituals, places, treeConflicts: 0, cannotStart: [], ...extra });
+  const shop = demoStatus(now).projects.find((one) => one.name === "demo-shop");
+  const shopRuns = (shop?.rituals ?? []).map((row) => {
+    const newest = shop?.runs.find((candidate) => candidate.item === `ritual/${row.slug}`);
+    return demoRuns(row.slug, newest === undefined ? null : { run: newest.run, outcome: newest.phase === "closed" ? newest.outcome : newest.phase, at: newest.startedAt }, newest?.outcome === "failed" ? 1 : 0);
+  });
+  return [
+    plain("demo-shop", here("checkout", ["host-b", "copy"], ["host-c", "copy"]), 6 * MINUTE, shopRuns),
+    plain("atlas-docs", here("checkout", ["host-c", "copy"]), 3 * MINUTE, [demoRuns("release-notes", { run: "01DEMOATLAS0000000000000001", outcome: "complete", at: ago(now, 9 * 60 * MINUTE) })]),
+    plain("field-notes", here("checkout"), 5 * 60 * MINUTE, [demoRuns("notes-index", { run: "01DEMONOTES0000000000000001", outcome: "complete", at: ago(now, 5 * 60 * MINUTE) })]),
+    plain("mail-relay", here("checkout", ["host-c", "copy"]), 40 * MINUTE, [demoRuns("bounce-scan", { run: "01DEMOMAIL00000000000000002", outcome: "failed", at: ago(now, 40 * MINUTE) }, 2), demoRuns("dns-check", { run: "01DEMOMAIL00000000000000003", outcome: "complete", at: ago(now, 2 * 60 * MINUTE) })]),
+    plain("ledger-tools", here("checkout"), 2 * 60 * MINUTE, [demoRuns("import-check", { run: "01DEMOLEDGER000000000000001", outcome: "failed", at: ago(now, 2 * 60 * MINUTE) }, 1)], { treeConflicts: 1 }),
+    plain("infra-notes", here("copy", ["host-b", "checkout"]), 3 * 60 * MINUTE, [demoRuns("cert-scan", { run: "01DEMOINFRA0000000000000001", outcome: "complete", at: ago(now, 3 * 60 * MINUTE) })]),
+    plain("status-page", here("copy", ["host-c", "checkout"]), 30 * MINUTE, [demoRuns("probe-review", { run: "01DEMOSTATUS000000000000001", outcome: "complete", at: ago(now, 30 * MINUTE) })]),
+    plain("old-site", here("checkout"), 40 * DAY),
+    plain("archive-2025", here("copy", ["host-b", "checkout"]), 90 * DAY),
+  ];
+}
+
+/** The fleet view of the demo: nine workspaces of every health on three hosts, and one workspace the mirror could not pull. */
+export function demoWorkspaces(now: number, only?: string): FleetWorkspaces {
+  const status = demoStatus(now);
+  return buildWorkspaces({
+    self: "demo",
+    now,
+    today: status.today,
+    generatedAt: status.generatedAt,
+    projects: status.projects.filter((one) => only === undefined || one.name === only),
+    ledgers: demoLedgers(now),
+    litCandles: demoCandles(now).filter((row) => row.status === "lit"),
+    hosts: ["demo", "host-b", "host-c"],
+    mirrorFailures: [{ project: "big-media", error: "bucket answered 403 for the project prefix", at: ago(now, 3 * 60 * MINUTE) }],
+  });
+}
+
 // --- demo writes (0.104.0) ---------------------------------------------------------------
 
 /** How long a demo start stays `starting`. */
@@ -823,5 +890,6 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
     peers: () => Promise.resolve(demoPeers(Date.now())),
     fleet: () => demoFleet(Date.now()),
+    workspaces: (only) => demoWorkspaces(Date.now(), only),
   };
 }

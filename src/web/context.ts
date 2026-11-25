@@ -21,8 +21,9 @@ import { activityOf, pendingActivity } from "./activity.ts";
 import { collectBackups } from "./backups.ts";
 import { collectCandleRows, candleDetail } from "./candles.ts";
 import { collectFleet } from "./fleet.ts";
+import { collectWorkspaces } from "./workspaces.ts";
 import { pendingStarts, vigilCheckOf } from "./pending.ts";
-import { peerHosts } from "./peers.ts";
+import { currentPeerHosts } from "./peers.ts";
 import { collectSystem } from "./system.ts";
 import { collectStatus, milestoneDetail, ritualDetail, runDetail, vigilDetail } from "./status.ts";
 
@@ -202,8 +203,10 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     emailProblem: () => emailStatus().problem,
     activity: (project, options) => collectActivity(project, options),
     pending: (project) => collectPending(project),
-    peers: () => peerHosts(),
+    // No page waits for a probe (0.140.0): the cache answers, a stale or a cold one probes in the background.
+    peers: () => Promise.resolve(currentPeerHosts()),
     fleet: () => collectFleet(),
+    workspaces: (only) => collectWorkspaces(cachedStatus(), new Date(), only),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),
   };
 }

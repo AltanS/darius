@@ -1,0 +1,201 @@
+/**
+ * The parts of the fleet pages (0.140.0): a health word with its dot, the
+ * reasons, the host chips of a workspace (checkout or copy), and the
+ * workspace header that heads a workspace Overview: health, where it lives,
+ * five count links and its djinns. Colour is never the only signal: every
+ * dot comes with its word.
+ */
+
+import { Link } from "react-router";
+
+import type { FleetDjinn, FleetWorkspace, WorkspaceHealth, WorkspacePlace } from "../../../src/web/api.ts";
+import { GROUP_MAX, healthWord, shownReasons } from "../lib/fleet.ts";
+import { href } from "../lib/paths.ts";
+import { outcomeTone, type Tone } from "../lib/tone.ts";
+import { Status, Time } from "./ui.tsx";
+
+interface HealthProps {
+  health: WorkspaceHealth;
+}
+
+/** The health word with a square dot in its colour. */
+export function HealthWord({ health }: HealthProps): React.ReactNode {
+  const word = healthWord(health);
+  return (
+    <span className={`fl-health tone-${word.tone}`}>
+      <span className="fl-dot" aria-hidden="true" />
+      <span className="fl-word">{word.label}</span>
+    </span>
+  );
+}
+
+interface ReasonsProps {
+  reasons: readonly string[];
+  max?: number;
+}
+
+/** The counted reasons, at most `max`, then "+n". */
+export function Reasons({ reasons, max = 2 }: ReasonsProps): React.ReactNode {
+  if (reasons.length === 0) return null;
+  const { shown, more } = shownReasons(reasons, max);
+  return (
+    <span className="fl-reasons" title={reasons.join(", ")}>
+      {shown.join(", ")}
+      {more === 0 ? null : <span className="fl-more">{` +${String(more)}`}</span>}
+    </span>
+  );
+}
+
+interface PlaceChipsProps {
+  places: readonly WorkspacePlace[];
+  self: string;
+  /** Chips link to their machine page; off inside a row that is itself a link. */
+  links?: boolean;
+}
+
+/** One chip per host that holds the workspace: its name and "checkout" or "copy". */
+export function PlaceChips({ places, self, links = true }: PlaceChipsProps): React.ReactNode {
+  return (
+    <span className="fl-chips">
+      {places.map((place) => {
+        const inner = (
+          <>
+            <span className="fl-chip-host">{place.host}</span>
+            <span className="fl-chip-kind">{place.kind}</span>
+          </>
+        );
+        const className = `fl-chip${place.kind === "checkout" ? " is-checkout" : ""}${place.host === self ? " is-self" : ""}`;
+        return links ? (
+          <Link key={place.host} to={href({ to: "machine", host: place.host })} className={className}>
+            {inner}
+          </Link>
+        ) : (
+          <span key={place.host} className={className}>
+            {inner}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+const DJINN_STATES = {
+  running: { tone: "run", label: "running" },
+  held: { tone: "wait", label: "held" },
+  late: { tone: "late", label: "late" },
+  due: { tone: "wait", label: "due today" },
+  idle: { tone: "idle", label: "next due" },
+} as const;
+
+/** The tone of a last run: an open one (running, held) is blue, a closed one has its outcome's tone. */
+function lastTone(outcome: string): Tone {
+  return outcome === "running" || outcome === "held" ? "run" : outcomeTone(outcome);
+}
+
+interface DjinnRowProps {
+  ws: string;
+  djinn: FleetDjinn;
+  self: string;
+}
+
+function DjinnRow({ ws, djinn, self }: DjinnRowProps): React.ReactNode {
+  const state = DJINN_STATES[djinn.state];
+  return (
+    <li className="fl-djinn">
+      <Link to={href({ to: "ritual", ws, slug: djinn.slug })} className="fl-djinn-name">
+        {djinn.title}
+      </Link>
+      <span className="fl-djinn-state">
+        <Status tone={state.tone} label={state.label} />
+        {djinn.state === "idle" && djinn.nextDue !== null ? <span className="text-muted">{` ${djinn.nextDue}`}</span> : null}
+      </span>
+      <span className="fl-djinn-host">
+        {djinn.host === null ? (
+          <span className="text-muted">any host</span>
+        ) : (
+          <>
+            {djinn.host === self ? <span>here</span> : <span className="fl-runs-on">{`runs on ${djinn.host}`}</span>}
+            <span className="text-muted">{` (${djinn.why === "pinned" ? "pinned" : "checkout"})`}</span>
+          </>
+        )}
+      </span>
+      <span className="fl-djinn-last">
+        {djinn.lastOutcome === null ? (
+          <span className="text-muted">no run yet</span>
+        ) : (
+          <>
+            <Status tone={lastTone(djinn.lastOutcome)} label={djinn.lastOutcome} /> <Time iso={djinn.lastAt} />
+          </>
+        )}
+      </span>
+    </li>
+  );
+}
+
+interface CountLinkProps {
+  to: string;
+  label: string;
+  count: number;
+  alarm: number;
+  alarmText: string;
+  tone: "late" | "bad" | "wait";
+}
+
+function CountLink({ to, label, count, alarm, alarmText, tone }: CountLinkProps): React.ReactNode {
+  return (
+    <Link to={to} className="fl-count">
+      <span className="fl-count-n">{count}</span>
+      <span className="fl-count-label">{label}</span>
+      {alarm === 0 ? null : <span className={`fl-count-alarm ink-${tone}`}>{`${String(alarm)} ${alarmText}`}</span>}
+    </Link>
+  );
+}
+
+interface HeaderProps {
+  workspace: FleetWorkspace;
+  self: string;
+}
+
+/** The top block of a workspace Overview: health and reasons, where it lives, five counts, its djinns. */
+export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNode {
+  const ws = workspace.name;
+  const { counts } = workspace;
+  const djinns = workspace.djinns.slice(0, GROUP_MAX);
+  return (
+    <section className="fl-head panel" aria-label={`${ws}: health and placement`}>
+      <p className="fl-head-line">
+        <HealthWord health={workspace.health} />
+        {workspace.reasons.length === 0 ? null : <span className="fl-head-reasons">{workspace.reasons.join(", ")}</span>}
+      </p>
+      <p className="fl-head-line fl-lives">
+        <span className="text-muted">Lives on</span>
+        <PlaceChips places={workspace.places} self={self} />
+        {workspace.here === "copy" ? (
+          <span className="text-muted">
+            copy here, synced <Time iso={workspace.lastSync} />
+          </span>
+        ) : null}
+      </p>
+      <nav className="fl-counts" aria-label={`${ws}: counts`}>
+        <CountLink to="#djinns" label="Djinns" count={counts.djinns} alarm={counts.djinnsLate} alarmText="late" tone="late" />
+        <CountLink to={href({ to: "section", ws, section: "rituals" })} label="Rituals" count={counts.rituals} alarm={counts.ritualsLate} alarmText="late" tone="late" />
+        <CountLink to={href({ to: "section", ws, section: "vigils" })} label="Vigils" count={counts.vigilsOpen} alarm={counts.vigilsFlagged} alarmText="flagged" tone="bad" />
+        <CountLink to={href({ to: "section", ws, section: "candles" })} label="Candles lit" count={counts.candlesLit} alarm={0} alarmText="" tone="wait" />
+        <CountLink to={href({ to: "section", ws, section: "findings" })} label="Findings" count={counts.findingsOpen} alarm={counts.findingsNeedYou} alarmText="need you" tone="wait" />
+      </nav>
+      <div id="djinns" className="fl-djinns">
+        <h2 className="label">Djinns</h2>
+        {djinns.length === 0 ? (
+          <p className="text-muted">darius runs no djinn here.</p>
+        ) : (
+          <ul className="fl-djinn-list">
+            {djinns.map((djinn) => (
+              <DjinnRow key={djinn.slug} ws={ws} djinn={djinn} self={self} />
+            ))}
+          </ul>
+        )}
+        {workspace.djinns.length > GROUP_MAX ? <Link to={href({ to: "section", ws, section: "rituals" })}>{`Show all ${String(workspace.djinns.length)}`}</Link> : null}
+      </div>
+    </section>
+  );
+}

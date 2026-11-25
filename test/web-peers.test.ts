@@ -271,3 +271,60 @@ test("GET /api/host.json: this host's live facts, with its open runs; no path, n
   assert.equal(text.includes(process.env.HOME ?? "/nonexistent-home"), false, "no home path");
   assert.equal(/DARIUS_|"env"/u.test(text), false, "no environment");
 });
+
+test("current (0.140.0): a cold cache answers at once with checking and probes in the background; the next read has the answer", async () => {
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+  const fetcher = fakeFetch({
+    "host-b": async () => {
+      await gate;
+      return answer(200, JSON.stringify(live("host-b")));
+    },
+    "host-c": () => Promise.reject(new Error("connect ECONNREFUSED")),
+    "host-d": () => Promise.reject(new Error("connect ECONNREFUSED")),
+  });
+  const probe = probeWith(fetcher, { timeoutMs: 5_000 });
+  const first = probe.current();
+  assert.deepEqual(
+    first.map((host) => [host.host, host.state]),
+    [
+      ["host-a", "self"],
+      ["host-b", "checking"],
+      ["host-c", "checking"],
+      ["host-d", "checking"],
+    ],
+  );
+  assert.deepEqual(probe.current().map((host) => host.state), ["self", "checking", "checking", "checking"], "a second read does not wait either");
+  release();
+  await probe.hosts();
+  assert.deepEqual(probe.current().map((host) => host.state), ["self", "online", "unreachable", "offline"]);
+  assert.equal(fetcher.asked.filter((one) => one.host === "host-b").length, 1, "one probe round, not one per read");
+});
+
+test("current (0.140.0): with the probe off it needs no network and answers the ledger state at once", () => {
+  const hosts = probeWith(null).current();
+  assert.deepEqual(
+    hosts.map((host) => [host.host, host.state, host.reason]),
+    [
+      ["host-a", "self", null],
+      ["host-b", "unreachable", "not probed here"],
+      ["host-c", "unreachable", "not probed here"],
+      ["host-d", "offline", "not probed here"],
+    ],
+  );
+});
+
+test("current (0.140.0): a stale cache answers at once and starts a new probe in the background", async () => {
+  let now = NOW;
+  const fetcher = fakeFetch({
+    "host-b": () => Promise.resolve(answer(200, JSON.stringify(live("host-b")))),
+    "host-c": () => Promise.resolve(answer(200, JSON.stringify(live("host-c")))),
+    "host-d": () => Promise.resolve(answer(200, JSON.stringify(live("host-d")))),
+  });
+  const probe = probeWith(fetcher, { now: () => now });
+  await probe.hosts();
+  assert.equal(fetcher.asked.length, 3);
+  now += 31_000;
+  assert.deepEqual(probe.current().map((host) => host.state), ["self", "online", "online", "online"], "the old answer, at once");
+  await probe.hosts();
+  assert.equal(fetcher.asked.length, 6, "the stale read started one more round");
+});

@@ -12,9 +12,13 @@
  *
  * The host strip (`host-strip.tsx`, 0.139.0) heads `<main>` on every page:
  * one chip per host of the synced store, live, each a link to its machine page.
+ * Since 0.140.0 it is a sticky one-line bar (under the phone top bar on a
+ * phone), and the Places head is sticky in the sidebar. While a navigation
+ * takes over 300 ms, the gem blinks and the text next to it names the page
+ * it opens ("Opening Fleet…"), in a polite live region.
  *
  * The scope is one workspace or all of them. A host page (Status, Machines,
- * Topology, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
+ * Fleet, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
  * were in: it is kept in the cookie `darius_scope`, written here.
  */
 
@@ -31,7 +35,7 @@ import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRo
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import { BUSY_AFTER_MS, isLoading } from "../lib/busy.ts";
 import type { Kind } from "../lib/kind.ts";
-import { href, placeOf, type Place, type Section } from "../lib/paths.ts";
+import { href, pageLabel, placeOf, type Place, type Section } from "../lib/paths.ts";
 import { effectiveScope, NO_TABS, type TabCounts } from "../lib/scope.ts";
 import { scopeCookieText } from "../lib/settings.ts";
 import { useAfter } from "../lib/use-after.ts";
@@ -48,7 +52,7 @@ function hostRowOf(pathname: string): LitRow | null {
   if (pathname === "/status") return "status";
   if (pathname === "/profiles") return "profiles";
   if (pathname === "/hosts" || pathname.startsWith("/hosts/")) return "hosts";
-  if (pathname === "/topology") return "topology";
+  if (pathname === "/fleet" || pathname === "/topology") return "fleet";
   if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   return null;
 }
@@ -61,6 +65,8 @@ interface TopBarProps {
   pathKey: string;
   /** The router has navigated for more than 300 ms: the gem blinks. A reload of the data in place does not count. */
   busy: boolean;
+  /** "Opening Fleet…" while busy, else empty. */
+  loading: string;
 }
 
 /** A press on the scrim shuts the drawer it sits in. */
@@ -72,7 +78,7 @@ function closeDrawer(event: React.MouseEvent<HTMLButtonElement>): void {
 }
 
 /** The phone top bar: one button that opens Places as a drawer. A desktop does not show it. */
-function TopBar({ data, scope, host, pathKey, busy }: TopBarProps): React.ReactNode {
+function TopBar({ data, scope, host, pathKey, busy, loading }: TopBarProps): React.ReactNode {
   // A dot when a scope other than this one needs you: another workspace, or on a host page any workspace. All workspaces already holds them all.
   const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
   const icon = host || scope === null ? null : (data.workspaces.find((entry) => entry.name === scope)?.icon ?? null);
@@ -81,10 +87,15 @@ function TopBar({ data, scope, host, pathKey, busy }: TopBarProps): React.ReactN
       <summary className="topbar">
         <Gem size={28} busy={busy} />
         <span className="topbar-lab">
-          <span className="topbar-cap">{host ? "Host" : "Workspace"}</span>
+          <span className="topbar-cap" hidden={loading !== ""}>
+            {host ? "Host" : "Workspace"}
+          </span>
           <span className="topbar-now">
             <WorkspaceGlyph icon={icon} className="topbar-icon" />
             {host ? data.host : (scope ?? "All workspaces")}
+          </span>
+          <span className="busy-text topbar-busy" aria-live="polite">
+            {loading}
           </span>
         </span>
         <NavIcon name="chevron" size={16} className="topbar-chev" />
@@ -113,6 +124,9 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   const navigation = useNavigation();
   const busy = useAfter(isLoading(navigation.state), BUSY_AFTER_MS);
   const location = useLocation();
+  // The words next to the busy gem: what the tap opens, from its address (0.140.0).
+  const target = busy && navigation.location !== undefined ? pageLabel(navigation.location.pathname) : null;
+  const loading = target === null ? (busy ? "Loading…" : "") : `Opening ${target}…`;
   // The tab and the Places row light from the page the tap goes to, not from the page that is on screen: the tap shows at once, before the loader answers.
   const shown = navigation.location ?? location;
   // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind, but only for the run on screen.
@@ -134,10 +148,10 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   }, [remembered]);
   return (
     <div className={data.finder === null ? "app" : "app has-finder"}>
-      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} />
+      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} loading={loading} />
       {data.finder === null ? null : <FinderButton finder={finder} className="finder-btn finder-btn-bar" />}
       <ConnectionStrip generatedAt={data.generatedAt} />
-      <Places data={data} scope={scope} lit={lit} busy={busy} finder={data.finder === null ? null : finder} />
+      <Places data={data} scope={scope} lit={lit} busy={busy} loading={loading} finder={data.finder === null ? null : finder} />
       <main className="wa page-main">
         <HostStrip peers={data.peers} />
         {children}
