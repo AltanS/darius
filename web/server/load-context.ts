@@ -30,6 +30,6 @@ export function loadContext(context: WebContext): AppLoadContext {
     followUp: (project, run) => context.followUp(project, run),
     peers: () => context.peers(),
     fleet: () => context.fleet(),
-    workspaces: (only) => context.workspaces(only),
+    workspaces: () => context.workspaces(),
   };
 }

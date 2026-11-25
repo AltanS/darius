@@ -2,6 +2,7 @@ import { Link } from "react-router";
 
 import type { Route } from "./+types/candles";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
+import { Crumbs } from "../components/crumbs.tsx";
 import { CandleIcon, CandleRows } from "../components/candles.tsx";
 import { TITLE_ICON } from "../components/section.tsx";
 import { Section } from "../components/ui.tsx";
@@ -47,6 +48,7 @@ export default function Candles({ loaderData }: Route.ComponentProps): React.Rea
   return (
     <div>
       <header className="page-head">
+        <Crumbs />
         <h1 className="page-title has-title-icon">
           <CandleIcon size={TITLE_ICON} />
           Candles

@@ -469,9 +469,9 @@ const context: WebContext = {
   peers: () => Promise.resolve(PEERS),
   fleet: () => FLEET,
   // From the status of the context it is called on, so a test that swaps the status swaps the fleet too.
-  workspaces(only) {
+  workspaces() {
     const status = this.status();
-    return buildWorkspaces({ self: "testhost", now: Date.parse(status.generatedAt), today: status.today, generatedAt: status.generatedAt, projects: status.projects.filter((one) => only === undefined || one.name === only), ledgers: [], litCandles: [], hosts: ["testhost", "host-b"], mirrorFailures: [] });
+    return buildWorkspaces({ self: "testhost", now: Date.parse(status.generatedAt), today: status.today, generatedAt: status.generatedAt, projects: status.projects, ledgers: [], litCandles: [], hosts: ["testhost", "host-b"], mirrorFailures: [] });
   },
   canWrite: true,
 };
@@ -582,10 +582,11 @@ function crumbsOf(body: string): Crumb[] {
   });
 }
 
-test("the breadcrumb nav: workspace, section, item, with the current page last and not a link", async () => {
+test("the breadcrumb nav: Workspaces, workspace, section, item, with the current page last and not a link", async () => {
   const ritual = await get("/w/demo/rituals/daily-report");
   const ritualTitle = RITUAL.row.title.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   assert.deepEqual(crumbsOf(ritual.body), [
+    { text: "Workspaces", href: "/workspaces" },
     { text: "demo", href: "/w/demo" },
     { text: "Rituals", href: "/w/demo/rituals" },
     { text: ritualTitle, href: null },
@@ -594,31 +595,37 @@ test("the breadcrumb nav: workspace, section, item, with the current page last a
 
   const run = await get(`/w/demo/runs/${DONE}`);
   const steps = crumbsOf(run.body);
-  assert.deepEqual(steps.map((step) => step.href), ["/w/demo", "/w/demo/rituals", "/w/demo/rituals/daily-report", null], "ws / Rituals / ritual / run, a ritual run is filed under Rituals");
-  assert.equal(steps[0]?.text, "demo");
-  assert.equal(steps[1]?.text, "Rituals");
-  assert.equal(steps[2]?.text, ritualTitle);
-  assert.equal(steps[3]?.text, "Findings heading", "the run's own title");
+  assert.deepEqual(steps.map((step) => step.href), ["/workspaces", "/w/demo", "/w/demo/rituals", "/w/demo/rituals/daily-report", null], "Workspaces / ws / Rituals / ritual / run, a ritual run is filed under Rituals");
+  assert.equal(steps[1]?.text, "demo");
+  assert.equal(steps[2]?.text, "Rituals");
+  assert.equal(steps[3]?.text, ritualTitle);
+  assert.equal(steps[4]?.text, "Findings heading", "the run's own title");
 
   const held = crumbsOf((await get(`/w/demo/runs/${HELD}`)).body);
-  assert.deepEqual(held.map((step) => step.href), ["/w/demo", "/w/demo/rituals", null], "a run titled by its ritual has no separate ritual step");
+  assert.deepEqual(held.map((step) => step.href), ["/workspaces", "/w/demo", "/w/demo/rituals", null], "a run titled by its ritual has no separate ritual step");
   assert.equal(held.at(-1)?.text, ritualTitle);
 
   assert.deepEqual(crumbsOf((await get("/w/demo/milestones/M7")).body), [
+    { text: "Workspaces", href: "/workspaces" },
     { text: "demo", href: "/w/demo" },
     { text: "Milestones", href: "/w/demo/milestones" },
     { text: "M7", href: null },
   ]);
 
   assert.deepEqual(crumbsOf((await get("/w/demo/runs")).body), [
+    { text: "Workspaces", href: "/workspaces" },
     { text: "demo", href: "/w/demo" },
     { text: "Runs", href: null },
   ]);
   assert.deepEqual(crumbsOf((await get("/runs")).body), [
-    { text: "All workspaces", href: "/all" },
+    { text: "Overview", href: "/all" },
     { text: "Runs", href: null },
   ]);
-  assert.equal((await get("/w/demo/rituals")).body.includes('aria-label="Breadcrumb"'), false, "a section list has no crumbs");
+  assert.deepEqual(
+    crumbsOf((await get("/w/demo/rituals")).body).map((step) => step.text),
+    ["Workspaces", "demo", "Rituals"],
+    "a section list starts its trail with Workspaces too (0.141.0)",
+  );
 });
 
 test("a vigil run is filed under Vigils, and the ritual page shows Next due as a clock time, not raw ISO", async () => {
@@ -626,8 +633,8 @@ test("a vigil run is filed under Vigils, and the ritual page shows Next due as a
   const vigilContext: WebContext = { ...context, run: (project, run) => (project === "demo" && run === DONE ? runDetail(vigilRun) : context.run(project, run)) };
   const page = await (await handler(new Request(`http://darius.test/w/demo/runs/${DONE}`), vigilContext)).text();
   const steps = crumbsOf(page);
-  assert.equal(steps[1]?.text, "Vigils");
-  assert.equal(steps[1]?.href, "/w/demo/vigils");
+  assert.equal(steps[2]?.text, "Vigils");
+  assert.equal(steps[2]?.href, "/w/demo/vigils");
   const repo = { ...RITUAL.row, heldRun: null, args: "--site acme", nextDueAt: "2026-09-29T05:00:00.000Z" };
   const ritual = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), { ...context, ritual: () => ({ ...RITUAL, row: repo }) })).text()).replaceAll("<!-- -->", "");
   assert.ok(ritual.includes("Next due") && /Next due.*?(29 Sep )?07:00/u.test(ritual.replaceAll(/<[^>]+>/gu, "")), "the host clock (UTC+2): a time, with the day when it is not today");
@@ -1769,7 +1776,7 @@ test("the vigil page: the failure block, the output as text in a pre, the last s
   assert.equal(page.status, 200);
   assertScriptsCarryNonce(page.body, "/w/demo/vigils/soak");
   const text = page.body.replaceAll("<!-- -->", "");
-  assert.deepEqual(crumbsOf(page.body).map((step) => step.text), ["demo", "Vigils", "Guard soak"]);
+  assert.deepEqual(crumbsOf(page.body).map((step) => step.text), ["Workspaces", "demo", "Vigils", "Guard soak"]);
   assert.ok(text.includes("Why flagged") && text.includes("Last sweeps"));
   const plain = text.replaceAll(/<[^>]+>/gu, "");
   for (const part of ["Step1: the page", "Commandcurl -sf http://localhost/", "Expectedexit 0", "Resultfail, exit 1", "Hosthost-a", "Check broken: the check itself failed"]) assert.ok(plain.includes(part), part);
@@ -1871,9 +1878,9 @@ function navOf(body: string, label: string): string {
   return from === -1 ? "" : body.slice(from, body.indexOf("</nav>", from));
 }
 
-/** The opening tag of the row of a scope in Places (the brand and the Overview row go to the same address), or null. */
+/** The opening tag of the one-line row of a workspace in Places, or null. */
 function scopeRow(places: string, href: string): string | null {
-  return [...places.matchAll(/<a\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes("places-scope") && tag.includes(` href="${href}"`)) ?? null;
+  return [...places.matchAll(/<a\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes("places-ws") && tag.includes(` href="${href}"`)) ?? null;
 }
 
 /** The addresses of the links in a piece of HTML, in order. */
@@ -1909,24 +1916,30 @@ test("both navs are in the HTML: the tab bar for a phone and Places for a deskto
   const places = navOf(body, "Places");
   const hostLine = places.slice(places.indexOf('class="places-foot"'));
   assert.match(hostLine.replaceAll(/<[^>]+>/gu, ""), /testhost, darius [^,]+, updated \d\d:\d\d, seen by [^.]+\./u, "host, version, time, viewer");
-  assert.ok(places.indexOf('class="places-foot"') > places.indexOf("This host"), "after the host pages");
+  assert.ok(places.indexOf('class="places-foot"') > places.indexOf('class="places-tree"'), "the foot follows the tree");
 });
 
-test("Places lists All workspaces and each workspace with what needs you; the scope is expanded to its eight places, one lit", async () => {
+test("Places: Overview, Machines, Workspaces, each workspace on one line; only the workspace you are in opens to its eight places, one lit", async () => {
   const status = threeWorkspaces();
   const { body } = await readWith("/w/demo/rituals", {}, status);
   const places = navOf(body, "Places");
   const names = [...places.matchAll(/<span class="places-name">([^<]+)<\/span>/gu)].map((match) => match[1]);
-  assert.deepEqual(names, ["All workspaces", "demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity", "atlas", "Fleet", "Machines", "Status", "Profiles", "Settings"], "the self-test workspace is not listed; only the scope is expanded");
+  assert.deepEqual(names.slice(0, 3), ["Overview", "Machines", "Workspaces"], "the three primary rows come first");
+  assert.deepEqual(names.slice(-2), ["Profiles", "Settings"], "the foot holds Profiles and Settings");
+  const demo = names.indexOf("demo");
+  assert.deepEqual(names.slice(demo, demo + 9), ["demo", "Overview", "Vigils", "Rituals", "Findings", "Candles", "Milestones", "Runs", "Activity"], "the workspace you are in opens to its eight places");
+  assert.ok(names.includes("atlas") && !names.includes("darius-selftest"), "the self-test workspace is not listed");
+  assert.equal(names.filter((name) => name === "Vigils").length, 1, "the Overview branch is closed");
   assert.ok(linkTo(places, "/all") !== null && linkTo(places, "/w/atlas") !== null, "a workspace row opens its Overview");
-  assert.ok(scopeRow(places, "/w/demo")?.includes('aria-current="true"'), "the current scope is marked");
-  assert.equal(scopeRow(places, "/w/atlas")?.includes("aria-current"), false, "another scope is not");
+  assert.ok(scopeRow(places, "/w/demo")?.includes("places-ws open"), "the workspace you are in is open");
+  assert.equal(scopeRow(places, "/w/atlas")?.includes("open"), false, "another is not");
   assert.ok(linkTo(places, "/w/demo/rituals")?.includes('aria-current="page"'), "the Rituals row is lit");
   assert.equal([...places.matchAll(/aria-current="page"/gu)].length, 1, "one row is lit");
-  assert.match(places, /<span class="places-need">2 need you<\/span>/u, "the count of a workspace");
-  assert.match(places, /<span class="places-clear">all clear<\/span>/u, "a quiet workspace says so");
-  assert.match(places, /<span class="tab-bdg tone-wait" title="2 need you">/u, "the section rows carry the badges of the tabs");
-  assert.deepEqual(hrefsOf(places.slice(places.indexOf("This host"))).slice(0, 3), ["/status", "/profiles", "/settings"]);
+  assert.match(places, /<span class="places-need">2 need you<\/span>/u, "the Overview row counts what needs you");
+  assert.match(places, /<span class="tab-bdg tone-wait" title="2 need you">/u, "a workspace row and the section rows carry the counts");
+  assert.doesNotMatch(places, /all clear/u, "a quiet workspace has no line of its own");
+  assert.match(scopeRow(places, "/w/atlas") ?? "", /title="atlas: [A-Z]/u, "the health word is in the title");
+  assert.deepEqual(hrefsOf(places.slice(places.indexOf('class="places-foot"'))).slice(0, 2), ["/profiles", "/settings"]);
   assert.equal(body.includes('class="topbar-dot"'), false, "no red square: the workspace you are in is the one that needs you");
   const other = await readWith("/w/atlas", {}, status);
   assert.ok(other.body.includes('class="topbar-dot"'), "a red square on the button when another workspace needs you");
@@ -1934,7 +1947,7 @@ test("Places lists All workspaces and each workspace with what needs you; the sc
   assert.equal(all.body.includes('class="topbar-dot"'), false, "All workspaces already holds every workspace");
 });
 
-test("the lit row of Places follows the page: a run lights its item's section, a host page lights its own row", async () => {
+test("the lit row of Places follows the page: a run lights its item's section, a page in no workspace lights its own row", async () => {
   const lit = (body: string): string[] => [...navOf(body, "Places").matchAll(/<a\b[^>]*aria-current="page"[^>]*href="([^"]+)"/gu)].map((match) => match[1] ?? "");
   const litTabs = (body: string): string[] => [...navOf(body, "Tabs").matchAll(/<a\b[^>]*aria-current="page"[^>]*href="([^"]+)"/gu)].map((match) => match[1] ?? "");
   const ritualRun = await get(`/w/demo/runs/${DONE}`);
@@ -1947,26 +1960,27 @@ test("the lit row of Places follows the page: a run lights its item's section, a
   assert.deepEqual(lit(ritual.body), ["/w/demo/rituals"]);
   const milestone = await get("/w/demo/milestones/M7");
   assert.deepEqual(litTabs(milestone.body), ["/w/demo/milestones"]);
-  const status = await get("/status");
-  assert.deepEqual(lit(status.body), ["/status"], "Status lights its row");
-  assert.deepEqual(litTabs(status.body), [], "no tab on a host page");
+  const machine = await get("/machines/testhost");
+  assert.deepEqual(lit(machine.body), ["/machines"], "a machine page lights Machines");
+  assert.deepEqual(litTabs(machine.body), [], "no tab on a page in no workspace");
+  assert.deepEqual(lit((await get("/workspaces")).body), ["/workspaces"], "Workspaces lights its row");
   assert.deepEqual(lit((await get("/settings/backups")).body), ["/settings"], "every settings tab lights Settings");
 });
 
-test("a host page points the tabs and Places at the last scope: the cookie darius_scope", async () => {
+test("a page in no workspace points the tabs at the last scope (the cookie darius_scope), and opens no branch of Places", async () => {
   const status = threeWorkspaces();
   const read = async (path: string, scope: string | null): Promise<string> => {
     const headers = scope === null ? undefined : { Cookie: `darius_scope=${encodeURIComponent(scope)}` };
     return (await (await handler(new Request(`http://darius.test${path}`, { headers }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
   };
-  const atlas = await read("/status", "atlas");
+  const atlas = await read("/machines", "atlas");
   assert.deepEqual(hrefsOf(navOf(atlas, "Tabs")), ["/w/atlas", "/w/atlas/vigils", "/w/atlas/rituals", "/w/atlas/findings", "/w/atlas/candles", "/w/atlas/milestones"]);
-  assert.ok(scopeRow(navOf(atlas, "Places"), "/w/atlas")?.includes('aria-current="true"'), "the last scope is the marked one");
-  assert.match(atlas, /<span class="topbar-cap">Host<\/span><span class="topbar-now">testhost<\/span>/u, "a host page names the host");
+  assert.doesNotMatch(navOf(atlas, "Places"), /places-ws open|href="\/vigils"/u, "no workspace is open, and the Overview branch is closed");
+  assert.match(atlas, /<span class="topbar-cap">darius<\/span><span class="topbar-now">Machines<\/span>/u, "the top bar names the page");
   assert.deepEqual(hrefsOf(navOf(await read("/profiles", "*"), "Tabs")), ["/all", "/vigils", "/rituals", "/findings", "/candles", "/milestones"], "* is all workspaces");
   const ghost = await read("/settings", "gone");
   assert.equal(hrefsOf(navOf(ghost, "Tabs"))[0], "/all", "a workspace this host lacks is ignored: no default, so all workspaces");
-  const withDefault = await readWith("/status", { ws: "demo" }, status);
+  const withDefault = await readWith("/machines", { ws: "demo" }, status);
   assert.equal(hrefsOf(navOf(withDefault.body, "Tabs"))[0], "/w/demo", "no cookie: the default workspace");
   assert.equal(hrefsOf(navOf((await get("/nope")).body, "Tabs"))[0], "/all", "an unknown path has no scope: the last one");
 });
@@ -2012,39 +2026,40 @@ test("showSelftest hides the self-test workspace from Places, the badges and the
 test("/all is always all workspaces, whatever the default workspace is", async () => {
   const status = threeWorkspaces();
   const plain = await readWith("/all", {}, status);
-  assert.match(plain.body, /<span class="topbar-now">All workspaces<\/span>/u, "no default: all workspaces");
+  assert.match(plain.body, /<span class="topbar-cap">All workspaces<\/span><span class="topbar-now">Overview<\/span>/u, "no default: all workspaces");
   const set = await readWith("/w/demo", { ws: "demo" }, status);
   assert.match(set.body, /<span class="topbar-now">demo<\/span>/u, "the default workspace");
   assert.ok(set.body.includes("/home/test/demo"), "it is the workspace Overview, with its checkout");
   assert.ok(linkTo(set.body, "/all") !== null, "all workspaces have an address of their own");
   const all = await readWith("/all", { ws: "demo" }, status);
-  assert.match(all.body, /<span class="topbar-now">All workspaces<\/span>/u);
+  assert.match(all.body, /<span class="topbar-now">Overview<\/span>/u);
   assert.equal(h1Of(all.body), "Two things need you.");
   const ghost = await readWith("/all", { ws: "gone" }, status);
-  assert.match(ghost.body, /<span class="topbar-now">All workspaces<\/span>/u, "a default that this host does not have is ignored");
+  assert.match(ghost.body, /<span class="topbar-now">Overview<\/span>/u, "a default that this host does not have is ignored");
 });
 
-test("the status page: strip, machine, hosts, a link to the backups, and no backup controls", async () => {
-  const page = await get("/status");
+test("the page of this machine holds Store and disks: strip, machine facts, projects, a link to the backups, and no backup controls", async () => {
+  const page = await get("/machines/testhost");
   assert.equal(page.status, 200);
   const body = page.body;
-  for (const text of ["Status", "other-host", "this host", "never", "sync-bucket", "Machine", "Hosts", "Projects and syncs", "since backup", "Backed up", "Backup stale", "no upload for 75 h", "last backup: none"]) {
-    assert.ok(body.includes(text), `the status page shows: ${text}`);
+  for (const text of ["Store and disks", "sync-bucket", "Machine", "Projects and syncs", "since backup", "Last backup"]) {
+    assert.ok(body.includes(text), `the page of this machine shows: ${text}`);
   }
-  assert.ok(body.includes("s3.example.com/backups"), "the hosts card shows the bucket of a host that has one");
-  assert.ok(body.includes("no bucket"), "and says so for a host that has none");
-  assert.equal(body.includes("different buckets"), false, "no warning while the hosts agree");
+  assert.equal(body.includes("more than one bucket"), false, "no warning while the machines agree");
   for (const text of ["Back up now", "Snapshots", "Test the bucket", "Delete in bucket", "bk-secret", "DARIUS_SNAPSHOT_ENDPOINT"]) {
-    assert.equal(body.includes(text), false, `the status page leaves out: ${text}`);
+    assert.equal(body.includes(text), false, `the page of this machine leaves out: ${text}`);
   }
   assert.ok(linkTo(body, "/settings/backups") !== null, "the pill and the notice link to the backups");
   assert.match(body, /<a\b[^>]*href="\/settings\/backups"[^>]*>(?:(?!<\/a>).)*since backup/u, "the since backup pill is a link");
   assert.ok(body.includes("One thing blocks backups."), "the backup problem shows as a one line notice");
   assert.equal(body.includes(EVIL), false, "store text never becomes a tag");
   assert.equal(body.includes(SECRET), false, "no secret on the page");
-  assert.ok(linkTo(navOf(body, "Places"), "/status")?.includes('aria-current="page"'), "the Status row of Places is lit");
-  assert.ok(linkTo(navOf((await get("/settings")).body, "Places"), "/status") !== null, "the Status row is on every page");
-  assertScriptsCarryNonce(body, "/status");
+  assert.ok(linkTo(navOf(body, "Places"), "/machines")?.includes('aria-current="page"'), "the Machines row of Places is lit");
+  assert.equal((await get("/machines/host-b")).body.includes("Store and disks"), false, "only the page of this machine has it");
+  const moved = await get("/status");
+  assert.equal(moved.status, 301, "the old Status page is a redirect");
+  assert.equal(moved.headers.get("location"), "/machines/testhost");
+  assertScriptsCarryNonce(body, "/machines/testhost");
 });
 
 /** The opening tag of the link in the settings tab row that goes to an address, or null. */
@@ -2342,10 +2357,10 @@ const CRAWL: Crawl[] = [
   { path: `/w/demo/runs/${DONE}`, lit: "/w/demo/rituals" },
   { path: `/w/demo/runs/${HELD}`, lit: "/w/demo/rituals" },
   { path: "/w/demo/milestones/M7", lit: "/w/demo/milestones" },
-  { path: "/status", lit: null },
-  { path: "/hosts", lit: null },
-  { path: "/hosts/host-b", lit: null },
-  { path: "/fleet", lit: null },
+  { path: "/machines", lit: null },
+  { path: "/machines/testhost", lit: null },
+  { path: "/machines/host-b", lit: null },
+  { path: "/workspaces", lit: null },
   { path: "/settings/backups", lit: null },
   { path: "/profiles", lit: null },
   { path: "/nope", lit: null },
@@ -2392,10 +2407,11 @@ test("the navigation crawl: every link in Places, Tabs, Breadcrumb and main lead
       }
     }
 
-    // 3) tabs and breadcrumbs keep the scope of the page (host and error pages: the cookie scope).
+    // 3) tabs and breadcrumbs keep the scope of the page (host and error pages: the cookie scope). A trail starts at Workspaces or Machines, in no scope.
     for (const [region, html] of [["Tabs", tabs], ["Breadcrumb", crumbs]] as const) {
       for (const address of anchorsOf(html)) {
         const place = crawlPaths.placeOf(address.split(/[?#]/u)[0]!);
+        if (region === "Breadcrumb" && place.kind === "host") continue;
         assert.equal(place.scope, scope, `${path} ${region} ${address}: the scope stays ${scope ?? "All workspaces"}`);
       }
     }
@@ -2405,13 +2421,14 @@ test("the navigation crawl: every link in Places, Tabs, Breadcrumb and main lead
     assert.deepEqual(litTabs, lit === null ? [] : [lit], `${path}: the lit tab`);
     assert.ok(tabs !== "", `${path}: the tab bar is there`);
 
-    // 5) Places lists every workspace but the self-test one, and marks the current scope.
-    const rows = [...places.matchAll(/<a\b[^>]*places-scope[^>]*>/gu)].map((match) => match[0]);
-    const scopeHrefs = rows.map((row) => /\shref="([^"]+)"/u.exec(row)?.[1] ?? "").filter((address) => address === "/all" || /^\/w\/[^/]+$/u.test(address));
-    assert.deepEqual(new Set(scopeHrefs), new Set(["/all", "/w/demo", "/w/atlas"]), `${path}: Places lists All workspaces and each workspace, not the self-test one`);
-    const marked = rows.filter((row) => row.includes('aria-current="true"')).map((row) => /\shref="([^"]+)"/u.exec(row)?.[1]);
-    assert.deepEqual(marked, [scope === null ? "/all" : crawlPaths.href({ to: "overview", ws: scope })], `${path}: Places marks the current scope`);
-    assert.ok([...places.matchAll(/aria-current="page"/gu)].length <= 1, `${path}: at most one row is lit`);
+    // 5) Places lists every workspace but the self-test one, and opens only the one the page is in (none on a page in no workspace).
+    const rows = [...places.matchAll(/<a\b[^>]*places-ws[^>]*>/gu)].map((match) => match[0]);
+    const scopeHrefs = rows.map((row) => /\shref="([^"]+)"/u.exec(row)?.[1] ?? "");
+    assert.deepEqual(new Set(scopeHrefs), new Set(["/w/demo", "/w/atlas"]), `${path}: Places lists each workspace, not the self-test one`);
+    const open = rows.filter((row) => row.includes("places-ws open")).map((row) => /\shref="([^"]+)"/u.exec(row)?.[1]);
+    const own = crawlPaths.placeOf(new URL(path, "http://darius.test").pathname).scope;
+    assert.deepEqual(open, own === null ? [] : [crawlPaths.href({ to: "overview", ws: own })], `${path}: Places opens the workspace the page is in`);
+    assert.equal([...places.matchAll(/aria-current="page"/gu)].length, path === "/nope" ? 0 : 1, `${path}: one row is lit`);
   }
   assert.ok(checked.size > 100 && [...checked].some((key) => key.includes("#")), "the crawl follows many links, fragments among them");
 });
@@ -2419,7 +2436,7 @@ test("the navigation crawl: every link in Places, Tabs, Breadcrumb and main lead
 test("the crawl reads the scope from the cookie on a host page, and a section page ignores it", async () => {
   const status = threeWorkspaces();
   const read = async (path: string, scope: string): Promise<string> => (await (await handler(new Request(`http://darius.test${path}`, { headers: { Cookie: `darius_scope=${scope}` } }), { ...context, status: () => status })).text()).replaceAll("<!-- -->", "");
-  assert.equal(anchorsOf(navOf(await read("/status", "atlas"), "Tabs"))[0], "/w/atlas");
+  assert.equal(anchorsOf(navOf(await read("/machines", "atlas"), "Tabs"))[0], "/w/atlas");
   assert.equal(anchorsOf(navOf(await read("/w/demo/vigils", "atlas"), "Tabs"))[0], "/w/demo", "the page wins over the cookie");
 });
 
@@ -2532,17 +2549,17 @@ async function pageWith(ctx: WebContext, path: string): Promise<string> {
 
 /** The Places row of the demo workspace, from its link to its end. */
 function placesRow(body: string): string {
-  return /<a class="places-row places-scope[^"]*"[^>]*href="\/w\/demo"[^>]*>.*?<\/a>/su.exec(body)?.[0] ?? "";
+  return /<a class="places-row places-ws[^"]*"[^>]*href="\/w\/demo"[^>]*>.*?<\/a>/su.exec(body)?.[0] ?? "";
 }
 
 test("an emoji icon is a span with aria-hidden in Places, the workspace list and the top bar; the name stays text", async () => {
   const ctx = iconContext({ kind: "emoji", text: "🎯" });
   const all = await pageWith(ctx, "/all");
   const row = placesRow(all);
-  assert.match(row, /<span class="ws-icon places-ico ws-icon-emoji" aria-hidden="true">🎯<\/span><span class="places-text"><span class="places-name">demo<\/span>/u);
+  assert.match(row, /<span class="ws-icon places-ico ws-icon-emoji" aria-hidden="true">🎯<\/span><span class="places-name">demo<\/span>/u);
   assert.doesNotMatch(row, /<svg/u, "the emoji takes the place of the generic workspace icon");
   assert.match(all, /<a class="rw-title" href="\/w\/demo"[^>]*><span class="ws-icon ws-title-icon ws-icon-emoji" aria-hidden="true">🎯<\/span>demo<\/a>/u);
-  assert.match(all, /<a class="places-row places-scope[^"]*"[^>]*href="\/all"[^>]*><svg class="nav-icon places-ico"/u, "All workspaces keeps its own icon");
+  assert.match(all, /<a class="places-row places-primary[^"]*"[^>]*href="\/all"[^>]*><svg class="nav-icon places-ico"/u, "the Overview row keeps its own icon");
   const workspace = await pageWith(ctx, "/w/demo");
   assert.match(workspace, /<span class="topbar-now"><span class="ws-icon topbar-icon ws-icon-emoji" aria-hidden="true">🎯<\/span>demo<\/span>/u);
   assertScriptsCarryNonce(workspace, "/w/demo");
@@ -2560,7 +2577,7 @@ test("an image icon is an img of the endpoint with an empty alt, a fixed size, l
 test("no icon gives today's markup: the generic workspace icon in Places, the bare name in the list and the top bar", async () => {
   const all = await pageWith(iconContext(null), "/all");
   assert.doesNotMatch(all, /ws-icon/u);
-  assert.match(placesRow(all), /^<a [^>]*><svg class="nav-icon places-ico"[^>]*>.*<\/svg><span class="places-text"><span class="places-name">demo<\/span>/su);
+  assert.match(placesRow(all), /^<a [^>]*><span class="places-dot[^"]*" aria-hidden="true"><\/span><svg class="nav-icon places-ico"[^>]*>.*<\/svg><span class="places-name">demo<\/span>/su);
   assert.match(all, /<a class="rw-title" href="\/w\/demo"[^>]*>demo<\/a>/u);
   assert.match(await pageWith(iconContext(null), "/w/demo"), /<span class="topbar-now">demo<\/span>/u);
   assert.equal(await pageWith(iconContext(null), "/all"), await pageWith(context, "/all"), "an explicit null and the fixture render the same bytes");
@@ -2585,19 +2602,11 @@ test("store text never becomes markup: an image src off the endpoint is not draw
   assert.ok(!all.includes("<img src=x"));
 });
 
-test("the status page marks hosts that back up to different buckets", async () => {
-  const split: SystemStatus = {
-    ...SYSTEM,
-    backupBucketsDiffer: true,
-    hosts: [
-      SYSTEM.hosts[0]!,
-      { host: "other-host", self: false, lastSeen: null, chunks: 0, projects: [], backup: { state: "ok", lastOkAt: "2026-09-28T06:00:00.000Z", ageMs: 3 * 3600_000, name: "darius-other-x.tar.gz", error: null, reason: null, bucket: "s3.example.com/other" } },
-    ],
-  };
-  const response = await handler(new Request("http://darius.test/status"), { ...context, system: () => split });
+test("the page of this machine says when the machines back up to different buckets", async () => {
+  const split: SystemStatus = { ...SYSTEM, backupBucketsDiffer: true };
+  const response = await handler(new Request("http://darius.test/machines/testhost"), { ...context, system: () => split });
   const body = (await response.text()).replaceAll("<!-- -->", "");
-  assert.ok(body.includes("Hosts back up to different buckets."), "the card carries one warning line");
-  assert.ok(body.includes("s3.example.com/other"), "each host still shows its own bucket");
+  assert.ok(body.includes("The machines back up to more than one bucket."), "the backups line carries one warning");
 });
 
 test("Done lately draws the receipts from the activity and the starts, and a reload shows the same (0.90.0)", async () => {

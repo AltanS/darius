@@ -14,7 +14,7 @@ import { peersOf } from "./lib/peers.ts";
 import { href } from "./lib/paths.ts";
 import { DEFAULT_SETTINGS, readSettings, type Theme } from "./lib/settings.ts";
 import { SPLASH_SIZES, splashFile, splashMedia } from "./lib/splash.ts";
-import { statusOf } from "./lib/status.ts";
+import { statusOf, workspacesOf } from "./lib/status.ts";
 import { shellData } from "./lib/scope.ts";
 import { useServiceWorker } from "./lib/sw.ts";
 
@@ -23,7 +23,7 @@ export async function loader({ context, request }: Route.LoaderArgs) {
   const settings = readSettings(request.headers.get("cookie"));
   // --- end settings block ---
   const status = statusOf(context);
-  // The host strip (0.139.0): every host of the synced store, live; cached 30 s on the server, each probe at most 1.5 s.
+  // The machine bar (0.139.0): every machine of the synced store, live; cached 30 s on the server, each probe at most 1.5 s.
   const peers = await peersOf(context);
   return {
     // Also on the client, so hydration renders the same nonce attributes.
@@ -35,8 +35,8 @@ export async function loader({ context, request }: Route.LoaderArgs) {
     generatedAt: status.generatedAt,
     today: status.today,
     utcOffset: status.utcOffset,
-    // The workspaces, the tab badges, the last scope and the host line: what Places and the tabs show (lib/scope.ts).
-    ...shellData(status, request),
+    // The workspaces with their health, the tab badges, the last scope and the host line: what Places and the tabs show (lib/scope.ts).
+    ...shellData(status, request, workspacesOf(context)),
     // The milestones of the workspace the page is in, for the finder (0.125.0); null outside a workspace.
     finder: finderOf(status.projects, new URL(request.url).pathname),
     peers,
@@ -250,8 +250,8 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps): React.ReactN
       <p className="brand">darius</p>
       <h1 className="page-title ink-bad">{title}</h1>
       {detail === "" ? null : <pre className="code-block">{detail}</pre>}
-      <p className="text-muted">{data === undefined ? "The status read failed." : `Host ${data.host}.`}</p>
-      <Link to={href({ to: "overview", ws: data?.lastScope ?? null })}>{`Back to ${data?.lastScope ?? "All workspaces"}`}</Link>
+      <p className="text-muted">{data === undefined ? "The status read failed." : `Machine ${data.host}.`}</p>
+      <Link to={href({ to: "overview", ws: data?.lastScope ?? null })}>{`Back to ${data?.lastScope ?? "the Overview"}`}</Link>
     </main>
   );
 }

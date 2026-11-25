@@ -11,7 +11,7 @@
  */
 
 import type { JsonValue } from "../../src/core/model.ts";
-import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, FleetHost, FleetLast, FleetView, FleetWorkspaces, HostLive, HostStatus, PeerHost, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
+import type { BackupRow, BackupsStatus, FindingCounts, FindingRow, CandleCounts, CandleDelivery, CandleDetail, CandleRow, CandleStep, FleetHost, FleetLast, FleetView, FleetWorkspaces, HostBackup, HostLive, HostStatus, PeerHost, MilestoneDetail, MilestoneFile, MilestoneRow, PendingKind, PendingPollEntry, PendingStart, ProjectStatus, RitualRow, RunRow, SpecRow, SystemStatus, VigilRow, WebContext } from "../../src/web/api.ts";
 import { pendingMessage } from "../../src/web/action-api.ts";
 import { parseMarkdown } from "../../src/web/markdown.ts";
 import { milestoneSummary } from "../../src/web/milestone-summary.ts";
@@ -546,13 +546,40 @@ function demoMilestone(now: number): MilestoneDetail {
   };
 }
 
-/** Fake machine and store numbers: two hosts, three projects, generic names. */
+/** The backups of the demo machines as their snapshot lines say: this machine backed up 3 h ago, host-b is stale, host-c wrote no line. */
+function demoHostBackups(now: number): Map<string, HostBackup> {
+  const back = (ms: number): string => new Date(now - ms).toISOString();
+  return new Map<string, HostBackup>([
+    ["demo", { state: "ok", lastOkAt: back(3 * 3600_000), ageMs: 3 * 3600_000, name: "darius-demo-x.tar.gz", error: null, reason: null, bucket: "s3.example.com/backups" }],
+    ["host-b", { state: "stale", lastOkAt: back(50 * 3600_000), ageMs: 50 * 3600_000, name: "darius-host-b-x.tar.gz", error: null, reason: "no upload for 50 h", bucket: "s3.example.com/backups" }],
+  ]);
+}
+
+/** The workspaces each demo machine holds, as the demo ledgers place them (`demoLedgers`). */
+const DEMO_HOLDS = new Map<string, string[]>([
+  ["demo", ["archive-2025", "atlas-docs", "broken-store", "demo-shop", "field-notes", "infra-notes", "ledger-tools", "mail-relay", "old-site", "status-page"]],
+  ["host-b", ["archive-2025", "demo-shop", "infra-notes"]],
+  ["host-c", ["atlas-docs", "demo-shop", "mail-relay", "status-page"]],
+]);
+
+/** How long ago each demo machine wrote its newest line. */
+const DEMO_SEEN = new Map<string, number>([
+  ["demo", MINUTE],
+  ["host-b", 4 * MINUTE],
+  ["host-c", 12 * MINUTE],
+]);
+
+/** The machine and the store of the demo: the same machine, version and workspaces as the demo peers and workspaces. */
 function demoSystem(now: number): SystemStatus {
   const back = (ms: number): string => new Date(now - ms).toISOString();
   const GB = 1024 ** 3;
+  const MB = 1024 * 1024;
+  const backups = demoHostBackups(now);
+  const readable = demoStatus(now).projects.filter((one) => one.error === null);
+  const projects = readable.map((one, index) => ({ project: one.name, lastSync: one.lastSync, rituals: one.rituals.length, vigils: one.vigils.length, profiles: 0, runs: one.runs.length, bytes: (index + 2) * 3 * MB })).toSorted((left, right) => left.project.localeCompare(right.project));
   return {
-    host: "host-a",
-    version: "0.44.0",
+    host: "demo",
+    version: "demo",
     runtime: "bun 1.3.0",
     platform: "linux x64",
     generatedAt: new Date(now).toISOString(),
@@ -563,16 +590,20 @@ function demoSystem(now: number): SystemStatus {
       { label: "store", path: "/home/user/.local/share/darius", freeBytes: 210 * GB, totalBytes: 500 * GB },
       { label: "backups", path: "/home/user/.local/share/darius-backup", freeBytes: 800 * GB, totalBytes: 2000 * GB },
     ],
-    store: { path: "/home/user/.local/share/darius", bytes: 48 * 1024 * 1024, files: 1520, projects: 3, rituals: 7, vigils: 2, profiles: 3, runs: 214, milestones: 4, specs: 19 },
-    hosts: [
-      { host: "host-a", self: true, lastSeen: back(60_000), chunks: 41, projects: ["project-one", "project-three", "project-two"], backup: { state: "ok", lastOkAt: back(3 * 3600_000), ageMs: 3 * 3600_000, name: "darius-host-a-x.tar.gz", error: null, reason: null, bucket: "s3.example.com/backups" } },
-      { host: "host-b", self: false, lastSeen: back(3 * 3600_000), chunks: 17, projects: ["project-one", "project-two"], backup: { state: "stale", lastOkAt: back(50 * 3600_000), ageMs: 50 * 3600_000, name: "darius-host-b-x.tar.gz", error: null, reason: "no upload for 50 h", bucket: "s3.example.com/backups" } },
-    ],
-    projects: [
-      { project: "project-one", lastSync: back(5 * 60_000), rituals: 4, vigils: 1, profiles: 2, runs: 150, bytes: 30 * 1024 * 1024 },
-      { project: "project-three", lastSync: null, rituals: 1, vigils: 0, profiles: 0, runs: 9, bytes: 2 * 1024 * 1024 },
-      { project: "project-two", lastSync: back(2 * 3600_000), rituals: 2, vigils: 1, profiles: 1, runs: 55, bytes: 16 * 1024 * 1024 },
-    ],
+    store: {
+      path: "/home/user/.local/share/darius",
+      bytes: projects.reduce((sum, one) => sum + one.bytes, 0),
+      files: 1520,
+      projects: projects.length,
+      rituals: projects.reduce((sum, one) => sum + one.rituals, 0),
+      vigils: projects.reduce((sum, one) => sum + one.vigils, 0),
+      profiles: 0,
+      runs: projects.reduce((sum, one) => sum + one.runs, 0),
+      milestones: 4,
+      specs: 19,
+    },
+    hosts: [...DEMO_HOLDS.entries()].map(([host, holds]) => ({ host, self: host === "demo", lastSeen: back(DEMO_SEEN.get(host) ?? 0), chunks: holds.length * 7, projects: holds, backup: backups.get(host) ?? null })),
+    projects,
     syncRemote: { endpoint: "https://s3.example.com", bucket: "darius-sync" },
     backupBucketsDiffer: false,
   };
@@ -580,7 +611,7 @@ function demoSystem(now: number): SystemStatus {
 
 const sha = (seed: string): string => seed.repeat(64).slice(0, 64);
 
-/** Fake snapshots of host-a: five files, three also in the bucket, one setting set by the environment. */
+/** Fake snapshots of this demo machine: five files, three also in the bucket, one setting set by the environment. */
 function demoBackups(clock: number): BackupsStatus {
   // Steady between two reads, so the page sees the same last run until a real run changes it.
   const now = clock - (clock % 600_000);
@@ -589,12 +620,12 @@ function demoBackups(clock: number): BackupsStatus {
   const row = (hoursAgo: number, mib: number, files: number | null, hash: string | null, local: boolean, remote: boolean): BackupRow => {
     const at = back(hoursAgo * 3600_000);
     const stamp = `${at.replaceAll(/[-:]/gu, "").slice(0, 15)}Z`;
-    return { name: `darius-host-a-${stamp}.tar.gz`, at, bytes: mib * MIB, files, sha256: hash, local, remote };
+    return { name: `darius-demo-${stamp}.tar.gz`, at, bytes: mib * MIB, files, sha256: hash, local, remote };
   };
   const snapshots = [row(3, 412, 1520, sha("3f9a"), true, true), row(27, 398, 1498, sha("b01c"), true, true), row(51, 371, 1450, sha("7d2e"), true, true), row(75, 120, 980, sha("c4a8"), true, false), row(99, 15, null, null, false, true)];
   return {
     generatedAt: new Date(now).toISOString(),
-    host: "host-a",
+    host: "demo",
     settings: {
       enabled: { value: true, source: "file" },
       dir: { value: "~/.local/share/darius-backup", source: "default" },
@@ -604,7 +635,7 @@ function demoBackups(clock: number): BackupsStatus {
       endpoint: { value: "https://s3.example.com", source: "env" },
       bucket: { value: "darius-backups", source: "file" },
       region: { value: "us-east-1", source: "default" },
-      prefix: { value: "host-a/", source: "file" },
+      prefix: { value: "demo/", source: "file" },
       pathStyle: { value: true, source: "default" },
       allowHttp: { value: false, source: "default" },
       sse: { value: false, source: "default" },
@@ -626,10 +657,10 @@ function demoBackups(clock: number): BackupsStatus {
 
 // --- hosts, machines and topology (0.139.0) ---------------------------------------------
 
-/** The host that ritual runs of the demo ran on: its pin, else host-b for every third ritual, else this host. */
-function demoRunHost(pin: string | null, index: number): string {
-  if (pin !== null) return pin;
-  return index % 3 === 2 ? "host-b" : "demo";
+/** The machine a ritual of the demo ran on: where its djinn runs (its pin, else the machine that runs the workspace), else this machine. */
+function demoRunHost(now: number, workspace: string, slug: string): string {
+  const djinn = demoWorkspaces(now).workspaces.find((one) => one.name === workspace)?.djinns.find((one) => one.slug === slug);
+  return djinn?.host ?? "demo";
 }
 
 /** This host's live facts in the demo: the open runs of the demo status, all on this host. */
@@ -673,18 +704,20 @@ export function demoPeers(now: number): PeerHost[] {
   ];
 }
 
-function demoFleetHost(host: string, self: boolean, lastSeen: string, versions: FleetHost["versions"], projects: string[], boxCheck: FleetHost["boxCheck"]): FleetHost {
-  return { host, self, lastSeen, chunks: projects.length * 7, projects, backup: null, version: versions[0]?.version ?? null, versions, boxCheck, retired: false };
+function demoFleetHost(now: number, host: string, lastSeen: string, versions: FleetHost["versions"], boxCheck: FleetHost["boxCheck"]): FleetHost {
+  const projects = DEMO_HOLDS.get(host) ?? [];
+  return { host, self: host === "demo", lastSeen, chunks: projects.length * 7, projects, backup: demoHostBackups(now).get(host) ?? null, version: versions[0]?.version ?? null, versions, boxCheck, retired: false };
 }
 
 /** The ledger view of the demo: three hosts, where each ritual and vigil last ran. */
 export function demoFleet(now: number): FleetView {
   const status = demoStatus(now);
-  const lastRuns = status.projects.flatMap((one) =>
-    one.rituals.flatMap((row, index): FleetLast[] => {
-      const newest = one.runs.find((candidate) => candidate.item === `ritual/${row.slug}`);
-      if (newest === undefined) return [];
-      return [{ project: one.name, item: `ritual/${row.slug}`, host: demoRunHost(row.host, index), at: newest.startedAt, outcome: newest.outcome, run: newest.run }];
+  // The newest run of each ritual, as the demo ledgers say it, on the machine its djinn runs on.
+  const lastRuns = demoLedgers(now).flatMap((facts) =>
+    facts.rituals.flatMap((row): FleetLast[] => {
+      if (row.last === null) return [];
+      const open = row.last.outcome === "running" || row.last.outcome === "held";
+      return [{ project: facts.name, item: `ritual/${row.slug}`, host: demoRunHost(now, facts.name, row.slug), at: row.last.at, outcome: open ? null : row.last.outcome, run: row.last.run }];
     }),
   );
   // Every vigil but each third was swept; every fourth sweep ran on host-c.
@@ -698,9 +731,9 @@ export function demoFleet(now: number): FleetView {
     self: "demo",
     generatedAt: new Date(now).toISOString(),
     hosts: [
-      demoFleetHost("demo", true, ago(now, MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }, { version: "demo-old", at: ago(now, 9 * DAY) }], ["atlas-docs", "demo-shop", "field-notes"], { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" }),
-      demoFleetHost("host-b", false, ago(now, 4 * MINUTE), [{ version: "demo-next", at: ago(now, 3 * DAY) }], ["demo-shop"], { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" }),
-      demoFleetHost("host-c", false, ago(now, 12 * MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }], ["atlas-docs", "demo-shop"], null),
+      demoFleetHost(now, "demo", ago(now, MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }, { version: "demo-old", at: ago(now, 9 * DAY) }], { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" }),
+      demoFleetHost(now, "host-b", ago(now, 4 * MINUTE), [{ version: "demo-next", at: ago(now, 3 * DAY) }], { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" }),
+      demoFleetHost(now, "host-c", ago(now, 12 * MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }], null),
     ],
     lastRuns,
     lastSweeps,
@@ -722,14 +755,17 @@ function here(kind: "checkout" | "copy", ...others: Array<[string, "checkout" | 
 /** What the ledgers say in the demo: where each workspace lives, its last activity, and the failed streaks that set its health. */
 function demoLedgers(now: number): WorkspaceLedgerFacts[] {
   const plain = (name: string, places: WorkspaceLedgerFacts["places"], lastAgo: number, rituals: RitualRuns[] = [], extra: Partial<WorkspaceLedgerFacts> = {}): WorkspaceLedgerFacts => ({ name, lastActivity: ago(now, lastAgo), rituals, places, treeConflicts: 0, cannotStart: [], ...extra });
-  const shop = demoStatus(now).projects.find((one) => one.name === "demo-shop");
-  const shopRuns = (shop?.rituals ?? []).map((row) => {
-    const newest = shop?.runs.find((candidate) => candidate.item === `ritual/${row.slug}`);
-    return demoRuns(row.slug, newest === undefined ? null : { run: newest.run, outcome: newest.phase === "closed" ? newest.outcome : newest.phase, at: newest.startedAt }, newest?.outcome === "failed" ? 1 : 0);
-  });
+  // The rituals of demo-shop and atlas-docs ran as their status runs say: the djinn rows and the Running now list agree.
+  const statusRuns = (name: string): RitualRuns[] => {
+    const one = demoStatus(now).projects.find((candidate) => candidate.name === name);
+    return (one?.rituals ?? []).flatMap((row) => {
+      const newest = one?.runs.find((candidate) => candidate.item === `ritual/${row.slug}`);
+      return newest === undefined ? [] : [demoRuns(row.slug, { run: newest.run, outcome: newest.phase === "closed" ? newest.outcome : newest.phase, at: newest.startedAt }, newest.outcome === "failed" ? 1 : 0)];
+    });
+  };
   return [
-    plain("demo-shop", here("checkout", ["host-b", "copy"], ["host-c", "copy"]), 6 * MINUTE, shopRuns),
-    plain("atlas-docs", here("checkout", ["host-c", "copy"]), 3 * MINUTE, [demoRuns("release-notes", { run: "01DEMOATLAS0000000000000001", outcome: "complete", at: ago(now, 9 * 60 * MINUTE) })]),
+    plain("demo-shop", here("checkout", ["host-b", "copy"], ["host-c", "copy"]), 6 * MINUTE, statusRuns("demo-shop")),
+    plain("atlas-docs", here("checkout", ["host-c", "copy"]), 3 * MINUTE, [...statusRuns("atlas-docs").filter((row) => row.slug !== "release-notes"), demoRuns("release-notes", { run: "01DEMOATLAS0000000000000001", outcome: "complete", at: ago(now, 9 * 60 * MINUTE) })]),
     plain("field-notes", here("checkout"), 5 * 60 * MINUTE, [demoRuns("notes-index", { run: "01DEMONOTES0000000000000001", outcome: "complete", at: ago(now, 5 * 60 * MINUTE) })]),
     plain("mail-relay", here("checkout", ["host-c", "copy"]), 40 * MINUTE, [demoRuns("bounce-scan", { run: "01DEMOMAIL00000000000000002", outcome: "failed", at: ago(now, 40 * MINUTE) }, 2), demoRuns("dns-check", { run: "01DEMOMAIL00000000000000003", outcome: "complete", at: ago(now, 2 * 60 * MINUTE) })]),
     plain("ledger-tools", here("checkout"), 2 * 60 * MINUTE, [demoRuns("import-check", { run: "01DEMOLEDGER000000000000001", outcome: "failed", at: ago(now, 2 * 60 * MINUTE) }, 1)], { treeConflicts: 1 }),
@@ -741,14 +777,14 @@ function demoLedgers(now: number): WorkspaceLedgerFacts[] {
 }
 
 /** The fleet view of the demo: nine workspaces of every health on three hosts, and one workspace the mirror could not pull. */
-export function demoWorkspaces(now: number, only?: string): FleetWorkspaces {
+export function demoWorkspaces(now: number): FleetWorkspaces {
   const status = demoStatus(now);
   return buildWorkspaces({
     self: "demo",
     now,
     today: status.today,
     generatedAt: status.generatedAt,
-    projects: status.projects.filter((one) => only === undefined || one.name === only),
+    projects: status.projects,
     ledgers: demoLedgers(now),
     litCandles: demoCandles(now).filter((row) => row.status === "lit"),
     hosts: ["demo", "host-b", "host-c"],
@@ -890,6 +926,6 @@ export function demoContext(base: WebContext, starts: DemoStarts = createDemoSta
     followUp: () => Promise.resolve({ ready: false, host: "demo", reason: "the demo has no runs" }),
     peers: () => Promise.resolve(demoPeers(Date.now())),
     fleet: () => demoFleet(Date.now()),
-    workspaces: (only) => demoWorkspaces(Date.now(), only),
+    workspaces: () => demoWorkspaces(Date.now()),
   };
 }

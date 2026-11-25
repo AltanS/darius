@@ -1,6 +1,7 @@
-import { Link } from "react-router";
+import { Link, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/overview";
+import type { loader as rootLoader } from "../root.tsx";
 import { WorkspaceHeader } from "../components/fleet.tsx";
 import { CardView, DoneRows, NextUp, NowList, Pieces, StatusStrip } from "../components/board.tsx";
 import { PhoneMore } from "../components/pulse.tsx";
@@ -8,11 +9,13 @@ import { RowList } from "../components/row.tsx";
 import { ReportRow, RunList } from "../components/runs.tsx";
 import { Empty, SectHead, Time } from "../components/ui.tsx";
 import { WorkspaceList } from "../components/workspaces.tsx";
+import { healthSplit } from "../lib/fleet.ts";
 import { useFollowStarts, startIdOf } from "../lib/follow-starts.ts";
 import { homeView, workspaceRows } from "../lib/home.ts";
 import { href } from "../lib/paths.ts";
+import { stateLine, stateSplit } from "../lib/machines.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
-import { statusOf } from "../lib/status.ts";
+import { statusOf, workspacesOf } from "../lib/status.ts";
 import { workspaceExtras, type WorkspaceExtras } from "../lib/workspace.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
@@ -45,8 +48,8 @@ export async function loader({ context, request, params }: Route.LoaderArgs) {
     home: homeView(status, read, scope, feed),
     workspaces: scope.workspace === null ? workspaceRows(status, scope) : null,
     extras: only === undefined ? null : workspaceExtras(only, read),
-    // The workspace header (0.140.0): health, where it lives, the counts and the djinns.
-    fleet: only === undefined ? null : (context.workspaces(only.name).workspaces[0] ?? null),
+    // The workspace head (0.140.0, 0.141.0): the name, its health, the status sentence, the counts and the djinns.
+    fleet: only === undefined ? null : (workspacesOf(context).workspaces.find((one) => one.name === only.name) ?? null),
     self: status.host,
     canWrite: context.canWrite,
   };
@@ -141,6 +144,29 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
   );
 }
 
+/** The line under the date of `/all` (0.141.0): the health split of the workspaces, each part a link to the filtered Workspaces page, and the machines in a link to Machines. */
+function OverviewLine(): React.ReactNode {
+  const root = useRouteLoaderData<typeof rootLoader>("root");
+  if (root === undefined) return null;
+  const split = healthSplit(root.workspaces);
+  return (
+    <p className="ov-line">
+      <span>
+        {split.lead}
+        {split.parts.length === 0 ? "" : ": "}
+        {split.parts.map((part, index) => (
+          <span key={part.health}>
+            {index === 0 ? "" : ", "}
+            <Link to={href({ to: "host", page: "workspaces", query: { health: part.health } })}>{part.text}</Link>
+          </span>
+        ))}
+        .
+      </span>
+      {root.peers.length === 0 ? null : <Link to={href({ to: "host", page: "machines" })}>{stateLine(stateSplit(root.peers.map((peer) => peer.state)))}</Link>}
+    </p>
+  );
+}
+
 /**
  * The Overview of a scope: the verdict, the Next line and the status strip on
  * top (the strip only has the segments above zero). Then Needs you (only when
@@ -151,7 +177,9 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
  * lives in the Rituals and Vigils sections: the Next line and the strip link
  * there. On a phone the sections stack in the order of the day; on a desktop
  * the wide column holds Needs you, Now and the reports, the rail holds Done
- * lately and the health line. Each run shows once.
+ * lately and the health line. Each run shows once. A workspace starts with
+ * its head (trail, name, status sentence, counts, djinns) instead of the
+ * verdict, and its Needs you heading holds the count (0.141.0).
  */
 export default function Overview({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { home, extras, workspaces, canWrite, workspace, fleet, self } = loaderData;
@@ -161,17 +189,24 @@ export default function Overview({ loaderData }: Route.ComponentProps): React.Re
   return (
     <div className="proj ov">
       {fleet === null ? null : <WorkspaceHeader workspace={fleet} self={self} />}
-      <section className="verdict">
-        <h1 className={`verdict-h ink-${tone}`}>{verdict}</h1>
-        <p className="verdict-sub">{sub}</p>
-        {next === null ? null : <NextUp next={next} />}
-      </section>
+      {fleet === null ? (
+        <section className="verdict">
+          <h1 className={`verdict-h ink-${tone}`}>{verdict}</h1>
+          <p className="verdict-sub">{sub}</p>
+          {workspace === null ? <OverviewLine /> : null}
+          {next === null ? null : <NextUp next={next} />}
+        </section>
+      ) : next === null ? null : (
+        <section className="verdict verdict-next">
+          <NextUp next={next} />
+        </section>
+      )}
       <StatusStrip segments={strip} />
       <div className="board board-home">
         <div className="board-main">
           {needs.length === 0 ? null : (
             <section className="section sec-needs" id="needs">
-              <SectHead title="Needs you" />
+              <SectHead title={fleet === null ? "Needs you" : `Needs you, ${String(needs.length)}`} />
               <div className="cards">
                 {needs.map((card) => (
                   <CardView key={card.id} card={card} canWrite={canWrite} />

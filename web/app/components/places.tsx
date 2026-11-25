@@ -1,26 +1,30 @@
 /**
- * Places: the one navigation tree of the app. It is the fixed sidebar of a
- * desktop and the drawer of a phone (the shell opens it with a
+ * Places: the one navigation tree of the app (0.141.0). It is the fixed
+ * sidebar of a desktop and the drawer of a phone (the shell opens it with a
  * `<details data-menu>`; the drawer is closed by a press outside, Escape or a
- * link). The tree: All workspaces; each workspace with what needs you there;
- * the scope you are in, expanded to its eight places; the Fleet group (Fleet,
- * Machines); the pages of this host; and a
- * small host line at the end. At most one row is lit, and the row of the
- * scope you are in carries a check mark.
+ * link). Three primary rows, always in this order at the top: Overview,
+ * Machines, Workspaces. Under Overview, while the page is in the
+ * all-workspaces scope, its seven places; under Workspaces every workspace
+ * on one line (a health dot, the name, what needs you), and the workspace
+ * the page is in opens to its eight places. Exactly one row is lit and at
+ * most one branch is open: the one the page is in (`navOf` in lib/paths.ts).
+ * Profiles, Settings and the host line sit in a foot that stays at the
+ * bottom; the tree scrolls between the head and the foot.
  */
 
 import { useEffect } from "react";
 import { Link } from "react-router";
 
-import type { WorkspaceIcon } from "../../../src/web/api.ts";
 import type { RootData } from "../root.tsx";
 import { FinderButton, type FinderState } from "./finder.tsx";
 import { KindIcon } from "./kind.tsx";
 import { Gem, NavIcon, type NavIconName } from "./nav-icons.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
+import { healthWord } from "../lib/fleet.ts";
 import { clockTime } from "../lib/format.ts";
-import { href, type Section } from "../lib/paths.ts";
-import { NO_TABS, type TabCounts } from "../lib/scope.ts";
+import { machinesRowText, stateSplit } from "../lib/machines.ts";
+import { href, type Branch, type LitRow, type Section } from "../lib/paths.ts";
+import { NO_TABS, type TabCounts, type WorkspaceEntry } from "../lib/scope.ts";
 
 interface SectionSpec {
   section: Section;
@@ -40,12 +44,8 @@ export const TAB_SECTIONS: readonly SectionSpec[] = [
   { section: "milestones", label: "Milestones", badge: NO_BADGE },
 ];
 
-/** The eight places of a scope: Overview comes first, Runs and Activity last (they are not tabs). */
-const RUNS: SectionSpec = { section: "runs", label: "Runs", badge: NO_BADGE };
-const ACTIVITY: SectionSpec = { section: "activity", label: "Activity", badge: NO_BADGE };
-
-/** The row of a page that is lit in Places: the Overview, a section, or a host page. */
-export type LitRow = "overview" | Section | "status" | "hosts" | "fleet" | "profiles" | "settings";
+/** The places of a scope after its Overview: the five tabs, then Runs and Activity (they are not tabs). */
+const PLACES: readonly SectionSpec[] = [...TAB_SECTIONS, { section: "runs", label: "Runs", badge: NO_BADGE }, { section: "activity", label: "Activity", badge: NO_BADGE }];
 
 interface SectionIconProps {
   section: Section;
@@ -117,92 +117,79 @@ function closeOnLink(event: React.MouseEvent<HTMLElement>): void {
   if (event.target instanceof Element && event.target.closest("a") !== null) closeMenus();
 }
 
-interface ScopeRowProps {
-  to: string;
-  name: string;
-  icon: NavIconName;
-  needs: number;
-  unreadable?: boolean;
-  current: boolean;
-  /** The workspace's own icon (0.70.0): it takes the place of `icon` in the same box. Null or absent: `icon`. */
-  workspaceIcon?: WorkspaceIcon | null;
-}
-
-/** A scope in the tree: its name and what needs you there. */
-function ScopeRow({ to, name, icon, needs, unreadable = false, current, workspaceIcon = null }: ScopeRowProps): React.ReactNode {
-  return (
-    <Link to={to} className={current ? "places-row places-scope on" : "places-row places-scope"} aria-current={current ? "true" : undefined}>
-      <WorkspaceGlyph icon={workspaceIcon} className="places-ico" fallback={<NavIcon name={icon} size={18} className="places-ico" />} />
-      <span className="places-text">
-        <span className="places-name">{name}</span>
-        {unreadable ? <span className="places-need tone-bad">unreadable</span> : needs > 0 ? <span className="places-need">{`${needs} ${needs === 1 ? "needs" : "need"} you`}</span> : <span className="places-clear">all clear</span>}
-      </span>
-      {current ? <NavIcon name="check" size={18} className="places-check" /> : null}
-    </Link>
-  );
-}
-
-interface LeafProps {
+interface RowProps {
   to: string;
   label: string;
   icon: React.ReactNode;
   lit: boolean;
-  badge?: React.ReactNode;
+  /** What the row counts, after the name. */
+  aside?: React.ReactNode;
+  className: string;
 }
 
-/** A place of the scope you are in, or a host page. */
-function Leaf({ to, label, icon, lit, badge }: LeafProps): React.ReactNode {
+/** One row of the tree: a primary row, a place of the open branch, or a page of the foot. */
+function Row({ to, label, icon, lit, aside, className }: RowProps): React.ReactNode {
   return (
-    <li>
-      <Link to={to} className={lit ? "places-row places-leaf lit" : "places-row places-leaf"} aria-current={lit ? "page" : undefined}>
-        {icon}
-        <span className="places-name">{label}</span>
-        {badge}
-      </Link>
-    </li>
+    <Link to={to} className={`places-row ${className}${lit ? " lit" : ""}`} aria-current={lit ? "page" : undefined}>
+      {icon}
+      <span className="places-name">{label}</span>
+      {aside}
+    </Link>
+  );
+}
+
+function rowIcon(name: NavIconName): React.ReactNode {
+  return <NavIcon name={name} size={18} className="places-ico" />;
+}
+
+/** The places of the open branch after its own row: for all workspaces the seven sections, for a workspace its Overview first. */
+function BranchPlaces({ scope, tabs, lit, withOverview }: { scope: string | null; tabs: TabCounts; lit: LitRow | null; withOverview: boolean }): React.ReactNode {
+  return (
+    <ul className="places-sub">
+      {withOverview ? (
+        <li>
+          <Row to={href({ to: "overview", ws: scope })} label="Overview" icon={<NavIcon name="overview" size={18} className="places-ico tab-ico" />} lit={lit === "overview"} className="places-leaf" />
+        </li>
+      ) : null}
+      {PLACES.map(({ section, label, badge }) => (
+        <li key={section}>
+          <Row to={href({ to: "section", ws: scope, section })} label={label} icon={<SectionIcon section={section} size={18} />} lit={lit === section} aside={<TabBadge {...badge(tabs)} />} className="places-leaf" />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** One workspace on one line: the health dot (its word for a screen reader and in the title), the icon, the name, and what needs you. */
+function WorkspaceRow({ entry, open }: { entry: WorkspaceEntry; open: boolean }): React.ReactNode {
+  const word = healthWord(entry.health);
+  return (
+    <Link to={href({ to: "overview", ws: entry.name })} className={`places-row places-ws${open ? " open" : ""}`} title={`${entry.name}: ${word.label}`}>
+      <span className={`places-dot tone-${word.tone}`} aria-hidden="true" />
+      <WorkspaceGlyph icon={entry.icon} className="places-ico" fallback={<NavIcon name="workspace" size={18} className="places-ico" />} />
+      <span className="places-name">{entry.name}</span>
+      <span className="sr-only">{`, ${word.label}`}</span>
+      {entry.error ? <span className="places-word tone-bad">unreadable</span> : <TabBadge count={entry.needs} tone="wait" text={entry.needs === 1 ? "needs you" : "need you"} />}
+    </Link>
   );
 }
 
 interface PlacesProps {
   data: RootData;
-  /** The scope the frame shows: a workspace name, or null for all workspaces. */
-  scope: string | null;
-  /** The row that is lit, or null when none is (an error page). */
+  /** The one lit row; null when none is (a 404). */
   lit: LitRow | null;
+  /** The one open branch; null when none is. */
+  branch: Branch | null;
   /** The page is loading and has taken more than 300 ms: the brand gem blinks. */
   busy: boolean;
   /** The milestone finder of the workspace, for its row under the head (desktop only); null outside a workspace. */
   finder: FinderState | null;
 }
 
-/** The pages of every host of the store (0.139.0): Fleet answers "how many and how healthy" (0.140.0), Machines the hosts. */
-const FLEET_ROWS: readonly { page: "fleet" | "hosts"; label: string; icon: NavIconName }[] = [
-  { page: "fleet", label: "Fleet", icon: "topology" },
-  { page: "hosts", label: "Machines", icon: "machine" },
-];
-
-const HOST_ROWS: readonly { page: "status" | "profiles" | "settings"; label: string; icon: NavIconName }[] = [
-  { page: "status", label: "Status", icon: "status" },
-  { page: "profiles", label: "Profiles", icon: "profile" },
-  { page: "settings", label: "Settings", icon: "gear" },
-];
-
-/** The places of one scope, each with its badge. */
-function ScopePlaces({ scope, tabs, lit }: { scope: string | null; tabs: TabCounts; lit: LitRow | null }): React.ReactNode {
-  return (
-    <ul className="places-sub">
-      <Leaf to={href({ to: "overview", ws: scope })} label="Overview" icon={<NavIcon name="overview" size={18} className="places-ico tab-ico" />} lit={lit === "overview"} />
-      {[...TAB_SECTIONS, RUNS, ACTIVITY].map(({ section, label, badge }) => (
-        <Leaf key={section} to={href({ to: "section", ws: scope, section })} label={label} icon={<SectionIcon section={section} size={18} />} lit={lit === section} badge={<TabBadge {...badge(tabs)} />} />
-      ))}
-    </ul>
-  );
-}
-
 /** The host line: where this runs, the version, when the data is from, who looks. The self-test lines follow. */
 function HostLine({ data }: { data: RootData }): React.ReactNode {
   return (
-    <div className="places-foot">
+    <>
       <p className="places-hostline">
         {data.host}, darius {data.version}, updated <time dateTime={data.generatedAt}>{clockTime(data.generatedAt, data.utcOffset)}</time>, seen by {data.viewer}.
       </p>
@@ -211,20 +198,26 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
           {line.text}
         </Link>
       ))}
-    </div>
+    </>
   );
 }
 
-export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.ReactNode {
-  const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
-  // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
-  const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: NO_TABS, icon: null }];
-  const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? NO_TABS));
-  // The head (gem, name, host) is sticky inside the scrolling sidebar, so the gem never scrolls away (0.140.0).
+/** "3" or "3, 1 unreachable": the worst state in words when not every machine is online. */
+function MachinesAside({ data }: { data: RootData }): React.ReactNode {
+  const split = stateSplit(data.peers.map((peer) => peer.state));
+  if (data.peers.length === 0) return null;
+  return <span className={split.worst === null ? "places-count" : "places-count ink-late"}>{machinesRowText(split, data.peers.length)}</span>;
+}
+
+export function Places({ data, lit, branch, busy, finder }: PlacesProps): React.ReactNode {
+  const open = branch?.kind === "workspace" ? branch.ws : null;
+  const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === name)?.tabs ?? NO_TABS));
+  const overviewOpen = branch?.kind === "overview";
+  // The head (gem, name, machine) and the foot (Profiles, Settings, the host line) are sticky inside the scrolling sidebar.
   return (
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
       <div className="places-head">
-        <Link to={href({ to: "overview", ws: scope })} className="places-brand" aria-label="darius, the Overview">
+        <Link to={href({ to: "overview", ws: null })} className="places-brand" aria-label="darius, the Overview">
           <Gem size={28} busy={busy} />
           <span>darius</span>
         </Link>
@@ -235,37 +228,43 @@ export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.R
           <FinderButton finder={finder} className="finder-btn finder-btn-side" label="Find a milestone" />
         </div>
       )}
-      <p className="places-group">Workspaces</p>
-      {data.workspaces.length === 0 ? (
-        <p className="places-empty">
-          No workspace is linked on this host. Run <code>darius link</code> in a checkout.
-        </p>
-      ) : null}
       <ul className="places-tree">
         <li>
-          <ScopeRow to={href({ to: "overview", ws: null })} name="All workspaces" icon="all" needs={data.needs} current={scope === null} />
-          {scope === null ? <ScopePlaces scope={null} tabs={tabsOf(null)} lit={lit} /> : null}
+          <Row to={href({ to: "overview", ws: null })} label="Overview" icon={rowIcon("overview")} lit={overviewOpen && lit === "overview"} className="places-primary" aside={data.needs === 0 ? null : <span className="places-need">{`${data.needs} ${data.needs === 1 ? "needs" : "need"} you`}</span>} />
+          {overviewOpen ? <BranchPlaces scope={null} tabs={tabsOf(null)} lit={lit} withOverview={false} /> : null}
         </li>
-        {listed.map((entry) => (
-          <li key={entry.name}>
-            <ScopeRow to={href({ to: "overview", ws: entry.name })} name={entry.name} icon="workspace" workspaceIcon={entry.icon} needs={entry.needs} unreadable={entry.error} current={scope === entry.name} />
-            {scope === entry.name ? <ScopePlaces scope={entry.name} tabs={tabsOf(entry.name)} lit={lit} /> : null}
+        <li>
+          <Row to={href({ to: "host", page: "machines" })} label="Machines" icon={rowIcon("machine")} lit={lit === "machines"} className="places-primary" aside={<MachinesAside data={data} />} />
+        </li>
+        <li>
+          <Row to={href({ to: "host", page: "workspaces" })} label="Workspaces" icon={rowIcon("all")} lit={lit === "workspaces"} className="places-primary" aside={<span className="places-count">{data.workspaces.length}</span>} />
+          {data.workspaces.length === 0 ? (
+            <p className="places-empty">
+              No workspace is linked on this machine. Run <code>darius link</code> in a project folder.
+            </p>
+          ) : (
+            <ul className="places-wss">
+              {data.workspaces.map((entry) => (
+                <li key={entry.name}>
+                  <WorkspaceRow entry={entry} open={open === entry.name} />
+                  {open === entry.name ? <BranchPlaces scope={entry.name} tabs={tabsOf(entry.name)} lit={lit} withOverview /> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      </ul>
+      <div className="places-foot">
+        <ul className="places-foot-rows">
+          <li>
+            <Row to={href({ to: "host", page: "profiles" })} label="Profiles" icon={rowIcon("profile")} lit={lit === "profiles"} className="places-leaf" />
           </li>
-        ))}
-      </ul>
-      <p className="places-group">Fleet</p>
-      <ul className="places-tree">
-        {FLEET_ROWS.map(({ page, label, icon }) => (
-          <Leaf key={page} to={href({ to: "host", page })} label={label} icon={<NavIcon name={icon} size={18} className="places-ico" />} lit={lit === page} />
-        ))}
-      </ul>
-      <p className="places-group">This host</p>
-      <ul className="places-tree">
-        {HOST_ROWS.map(({ page, label, icon }) => (
-          <Leaf key={page} to={href({ to: "host", page })} label={label} icon={<NavIcon name={icon} size={18} className="places-ico" />} lit={lit === page} />
-        ))}
-      </ul>
-      <HostLine data={data} />
+          <li>
+            <Row to={href({ to: "host", page: "settings" })} label="Settings" icon={rowIcon("gear")} lit={lit === "settings"} className="places-leaf" />
+          </li>
+        </ul>
+        <HostLine data={data} />
+      </div>
     </nav>
   );
 }

@@ -2,7 +2,7 @@
 
 import { Link, useLocation } from "react-router";
 
-import { crumbsOf, litSection, placeOf, type Target } from "../lib/paths.ts";
+import { crumbsOf, litSection, placeOf, type Crumb, type Target } from "../lib/paths.ts";
 
 interface CrumbsProps {
   /** The page's own title: the last step, not a link. */
@@ -11,17 +11,19 @@ interface CrumbsProps {
   parent?: { label: string; target: Target };
   /** The kind of a run's item: the run page is then filed under that section, not under Runs. */
   itemKind?: "ritual" | "vigil";
+  /** A trail the address cannot give: a machine page passes `machineCrumbs(name)`. */
+  trail?: Crumb[];
 }
 
 /**
- * `ws / Rituals / ritual / run`. On a phone only the step above the page is
+ * `Workspaces / ws / Rituals / ritual / run`. On a phone only the step above the page is
  * shown, as a back link; from 1024 px the whole trail. The scope comes from
  * the address, like the rest of the navigation.
  */
-export function Crumbs({ title, parent, itemKind }: CrumbsProps): React.ReactNode {
+export function Crumbs({ title, parent, itemKind, trail: given }: CrumbsProps): React.ReactNode {
   const place = placeOf(useLocation().pathname);
   const filed = itemKind === undefined ? place : { ...place, section: litSection(place, itemKind) };
-  const trail = crumbsOf(filed, parent, title);
+  const trail = given ?? crumbsOf(filed, parent, title);
   if (trail.length === 0) return null;
   return (
     <nav aria-label="Breadcrumb" className="crumbs">

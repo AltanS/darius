@@ -2,7 +2,7 @@
  * The fleet of workspaces (0.140.0): every workspace this host holds, with
  * its health word (src/web/health.ts), where it lives (a checkout or a copy
  * per host, and the rituals pinned there), its counts and its djinns. The
- * `/fleet` page and the workspace header read it.
+ * Workspaces page, the machine pages, Places and the workspace head read it.
  *
  * Two halves: `collectWorkspaces` reads the store (ledgers, candles, box
  * taints, checkout records, mirror failures) into plain facts, and
@@ -265,9 +265,8 @@ function refusesBehind(): boolean {
   }
 }
 
-/** The fleet view of this host's store, or of the one workspace `only`. `status` is the status read of the same request. */
-export function collectWorkspaces(fullStatus: HostStatus, now: Date = new Date(), only?: string): FleetWorkspaces {
-  const status = only === undefined ? fullStatus : { ...fullStatus, projects: fullStatus.projects.filter((project) => project.name === only) };
+/** The fleet view of this host's store. `status` is the status read of the same request. */
+export function collectWorkspaces(status: HostStatus, now: Date = new Date()): FleetWorkspaces {
   const self = hostId();
   const taints = safeTaints();
   const refuse = refusesBehind();

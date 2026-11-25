@@ -10,10 +10,10 @@
 
 import { data } from "react-router";
 
-import type { HostStatus, ProjectStatus, WorkspaceIcon } from "../../../src/web/api.ts";
+import type { FleetWorkspaces, HostStatus, ProjectStatus, WorkspaceHealth, WorkspaceIcon } from "../../../src/web/api.ts";
 import { buildAgenda, vigilsDue } from "./agenda.ts";
 import { needCounts, scopeProjects, selftestLines, workspaceIcon, type HomeScope, type SelftestLine } from "./home.ts";
-import type { Place } from "./paths.ts";
+import { placeOf, type Place } from "./paths.ts";
 import { readScopeCookie, readSettings, type Settings } from "./settings.ts";
 
 /** The badges on the tabs: vigils due today or late, rituals darius runs that are late, findings that need the operator, candles that are lit. */
@@ -93,17 +93,24 @@ export interface WorkspaceEntry {
   tabs: TabCounts;
   /** The icon its marker names; null when it has none or darius could not read it. */
   icon: WorkspaceIcon | null;
+  /** Its health (0.141.0), the same word as the Workspaces table. */
+  health: WorkspaceHealth;
 }
 
-/** The workspaces Places lists: the self-test one only when it is shown. */
-export function workspaceEntries(status: HostStatus, settings: Settings, needsBy: Readonly<Record<string, number>>): WorkspaceEntry[] {
-  return scopeProjects(status, { workspace: null, includeSelftest: settings.showSelftest }).map((project) => ({
-    name: project.name,
-    error: project.error !== null,
-    needs: needsBy[project.name] ?? 0,
-    tabs: tabCounts([project], status.today),
-    icon: workspaceIcon(project),
-  }));
+/**
+ * The workspaces Places lists: the self-test one only when it is shown, or
+ * when the page is in it (`current`). They come in the order of the
+ * Workspaces table (worst health first, then the name), with its health:
+ * one computation for both (0.141.0).
+ */
+export function workspaceEntries(status: HostStatus, settings: Settings, needsBy: Readonly<Record<string, number>>, fleet: FleetWorkspaces, current: string | null = null): WorkspaceEntry[] {
+  const shown = scopeProjects(status, { workspace: null, includeSelftest: settings.showSelftest });
+  const projects = current !== null && !shown.some((one) => one.name === current) ? [...shown, ...status.projects.filter((one) => one.name === current)] : shown;
+  return fleet.workspaces.flatMap((workspace): WorkspaceEntry[] => {
+    const project = projects.find((one) => one.name === workspace.name);
+    if (project === undefined) return [];
+    return [{ name: project.name, error: project.error !== null, needs: needsBy[project.name] ?? 0, tabs: tabCounts([project], status.today), icon: workspaceIcon(project), health: workspace.health }];
+  });
 }
 
 /** What the frame needs from the store, on every page: Places, the tabs and the host line. */
@@ -121,13 +128,13 @@ export interface ShellData {
   lastScope: string | null;
 }
 
-export function shellData(status: HostStatus, request: Request): ShellData {
+export function shellData(status: HostStatus, request: Request, fleet: FleetWorkspaces): ShellData {
   const settings = readSettings(request.headers.get("Cookie"));
   const counts = needCounts(status, settings.showSelftest);
   return {
     needs: counts.total,
     selftest: settings.showSelftest ? [] : selftestLines(status),
-    workspaces: workspaceEntries(status, settings, counts.byProject),
+    workspaces: workspaceEntries(status, settings, counts.byProject, fleet, placeOf(new URL(request.url).pathname).scope),
     allTabs: tabCounts(scopeProjects(status, { workspace: null, includeSelftest: settings.showSelftest }), status.today),
     defaultWorkspace: defaultWorkspaceOf(status, settings),
     lastScope: lastScopeOf(status, settings, request.headers.get("Cookie")),

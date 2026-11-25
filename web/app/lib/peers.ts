@@ -1,12 +1,12 @@
 /**
- * The hosts of the synced store as the pages show them (0.139.0): one probe
- * read per request, the words and tones of a host state, and the pure
- * helpers of the host strip and the Machines pages.
+ * The machines of the synced store as the pages show them (0.139.0): one
+ * probe read per request, the words and tones of a machine state, and the
+ * pure helpers of the machine bar.
  */
 
 import type { AppLoadContext } from "react-router";
 
-import type { FleetView, PeerHost, PeerState } from "../../../src/web/api.ts";
+import type { PeerHost, PeerState } from "../../../src/web/api.ts";
 import type { Badge } from "./tone.ts";
 
 const cache = new WeakMap<AppLoadContext, Promise<PeerHost[]>>();
@@ -22,7 +22,7 @@ export function peersOf(context: AppLoadContext): Promise<PeerHost[]> {
 }
 
 const STATE_WORDS = {
-  self: { tone: "ok", label: "this host" },
+  self: { tone: "ok", label: "online" },
   online: { tone: "ok", label: "online" },
   unreachable: { tone: "late", label: "unreachable" },
   offline: { tone: "bad", label: "offline" },
@@ -34,9 +34,14 @@ export function peerWord(state: PeerState): Badge {
   return STATE_WORDS[state];
 }
 
+/** The word of a machine state, or "not asked" for a machine the probe does not know. */
+export function machineWord(state: PeerState | null): Badge {
+  return state === null ? { tone: "idle", label: "not asked" } : STATE_WORDS[state];
+}
+
 /** What the state means, for a title and a screen reader. */
 export function peerMeaning(peer: PeerHost): string {
-  if (peer.state === "self") return "This host, the one that serves this page.";
+  if (peer.state === "self") return "Online: this machine, the one that serves this page.";
   if (peer.state === "online") return "Online: its darius serve answered.";
   if (peer.state === "checking") return "Checking: the first probe is still running. The next page shows the answer.";
   const why = peer.reason === null ? "" : ` (${peer.reason})`;
@@ -53,10 +58,4 @@ export function differentVersions(peers: readonly PeerHost[]): string[] {
 /** The open runs of a host: running and held. Unknown (null) when the host did not answer. */
 export function openRunCount(peer: PeerHost): number | null {
   return peer.live === null ? null : peer.live.openRuns.length;
-}
-
-/** The hosts of the Machines page: every host the ledgers know but the retired ones, this host first, plus any peer the probe knows that they do not. */
-export function columnsOf(fleet: FleetView, peers: readonly PeerHost[]): string[] {
-  const hosts = fleet.hosts.filter((host) => !host.retired).map((host) => host.host);
-  return [...hosts, ...peers.map((peer) => peer.host).filter((host) => !hosts.includes(host))];
 }

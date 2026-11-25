@@ -34,17 +34,18 @@ export default [
     route("backups", "routes/settings-backups.tsx"),
     route("about", "routes/settings-about.tsx"),
   ]),
-  // The machine, the store and the sync hosts of this host (0.44.0).
-  route("status", "routes/status.tsx"),
-  // The machines of the synced store and what runs where (0.139.0): host pages, in no workspace.
-  // Fleet (0.140.0): every workspace with its health and placement; /topology redirects to its #placement.
-  route("fleet", "routes/fleet.tsx"),
-  route("hosts", "routes/hosts.tsx"),
-  route("hosts/:host", "routes/host.tsx"),
-  route("topology", "routes/topology.tsx"),
+  // The two lists in no workspace (0.141.0): every workspace with its health, every machine of the synced store, and one machine.
+  route("workspaces", "routes/workspaces.tsx"),
+  route("machines", "routes/machines.tsx"),
+  route("machines/:host", "routes/machine.tsx"),
   route("runs", "routes/runs.tsx", { id: "runs-all" }),
   route("profiles", "routes/profiles.tsx"),
-  // Old addresses, kept as 301 redirects: the first status page (0.9.0) and the /p/ project pages.
+  // Old addresses, kept as 301 redirects: the first status page (0.9.0), the /p/ project pages, and the pages 0.141.0 renamed.
+  route("fleet", "routes/moved.tsx", { id: "moved-fleet" }),
+  route("topology", "routes/moved.tsx", { id: "moved-topology" }),
+  route("hosts", "routes/moved.tsx", { id: "moved-hosts" }),
+  route("hosts/:host", "routes/moved.tsx", { id: "moved-host" }),
+  route("status", "routes/moved.tsx", { id: "moved-status" }),
   route("runs/:project/:run", "routes/legacy-run.tsx", { id: "legacy-run-first" }),
   route("p/:project", "routes/project.tsx"),
   route("p/:project/rituals/:slug", "routes/legacy-ritual.tsx"),

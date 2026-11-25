@@ -1,18 +1,18 @@
 /**
- * The machine and the store, for the status page (0.44.0): the strip of
- * small facts at the top, then the machine, the hosts that sync, and the
- * projects with their last sync. Read-only. Every row is a line, not a tile.
+ * The machine and the store (0.44.0), since 0.141.0 the "Store and disks"
+ * part of the page of this machine: the strip of small facts, the machine
+ * facts with the disk bars, and the projects with their last sync.
+ * Read-only. Every row is a line, not a tile.
  */
 
 import { Link } from "react-router";
 
-import type { BackupsStatus, SystemDisk, SystemHost, SystemProject, SystemStatus } from "../../../src/web/api.ts";
+import type { BackupsStatus, SystemDisk, SystemProject, SystemStatus } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { href } from "../lib/paths.ts";
 import { byteSize, momentText, relativeTime, uptimeText } from "../lib/format.ts";
-import { backupWord } from "../lib/state-words.ts";
 import type { Tone } from "../lib/tone.ts";
-import { Section, Status, Time } from "./ui.tsx";
+import { Time } from "./ui.tsx";
 
 const DAY_MS = 86_400_000;
 
@@ -80,7 +80,7 @@ export function StatusStrip({ system, backups }: StripProps): React.ReactNode {
   const syncTone: Tone = sync === null ? "idle" : now - Date.parse(sync) > DAY_MS ? "late" : "ok";
   return (
     <nav className="pulse pulse-home pulse-status stagger" aria-label="Summary">
-      <FactPill value={String(system.hosts.length)} label={system.hosts.length === 1 ? "host" : "hosts"} tone="gold" />
+      <FactPill value={String(system.hosts.length)} label={system.hosts.length === 1 ? "machine" : "machines"} tone="gold" />
       <FactPill value={String(system.store.rituals + system.store.vigils)} label="items" tone="gold" />
       <FactPill value={String(system.store.runs)} label="runs" tone="gold" />
       <FactPill value={byteSize(system.store.bytes)} label="store" tone="gold" />
@@ -132,10 +132,11 @@ interface MachineProps {
   system: SystemStatus;
 }
 
+/** The machine facts and the disk bars of this machine. */
 export function Machine({ system }: MachineProps): React.ReactNode {
   const used = system.memory.totalBytes - system.memory.freeBytes;
   const rows: ReadonlyArray<readonly [string, string]> = [
-    ["Host", system.host],
+    ["Machine", system.host],
     ["darius", system.version],
     ["Runtime", system.runtime],
     ["Platform", system.platform],
@@ -144,7 +145,7 @@ export function Machine({ system }: MachineProps): React.ReactNode {
     ["Memory", `${byteSize(used)} used of ${byteSize(system.memory.totalBytes)}`],
   ];
   return (
-    <Section title="Machine">
+    <div className="sy-grid">
       <dl className="sy-rows panel">
         {rows.map(([name, value]) => (
           <div key={name}>
@@ -158,92 +159,11 @@ export function Machine({ system }: MachineProps): React.ReactNode {
           <DiskRow key={disk.label} disk={disk} />
         ))}
       </div>
-    </Section>
+    </div>
   );
 }
 
-// --- hosts and projects ------------------------------------------------------------------
-
-interface HostRowProps {
-  host: SystemHost;
-  /** True when the hosts name more than one snapshot bucket: each bucket shows in the late tone. */
-  differ: boolean;
-}
-
-/** The last backup of a host: its state, when the last good snapshot was made, and why the newest run failed. */
-function HostBackupLine({ host, differ }: HostRowProps): React.ReactNode {
-  const { backup } = host;
-  if (backup === null) {
-    return (
-      <p className="sy-meta">
-        <span className="ink-idle">last backup: none</span>
-      </p>
-    );
-  }
-  const word = backupWord(backup.state);
-  return (
-    <p className="sy-meta">
-      <span>last backup</span>
-      <Status tone={word.tone} label={word.label} />
-      {backup.lastOkAt === null ? <span className="ink-idle">no good snapshot yet</span> : <Time iso={backup.lastOkAt} />}
-      {backup.reason === null ? null : <span className="ink-late">{backup.reason}</span>}
-      {backup.error === null ? null : <span className="ink-bad">{backup.error}</span>}
-      <span className={differ ? "ink-late" : "ink-idle"}>{backup.bucket ?? "no bucket"}</span>
-    </p>
-  );
-}
-
-function HostRow({ host, differ }: HostRowProps): React.ReactNode {
-  return (
-    <li className="sy-item">
-      <p className="sy-item-head">
-        <Link to={href({ to: "machine", host: host.host })} className="sy-name">
-          {host.host}
-        </Link>
-        {host.self ? <span className="bk-mark tone-ok">this host</span> : null}
-      </p>
-      <p className="sy-meta">
-        <span>
-          last seen <Time iso={host.lastSeen} />
-        </span>
-        <span>
-          {host.chunks} {host.chunks === 1 ? "chunk" : "chunks"}
-        </span>
-        <span>{host.projects.length === 0 ? "no projects" : host.projects.join(", ")}</span>
-      </p>
-      <HostBackupLine host={host} differ={differ} />
-    </li>
-  );
-}
-
-interface HostsProps {
-  hosts: readonly SystemHost[];
-  /** `SystemStatus.backupBucketsDiffer`. */
-  bucketsDiffer: boolean;
-}
-
-export function Hosts({ hosts, bucketsDiffer }: HostsProps): React.ReactNode {
-  return (
-    <Section title="Hosts" aside={<Link to={href({ to: "host", page: "hosts" })}>Machines</Link>}>
-      {hosts.length === 0 ? (
-        <p className="panel-empty panel">No host has written to this store yet.</p>
-      ) : (
-        <>
-          <ul className="sy-list panel">
-            {hosts.map((host) => (
-              <HostRow key={host.host} host={host} differ={bucketsDiffer} />
-            ))}
-          </ul>
-          {bucketsDiffer ? (
-            <p className="page-warn tone-late" role="status">
-              Hosts back up to different buckets.
-            </p>
-          ) : null}
-        </>
-      )}
-    </Section>
-  );
-}
+// --- projects ----------------------------------------------------------------------------
 
 interface ProjectRowProps {
   project: SystemProject;
@@ -283,9 +203,11 @@ interface ProjectsProps {
   system: SystemStatus;
 }
 
+/** The projects of the store with their last sync, and the sync bucket. */
 export function Projects({ system }: ProjectsProps): React.ReactNode {
   return (
-    <Section title="Projects and syncs">
+    <div className="stack">
+      <h3 className="fl-group-name">Projects and syncs</h3>
       {system.projects.length === 0 ? (
         <p className="panel-empty panel">This store holds no project yet.</p>
       ) : (
@@ -297,13 +219,13 @@ export function Projects({ system }: ProjectsProps): React.ReactNode {
       )}
       <p className="sy-remote">
         {system.syncRemote === null ? (
-          "This host has no sync bucket."
+          "This machine has no sync bucket."
         ) : (
           <>
             Sync bucket: <code>{system.syncRemote.bucket}</code> at <code>{system.syncRemote.endpoint}</code>.
           </>
         )}
       </p>
-    </Section>
+    </div>
   );
 }

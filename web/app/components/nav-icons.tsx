@@ -1,7 +1,8 @@
 /**
- * The icons of the frame: the brand gem, the marks of Places (the settings gear, the status
- * pulse, the profile, the overview house, the shield of a finding, the candle, the event list of Activity, the two marks of the scopes,
- * the milestone flag, the screen of Machines and the three linked nodes of Topology), the chevron, check and close marks, the lock of a setting the environment sets, and the lens of the finder.
+ * The icons of the frame: the brand gem, the marks of Places (the settings gear, the profile,
+ * the overview house, the shield of a finding, the candle, the event list of Activity, the stack of
+ * Workspaces and the mark of one workspace, the milestone flag and the screen of Machines), the
+ * chevron and close marks, the lock of a setting the environment sets, and the lens of the finder.
  * The candle comes from the shared glyphs (`lib/glyphs.ts`), as do the eye and the two arrows of the vigil and ritual tabs (`kind.tsx`).
  * Same 16 by 16 grid and round strokes as the kind icons; the colour comes
  * from the text colour around them.
@@ -15,11 +16,9 @@ const PATHS = {
   gear: [GEAR, "M8 5.9A2.1 2.1 0 1 0 8 10.1A2.1 2.1 0 1 0 8 5.9Z"],
   milestone: ["M3.5 14.6V1.8", "M3.5 2.8H12.4L10.2 5.6L12.4 8.4H3.5"],
   chevron: ["M3.5 6L8 10.5L12.5 6"],
-  check: ["M3 8.6L6.5 12L13 4.6"],
   close: ["M4 4L12 12", "M12 4L4 12"],
   workspace: ["M2.4 3.4H13.6V12.6H2.4Z", "M2.4 6.4H13.6"],
   all: ["M8 2L14.4 5.4L8 8.8L1.6 5.4Z", "M1.6 8.4L8 11.8L14.4 8.4", "M1.6 11.2L8 14.6L14.4 11.2"],
-  status: ["M1.6 8.4H4.4L6.2 3.2L9.4 13L11.2 8.4H14.4"],
   overview: ["M1.8 7.6L8 2.3L14.2 7.6", "M3.6 6.6V13.7H12.4V6.6", "M6.6 13.7V9.6H9.4V13.7"],
   finding: ["M8 1.8L13 3.6V7.8C13 10.9 10.9 13.2 8 14.4C5.1 13.2 3 10.9 3 7.8V3.6Z", "M8 5.3V8.5", "M8 10.8H8.01"],
   candle: GLYPHS.candle,
@@ -29,7 +28,6 @@ const PATHS = {
   lock: ["M3.4 7.2H12.6V14.2H3.4Z", "M5.4 7.2V4.9A2.6 2.6 0 0 1 10.6 4.9V7.2"],
   search: ["M7 2.4A4.6 4.6 0 1 0 7 11.6A4.6 4.6 0 1 0 7 2.4Z", "M10.4 10.4L13.8 13.8"],
   machine: ["M2.2 2.8H13.8V10.2H2.2Z", "M5.6 13.4H10.4", "M8 10.2V13.4"],
-  topology: ["M8 1.8A1.6 1.6 0 1 0 8 5A1.6 1.6 0 1 0 8 1.8Z", "M3.2 11A1.6 1.6 0 1 0 3.2 14.2A1.6 1.6 0 1 0 3.2 11Z", "M12.8 11A1.6 1.6 0 1 0 12.8 14.2A1.6 1.6 0 1 0 12.8 11Z", "M7.1 4.8L4.1 11.2", "M8.9 4.8L11.9 11.2", "M4.8 12.6H11.2"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type NavIconName = keyof typeof PATHS;

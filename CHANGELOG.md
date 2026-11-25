@@ -2,6 +2,36 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.141.0] - 2026-11-25
+
+### Added
+
+- **The Overview says how the workspaces and the machines are.** Under the date of `/all` one line reads "10 workspaces: 2 OK, 3 need you, 2 failing, 1 unreadable, 2 quiet". Each count links to the Workspaces page filtered to that health. Next to it "3 machines: 2 online, 1 unreachable" links to Machines.
+- **A machine page says what the machine does.** `/machines/<name>` starts with the trail "Machines / name", the name with its state word and a "this machine" mark, and one sentence built from the facts: "host-b is online. It runs 2 workspaces (infra-notes, archive-2025) and shows a copy of 1. No run is open now. 2 djinns run here; the last one ran 25 min ago." The names are links; after four names it says "and n more". A machine that did not answer says why and when its ledgers were last seen.
+- **Needs attention on a machine page.** A short list shows only when something needs it: the darius version differs from this machine (with `darius update --hosts`), the box check failed, the backup is stale or failed, the serve did not answer, or the machine is retired.
+- **Workspaces on this machine.** A table on each machine page: workspace, role ("runs here" or "copy"), health, djinns here (late in amber), open runs and the last run here. The workspaces it runs come first, then its copies. A row links to the workspace. One line of facts sits above it: darius, up, load, box check, last seen and last backup.
+- **Pure functions with tests** for the lit row and the open branch of Places, the machine sentence, what needs attention, the workspace status sentence, the page labels and the old addresses.
+
+### Changed
+
+- **One navigation tree.** Places has three rows at the top, always in this order: Overview, Machines, Workspaces. Exactly one row is lit and one branch is open: the one the page is in. On Machines, Workspaces, Profiles and Settings no workspace is open. The Overview row shows what needs you, the Machines row the count and the worst state ("3, 1 unreachable"), the Workspaces row the count.
+- **A workspace is one line in Places.** It shows a health dot, its icon, its name and what needs you when above zero. The dot uses the same health as the Workspaces table, from one computation, and says the word in its title and to a screen reader. Unreadable keeps its word. The list is sorted like the table: worst health first, then the name. The "all clear" line is gone.
+- **Profiles and Settings sit in a foot** that stays at the bottom of the sidebar with the host line. The tree scrolls between the head and the foot.
+- **Fleet is now Workspaces, at `/workspaces`.** The column "Where" is "Runs on": the machines that run the workspace in bold, then "+2 copies" in muted text with the names in its title, or "no machine". A zero in a number column is muted. A legend sentence explains "runs" and "copy". "Not mirrored here" reads "Not copied to this machine yet". The headline counts machines, not hosts.
+- **Machines is a table, at `/machines`.** One row per machine, a card on a phone, the whole row a link: state, name with the "this machine" mark, the workspaces it runs and "+n copies", running now, djinns, darius, up, box check and last seen. A value a machine did not give is a muted dash with the title "did not answer". A sentence on top says "3 machines: 2 online, 1 unreachable" and how many runs are open.
+- **The Status page is part of the page of this machine.** Its strip, machine facts, disk bars, projects list and backups line are under "Store and disks", only on the page of the machine that serves the app.
+- **A workspace page says its name.** The Overview of a workspace starts with the trail "Workspaces / name", then the name as the title with its health word, then a status sentence: "Failing: 2 high candles lit, 2 vigils flagged. Runs on demo. Copies on host-b and host-c." A copy here adds "This machine shows a copy, synced 6 min ago." The four count links and the djinns follow. "One thing needs you." is now the heading "Needs you, 1"; the big line stays only on `/all`.
+- **Every page in a workspace starts its trail with "Workspaces".** The section lists (Vigils, Rituals, Findings, Candles, Milestones, Runs, Activity) have a trail too; for all workspaces it starts with "Overview".
+- **The machine bar is labelled.** The bar at the top of each page starts with "Machines". The chip of this machine carries a small "this" mark, and a chip says "3 running" (the number alone on a phone).
+- **Plain words.** The web app says "machine" for a host, "runs here" or "runs on X" for a checkout, and "copy" for a copy. A djinn row shows "pinned" only when the djinn is pinned to a machine. The API keeps its field names and values.
+- **The demo agrees with itself.** Its store facts and backups name the same machine and version as its machines, and each machine holds the workspaces the demo places on it.
+- **Old addresses redirect with 301.** `/fleet` and `/topology` go to `/workspaces` (the query stays), `/hosts` to `/machines`, `/hosts/<name>` to `/machines/<name>`, and `/status` to the page of this machine. The loading text follows the new names ("Opening Workspaces…", "Opening machine host-b…").
+
+### Removed
+
+- **The placement matrix.** Each machine page has the table of its workspaces instead.
+- **The machine cards** of 0.140.0 and the Hosts list of the Status page. Machines and the machine pages show the same facts.
+
 ## [0.140.0] - 2026-11-25
 
 ### Added

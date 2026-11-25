@@ -22,7 +22,7 @@ function loadContext(context) {
 		followUp: (project, run) => context.followUp(project, run),
 		peers: () => context.peers(),
 		fleet: () => context.fleet(),
-		workspaces: (only) => context.workspaces(only)
+		workspaces: () => context.workspaces()
 	};
 }
 //#endregion
@@ -33,7 +33,7 @@ function loadContext(context) {
 * (src/web/api.ts). Everything is bundled into the build, so the file loads
 * under Node and Bun with no node_modules beside it.
 */
-var handle = createRequestHandler(() => import("./assets/server-build-DLlhK-PI.js"), "production");
+var handle = createRequestHandler(() => import("./assets/server-build-MmKdj637.js"), "production");
 var handler = (request, context) => handle(request, loadContext(context));
 //#endregion
 export { handler as default };

@@ -129,7 +129,8 @@ export function activityQuery(filter: ActivityFilter) {
   return Object.fromEntries(entries.filter(([, value]) => value !== ""));
 }
 
-export type HostPage = "status" | "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about" | "hosts" | "fleet";
+/** The pages in no workspace (0.141.0): the Machines list, the Workspaces list, Profiles and Settings. */
+export type HostPage = "profiles" | "settings" | "settings/notifications" | "settings/backups" | "settings/about" | "machines" | "workspaces";
 
 export type Target =
   | { to: "overview"; ws: string | null }
@@ -140,7 +141,7 @@ export type Target =
   | { to: "vigil"; ws: string; slug: string }
   | { to: "candle"; ws: string; key: string }
   | { to: "host"; page: HostPage; hash?: string; query?: Record<string, string> }
-  /** One machine of the synced store (0.139.0). */
+  /** One machine of the synced store (0.139.0), at `/machines/<name>` since 0.141.0. */
   | { to: "machine"; host: string; hash?: string };
 
 function enc(text: string): string {
@@ -182,7 +183,7 @@ export function href(target: Target): string {
     case "host":
       return `/${target.page}${queryText(target.query)}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
     case "machine":
-      return `/hosts/${enc(target.host)}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
+      return `/machines/${enc(target.host)}${target.hash === undefined ? "" : `#${enc(target.hash)}`}`;
   }
 }
 
@@ -217,7 +218,7 @@ function isSection(text: string | undefined): text is Section {
   return SECTIONS.some((section) => section === text);
 }
 
-const HOST_ROOTS = new Set(["status", "profiles", "settings", "hosts", "topology", "fleet"]);
+const HOST_ROOTS = new Set(["profiles", "settings", "machines", "workspaces"]);
 
 function placeOfWorkspace(scope: string, rest: readonly string[]): Place {
   const [first, second] = rest;
@@ -253,12 +254,10 @@ const SECTION_LABELS = {
 } satisfies Record<Section, string>;
 
 const HOST_LABELS = new Map([
-  ["status", "Status"],
   ["profiles", "Profiles"],
   ["settings", "Settings"],
-  ["hosts", "Machines"],
-  ["topology", "Fleet"],
-  ["fleet", "Fleet"],
+  ["machines", "Machines"],
+  ["workspaces", "Workspaces"],
 ]);
 
 const DETAIL_WORDS = new Map<Section, string>([
@@ -270,14 +269,14 @@ const DETAIL_WORDS = new Map<Section, string>([
 ]);
 
 /**
- * The label of the page a path opens, for the loading line (0.140.0): "Fleet", "Vigils",
+ * The label of the page a path opens, for the loading line (0.140.0): "Workspaces", "Vigils",
  * "vigil odds-empty-record", "machine host-b", "demo-shop" (a workspace Overview),
- * "All workspaces". Null for a path that names no page.
+ * "Overview" (all workspaces). Null for a path that names no page.
  */
 export function pageLabel(pathname: string): string | null {
   const place = placeOf(pathname);
   const parts = pathname.split("/").filter((part) => part !== "");
-  if (place.kind === "overview") return place.scope ?? "All workspaces";
+  if (place.kind === "overview") return place.scope ?? "Overview";
   if (place.kind === "section" && place.section !== null) return SECTION_LABELS[place.section];
   if (place.kind === "detail" && place.section !== null) {
     const word = DETAIL_WORDS.get(place.section) ?? place.section;
@@ -285,7 +284,7 @@ export function pageLabel(pathname: string): string | null {
   }
   if (place.kind === "host") {
     const [first = "", second] = parts;
-    if (first === "hosts" && second !== undefined) return `machine ${decoded(second)}`;
+    if (first === "machines" && second !== undefined) return `machine ${decoded(second)}`;
     return HOST_LABELS.get(first) ?? null;
   }
   return null;
@@ -297,22 +296,41 @@ export interface Crumb {
   href: string | null;
 }
 
+/** The first step of the trail of a scope: Workspaces for a workspace (0.141.0), Overview for all workspaces. */
+function scopeRoot(scope: string | null): Crumb[] {
+  if (scope === null) return [{ label: "Overview", href: href({ to: "overview", ws: null }) }];
+  return [
+    { label: "Workspaces", href: href({ to: "host", page: "workspaces" }) },
+    { label: scope, href: href({ to: "overview", ws: scope }) },
+  ];
+}
+
 /**
- * The trail above a page: the scope, the section, the parent when there is
- * one (a run's ritual), and the page's own title. Only the last step is not a
- * link, so a page that gives no `title` (the Runs list) ends in its section.
- * A page with no scope trail (an overview, a host page, an unknown path) has
- * no crumbs.
+ * The trail above a page: Workspaces and the workspace (or Overview for all
+ * workspaces), the section, the parent when there is one (a run's ritual),
+ * and the page's own title. Only the last step is not a link, so a page that
+ * gives no `title` (the Runs list) ends in its section. The Overview of a
+ * workspace has the trail "Workspaces / name"; the Overview of all
+ * workspaces, a host page and an unknown path have none.
  */
 export function crumbsOf(place: Place, parent?: { label: string; target: Target }, title?: string): Crumb[] {
+  if (place.kind === "overview" && place.scope !== null) return [{ label: "Workspaces", href: href({ to: "host", page: "workspaces" }) }, { label: place.scope, href: null }];
   if (place.kind !== "section" && place.kind !== "detail") return [];
-  const trail: Crumb[] = [{ label: place.scope ?? "All workspaces", href: href({ to: "overview", ws: place.scope }) }];
+  const trail: Crumb[] = scopeRoot(place.scope);
   if (place.section !== null) trail.push({ label: SECTION_LABELS[place.section], href: href({ to: "section", ws: place.scope, section: place.section }) });
   if (parent !== undefined) trail.push({ label: parent.label, href: href(parent.target) });
   if (title !== undefined) trail.push({ label: title, href: null });
   const last = trail.at(-1);
   if (last !== undefined) last.href = null;
   return trail;
+}
+
+/** The trail of a machine page: "Machines / host-b". */
+export function machineCrumbs(name: string): Crumb[] {
+  return [
+    { label: "Machines", href: href({ to: "host", page: "machines" }) },
+    { label: name, href: null },
+  ];
 }
 
 /**
@@ -335,4 +353,62 @@ export function litSection(place: Place, itemKind?: "ritual" | "vigil"): Section
 export function switchTarget(place: Place, ws: string | null): Target {
   if ((place.kind === "section" || place.kind === "detail") && place.section !== null) return { to: "section", ws, section: place.section };
   return { to: "overview", ws };
+}
+
+// --- the Places tree (0.141.0) ------------------------------------------------------------------
+
+/** A row of Places that a page lights: a primary row, a page of the foot, or a place of the open branch ("overview" or a section). */
+export type LitRow = "overview" | Section | "machines" | "workspaces" | "profiles" | "settings";
+
+/** The branch of Places that is open: the seven places of all workspaces under Overview, or the eight places of one workspace. */
+export type Branch = { kind: "overview" } | { kind: "workspace"; ws: string };
+
+export interface NavState {
+  /** The one lit row; null on a page that names none (a 404). With an open branch, "overview" and a section are rows of that branch. */
+  lit: LitRow | null;
+  /** The one open branch; null on Machines, Workspaces, Profiles, Settings and a 404 with no scope. */
+  branch: Branch | null;
+}
+
+const ROOT_ROWS = new Map<string, LitRow>([
+  ["machines", "machines"],
+  ["workspaces", "workspaces"],
+  ["profiles", "profiles"],
+  ["settings", "settings"],
+]);
+
+/**
+ * Which row of Places is lit and which branch is open, from the address
+ * alone. `/all` lights Overview and opens its branch; `/vigils` lights
+ * Vigils in it. `/w/<ws>` opens that workspace and lights its Overview;
+ * `/w/<ws>/rituals/x` lights Rituals there. A run page lights the section of
+ * its item when `itemKind` says it, else Runs. Machines, Workspaces,
+ * Profiles and Settings light their own row and open no branch.
+ */
+export function navOf(pathname: string, itemKind?: "ritual" | "vigil"): NavState {
+  const place = placeOf(pathname);
+  if (place.kind === "host") return { lit: ROOT_ROWS.get(pathname.split("/").find((part) => part !== "") ?? "") ?? null, branch: null };
+  const branch: Branch = place.scope === null ? { kind: "overview" } : { kind: "workspace", ws: place.scope };
+  if (place.kind === "overview") return { lit: "overview", branch };
+  if (place.kind === "unknown") return { lit: null, branch: place.scope === null ? null : branch };
+  return { lit: litSection(place, itemKind) ?? place.section, branch };
+}
+
+// --- old addresses (0.141.0) ----------------------------------------------------------------------
+
+/**
+ * Where an address that 0.141.0 renamed lives now: `/fleet` and `/topology`
+ * are Workspaces, `/hosts` is Machines, `/hosts/<name>` is that machine,
+ * and `/status` is the page of this machine (`self`). The query stays. Null
+ * for any other address.
+ */
+export function movedTo(pathname: string, search: string, self: string): string | null {
+  const [first, second, ...rest] = pathname.split("/").filter((part) => part !== "");
+  if (rest.length > 0) return null;
+  const keep = search === "?" ? "" : search;
+  if ((first === "fleet" || first === "topology") && second === undefined) return `${href({ to: "host", page: "workspaces" })}${keep}`;
+  if (first === "hosts" && second === undefined) return `${href({ to: "host", page: "machines" })}${keep}`;
+  if (first === "hosts" && second !== undefined) return `${href({ to: "machine", host: decoded(second) })}${keep}`;
+  if (first === "status" && second === undefined) return `${href({ to: "machine", host: self })}${keep}`;
+  return null;
 }

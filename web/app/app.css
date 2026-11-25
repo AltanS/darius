@@ -3295,24 +3295,80 @@
     color: var(--color-muted);
   }
 
-  .places-group {
-    padding: 14px 16px 6px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-muted);
-  }
-
   .places-tree,
-  .places-sub {
+  .places-sub,
+  .places-wss,
+  .places-foot-rows {
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
+  .places-tree {
+    padding-top: 8px;
+  }
+
+  /* The three primary rows (0.141.0): Overview, Machines, Workspaces; same style, each with an icon and a count. */
+
+  .places-primary .places-name {
+    font-weight: 600;
+  }
+
+  .places-count {
+    flex: none;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .places-count.ink-late {
+    color: var(--color-late);
+  }
+
+  /* A workspace on one line: the health dot, the icon, the name, what needs you. */
+
+  .places-ws {
+    padding-left: 24px;
+    font-size: 14.5px;
+  }
+
+  .places-ws .places-name {
+    overflow: hidden;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .places-ws.open .places-name {
+    font-weight: 600;
+  }
+
+  .places-ws .tab-bdg {
+    flex: none;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    font-size: 12.5px;
+  }
+
+  .places-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--tone);
+  }
+
+  .places-word {
+    flex: none;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--tone);
+  }
+
   .places-empty {
-    padding: 4px 16px 12px;
+    padding: 4px 16px 12px 40px;
     font-size: 13.5px;
     color: var(--color-muted);
   }
@@ -3347,32 +3403,6 @@
     min-width: 0;
     overflow-wrap: anywhere;
     font-weight: 500;
-  }
-
-  /* A scope: its name, and under it what needs you there. */
-
-  .places-text {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 3px;
-    min-width: 0;
-    padding-block: 2px;
-  }
-
-  .places-text .places-name {
-    flex: none;
-    max-width: 100%;
-  }
-
-  .places-scope.on .places-name {
-    font-weight: 600;
-  }
-
-  .places-check {
-    flex: none;
-    color: var(--color-gold);
   }
 
   /* A workspace icon (0.70.0): an emoji or a checked image in the box of a nav icon, so rows with and without one line up. Plain: no frame, square corners. */
@@ -3419,14 +3449,6 @@
     color: var(--on-solid, var(--color-night));
   }
 
-  .places-clear {
-    flex: none;
-    font-size: 12px;
-    line-height: 1.4;
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-
   /* The places of the scope you are in: indented under its row. */
 
   .places-sub {
@@ -3440,6 +3462,12 @@
   .places-sub .places-leaf {
     padding-left: 32px;
     font-size: 14.5px;
+  }
+
+  /* The eight places of the open workspace sit one step deeper than its row. */
+
+  .places-wss .places-sub .places-leaf {
+    padding-left: 48px;
   }
 
   .places-leaf:hover {
@@ -3458,31 +3486,50 @@
     font-size: 12.5px;
   }
 
-  /* The lit row: gold text and a bar of 3 px at the left. The corners stay square. */
+  /* The one lit row: gold text and a bar of 3 px at the left. The corners stay square. */
 
-  .places-leaf.lit {
+  .places-row.lit {
     border-left-color: var(--gold-bar, var(--color-gold));
     background: var(--color-surface);
     color: var(--color-gold);
   }
 
-  .places-leaf.lit .places-ico {
+  .places-row.lit .places-ico {
     color: inherit;
   }
 
-  .places-leaf.lit .places-name {
+  .places-row.lit .places-name {
     font-weight: 600;
   }
 
-  /* The host line: host, version, update time, viewer, small, at the end of the tree. */
+  /* The foot (0.141.0): Profiles, Settings and the host line stay at the bottom; the tree scrolls above it. */
 
   .places-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
     display: flex;
+    flex: none;
     flex-direction: column;
     gap: 6px;
     margin-top: auto;
-    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+    padding: 6px 0 calc(12px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--color-sand);
+    background: var(--color-deep);
+  }
+
+  .places-foot-rows {
+    display: flex;
+  }
+
+  .places-foot-rows > li {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .places-foot .places-hostline,
+  .places-foot .places-selftest {
+    padding-inline: 16px;
   }
 
   .places-hostline {
@@ -5854,9 +5901,10 @@
   /* --- hosts: the host strip, Machines and Topology (0.139.0) ------------------------- */
 
   /*
-   * The host strip (0.140.0): a sticky one-line bar at the top of <main>, under the phone top bar on a
-   * phone. A chip is a square in the state colour, the name, and the open runs when above 0. Square
-   * corners, no accent border. Below 480 px the chips are dots; the name stays in the accessible label.
+   * The machine bar (0.140.0, labelled in 0.141.0): a sticky one-line bar at the top of <main>, under
+   * the phone top bar on a phone. The label "Machines", then a chip per machine: a square in the state
+   * colour, the name, a "this" mark for this machine, and "n running" when above 0. Square corners, no
+   * accent border. Below 480 px with many machines the chips are dots; the name stays in the accessible label.
    */
 
   .hs {
@@ -5872,6 +5920,15 @@
     border-bottom: 1px solid var(--color-sand);
     background: var(--color-night);
     overflow: hidden;
+  }
+
+  .hs-label {
+    flex: none;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
   }
 
   .hs-list {
@@ -5931,9 +5988,32 @@
     text-overflow: ellipsis;
   }
 
+  .hs-this {
+    flex: none;
+    padding: 0 4px;
+    border: 1px solid var(--color-gold);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--color-gold);
+  }
+
   .hs-runs {
     font-variant-numeric: tabular-nums;
     color: var(--color-run);
+  }
+
+  /* A phone shows the run count without the word; the screen reader text keeps it. */
+
+  @media (max-width: 639px) {
+    .hs-runs-word {
+      display: none;
+    }
+
+    .hs-label {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+    }
   }
 
   /* The loading text sits at the right of the bar, before "versions differ". It is the desktop copy: the phone top bar has its own. */
@@ -6019,7 +6099,7 @@
       padding-inline: 6px;
     }
 
-    /* A phone keeps each host name whole: the chips scroll sideways inside the bar instead of shrinking. */
+    /* A phone keeps each machine name whole: the chips scroll sideways inside the bar instead of shrinking. */
 
     .hs-list {
       overflow-x: auto;
@@ -6031,7 +6111,7 @@
     }
   }
 
-  /* More than 3 hosts below 480 px: dots, with the name in the accessible label. */
+  /* More than 3 machines below 480 px: dots, with the name in the accessible label. */
 
   @media (max-width: 479px) {
     .hs-many .hs-chip {
@@ -6040,7 +6120,8 @@
       padding-inline: 8px;
     }
 
-    .hs-many .hs-name {
+    .hs-many .hs-name,
+    .hs-many .hs-this {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -6050,15 +6131,7 @@
     }
   }
 
-  .mh-state,
-  .mh-lede {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 10px;
-  }
-
-  /* --- the fleet (0.140.0): health words, the workspace table, placement, machine cards ------ */
+  /* --- workspaces and machines (0.140.0, 0.141.0): health words, the tables, the machine page ------ */
 
   .fl-health {
     display: inline-flex;
@@ -6077,6 +6150,11 @@
     background: var(--tone);
   }
 
+  .fl-dot.is-hollow {
+    background: none;
+    box-shadow: inset 0 0 0 1px var(--tone);
+  }
+
   .fl-headline {
     max-width: 70ch;
     font-size: 17px;
@@ -6088,42 +6166,6 @@
   }
 
   .fl-more {
-    color: var(--color-faint);
-  }
-
-  .fl-chips {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .fl-chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    max-width: 100%;
-    padding: 1px 6px;
-    border: 1px solid var(--color-sand);
-    font-size: 12px;
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-
-  .fl-chip.is-checkout {
-    color: var(--color-parchment);
-  }
-
-  .fl-chip.is-self {
-    border-color: var(--color-gold);
-  }
-
-  .fl-chip-host {
-    overflow: hidden;
-    font-weight: 600;
-    text-overflow: ellipsis;
-  }
-
-  .fl-chip-kind {
     color: var(--color-faint);
   }
 
@@ -6187,14 +6229,35 @@
     overflow-wrap: anywhere;
   }
 
-  /* The host chips of a row stack in their own column and never run into the counts beside it. */
+  /* Runs on: the machines that run it in bold, then "+2 copies" muted. */
 
   .fl-c-where {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .fl-runs-names {
+    font-weight: 600;
+  }
+
+  .fl-copies {
+    color: var(--color-muted);
+  }
+
+  /* A zero is muted, so the eye finds the numbers that matter. */
+
+  .fl-n.is-zero {
+    color: var(--color-faint);
+  }
+
+  .fl-legend {
+    max-width: 75ch;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .fl-list {
+    display: grid;
+    gap: 12px;
   }
 
   .fl-c-num {
@@ -6271,7 +6334,8 @@
       text-align: right;
     }
 
-    .fl-c-num .fl-label {
+    .fl-c-num .fl-label,
+    .fl-c-where .fl-label {
       position: static;
       width: auto;
       height: auto;
@@ -6282,90 +6346,13 @@
     }
   }
 
-  /* The placement matrix: short cells; long names end in an ellipsis with the full name in the title. */
-
-  .fl-matrix-wrap {
-    position: relative;
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
-  /* Fixed layout: the host columns share the width evenly. The inline min-width keeps each at 120 px; the wrap scrolls below it. */
-
-  .fl-matrix {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: 13px;
-  }
-
-  .fl-matrix .fl-matrix-first {
-    width: 11rem;
-  }
-
-  .fl-matrix th,
-  .fl-matrix td {
-    padding: 6px 10px;
-    border-top: 1px solid var(--color-sand);
-    overflow: hidden;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-
-  .fl-matrix thead th {
-    border-top: 0;
-    font-weight: 600;
-  }
-
-  .fl-matrix td.is-checkout {
-    color: var(--color-parchment);
-  }
-
-  .fl-trunc {
-    display: inline-block;
-    max-width: 10rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    vertical-align: bottom;
-  }
-
-  .fl-pins {
-    font-size: 12px;
-    color: var(--color-faint);
-  }
-
-  @media (max-width: 639px) {
-    .fl-trunc {
-      max-width: 6.5rem;
-    }
-
-    .fl-matrix th,
-    .fl-matrix td {
-      padding-inline: 6px;
-    }
-  }
-
-  /* The workspace header on top of a workspace Overview. */
+  /* The counts and djinns under the head of a workspace Overview. */
 
   .fl-head {
     display: grid;
     gap: 8px;
     margin-bottom: 16px;
     padding: 12px 16px;
-  }
-
-  .fl-head-line {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 12px;
-    margin: 0;
-  }
-
-  .fl-head-reasons {
-    color: var(--color-muted);
   }
 
   /* The counts: one row of compact inline items, about 44 px tall. No tiles. */
@@ -6488,70 +6475,311 @@
     font-size: 13px;
   }
 
-  .fl-holds {
+  /* The Machines table and the table of a machine's workspaces (0.141.0): one grid per row, so the whole row is one link. A card per row on a phone. */
+
+  .mt-row,
+  .mw-row {
     display: grid;
-    gap: 6px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  /* Machines: equal cards side by side on a desktop, one column on a phone. */
-
-  .mc-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
-    gap: 16px;
-  }
-
-  .mc {
-    display: grid;
-    gap: 10px;
-    padding: 16px;
-  }
-
-  .mc-head {
-    display: flex;
-    flex-wrap: wrap;
+    gap: 12px;
     align-items: center;
-    gap: 6px 10px;
-  }
-
-  .mc-name {
-    font-size: 17px;
-    font-weight: 600;
-  }
-
-  .mc-facts {
-    display: grid;
-    gap: 4px;
-    margin: 0;
+    padding: 10px 12px;
+    border-top: 1px solid var(--color-sand);
     font-size: 14px;
+    color: var(--color-parchment);
   }
 
-  .mc-facts > div {
-    display: grid;
-    grid-template-columns: 8.5rem minmax(0, 1fr);
-    gap: 8px;
+  .mt-row {
+    grid-template-columns: 6.5rem minmax(6rem, 1.2fr) minmax(7.5rem, 1.3fr) 5rem 4rem minmax(5rem, 1fr) 4rem 5rem 5.5rem;
   }
 
-  .mc-facts dt {
+  .mw-row {
+    grid-template-columns: minmax(8rem, 1.5fr) 6rem 7rem 6rem 5rem minmax(8rem, 1fr);
+  }
+
+  a.mt-row:hover,
+  a.mw-row:hover {
+    background: var(--color-surface);
+    text-decoration: none;
+  }
+
+  .mt-row.fl-thead,
+  .mw-row.fl-thead {
+    border-top: 0;
+    font-size: 12px;
+    font-weight: 600;
     color: var(--color-muted);
   }
 
-  .mc-facts dd {
-    min-width: 0;
-    margin: 0;
+  .mt-c-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    font-weight: 600;
   }
 
-  .mc-load {
+  .mt-c-ver,
+  .mt-c-runs {
+    overflow-wrap: anywhere;
+  }
+
+  .mt-c-num,
+  .mw-c-num {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 6px;
     font-variant-numeric: tabular-nums;
   }
 
-  .mc-trunc {
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .mt-c-seen,
+  .mw-c-last {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  /* The mark of this machine: small gold text in a square frame. */
+
+  .mt-this {
+    flex: none;
+    padding: 0 5px;
+    border: 1px solid var(--color-gold);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1.5;
+    text-transform: none;
     white-space: nowrap;
+    color: var(--color-gold);
+  }
+
+  /* Nine columns need about 1200 px: below that each machine is a card. */
+
+  @media (max-width: 1199px) {
+    .mt-row.fl-thead,
+    .mw-row.fl-thead {
+      display: none;
+    }
+
+    .mt-row .fl-label,
+    .mw-row .fl-label {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
+      font-size: 12px;
+      color: var(--color-muted);
+    }
+
+    .mt-row,
+    .mw-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px 16px;
+      padding: 12px;
+    }
+
+    .mt-row {
+      grid-template-areas:
+        "state name name"
+        "runs runs runs"
+        "running djinns ver"
+        "up box seen";
+    }
+
+    .mw-row {
+      grid-template-areas:
+        "name name role"
+        "health djinns open"
+        "last last last";
+    }
+
+    .mt-c-state {
+      grid-area: state;
+    }
+
+    .mt-c-name {
+      grid-area: name;
+    }
+
+    .mt-c-runs {
+      grid-area: runs;
+    }
+
+    .mt-c-num:nth-child(4) {
+      grid-area: running;
+    }
+
+    .mt-c-num:nth-child(5) {
+      grid-area: djinns;
+    }
+
+    .mt-c-ver {
+      grid-area: ver;
+    }
+
+    .mt-c-up {
+      grid-area: up;
+    }
+
+    .mt-c-box {
+      grid-area: box;
+    }
+
+    .mt-c-seen {
+      grid-area: seen;
+    }
+
+    .mw-c-name {
+      grid-area: name;
+    }
+
+    .mw-c-role {
+      grid-area: role;
+      text-align: right;
+    }
+
+    .mw-c-health {
+      grid-area: health;
+    }
+
+    .mw-c-num:nth-child(4) {
+      grid-area: djinns;
+    }
+
+    .mw-c-num:nth-child(5) {
+      grid-area: open;
+    }
+
+    .mw-c-last {
+      grid-area: last;
+    }
+
+    /* On a card each value has its label before it. */
+
+    .mt-row > .fl-c,
+    .mw-c-last {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 2px 6px;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .fl-c-where {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 2px 6px;
+    }
+  }
+
+  /* One machine (0.141.0): the name with its state, the sentence, what needs attention, one line of facts. */
+
+  .mp-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+  }
+
+  .mp-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mp-title .status {
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .mp-sentence,
+  .ws-sentence {
+    max-width: 75ch;
+    margin-top: 12px;
+    font-size: 17px;
+    line-height: 1.5;
+  }
+
+  .mp-attention {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 12px 16px 12px 32px;
+  }
+
+  .mp-attention code {
+    font-size: 13px;
+  }
+
+  .mp-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    margin: 0;
+    padding-block: 10px;
+    border-block: 1px solid var(--color-sand);
+    font-size: 14px;
+  }
+
+  .mp-facts > div {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+
+  .mp-facts dt {
+    font-size: 12px;
+    color: var(--color-muted);
+  }
+
+  .mp-facts dd {
+    margin: 0;
+  }
+
+  /* The head of a workspace Overview (0.141.0): the trail, the name with its health word, the status sentence. */
+
+  .ws-head {
+    padding-bottom: 20px;
+  }
+
+  .ws-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+  }
+
+  .ws-title .ws-title-icon {
+    margin-right: 0;
+  }
+
+  .ws-title-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ws-title .fl-health {
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* The line under the date of the Overview (0.141.0): the health split and the machines, each a link. */
+
+  .ov-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin-top: 10px;
+    font-size: 15px;
+    color: var(--color-muted);
+  }
+
+  .verdict-next {
+    padding-top: 0;
   }
 
   /* The loading text next to the busy gem (0.140.0): one line, cut with an ellipsis. */
@@ -6579,10 +6807,6 @@
     .places-row {
       min-height: 44px;
       padding-block: 4px;
-    }
-
-    .places-group {
-      padding-block: 10px 4px;
     }
 
     .ms-page {

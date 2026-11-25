@@ -1,14 +1,11 @@
 /**
- * The parts of the Machines pages (0.139.0): a host's state, its live facts
- * from its own `darius serve`, and its facts from the synced ledgers. Since
- * 0.140.0 a machine is an equal card (`MachineCard`). Read-only.
+ * The parts of the machine pages (0.139.0, 0.141.0): the box check in
+ * words, the muted dash of a value a machine did not give, its live facts
+ * from its own `darius serve`, and its facts from the synced ledgers.
+ * Read-only.
  */
 
-import { Link } from "react-router";
-
-import type { FleetHost, HostBoxCheck, HostLive, PeerHost } from "../../../src/web/api.ts";
-import { href } from "../lib/paths.ts";
-import { peerMeaning, peerWord } from "../lib/peers.ts";
+import type { FleetHost, HostBoxCheck, HostLive } from "../../../src/web/api.ts";
 import { uptimeText } from "../lib/format.ts";
 import { backupWord } from "../lib/state-words.ts";
 import type { Badge } from "../lib/tone.ts";
@@ -20,18 +17,18 @@ export function boxWord(check: HostBoxCheck | null): Badge {
   return check.outcome === "pass" ? { tone: "ok", label: "box check passed" } : { tone: "bad", label: `box check ${check.outcome}` };
 }
 
-interface StateProps {
-  peer: PeerHost | undefined;
+/** The newest box check in a short word ("passed", "fail"), in its tone. */
+export function BoxWord({ check }: { check: HostBoxCheck | null }): React.ReactNode {
+  const box = boxWord(check);
+  return <Status tone={box.tone} label={check === null ? "none" : box.label.replace(/^box check /u, "")} />;
 }
 
-/** The live state of a host, with the reason when the probe failed. */
-export function HostState({ peer }: StateProps): React.ReactNode {
-  if (peer === undefined) return <Status tone="idle" label="not probed" />;
-  const word = peerWord(peer.state);
+/** A value the machine did not give: a muted dash, with the reason in the title. */
+export function Unknown(): React.ReactNode {
   return (
-    <span className="mh-state" title={peerMeaning(peer)}>
-      <Status tone={word.tone} label={word.label} />
-      {peer.reason === null ? null : <span className="text-muted">{peer.reason}</span>}
+    <span className="text-muted" title="did not answer">
+      <span aria-hidden="true">–</span>
+      <span className="sr-only">unknown, did not answer</span>
     </span>
   );
 }
@@ -91,86 +88,5 @@ export function LedgerFacts({ host }: LedgerProps): React.ReactNode {
         )}
       </span>
     </p>
-  );
-}
-
-interface CardProps {
-  name: string;
-  peer: PeerHost | undefined;
-  host: FleetHost | undefined;
-  /** This host's darius version: a card whose version differs shows it in amber. */
-  selfVersion: string | null;
-  /** The workspaces with a checkout on this host. */
-  checkouts: readonly string[];
-  /** The djinns pinned to this host. */
-  pinnedDjinns: number;
-  /** Link the name to the machine page (the list), or not (the machine page itself). */
-  linked?: boolean;
-}
-
-/** One machine as an equal card: state, name, version, uptime, load, box check, last seen, and what it runs. */
-export function MachineCard({ name, peer, host, selfVersion, checkouts, pinnedDjinns, linked = true }: CardProps): React.ReactNode {
-  const live = peer?.live ?? null;
-  const version = peer?.version ?? host?.version ?? null;
-  const differs = version !== null && selfVersion !== null && version !== selfVersion;
-  const box = boxWord(live?.boxCheck ?? host?.boxCheck ?? null);
-  const self = peer?.self === true || host?.self === true;
-  const running = live?.openRuns.length ?? null;
-  return (
-    <article className="mc panel">
-      <header className="mc-head">
-        {linked ? (
-          <Link to={href({ to: "machine", host: name })} className="mc-name">
-            {name}
-          </Link>
-        ) : (
-          <span className="mc-name">{name}</span>
-        )}
-        {self ? <span className="bk-mark tone-ok">this host</span> : null}
-        <HostState peer={peer} />
-      </header>
-      <dl className="mc-facts">
-        <div>
-          <dt>darius</dt>
-          <dd className={differs ? "ink-late" : undefined}>{version === null ? "unknown" : differs ? `${version}, differs` : version}</dd>
-        </div>
-        <div>
-          <dt>Up</dt>
-          <dd>{live === null ? <span className="text-muted">unknown</span> : uptimeText(live.uptimeSeconds)}</dd>
-        </div>
-        <div>
-          <dt>Load</dt>
-          <dd className="mc-load">{live === null ? <span className="text-muted">unknown</span> : live.load.map((value) => value.toFixed(2)).join(" ")}</dd>
-        </div>
-        <div>
-          <dt>Box check</dt>
-          <dd>
-            <Status tone={box.tone} label={box.label.replace(/^box check /u, "")} />
-          </dd>
-        </div>
-        <div>
-          <dt>Last seen</dt>
-          <dd>
-            <Time iso={host?.lastSeen ?? null} />
-          </dd>
-        </div>
-        <div>
-          <dt>Running now</dt>
-          <dd>{running === null ? <span className="text-muted">unknown</span> : <Link to={href({ to: "machine", host: name, hash: "running" })}>{running}</Link>}</dd>
-        </div>
-        <div>
-          <dt>Checkouts here</dt>
-          <dd className="mc-trunc" title={checkouts.join(", ")}>
-            {checkouts.length === 0 ? <span className="text-muted">none</span> : `${String(checkouts.length)}: ${checkouts.join(", ")}`}
-          </dd>
-        </div>
-        <div>
-          <dt>Pinned djinns</dt>
-          <dd>
-            <Link to={href({ to: "machine", host: name, hash: "djinns" })}>{pinnedDjinns}</Link>
-          </dd>
-        </div>
-      </dl>
-    </article>
   );
 }

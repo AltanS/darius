@@ -2,6 +2,7 @@ import { Link, redirect } from "react-router";
 
 import type { Route } from "./+types/findings";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
+import { Crumbs } from "../components/crumbs.tsx";
 import { FindingList } from "../components/findings.tsx";
 import { Section } from "../components/ui.tsx";
 import { emptyText, facetOptions, filterFindings, filterText, findingsHref, readQuery, viewCount, VIEWS, type FindingQuery } from "../lib/findings.ts";
@@ -46,6 +47,7 @@ export default function Findings({ loaderData }: Route.ComponentProps): React.Re
   return (
     <div>
       <header className="page-head">
+        <Crumbs />
         <h1 className="page-title">Findings</h1>
         <p className="page-meta">
           <span>{filterText(query, scope)}</span>

@@ -206,7 +206,7 @@ export function webContext(viewer: string, nonce: string = newNonce(), local = f
     // No page waits for a probe (0.140.0): the cache answers, a stale or a cold one probes in the background.
     peers: () => Promise.resolve(currentPeerHosts()),
     fleet: () => collectFleet(),
-    workspaces: (only) => collectWorkspaces(cachedStatus(), new Date(), only),
+    workspaces: () => collectWorkspaces(cachedStatus()),
     followUp: (project, run) => (local ? Promise.resolve({ ready: false, host: hostId(), reason: LOOPBACK_FOLLOW_UP }) : followUpReadiness(project, run)),
   };
 }

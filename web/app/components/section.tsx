@@ -1,5 +1,7 @@
 /** The head of a section page (Vigils, Rituals): the section mark and name, then the scope it covers and a count. */
 
+import { Crumbs } from "./crumbs.tsx";
+
 /** Pixels of the mark before a section page title. */
 export const TITLE_ICON = 24;
 
@@ -16,6 +18,7 @@ interface SectionHeadProps {
 export function SectionPageHead({ title, workspace, fact, icon }: SectionHeadProps): React.ReactNode {
   return (
     <header className="page-head page-head-tight proj-head">
+      <Crumbs />
       <h1 className={icon === undefined ? "page-title" : "page-title has-title-icon"}>
         {icon}
         {title}

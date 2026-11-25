@@ -1,6 +1,7 @@
 import { data } from "react-router";
 
 import type { Route } from "./+types/milestones";
+import { Crumbs } from "../components/crumbs.tsx";
 import { Workspace } from "../components/milestones.tsx";
 import { isSelftest } from "../lib/home.ts";
 import { hasMilestones, workspaceMilestones } from "../lib/milestones.ts";
@@ -39,6 +40,7 @@ export default function Milestones({ loaderData }: Route.ComponentProps): React.
   return (
     <div className="ms-page">
       <header className="ms-head">
+        <Crumbs />
         <h1 className="ms-h1">Milestones</h1>
         <p className="ms-sub">{scope === null ? "All workspaces, read-only, from the tracker" : "Read-only, from the tracker"}</p>
       </header>

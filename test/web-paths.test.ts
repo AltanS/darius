@@ -46,12 +46,11 @@ const CASES: { target: Target; place: Place }[] = [
   { target: { to: "milestone", ws: "demo", ref: "M7" }, place: { scope: "demo", kind: "detail", section: "milestones" } },
   { target: { to: "milestone", ws: SPACED, ref: "M12-cart shop" }, place: { scope: SPACED, kind: "detail", section: "milestones" } },
   { target: { to: "vigil", ws: "demo", slug: "guard-soak" }, place: { scope: "demo", kind: "detail", section: "vigils" } },
-  { target: { to: "host", page: "status" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "profiles", hash: "profile-fast" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "settings" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "host", page: "settings/backups" }, place: { scope: null, kind: "host", section: null } },
-  { target: { to: "host", page: "hosts" }, place: { scope: null, kind: "host", section: null } },
-  { target: { to: "host", page: "fleet" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "host", page: "machines" }, place: { scope: null, kind: "host", section: null } },
+  { target: { to: "host", page: "workspaces" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "machine", host: "host-b" }, place: { scope: null, kind: "host", section: null } },
   { target: { to: "machine", host: "a b" }, place: { scope: null, kind: "host", section: null } },
 ];
@@ -139,11 +138,12 @@ test("ACTIVITY_KINDS lists every kind of the ActivityKind type, and only those",
 test("crumbsOf() and litSection() know Activity: scope, section, no tab", () => {
   const all = paths.placeOf("/activity");
   assert.deepEqual(paths.crumbsOf(all), [
-    { label: "All workspaces", href: "/all" },
+    { label: "Overview", href: "/all" },
     { label: "Activity", href: null },
   ]);
   const one = paths.placeOf("/w/demo/activity");
   assert.deepEqual(paths.crumbsOf(one), [
+    { label: "Workspaces", href: "/workspaces" },
     { label: "demo", href: "/w/demo" },
     { label: "Activity", href: null },
   ]);
@@ -181,13 +181,14 @@ test("switchTarget() keeps the section and sends a detail page to its list", () 
   assert.equal(paths.href(paths.switchTarget(rituals, null)), "/rituals");
   assert.equal(paths.href(paths.switchTarget(paths.placeOf("/w/demo/milestones/M7"), "other")), "/w/other/milestones");
   assert.equal(paths.href(paths.switchTarget(paths.placeOf("/w/demo"), "other")), "/w/other");
-  assert.equal(paths.href(paths.switchTarget(paths.placeOf("/status"), "other")), "/w/other");
+  assert.equal(paths.href(paths.switchTarget(paths.placeOf("/machines"), "other")), "/w/other");
   assert.equal(paths.href(paths.switchTarget(paths.placeOf("/all"), "other")), "/w/other");
 });
 
-test("crumbsOf() lists the scope, the section, the parent and the title; only the last step is not a link", () => {
+test("crumbsOf() lists Workspaces and the scope, the section, the parent and the title; only the last step is not a link", () => {
   const ritual = paths.placeOf("/w/demo/rituals/daily-report");
   assert.deepEqual(paths.crumbsOf(ritual, undefined, "Daily report"), [
+    { label: "Workspaces", href: "/workspaces" },
     { label: "demo", href: "/w/demo" },
     { label: "Rituals", href: "/w/demo/rituals" },
     { label: "Daily report", href: null },
@@ -196,23 +197,28 @@ test("crumbsOf() lists the scope, the section, the parent and the title; only th
   const run = paths.placeOf("/w/demo/runs/01K");
   const inRituals = { ...run, section: paths.litSection(run, "ritual") };
   assert.deepEqual(paths.crumbsOf(inRituals, parent, "Findings heading"), [
+    { label: "Workspaces", href: "/workspaces" },
     { label: "demo", href: "/w/demo" },
     { label: "Rituals", href: "/w/demo/rituals" },
     { label: "Daily report", href: "/w/demo/rituals/daily-report" },
     { label: "Findings heading", href: null },
   ]);
   const vigil = { label: "Guard soak", target: { to: "vigil", ws: "demo", slug: "guard" } satisfies Target };
-  assert.deepEqual(paths.crumbsOf({ ...run, section: paths.litSection(run, "vigil") }, undefined, "Guard soak").map((crumb) => crumb.label), ["demo", "Vigils", "Guard soak"]);
+  assert.deepEqual(paths.crumbsOf({ ...run, section: paths.litSection(run, "vigil") }, undefined, "Guard soak").map((crumb) => crumb.label), ["Workspaces", "demo", "Vigils", "Guard soak"]);
   assert.equal(paths.crumbsOf({ ...run, section: "vigils" }, vigil).at(-1)?.href, null, "without a title the parent is the last step and not a link");
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/w/demo/runs")), [
+    { label: "Workspaces", href: "/workspaces" },
     { label: "demo", href: "/w/demo" },
     { label: "Runs", href: null },
   ]);
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/runs")), [
-    { label: "All workspaces", href: "/all" },
+    { label: "Overview", href: "/all" },
     { label: "Runs", href: null },
   ]);
-  assert.deepEqual(paths.crumbsOf(paths.placeOf("/w/demo")), []);
+  assert.deepEqual(paths.crumbsOf(paths.placeOf("/w/demo")), [
+    { label: "Workspaces", href: "/workspaces" },
+    { label: "demo", href: null },
+  ]);
   assert.deepEqual(paths.crumbsOf(paths.placeOf("/settings")), []);
 });
 
@@ -227,7 +233,7 @@ test("litSection() lights the section of the page; a run page lights the section
   assert.equal(paths.litSection(paths.placeOf("/w/demo/runs/01K"), "vigil"), "vigils");
   assert.equal(paths.litSection(paths.placeOf("/w/demo/runs/01K")), null);
   assert.equal(paths.litSection(paths.placeOf("/w/demo")), null);
-  assert.equal(paths.litSection(paths.placeOf("/status")), null);
+  assert.equal(paths.litSection(paths.placeOf("/machines")), null);
 });
 
 const APP = fileURLToPath(new URL("../web/app/", import.meta.url));
@@ -273,6 +279,7 @@ test("a candle's address holds the key encoded in one segment, and its page is f
   assert.deepEqual(place, { scope: "demo", kind: "detail", section: "candles" });
   assert.equal(paths.litSection(place), "candles");
   assert.deepEqual(paths.crumbsOf(place, undefined, "Cache flip"), [
+    { label: "Workspaces", href: "/workspaces" },
     { label: "demo", href: "/w/demo" },
     { label: "Candles", href: "/w/demo/candles" },
     { label: "Cache flip", href: null },

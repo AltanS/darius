@@ -10,18 +10,19 @@
  * workspace, the milestone finder (`finder.tsx`) has a button in the phone top
  * bar and a row in the desktop sidebar.
  *
- * The host strip (`host-strip.tsx`, 0.139.0) heads `<main>` on every page:
- * one chip per host of the synced store, live, each a link to its machine page.
- * Since 0.140.0 it is a sticky one-line bar (under the phone top bar on a
- * phone), and the Places head is sticky in the sidebar. While a navigation
- * takes over 300 ms, the gem blinks and a text names the page it opens
- * ("Opening Fleet…"), in a polite live region: in the phone top bar next to
- * the gem, on a desktop at the right of the host bar (the sidebar head keeps
- * the name and the host name).
+ * The machine bar (`host-strip.tsx`, 0.139.0) heads `<main>` on every page:
+ * the label "Machines", then one chip per machine of the synced store, live,
+ * each a link to its machine page. Since 0.140.0 it is a sticky one-line bar
+ * (under the phone top bar on a phone), and the Places head is sticky in the
+ * sidebar. While a navigation takes over 300 ms, the gem blinks and a text
+ * names the page it opens ("Opening Workspaces…"), in a polite live region:
+ * in the phone top bar next to the gem, on a desktop at the right of the
+ * machine bar (the sidebar head keeps the name and the machine name).
  *
- * The scope is one workspace or all of them. A host page (Status, Machines,
- * Fleet, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
- * were in: it is kept in the cookie `darius_scope`, written here.
+ * The scope is one workspace or all of them. A page in no workspace
+ * (Machines, Workspaces, Profiles, Settings) is in no scope: Places lights
+ * its own row and opens no branch (0.141.0), and the phone tabs point at the
+ * last scope you were in, kept in the cookie `darius_scope`, written here.
  */
 
 import { useEffect } from "react";
@@ -33,41 +34,26 @@ import { ConnectionStrip } from "./connection-strip.tsx";
 import { HostStrip } from "./host-strip.tsx";
 import { FinderButton, FinderDialog, useFinder } from "./finder.tsx";
 import { Gem, NavIcon } from "./nav-icons.tsx";
-import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss, type LitRow } from "./places.tsx";
+import { Places, SectionIcon, TAB_SECTIONS, TabBadge, useMenuDismiss } from "./places.tsx";
 import { WorkspaceGlyph } from "./workspace-icon.tsx";
 import { BUSY_AFTER_MS, isLoading } from "../lib/busy.ts";
-import type { Kind } from "../lib/kind.ts";
-import { href, pageLabel, placeOf, type Place, type Section } from "../lib/paths.ts";
+import { href, navOf, pageLabel, placeOf } from "../lib/paths.ts";
 import { effectiveScope, NO_TABS, type TabCounts } from "../lib/scope.ts";
 import { scopeCookieText } from "../lib/settings.ts";
 import { useAfter } from "../lib/use-after.ts";
 
-/** The section a page belongs to, for the lit state: a ritual page is in Rituals, a run page in the section of its item. */
-function sectionOf(place: Place, runKind: Kind | undefined): Section | null {
-  if (place.kind === "overview" || place.kind === "host" || place.kind === "unknown") return null;
-  if (place.kind === "detail" && place.section === "runs") return runKind === undefined ? null : runKind === "ritual" ? "rituals" : "vigils";
-  return place.section;
-}
-
-/** The host page of a path, for the lit row of Places. */
-function hostRowOf(pathname: string): LitRow | null {
-  if (pathname === "/status") return "status";
-  if (pathname === "/profiles") return "profiles";
-  if (pathname === "/hosts" || pathname.startsWith("/hosts/")) return "hosts";
-  if (pathname === "/fleet" || pathname === "/topology") return "fleet";
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
-  return null;
-}
-
 interface TopBarProps {
   data: RootData;
   scope: string | null;
+  /** The page is in no workspace: its caption and name come from `pageLabel`. */
   host: boolean;
+  /** The label of the page on screen ("Machines", "machine host-b"), for a page in no workspace. */
+  label: string;
   /** Keyed by the address, so the drawer closes after each navigation. */
   pathKey: string;
   /** The router has navigated for more than 300 ms: the gem blinks. A reload of the data in place does not count. */
   busy: boolean;
-  /** "Opening Fleet…" while busy, else empty. */
+  /** "Opening Workspaces…" while busy, else empty. */
   loading: string;
 }
 
@@ -80,7 +66,7 @@ function closeDrawer(event: React.MouseEvent<HTMLButtonElement>): void {
 }
 
 /** The phone top bar: one button that opens Places as a drawer. A desktop does not show it. */
-function TopBar({ data, scope, host, pathKey, busy, loading }: TopBarProps): React.ReactNode {
+function TopBar({ data, scope, host, label, pathKey, busy, loading }: TopBarProps): React.ReactNode {
   // A dot when a scope other than this one needs you: another workspace, or on a host page any workspace. All workspaces already holds them all.
   const others = (host || scope !== null) && data.workspaces.some((entry) => entry.needs > 0 && (host || entry.name !== scope));
   const icon = host || scope === null ? null : (data.workspaces.find((entry) => entry.name === scope)?.icon ?? null);
@@ -90,11 +76,11 @@ function TopBar({ data, scope, host, pathKey, busy, loading }: TopBarProps): Rea
         <Gem size={28} busy={busy} />
         <span className="topbar-lab">
           <span className="topbar-cap" hidden={loading !== ""}>
-            {host ? "Host" : "Workspace"}
+            {host ? "darius" : scope === null ? "All workspaces" : "Workspace"}
           </span>
           <span className="topbar-now">
             <WorkspaceGlyph icon={icon} className="topbar-icon" />
-            {host ? data.host : (scope ?? "All workspaces")}
+            {host ? label : (scope ?? "Overview")}
           </span>
           <span className="busy-text topbar-busy" aria-live="polite">
             {loading}
@@ -133,15 +119,14 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   const shown = navigation.location ?? location;
   // The run page lights the section of its item (a ritual run: Rituals; a vigil run: Vigils); its loader knows the kind, but only for the run on screen.
   const runKind = useRouteLoaderData<typeof runLoader>("routes/run")?.kind;
-  const shownPlace = placeOf(shown.pathname);
-  const section = sectionOf(shownPlace, shown.pathname === location.pathname ? runKind : undefined);
+  const nav = navOf(shown.pathname, shown.pathname === location.pathname ? runKind : undefined);
   // The scope, the cookie and the top bar follow the page on screen, so a tap that is cancelled leaves nothing behind.
   const place = placeOf(location.pathname);
   const scope = effectiveScope(place, data.lastScope);
   const host = place.kind === "host";
-  // Runs and Activity are places, not tabs: they light a Places row and no tab.
-  const tabLit = section === "runs" || section === "activity" ? null : section;
-  const lit: LitRow | null = shownPlace.kind === "host" ? hostRowOf(shown.pathname) : shownPlace.kind === "overview" ? "overview" : section;
+  // Runs and Activity are places, not tabs: they light a Places row and no tab. A page in no workspace lights no tab.
+  const lit = nav.branch === null ? null : nav.lit;
+  const tabLit = lit === "runs" || lit === "activity" ? null : lit;
   const tabs: TabCounts = scope === null ? data.allTabs : (data.workspaces.find((entry) => entry.name === scope)?.tabs ?? NO_TABS);
   // Remember the scope you are in, for the host pages and the error pages. A path with no scope (a 404) says nothing.
   const remembered = host || (place.kind === "unknown" && place.scope === null) ? undefined : place.scope;
@@ -150,16 +135,16 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
   }, [remembered]);
   return (
     <div className={data.finder === null ? "app" : "app has-finder"}>
-      <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} loading={loading} />
+      <TopBar data={data} scope={scope} host={host} label={pageLabel(location.pathname) ?? data.host} pathKey={`${location.pathname}${location.search}`} busy={busy} loading={loading} />
       {data.finder === null ? null : <FinderButton finder={finder} className="finder-btn finder-btn-bar" />}
       <ConnectionStrip generatedAt={data.generatedAt} />
-      <Places data={data} scope={scope} lit={lit} busy={busy} finder={data.finder === null ? null : finder} />
+      <Places data={data} lit={nav.lit} branch={nav.branch} busy={busy} finder={data.finder === null ? null : finder} />
       <main className="wa page-main">
         <HostStrip peers={data.peers} loading={loading} />
         {children}
       </main>
       <nav aria-label="Tabs" className="tabbar">
-        <Link to={href({ to: "overview", ws: scope })} className={lit === "overview" ? "tab on" : "tab"} aria-current={lit === "overview" ? "page" : undefined}>
+        <Link to={href({ to: "overview", ws: scope })} className={tabLit === "overview" ? "tab on" : "tab"} aria-current={tabLit === "overview" ? "page" : undefined}>
           <span className="tab-ico-wrap">
             <NavIcon name="overview" size={22} className="tab-ico" />
           </span>

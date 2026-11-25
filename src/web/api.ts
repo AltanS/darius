@@ -1456,8 +1456,8 @@ export interface WebContext {
   peers(): Promise<PeerHost[]>;
   /** The hosts of the store with their versions and box checks, and where each ritual and vigil last ran (0.139.0). Reads only. */
   fleet(): FleetView;
-  /** Every workspace of this host with its health and placement (0.140.0); `only` reads one workspace. */
-  workspaces(only?: string): FleetWorkspaces;
+  /** Every workspace of this host with its health and placement (0.140.0). Places, Workspaces and the machine pages read it once per request (0.141.0). */
+  workspaces(): FleetWorkspaces;
   /**
    * Whether the viewer may write through the page (0.68.0): false for the
    * loopback viewer, whose POSTs the server refuses. The page hides the

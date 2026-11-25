@@ -6,9 +6,10 @@
 
 import type { AppLoadContext } from "react-router";
 
-import type { HostStatus, ProjectStatus, RunRow } from "../../../src/web/api.ts";
+import type { FleetWorkspaces, HostStatus, ProjectStatus, RunRow } from "../../../src/web/api.ts";
 
 const cache = new WeakMap<AppLoadContext, HostStatus>();
+const workspacesCache = new WeakMap<AppLoadContext, FleetWorkspaces>();
 
 export function statusOf(context: AppLoadContext): HostStatus {
   const cached = cache.get(context);
@@ -16,6 +17,18 @@ export function statusOf(context: AppLoadContext): HostStatus {
   const status = context.status();
   cache.set(context, status);
   return status;
+}
+
+/**
+ * Every workspace with its health, read once per request (0.141.0): Places
+ * in the root loader and the Workspaces, machine and workspace pages share it.
+ */
+export function workspacesOf(context: AppLoadContext): FleetWorkspaces {
+  const cached = workspacesCache.get(context);
+  if (cached !== undefined) return cached;
+  const workspaces = context.workspaces();
+  workspacesCache.set(context, workspaces);
+  return workspaces;
 }
 
 /** A run with the project it belongs to. */
