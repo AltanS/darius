@@ -100,7 +100,7 @@ test("the machine bar: the label Machines, then state dot, name, this mark and n
     assert.match(strip, /class="hs-this" aria-hidden="true">this<\/span><span class="sr-only">, online, this machine<\/span>/u);
     assert.match(strip, /, online<\/span>/u);
     assert.match(strip, /, unreachable<\/span>/u);
-    assert.match(strip, /title="host-c: Unreachable: it syncs, but its darius serve did not answer \(connection refused\)\."/u);
+    assert.match(strip, /title="host-c: Unreachable: its darius serve did not answer \(connection refused\)\."/u);
     assert.match(strip, /class="hs-runs"><span aria-hidden="true">\d+<\/span><span class="hs-runs-word" aria-hidden="true"> running<\/span><span class="sr-only">, \d+ open runs?<\/span>/u, "this machine has open runs");
     assert.match(strip, /versions differ/u, "host-b runs another darius");
     const chips = strip.slice(0, strip.indexOf("</ul>"));
@@ -231,7 +231,7 @@ test("/machines/:host: trail, title, the sentence, needs attention, facts, the w
   assert.doesNotMatch(b, /Store and disks|checkout/u, "Store and disks is only on the page of this machine");
 
   const c = markup((await page("/machines/host-c")).body);
-  assert.match(textOf(c), /host-c did not answer \(connection refused\)\. Its ledgers were last seen /u);
+  assert.match(textOf(c), /host-c did not answer \(connection refused\)\. Its last ledger line is 12 min old\. /u);
   assert.match(textOf(c), /Its darius serve did not answer \(connection refused\)\./u);
 
   const self = await page("/machines/demo");

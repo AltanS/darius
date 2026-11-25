@@ -7,7 +7,7 @@
  */
 
 import type { FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState, WorkspaceHealth } from "../../../src/web/api.ts";
-import { counted, link, plain, time, type Part } from "./sentence.ts";
+import { age, counted, link, plain, time, type Part } from "./sentence.ts";
 
 /** At most this many workspace names in a machine sentence, then "and n more". */
 export const SENTENCE_NAMES = 4;
@@ -99,10 +99,10 @@ function namesInBrackets(names: readonly string[]): Part[] {
 function stateParts(facts: MachineFacts): Part[] {
   const why = facts.reason === null ? "" : ` (${facts.reason})`;
   const seen = facts.lastSeen === null ? [plain(" Its ledgers hold no line of it.")] : [plain(" Its ledgers were last seen "), time(facts.lastSeen), plain(".")];
+  const lastLine = facts.lastSeen === null ? [plain(" It has no ledger line here.")] : [plain(" Its last ledger line is "), age(facts.lastSeen), plain(" old.")];
   if (facts.self) return [plain(`${facts.name} is this machine, the one that serves this page.`)];
   if (facts.state === "online") return [plain(`${facts.name} is online.`)];
-  if (facts.state === "unreachable") return [plain(`${facts.name} did not answer${why}.`), ...seen];
-  if (facts.state === "offline") return [plain(`${facts.name} is offline: it did not answer${why} and does not sync.`), ...seen];
+  if (facts.state === "unreachable" || facts.state === "offline") return [plain(`${facts.name} did not answer${why}.`), ...lastLine];
   if (facts.state === "checking") return [plain(`darius is still asking ${facts.name}.`), ...seen];
   return [plain(`darius did not ask ${facts.name}.`), ...seen];
 }
@@ -147,7 +147,7 @@ export interface Attention {
 export function machineAttention(facts: MachineFacts, selfVersion: string | null): Attention[] {
   const items: Attention[] = [];
   const why = facts.reason === null ? "" : ` (${facts.reason})`;
-  if (facts.state === "unreachable" || facts.state === "offline") items.push({ text: `Its darius serve did not answer${why}.`, command: null });
+  if (facts.state === "unreachable" || facts.state === "offline") items.push({ text: `Its darius serve did not answer${why}. Live facts show only while darius serve runs on that machine, and [setup] units must list web there.`, command: "darius setup --systemd" });
   if (facts.retired) items.push({ text: "It wrote no line in 30 days, so darius counts it as retired.", command: null });
   if (facts.differs && facts.version !== null) items.push({ text: `It runs darius ${facts.version}, and this machine runs ${selfVersion ?? "another version"}.`, command: "darius update --hosts" });
   if (facts.boxCheck !== null && facts.boxCheck.outcome !== "pass") items.push({ text: facts.boxCheck.outcome === "fail" ? "Its last box check failed." : `Its last box check ended ${facts.boxCheck.outcome}.`, command: "darius box check" });
@@ -158,14 +158,15 @@ export function machineAttention(facts: MachineFacts, selfVersion: string | null
 
 // --- the split of states ---------------------------------------------------------------------------
 
-/** The state word of a machine in a count: this machine counts as online. */
-type StateWord = "online" | "unreachable" | "offline" | "checking" | "not asked";
+/** The state word of a machine in a count: this machine counts as online, and offline is counted as unreachable (the page cannot tell a down machine from one whose serve is down). */
+type StateWord = "online" | "unreachable" | "checking" | "not asked";
 
-const STATE_ORDER: readonly StateWord[] = ["online", "unreachable", "offline", "checking", "not asked"];
+const STATE_ORDER: readonly StateWord[] = ["online", "unreachable", "checking", "not asked"];
 
 function stateWordOf(state: PeerState | null): StateWord {
   if (state === null) return "not asked";
-  return state === "self" ? "online" : state;
+  if (state === "self") return "online";
+  return state === "offline" ? "unreachable" : state;
 }
 
 export interface StateSplit {
@@ -184,7 +185,7 @@ export function stateSplit(states: readonly (PeerState | null)[]): StateSplit {
     const count = words.filter((one) => one === word).length;
     return count === 0 ? [] : [{ word, text: `${String(count)} ${word}` }];
   });
-  const bad = ["offline", "unreachable", "checking", "not asked"].map((word) => parts.find((part) => part.word === word)).find((part) => part !== undefined);
+  const bad = ["unreachable", "checking", "not asked"].map((word) => parts.find((part) => part.word === word)).find((part) => part !== undefined);
   return { lead: counted(states.length, "machine", "machines"), parts: parts.map((part) => part.text), worst: bad?.text ?? null };
 }
 

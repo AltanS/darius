@@ -15,7 +15,7 @@
  * for 30 s, so a page never waits longer than one timeout and most pages do
  * not wait at all. A failed probe is `unreachable` when the host's ledger
  * lines are at most 20 minutes old (it syncs; its serve does not answer),
- * else `offline`. The reason is a few words, never a URL or an address.
+ * else `offline`. The web app words both "unreachable". The reason is a few words, never a URL or an address.
  *
  * Only a process that turned the probe on asks the network: `darius serve`
  * does (`enablePeerProbe`). Anywhere else (tests, the CLI) the other hosts

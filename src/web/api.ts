@@ -1263,6 +1263,7 @@ export interface HostLive {
  * What the probe knows of a host. `self` is the host that serves the page.
  * `online`: its serve answered. `unreachable`: it did not, but its ledger lines are fresh (it syncs,
  * its serve is down or not reachable). `offline`: it did not answer and its lines are older.
+ * The web app shows both as "unreachable": a missing line does not prove a machine stopped syncing.
  */
 /** `checking` (0.140.0): no probe answer yet; the first probe runs in the background, so no page waits for it. */
 export type PeerState = "self" | "online" | "unreachable" | "offline" | "checking";

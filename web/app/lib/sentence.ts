@@ -1,13 +1,13 @@
 /**
  * A sentence built from variables (0.141.0): plain text, a name that links
- * to its page, and a time that the page shows as "12 min ago". The machine
+ * to its page, and a time that the page shows as "12 min ago" (or an age, "12 min"). The machine
  * page and the workspace page say their status this way. `sentenceText`
  * reads one back as plain text, for the tests and for a title.
  */
 
 import type { Target } from "./paths.ts";
 
-export type Part = { kind: "text"; text: string } | { kind: "link"; text: string; to: Target } | { kind: "time"; iso: string };
+export type Part = { kind: "text"; text: string } | { kind: "link"; text: string; to: Target } | { kind: "time"; iso: string; age: boolean };
 
 export function plain(value: string): Part {
   return { kind: "text", text: value };
@@ -18,7 +18,12 @@ export function link(value: string, to: Target): Part {
 }
 
 export function time(iso: string): Part {
-  return { kind: "time", iso };
+  return { kind: "time", iso, age: false };
+}
+
+/** An age with no "ago": "25 min", for "is 25 min old". */
+export function age(iso: string): Part {
+  return { kind: "time", iso, age: true };
 }
 
 /** The sentence as plain text; `timeText` turns a time into words. */

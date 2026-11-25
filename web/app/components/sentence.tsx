@@ -23,7 +23,7 @@ export function Sentence({ parts, className }: SentenceProps): React.ReactNode {
             </Link>
           );
         }
-        if (part.kind === "time") return <Time key={key} iso={part.iso} />;
+        if (part.kind === "time") return <Time key={key} iso={part.iso} age={part.age} />;
         return <span key={key}>{part.text}</span>;
       })}
     </p>

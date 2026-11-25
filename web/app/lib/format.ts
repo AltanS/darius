@@ -15,6 +15,15 @@ export function relativeTime(iso: string, now: number): string {
   return delta >= 0 ? `${amount} ago` : `in ${amount}`;
 }
 
+/** "3 min", "2 h", "4 d": how old a time is, with no "ago". "under 1 min" for a time that is less than a minute away. */
+export function relativeAge(iso: string, now: number): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return iso;
+  const size = Math.abs(now - at);
+  if (size < MINUTE) return "under 1 min";
+  return size < HOUR ? `${Math.round(size / MINUTE)} min` : size < DAY ? `${Math.round(size / HOUR)} h` : `${Math.round(size / DAY)} d`;
+}
+
 function dayNumber(date: string): number {
   return Math.round(Date.parse(`${date}T00:00:00Z`) / DAY);
 }

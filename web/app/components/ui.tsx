@@ -1,7 +1,7 @@
 /** Small shared pieces: sections, status words, times, folds, code chips. */
 
 import { useClock } from "../lib/clock.tsx";
-import { relativeDate, relativeTime } from "../lib/format.ts";
+import { relativeAge, relativeDate, relativeTime } from "../lib/format.ts";
 import type { Tone } from "../lib/tone.ts";
 
 interface StatusProps {
@@ -25,15 +25,17 @@ export function Status({ tone, label }: StatusProps): React.ReactNode {
 
 interface TimeProps {
   iso: string | null;
+  /** Show the age ("25 min") with no "ago", for a sentence that adds its own word. */
+  age?: boolean;
 }
 
 /** A relative time with the absolute ISO time on hover. */
-export function Time({ iso }: TimeProps): React.ReactNode {
+export function Time({ iso, age = false }: TimeProps): React.ReactNode {
   const { now } = useClock();
   if (iso === null) return <span className="text-muted">never</span>;
   return (
     <time dateTime={iso} title={iso}>
-      {relativeTime(iso, now)}
+      {age ? relativeAge(iso, now) : relativeTime(iso, now)}
     </time>
   );
 }

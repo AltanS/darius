@@ -25,11 +25,11 @@ const STATE_WORDS = {
   self: { tone: "ok", label: "online" },
   online: { tone: "ok", label: "online" },
   unreachable: { tone: "late", label: "unreachable" },
-  offline: { tone: "bad", label: "offline" },
+  offline: { tone: "bad", label: "unreachable" },
   checking: { tone: "idle", label: "checking" },
 } as const satisfies Record<PeerState, Badge>;
 
-/** The word and tone of a host state. */
+/** The word and tone of a host state. `offline` shows as "unreachable", in its own tone: the page cannot tell a down machine from one whose serve is down. */
 export function peerWord(state: PeerState): Badge {
   return STATE_WORDS[state];
 }
@@ -45,8 +45,7 @@ export function peerMeaning(peer: PeerHost): string {
   if (peer.state === "online") return "Online: its darius serve answered.";
   if (peer.state === "checking") return "Checking: the first probe is still running. The next page shows the answer.";
   const why = peer.reason === null ? "" : ` (${peer.reason})`;
-  if (peer.state === "unreachable") return `Unreachable: it syncs, but its darius serve did not answer${why}.`;
-  return `Offline: no answer and no recent sync${why}.`;
+  return `Unreachable: its darius serve did not answer${why}.`;
 }
 
 /** The darius versions the hosts run, when they differ; empty when all known versions agree. */

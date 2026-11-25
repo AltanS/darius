@@ -2,6 +2,14 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.141.1] - 2026-11-25
+
+### Fixed
+
+- **A machine that did not answer is no longer called "offline".** The web app judged a machine by its newest ledger line, and said "offline: it did not answer and does not sync" when that line was older than 20 minutes. That is false for a machine that syncs every 15 minutes but had nothing to push: a sync with nothing to push writes no line. Both states now show "unreachable", in the top bar, Places, the Overview line, the Machines sentence and table, and the machine page. The two states keep their tones (amber for a recent line, grey for none).
+- **The machine sentence tells what is known.** "host-b did not answer (timeout). Its last ledger line is 3 h old." With no line at all: "It has no ledger line here." It never claims that the machine does or does not sync.
+- **Needs attention says what to check.** For a machine that did not answer: "Its darius serve did not answer. Live facts show only while darius serve runs on that machine, and [setup] units must list web there. Run darius setup --systemd."
+
 ## [0.141.0] - 2026-11-25
 
 ### Added

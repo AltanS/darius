@@ -50,13 +50,14 @@ test("machine sentence: online, with workspaces, copies, no open run and djinns"
   assert.equal(say(facts()), "host-b is online. It runs 2 workspaces (infra-notes, archive-2025) and shows a copy of 1. No run is open now. 2 djinns run here; the last one ran <T-djinn>.");
 });
 
-test("machine sentence: a machine that did not answer says why and when its ledgers were last seen, and says nothing of open runs", () => {
+test("machine sentence: a machine that did not answer says why and how old its last ledger line is, and says nothing of open runs", () => {
   const text = say(facts({ name: "host-c", state: "unreachable", reason: "connection refused", openRuns: null, runs: ["status-page"], copies: [], djinns: 0, lastDjinnAt: null }));
-  assert.equal(text, "host-c did not answer (connection refused). Its ledgers were last seen <T-seen>. It runs 1 workspace (status-page). No djinn runs here.");
+  assert.equal(text, "host-c did not answer (connection refused). Its last ledger line is <T-seen> old. It runs 1 workspace (status-page). No djinn runs here.");
 });
 
-test("machine sentence: offline and checking, with and without a ledger line", () => {
-  assert.equal(say(facts({ state: "offline", reason: "timeout", openRuns: null, runs: [], copies: [], djinns: 0 })), "host-b is offline: it did not answer (timeout) and does not sync. Its ledgers were last seen <T-seen>. It runs no workspace. No djinn runs here.");
+test("machine sentence: offline, checking and not asked, with and without a ledger line", () => {
+  assert.equal(say(facts({ state: "offline", reason: "timeout", openRuns: null, runs: [], copies: [], djinns: 0 })), "host-b did not answer (timeout). Its last ledger line is <T-seen> old. It runs no workspace. No djinn runs here.");
+  assert.equal(say(facts({ state: "offline", reason: "timeout", lastSeen: null, openRuns: null, runs: [], copies: [], djinns: 0 })), "host-b did not answer (timeout). It has no ledger line here. It runs no workspace. No djinn runs here.");
   assert.equal(say(facts({ state: "checking", openRuns: null, lastSeen: null, runs: [], copies: ["a", "b"], djinns: 0 })), "darius is still asking host-b. Its ledgers hold no line of it. It runs no workspace and shows a copy of 2. No djinn runs here.");
   assert.equal(say(facts({ state: null, openRuns: null, runs: [], copies: [], djinns: 0 })), "darius did not ask host-b. Its ledgers were last seen <T-seen>. It runs no workspace. No djinn runs here.");
 });
@@ -90,7 +91,7 @@ test("machine attention: did not answer, retired, version, box check, backup; no
   assert.deepEqual(
     all.map((item) => [item.text, item.command]),
     [
-      ["Its darius serve did not answer (connection refused).", null],
+      ["Its darius serve did not answer (connection refused). Live facts show only while darius serve runs on that machine, and [setup] units must list web there.", "darius setup --systemd"],
       ["It wrote no line in 30 days, so darius counts it as retired.", null],
       ["It runs darius 0.9.0, and this machine runs 1.0.0.", "darius update --hosts"],
       ["Its last box check failed.", "darius box check"],
@@ -110,7 +111,9 @@ test("state split: the Machines sentence, the Overview line and the Places row",
   const fine = machines.stateSplit(["self", "online"]);
   assert.equal(machines.machinesRowText(fine, 2), "2");
   assert.equal(machines.stateLine(fine), "2 machines: 2 online.");
-  assert.equal(machines.machinesRowText(machines.stateSplit(["self", "unreachable", "offline"]), 3), "3, 1 offline", "the worst state wins");
+  const mixed = machines.stateSplit(["self", "unreachable", "offline"]);
+  assert.equal(machines.stateLine(mixed), "3 machines: 1 online, 2 unreachable.");
+  assert.equal(machines.machinesRowText(mixed, 3), "3, 2 unreachable");
   assert.equal(machines.openRunsLine([facts({ openRuns: [] }), facts({ openRuns: null })]), "No run is open now on the machines that answered.");
 });
 
@@ -162,4 +165,24 @@ test("health split and copies mark: the Overview line and the Runs on column", (
   assert.deepEqual(fleet.copiesMark(["host-b", "host-c"]), { text: "+2 copies", title: "Copies on host-b and host-c" });
   assert.deepEqual(fleet.copiesMark(["host-b"]), { text: "+1 copy", title: "Copies on host-b" });
   assert.equal(fleet.copiesMark([]), null);
+});
+
+test("a machine in state offline shows unreachable, and its sentence says neither offline nor sync", async () => {
+  const peers = await import("../web/app/lib/peers.ts");
+  assert.equal(peers.peerWord("offline").label, "unreachable");
+  assert.equal(peers.peerWord("unreachable").label, "unreachable");
+  assert.notEqual(peers.peerWord("offline").tone, peers.peerWord("unreachable").tone, "the two states keep their tones");
+  assert.equal(peers.machineWord("offline").label, "unreachable");
+  const host = { host: "host-b", self: false, live: null, lastSeen: null, version: null, reason: "timeout", checkedAt: "T" } as const;
+  for (const state of ["offline", "unreachable"] as const) {
+    assert.doesNotMatch(peers.peerMeaning({ ...host, state }), /offline|sync/iu);
+  }
+  for (const lastSeen of ["T-seen", null]) {
+    const text = say(facts({ state: "offline", reason: "timeout", lastSeen, openRuns: null }));
+    assert.doesNotMatch(text, /offline|sync/iu);
+  }
+  const items = machines.machineAttention(facts({ state: "offline", reason: "timeout", openRuns: null }), "1.0.0");
+  assert.match(items[0]?.text ?? "", /^Its darius serve did not answer \(timeout\)\. Live facts show only while darius serve runs on that machine/u);
+  assert.equal(items[0]?.command, "darius setup --systemd");
+  assert.doesNotMatch(items[0]?.text ?? "", /offline|does not sync/iu);
 });
