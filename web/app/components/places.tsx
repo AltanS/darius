@@ -171,8 +171,6 @@ interface PlacesProps {
   lit: LitRow | null;
   /** The page is loading and has taken more than 300 ms: the brand gem blinks. */
   busy: boolean;
-  /** "Opening Fleet…" while busy, else empty: the text next to the gem (0.140.0). */
-  loading: string;
   /** The milestone finder of the workspace, for its row under the head (desktop only); null outside a workspace. */
   finder: FinderState | null;
 }
@@ -217,12 +215,12 @@ function HostLine({ data }: { data: RootData }): React.ReactNode {
   );
 }
 
-export function Places({ data, scope, lit, busy, loading, finder }: PlacesProps): React.ReactNode {
+export function Places({ data, scope, lit, busy, finder }: PlacesProps): React.ReactNode {
   const known = scope === null || data.workspaces.some((entry) => entry.name === scope);
   // A self-test workspace you opened by its address is not in the list; the list shows it while you are in it.
   const listed = known ? data.workspaces : [...data.workspaces, { name: scope, error: false, needs: 0, tabs: NO_TABS, icon: null }];
   const tabsOf = (name: string | null): TabCounts => (name === null ? data.allTabs : (listed.find((entry) => entry.name === name)?.tabs ?? NO_TABS));
-  // The head (gem, name, host) is sticky inside the scrolling sidebar, so the gem and the loading text never scroll away (0.140.0).
+  // The head (gem, name, host) is sticky inside the scrolling sidebar, so the gem never scrolls away (0.140.0).
   return (
     <nav aria-label="Places" className="places" onClick={closeOnLink}>
       <div className="places-head">
@@ -230,12 +228,7 @@ export function Places({ data, scope, lit, busy, loading, finder }: PlacesProps)
           <Gem size={28} busy={busy} />
           <span>darius</span>
         </Link>
-        <span className="places-hostname" hidden={loading !== ""}>
-          {data.host}
-        </span>
-        <span className="busy-text" aria-live="polite">
-          {loading}
-        </span>
+        <span className="places-hostname">{data.host}</span>
       </div>
       {finder === null ? null : (
         <div className="places-find">

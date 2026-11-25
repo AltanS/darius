@@ -107,7 +107,8 @@ test("Places: the Fleet group holds Fleet and Machines, and the head with the ge
   assert.match(places, /<p class="places-group">Fleet<\/p>/u);
   assert.ok(places.includes('href="/fleet"') && places.includes('href="/hosts"'));
   assert.doesNotMatch(places, /Topology|All hosts/u);
-  assert.match(places, /<span class="busy-text" aria-live="polite">/u);
+  assert.doesNotMatch(places, /busy-text/u, "the sidebar head keeps the name and the host name");
+  assert.match(markup(body), /<span class="busy-text hs-loading" aria-live="polite">/u, "the host bar holds the loading text on a desktop");
   assert.match(markup(body), /<span class="busy-text topbar-busy" aria-live="polite">/u, "the phone top bar too");
 });
 
@@ -125,7 +126,7 @@ test("/fleet: the headline with linked counts, the workspace table worst first, 
   assert.match(html, /\+\d+<\/span>/u, "more than two reasons end in +n");
   assert.match(html, /fl-chip-host">host-b<\/span><span class="fl-chip-kind">checkout/u, "the where chips");
   assert.match(html, /id="placement"/u);
-  assert.match(html, /<td class="is-checkout">checkout<span class="fl-pins">1 pinned<\/span><\/td>/u, "a pinned ritual in the matrix");
+  assert.match(html, /<td class="is-checkout">checkout<span class="fl-pins"> · 1 pinned<\/span><\/td>/u, "a pinned ritual in the matrix");
   assert.match(html, /Not mirrored here/u);
   assert.match(html, /big-media/u);
 });
@@ -143,13 +144,14 @@ test("/topology redirects to the placement matrix of /fleet", async () => {
   assert.equal(location, "/fleet#placement");
 });
 
-test("the workspace header: health and reasons, lives on, five count links, the djinns with where they run", async () => {
+test("the workspace header: health and reasons, lives on, four count links, the djinns with where they run", async () => {
   const html = markup((await page("/w/demo-shop")).body);
   assert.match(html, /class="fl-head panel"/u);
   assert.match(html, /<span class="fl-word">Failing<\/span>/u);
   assert.match(html, /2 vigils flagged/u);
   assert.match(html, /Lives on/u);
-  for (const label of ["Djinns", "Rituals", "Vigils", "Candles lit", "Findings"]) assert.ok(html.includes(`fl-count-label">${label}<`), label);
+  for (const label of ["Rituals", "Vigils", "Candles", "Findings"]) assert.ok(html.includes(`fl-count-label">${label}<`), label);
+  assert.match(html, /fl-count-sub">\d+ djinns?</u, "the Rituals tile has the djinns on a second line");
   assert.match(html, /id="djinns"/u);
   assert.match(html, /runs on host-b<\/span><span class="text-muted"> \(pinned\)/u, "a pinned djinn names its host");
   assert.match(html, /<span>here<\/span><span class="text-muted"> \(checkout\)/u);

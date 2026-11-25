@@ -4,8 +4,11 @@
  * square in the state colour, the host name and the count of its open runs
  * when above 0, and links to the machine page. The state is in words for a
  * screen reader and in the title; this host has a gold edge. The version
- * lives on Machines: the strip only marks "versions differ". On a narrow
- * phone the chips are dots, with the name in their accessible label.
+ * lives on Machines: the strip only marks "versions differ". A chip name is
+ * cut at about 10 characters. Below 480 px with more than 3 hosts the chips
+ * are dots, with the name in their accessible label. While a page loads, a
+ * desktop shows the loading text ("Opening Machines…") at the right, before
+ * "versions differ"; a phone shows it in the top bar instead.
  */
 
 import { Link } from "react-router";
@@ -40,18 +43,27 @@ function HostChip({ peer }: ChipProps): React.ReactNode {
 
 interface HostStripProps {
   peers: readonly PeerHost[];
+  /** "Opening Fleet…" while a navigation is slow, else empty. */
+  loading: string;
 }
 
-export function HostStrip({ peers }: HostStripProps): React.ReactNode {
-  if (peers.length === 0) return null;
+/** More hosts than this, and a phone under 480 px shows dots. */
+const NAMED_CHIPS_MAX = 3;
+
+export function HostStrip({ peers, loading }: HostStripProps): React.ReactNode {
+  if (peers.length === 0 && loading === "") return null;
   const versions = differentVersions(peers);
+  const className = `hs${peers.length > NAMED_CHIPS_MAX ? " hs-many" : ""}${loading === "" ? "" : " is-loading"}`;
   return (
-    <nav aria-label="Hosts" className="hs">
+    <nav aria-label="Hosts" className={className}>
       <ul className="hs-list">
         {peers.map((peer) => (
           <HostChip key={peer.host} peer={peer} />
         ))}
       </ul>
+      <span className="busy-text hs-loading" aria-live="polite">
+        {loading}
+      </span>
       {versions.length === 0 ? null : (
         <Link to={href({ to: "host", page: "hosts" })} className="hs-warn tone-late" title={`The hosts run different darius versions: ${versions.join(", ")}.`}>
           versions differ

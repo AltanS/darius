@@ -64,7 +64,7 @@ test("one failed run is Needs you, two in a row is Failing", () => {
 test("Needs you: each of its rules alone", () => {
   const cases: ReadonlyArray<readonly [Partial<HealthFacts>, string]> = [
     [{ candlesLow: 2 }, "2 candles lit"],
-    [{ findingsNeedYou: 1 }, "1 finding needs you"],
+    [{ findingsNeedYou: 1 }, "1 open finding"],
     [{ runsHeld: 1 }, "1 run held"],
     [{ ritualsLate: 3 }, "3 rituals late"],
     [{ vigilsDue: 1 }, "1 vigil due"],

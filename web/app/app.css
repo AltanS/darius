@@ -5925,6 +5925,7 @@
 
   .hs-name {
     min-width: 0;
+    max-width: 10ch;
     overflow: hidden;
     font-weight: 600;
     text-overflow: ellipsis;
@@ -5933,6 +5934,37 @@
   .hs-runs {
     font-variant-numeric: tabular-nums;
     color: var(--color-run);
+  }
+
+  /* The loading text sits at the right of the bar, before "versions differ". It is the desktop copy: the phone top bar has its own. */
+
+  .hs-loading {
+    flex: none;
+    max-width: 50%;
+  }
+
+  .hs-loading:empty {
+    display: none;
+  }
+
+  .hs.is-loading .hs-warn {
+    display: none;
+  }
+
+  @media (min-width: 1440px) {
+    .hs.is-loading .hs-warn {
+      display: inline;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .hs-loading {
+      display: none;
+    }
+
+    .hs.is-loading .hs-warn {
+      display: inline;
+    }
   }
 
   .hs-warn {
@@ -5948,14 +5980,33 @@
     }
   }
 
-  @media (max-width: 479px) {
+  /* On a phone the chips keep their name (cut at 10 characters) and shrink with it; the bar never scrolls sideways. */
+
+  @media (max-width: 639px) {
+    .hs {
+      gap: 6px;
+    }
+
+    .hs-list {
+      gap: 4px;
+    }
+
     .hs-chip {
+      gap: 4px;
+      padding-inline: 6px;
+    }
+  }
+
+  /* More than 3 hosts below 480 px: dots, with the name in the accessible label. */
+
+  @media (max-width: 479px) {
+    .hs-many .hs-chip {
       justify-content: center;
       min-width: 36px;
       padding-inline: 8px;
     }
 
-    .hs-name {
+    .hs-many .hs-name {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -6052,7 +6103,7 @@
 
   .fl-row {
     display: grid;
-    grid-template-columns: 7.5rem minmax(9rem, 1.2fr) minmax(10rem, 1.6fr) minmax(8rem, 1.2fr) 5.5rem 5.5rem 4.5rem 7rem;
+    grid-template-columns: 7rem minmax(8rem, 1fr) minmax(12rem, 2.2fr) minmax(7rem, 1.2fr) 5rem 5rem 4.5rem 6rem;
     gap: 12px;
     align-items: center;
     padding: 10px 12px;
@@ -6090,10 +6141,15 @@
     white-space: nowrap;
   }
 
+  /* Why wraps to at most two lines; the full list is also in the title. */
+
   .fl-c-reasons {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
 
   .fl-c-num {
@@ -6147,7 +6203,6 @@
 
     .fl-c-reasons {
       grid-area: reasons;
-      white-space: normal;
     }
 
     .fl-c-where {
@@ -6189,16 +6244,26 @@
     overflow-x: auto;
   }
 
+  /* Fixed layout: the host columns share the width evenly. The inline min-width keeps each at 120 px; the wrap scrolls below it. */
+
   .fl-matrix {
+    width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
     font-size: 13px;
+  }
+
+  .fl-matrix .fl-matrix-first {
+    width: 11rem;
   }
 
   .fl-matrix th,
   .fl-matrix td {
     padding: 6px 10px;
     border-top: 1px solid var(--color-sand);
+    overflow: hidden;
     text-align: left;
+    text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--color-muted);
   }
@@ -6221,7 +6286,6 @@
   }
 
   .fl-pins {
-    display: block;
     font-size: 12px;
     color: var(--color-faint);
   }
@@ -6241,47 +6305,66 @@
 
   .fl-head {
     display: grid;
-    gap: 12px;
-    margin-bottom: 20px;
-    padding: 16px;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 12px 16px;
   }
 
   .fl-head-line {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px 12px;
+    gap: 4px 12px;
+    margin: 0;
   }
 
   .fl-head-reasons {
     color: var(--color-muted);
   }
 
+  /* The counts: one row of compact inline items, about 44 px tall. No tiles. */
+
   .fl-counts {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 20px;
+    border-block: 1px solid var(--color-sand);
   }
 
   .fl-count {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas:
+      "n main"
+      "n sub";
+    align-content: center;
+    align-items: baseline;
+    column-gap: 8px;
     min-height: 44px;
-    padding: 8px 10px;
-    border: 1px solid var(--color-sand);
     color: var(--color-parchment);
   }
 
   .fl-count:hover {
-    border-color: var(--color-sand-hi);
     text-decoration: none;
   }
 
+  .fl-count:hover .fl-count-label {
+    color: var(--color-parchment);
+  }
+
   .fl-count-n {
+    grid-area: n;
+    align-self: center;
     font-size: 20px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .fl-count-main {
+    grid-area: main;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 8px;
   }
 
   .fl-count-label {
@@ -6293,15 +6376,24 @@
     font-size: 12px;
   }
 
-  @media (max-width: 639px) {
-    .fl-counts {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+  .fl-count-sub {
+    grid-area: sub;
+    font-size: 12px;
+    color: var(--color-faint);
   }
 
   .fl-djinns {
     display: grid;
-    gap: 6px;
+    gap: 2px;
+  }
+
+  .fl-djinns-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0;
+    font-size: 13px;
   }
 
   .fl-djinn-list {
@@ -6315,7 +6407,7 @@
     grid-template-columns: minmax(10rem, 2fr) minmax(7rem, 1fr) minmax(9rem, 1.2fr) minmax(9rem, 1.2fr);
     gap: 4px 12px;
     align-items: baseline;
-    padding: 8px 0;
+    padding: 5px 0;
     border-top: 1px solid var(--color-sand);
     font-size: 14px;
   }

@@ -14,8 +14,10 @@
  * one chip per host of the synced store, live, each a link to its machine page.
  * Since 0.140.0 it is a sticky one-line bar (under the phone top bar on a
  * phone), and the Places head is sticky in the sidebar. While a navigation
- * takes over 300 ms, the gem blinks and the text next to it names the page
- * it opens ("Opening Fleet…"), in a polite live region.
+ * takes over 300 ms, the gem blinks and a text names the page it opens
+ * ("Opening Fleet…"), in a polite live region: in the phone top bar next to
+ * the gem, on a desktop at the right of the host bar (the sidebar head keeps
+ * the name and the host name).
  *
  * The scope is one workspace or all of them. A host page (Status, Machines,
  * Fleet, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
@@ -151,9 +153,9 @@ export function Shell({ data, children }: ShellProps): React.ReactNode {
       <TopBar data={data} scope={scope} host={host} pathKey={`${location.pathname}${location.search}`} busy={busy} loading={loading} />
       {data.finder === null ? null : <FinderButton finder={finder} className="finder-btn finder-btn-bar" />}
       <ConnectionStrip generatedAt={data.generatedAt} />
-      <Places data={data} scope={scope} lit={lit} busy={busy} loading={loading} finder={data.finder === null ? null : finder} />
+      <Places data={data} scope={scope} lit={lit} busy={busy} finder={data.finder === null ? null : finder} />
       <main className="wa page-main">
-        <HostStrip peers={data.peers} />
+        <HostStrip peers={data.peers} loading={loading} />
         {children}
       </main>
       <nav aria-label="Tabs" className="tabbar">

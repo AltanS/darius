@@ -2,14 +2,14 @@
  * The parts of the fleet pages (0.140.0): a health word with its dot, the
  * reasons, the host chips of a workspace (checkout or copy), and the
  * workspace header that heads a workspace Overview: health, where it lives,
- * five count links and its djinns. Colour is never the only signal: every
+ * four compact count links and its djinns. Colour is never the only signal: every
  * dot comes with its word.
  */
 
 import { Link } from "react-router";
 
 import type { FleetDjinn, FleetWorkspace, WorkspaceHealth, WorkspacePlace } from "../../../src/web/api.ts";
-import { GROUP_MAX, healthWord, shownReasons } from "../lib/fleet.ts";
+import { healthWord, shownReasons } from "../lib/fleet.ts";
 import { href } from "../lib/paths.ts";
 import { outcomeTone, type Tone } from "../lib/tone.ts";
 import { Status, Time } from "./ui.tsx";
@@ -139,28 +139,41 @@ interface CountLinkProps {
   alarm: number;
   alarmText: string;
   tone: "late" | "bad" | "wait";
+  /** A second line under the label: "11 djinns". */
+  sub?: string;
 }
 
-function CountLink({ to, label, count, alarm, alarmText, tone }: CountLinkProps): React.ReactNode {
+function CountLink({ to, label, count, alarm, alarmText, tone, sub }: CountLinkProps): React.ReactNode {
   return (
     <Link to={to} className="fl-count">
       <span className="fl-count-n">{count}</span>
-      <span className="fl-count-label">{label}</span>
-      {alarm === 0 ? null : <span className={`fl-count-alarm ink-${tone}`}>{`${String(alarm)} ${alarmText}`}</span>}
+      <span className="fl-count-main">
+        <span className="fl-count-label">{label}</span>
+        {alarm === 0 ? null : <span className={`fl-count-alarm ink-${tone}`}>{`${String(alarm)} ${alarmText}`}</span>}
+      </span>
+      {sub === undefined ? null : <span className="fl-count-sub">{sub}</span>}
     </Link>
   );
 }
+
+/** The djinns the header lists before "Show all". */
+const HEADER_DJINNS = 3;
 
 interface HeaderProps {
   workspace: FleetWorkspace;
   self: string;
 }
 
-/** The top block of a workspace Overview: health and reasons, where it lives, five counts, its djinns. */
+/**
+ * The top block of a workspace Overview: health and reasons, where it lives, four counts in one row, its djinns.
+ * The reasons are the health reasons: a finding that needs a decision reads "n open findings", never "need you",
+ * as in the Overview's summary line, which counts findings apart from what needs you.
+ */
 export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNode {
   const ws = workspace.name;
   const { counts } = workspace;
-  const djinns = workspace.djinns.slice(0, GROUP_MAX);
+  const djinns = workspace.djinns.slice(0, HEADER_DJINNS);
+  const ritualsHref = href({ to: "section", ws, section: "rituals" });
   return (
     <section className="fl-head panel" aria-label={`${ws}: health and placement`}>
       <p className="fl-head-line">
@@ -177,14 +190,16 @@ export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNo
         ) : null}
       </p>
       <nav className="fl-counts" aria-label={`${ws}: counts`}>
-        <CountLink to="#djinns" label="Djinns" count={counts.djinns} alarm={counts.djinnsLate} alarmText="late" tone="late" />
-        <CountLink to={href({ to: "section", ws, section: "rituals" })} label="Rituals" count={counts.rituals} alarm={counts.ritualsLate} alarmText="late" tone="late" />
+        <CountLink to={ritualsHref} label="Rituals" count={counts.rituals} alarm={counts.ritualsLate} alarmText="late" tone="late" sub={`${String(counts.djinns)} ${counts.djinns === 1 ? "djinn" : "djinns"}`} />
         <CountLink to={href({ to: "section", ws, section: "vigils" })} label="Vigils" count={counts.vigilsOpen} alarm={counts.vigilsFlagged} alarmText="flagged" tone="bad" />
-        <CountLink to={href({ to: "section", ws, section: "candles" })} label="Candles lit" count={counts.candlesLit} alarm={0} alarmText="" tone="wait" />
-        <CountLink to={href({ to: "section", ws, section: "findings" })} label="Findings" count={counts.findingsOpen} alarm={counts.findingsNeedYou} alarmText="need you" tone="wait" />
+        <CountLink to={href({ to: "section", ws, section: "candles" })} label="Candles" count={counts.candlesLit} alarm={0} alarmText="" tone="wait" />
+        <CountLink to={href({ to: "section", ws, section: "findings" })} label="Findings" count={counts.findingsOpen} alarm={counts.findingsNeedYou} alarmText="to decide" tone="wait" />
       </nav>
       <div id="djinns" className="fl-djinns">
-        <h2 className="label">Djinns</h2>
+        <p className="fl-djinns-head">
+          <span className="label">Djinns</span>
+          {workspace.djinns.length > HEADER_DJINNS ? <Link to={ritualsHref}>{`Show all ${String(workspace.djinns.length)}`}</Link> : null}
+        </p>
         {djinns.length === 0 ? (
           <p className="text-muted">darius runs no djinn here.</p>
         ) : (
@@ -194,7 +209,6 @@ export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNo
             ))}
           </ul>
         )}
-        {workspace.djinns.length > GROUP_MAX ? <Link to={href({ to: "section", ws, section: "rituals" })}>{`Show all ${String(workspace.djinns.length)}`}</Link> : null}
       </div>
     </section>
   );

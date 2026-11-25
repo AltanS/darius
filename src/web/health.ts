@@ -91,7 +91,7 @@ function needsReasons(facts: HealthFacts, now: number): string[] {
     ...counted(facts.ritualsFailedOnce, "run failed", "runs failed"),
     ...counted(facts.runsHeld, "run held", "runs held"),
     ...counted(facts.candlesLow, "candle lit", "candles lit"),
-    ...counted(facts.findingsNeedYou, "finding needs you", "findings need you"),
+    ...counted(facts.findingsNeedYou, "open finding", "open findings"),
     ...counted(facts.ritualsLate, "ritual late", "rituals late"),
     ...counted(facts.vigilsDue, "vigil due", "vigils due"),
     ...counted(facts.treeConflicts, "tree conflict", "tree conflicts"),

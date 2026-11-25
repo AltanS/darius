@@ -9998,8 +9998,11 @@ function columnsOf(fleet, peers) {
 * square in the state colour, the host name and the count of its open runs
 * when above 0, and links to the machine page. The state is in words for a
 * screen reader and in the title; this host has a gold edge. The version
-* lives on Machines: the strip only marks "versions differ". On a narrow
-* phone the chips are dots, with the name in their accessible label.
+* lives on Machines: the strip only marks "versions differ". A chip name is
+* cut at about 10 characters. Below 480 px with more than 3 hosts the chips
+* are dots, with the name in their accessible label. While a page loads, a
+* desktop shows the loading text ("Opening Machines…") at the right, before
+* "versions differ"; a phone shows it in the top bar instead.
 */
 function HostChip({ peer }) {
 	const word = peerWord(peer.state);
@@ -10037,24 +10040,35 @@ function HostChip({ peer }) {
 		]
 	}) });
 }
-function HostStrip({ peers }) {
-	if (peers.length === 0) return null;
+/** More hosts than this, and a phone under 480 px shows dots. */
+var NAMED_CHIPS_MAX = 3;
+function HostStrip({ peers, loading }) {
+	if (peers.length === 0 && loading === "") return null;
 	const versions = differentVersions(peers);
+	const className = `hs${peers.length > NAMED_CHIPS_MAX ? " hs-many" : ""}${loading === "" ? "" : " is-loading"}`;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 		"aria-label": "Hosts",
-		className: "hs",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-			className: "hs-list",
-			children: peers.map((peer) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostChip, { peer }, peer.host))
-		}), versions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-			to: href({
-				to: "host",
-				page: "hosts"
+		className,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "hs-list",
+				children: peers.map((peer) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostChip, { peer }, peer.host))
 			}),
-			className: "hs-warn tone-late",
-			title: `The hosts run different darius versions: ${versions.join(", ")}.`,
-			children: "versions differ"
-		})]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "busy-text hs-loading",
+				"aria-live": "polite",
+				children: loading
+			}),
+			versions.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+				to: href({
+					to: "host",
+					page: "hosts"
+				}),
+				className: "hs-warn tone-late",
+				title: `The hosts run different darius versions: ${versions.join(", ")}.`,
+				children: "versions differ"
+			})
+		]
 	});
 }
 //#endregion
@@ -13969,7 +13983,7 @@ function HostLine({ data }) {
 		}, line.href))]
 	});
 }
-function Places({ data, scope, lit, busy, loading, finder }) {
+function Places({ data, scope, lit, busy, finder }) {
 	const listed = scope === null || data.workspaces.some((entry) => entry.name === scope) ? data.workspaces : [...data.workspaces, {
 		name: scope,
 		error: false,
@@ -13985,30 +13999,21 @@ function Places({ data, scope, lit, busy, loading, finder }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "places-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
-						to: href({
-							to: "overview",
-							ws: scope
-						}),
-						className: "places-brand",
-						"aria-label": "darius, the Overview",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gem, {
-							size: 28,
-							busy
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "darius" })]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
+					to: href({
+						to: "overview",
+						ws: scope
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "places-hostname",
-						hidden: loading !== "",
-						children: data.host
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "busy-text",
-						"aria-live": "polite",
-						children: loading
-					})
-				]
+					className: "places-brand",
+					"aria-label": "darius, the Overview",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gem, {
+						size: 28,
+						busy
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "darius" })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "places-hostname",
+					children: data.host
+				})]
 			}),
 			finder === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "places-find",
@@ -14146,8 +14151,10 @@ function useAfter(active, delay) {
 * one chip per host of the synced store, live, each a link to its machine page.
 * Since 0.140.0 it is a sticky one-line bar (under the phone top bar on a
 * phone), and the Places head is sticky in the sidebar. While a navigation
-* takes over 300 ms, the gem blinks and the text next to it names the page
-* it opens ("Opening Fleet…"), in a polite live region.
+* takes over 300 ms, the gem blinks and a text names the page it opens
+* ("Opening Fleet…"), in a polite live region: in the phone top bar next to
+* the gem, on a desktop at the right of the host bar (the sidebar head keeps
+* the name and the host name).
 *
 * The scope is one workspace or all of them. A host page (Status, Machines,
 * Fleet, Profiles, Settings) is in no scope, so the tabs and Places point at the last scope you
@@ -14276,12 +14283,14 @@ function Shell({ data, children }) {
 				scope,
 				lit,
 				busy,
-				loading,
 				finder: data.finder === null ? null : finder
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 				className: "wa page-main",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostStrip, { peers: data.peers }), children]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostStrip, {
+					peers: data.peers,
+					loading
+				}), children]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 				"aria-label": "Tabs",
@@ -14983,7 +14992,7 @@ function pinnedDjinnsOn(workspaces, host) {
 * The parts of the fleet pages (0.140.0): a health word with its dot, the
 * reasons, the host chips of a workspace (checkout or copy), and the
 * workspace header that heads a workspace Overview: health, where it lives,
-* five count links and its djinns. Colour is never the only signal: every
+* four compact count links and its djinns. Colour is never the only signal: every
 * dot comes with its word.
 */
 /** The health word with a square dot in its colour. */
@@ -15120,7 +15129,7 @@ function DjinnRow({ ws, djinn, self }) {
 		]
 	});
 }
-function CountLink({ to, label, count, alarm, alarmText, tone }) {
+function CountLink({ to, label, count, alarm, alarmText, tone, sub }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Link, {
 		to,
 		className: "fl-count",
@@ -15129,22 +15138,39 @@ function CountLink({ to, label, count, alarm, alarmText, tone }) {
 				className: "fl-count-n",
 				children: count
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "fl-count-label",
-				children: label
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "fl-count-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-count-label",
+					children: label
+				}), alarm === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: `fl-count-alarm ink-${tone}`,
+					children: `${String(alarm)} ${alarmText}`
+				})]
 			}),
-			alarm === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: `fl-count-alarm ink-${tone}`,
-				children: `${String(alarm)} ${alarmText}`
+			sub === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-count-sub",
+				children: sub
 			})
 		]
 	});
 }
-/** The top block of a workspace Overview: health and reasons, where it lives, five counts, its djinns. */
+/** The djinns the header lists before "Show all". */
+var HEADER_DJINNS = 3;
+/**
+* The top block of a workspace Overview: health and reasons, where it lives, four counts in one row, its djinns.
+* The reasons are the health reasons: a finding that needs a decision reads "n open findings", never "need you",
+* as in the Overview's summary line, which counts findings apart from what needs you.
+*/
 function WorkspaceHeader({ workspace, self }) {
 	const ws = workspace.name;
 	const { counts } = workspace;
-	const djinns = workspace.djinns.slice(0, 5);
+	const djinns = workspace.djinns.slice(0, HEADER_DJINNS);
+	const ritualsHref = href({
+		to: "section",
+		ws,
+		section: "rituals"
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "fl-head panel",
 		"aria-label": `${ws}: health and placement`,
@@ -15178,24 +15204,13 @@ function WorkspaceHeader({ workspace, self }) {
 				"aria-label": `${ws}: counts`,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CountLink, {
-						to: "#djinns",
-						label: "Djinns",
-						count: counts.djinns,
-						alarm: counts.djinnsLate,
-						alarmText: "late",
-						tone: "late"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CountLink, {
-						to: href({
-							to: "section",
-							ws,
-							section: "rituals"
-						}),
+						to: ritualsHref,
 						label: "Rituals",
 						count: counts.rituals,
 						alarm: counts.ritualsLate,
 						alarmText: "late",
-						tone: "late"
+						tone: "late",
+						sub: `${String(counts.djinns)} ${counts.djinns === 1 ? "djinn" : "djinns"}`
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CountLink, {
 						to: href({
@@ -15215,7 +15230,7 @@ function WorkspaceHeader({ workspace, self }) {
 							ws,
 							section: "candles"
 						}),
-						label: "Candles lit",
+						label: "Candles",
 						count: counts.candlesLit,
 						alarm: 0,
 						alarmText: "",
@@ -15230,7 +15245,7 @@ function WorkspaceHeader({ workspace, self }) {
 						label: "Findings",
 						count: counts.findingsOpen,
 						alarm: counts.findingsNeedYou,
-						alarmText: "need you",
+						alarmText: "to decide",
 						tone: "wait"
 					})
 				]
@@ -15238,31 +15253,26 @@ function WorkspaceHeader({ workspace, self }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "djinns",
 				className: "fl-djinns",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "fl-djinns-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "label",
 						children: "Djinns"
-					}),
-					djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "text-muted",
-						children: "darius runs no djinn here."
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "fl-djinn-list",
-						children: djinns.map((djinn) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DjinnRow, {
-							ws,
-							djinn,
-							self
-						}, djinn.slug))
-					}),
-					workspace.djinns.length > 5 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: href({
-							to: "section",
-							ws,
-							section: "rituals"
-						}),
+					}), workspace.djinns.length > HEADER_DJINNS ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						to: ritualsHref,
 						children: `Show all ${String(workspace.djinns.length)}`
-					}) : null
-				]
+					}) : null]
+				}), djinns.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "text-muted",
+					children: "darius runs no djinn here."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "fl-djinn-list",
+					children: djinns.map((djinn) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DjinnRow, {
+						ws,
+						djinn,
+						self
+					}, djinn.slug))
+				})]
 			})
 		]
 	});
@@ -24878,13 +24888,17 @@ function WorkspaceTable({ workspaces, self }) {
 		})]
 	});
 }
+/** The least width of a host column of the placement matrix, in px. */
+var MATRIX_HOST_MIN = 120;
 function Placement({ fleet }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "fl-matrix-wrap",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
 			className: "fl-matrix",
+			style: { minWidth: `calc(11rem + ${String(fleet.hosts.length * MATRIX_HOST_MIN)}px)` },
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 				scope: "col",
+				className: "fl-matrix-first",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sr-only",
 					children: "Workspace"
@@ -24920,7 +24934,7 @@ function Placement({ fleet }) {
 						children: "nothing"
 					}) : place.kind, place === void 0 || place.pinned === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-pins",
-						children: `${String(place.pinned)} pinned`
+						children: ` · ${String(place.pinned)} pinned`
 					})]
 				}, host);
 			})] }, workspace.name)) })]
@@ -25687,7 +25701,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-DohQsi_N.js",
+			"module": "/assets/root-HVBpyUjq.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -25707,7 +25721,7 @@ var server_manifest_default = {
 				"/assets/sw-BAanqJqG.js",
 				"/assets/ask-kQxC4ygO.js"
 			],
-			"css": ["/assets/root-C-qTXrqi.css"],
+			"css": ["/assets/root-DPe-q09b.css"],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
 			"clientMiddlewareModule": void 0,
@@ -25747,7 +25761,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-WdwibCEw.js",
+			"module": "/assets/overview-CLHcY8k6.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -25755,7 +25769,7 @@ var server_manifest_default = {
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-CQfrpdiA.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
-				"/assets/fleet-C0QVwCaJ.js",
+				"/assets/fleet-DHAWZll6.js",
 				"/assets/runs-BqFWZabC.js",
 				"/assets/wait-line-BOv9LIT_.js",
 				"/assets/pulse-BtPGX35O.js",
@@ -25793,7 +25807,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/overview-WdwibCEw.js",
+			"module": "/assets/overview-CLHcY8k6.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
@@ -25801,7 +25815,7 @@ var server_manifest_default = {
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/row-CQfrpdiA.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
-				"/assets/fleet-C0QVwCaJ.js",
+				"/assets/fleet-DHAWZll6.js",
 				"/assets/runs-BqFWZabC.js",
 				"/assets/wait-line-BOv9LIT_.js",
 				"/assets/pulse-BtPGX35O.js",
@@ -26687,14 +26701,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/fleet-UjtXD9Ny.js",
+			"module": "/assets/fleet-D_kLKS2t.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CtHZCo-R.js",
 				"/assets/ui-D4Ql5y0I.js",
 				"/assets/workspace-icon-DBiYg_Et.js",
-				"/assets/fleet-C0QVwCaJ.js",
+				"/assets/fleet-DHAWZll6.js",
 				"/assets/fleet-CDb4Hqz6.js"
 			],
 			"css": [],
@@ -26746,13 +26760,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/host-UolsWvab.js",
+			"module": "/assets/host-tdTt5srz.js",
 			"imports": [
 				"/assets/chunk-OB3PAWPO-zbfVsNFB.js",
 				"/assets/jsx-runtime-Ct7oOVMJ.js",
 				"/assets/route-error-CtHZCo-R.js",
 				"/assets/ui-D4Ql5y0I.js",
-				"/assets/fleet-C0QVwCaJ.js",
+				"/assets/fleet-DHAWZll6.js",
 				"/assets/machines-Cz7bZkgM.js",
 				"/assets/fleet-CDb4Hqz6.js",
 				"/assets/peers-B8pjfJAN.js",
@@ -26966,8 +26980,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-c022b650.js",
-	"version": "c022b650",
+	"url": "/assets/manifest-a0573e69.js",
+	"version": "a0573e69",
 	"sri": void 0
 };
 //#endregion

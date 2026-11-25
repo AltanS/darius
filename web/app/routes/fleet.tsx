@@ -135,13 +135,16 @@ function WorkspaceTable({ workspaces, self }: { workspaces: readonly FleetWorksp
   );
 }
 
+/** The least width of a host column of the placement matrix, in px. */
+const MATRIX_HOST_MIN = 120;
+
 function Placement({ fleet }: { fleet: FleetWorkspaces }): React.ReactNode {
   return (
     <div className="fl-matrix-wrap">
-      <table className="fl-matrix">
+      <table className="fl-matrix" style={{ minWidth: `calc(11rem + ${String(fleet.hosts.length * MATRIX_HOST_MIN)}px)` }}>
         <thead>
           <tr>
-            <th scope="col">
+            <th scope="col" className="fl-matrix-first">
               <span className="sr-only">Workspace</span>
             </th>
             {fleet.hosts.map((host) => (
@@ -166,7 +169,7 @@ function Placement({ fleet }: { fleet: FleetWorkspaces }): React.ReactNode {
                 return (
                   <td key={host} className={place?.kind === "checkout" ? "is-checkout" : undefined}>
                     {place === undefined ? <span className="sr-only">nothing</span> : place.kind}
-                    {place === undefined || place.pinned === 0 ? null : <span className="fl-pins">{`${String(place.pinned)} pinned`}</span>}
+                    {place === undefined || place.pinned === 0 ? null : <span className="fl-pins">{` · ${String(place.pinned)} pinned`}</span>}
                   </td>
                 );
               })}
