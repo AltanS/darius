@@ -77,6 +77,7 @@ import {
 import type { JsonValue } from "../core/model.ts";
 import { appDir } from "../core/paths.ts";
 import { ssh as sshRun, sshProgram, SSH_FAILED, type Ran } from "../core/ssh.ts";
+import { healthAddress } from "../core/web-bind.ts";
 import { errorMessage } from "../runtime.ts";
 import { VERSION } from "../version.ts";
 import { UsageError, type Command, type ParsedArgs } from "./registry.ts";
@@ -296,19 +297,41 @@ function webEnabled(systemctl: SystemctlRunner): boolean {
   }
 }
 
-/** The port `darius-web.service` listens on: `DARIUS_WEB_PORT` in `~/.config/darius/web.env`, else 4747. */
+/** The value of `name` in the text of a `web.env` file: the last such line, with its quotes taken off. */
+function envValue(text: string, name: string): string | undefined {
+  let value: string | undefined;
+  for (const line of text.split("\n")) {
+    const match = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=\\s*(.*?)\\s*$`, "u").exec(line);
+    const raw = match?.[1];
+    if (raw === undefined) continue;
+    value = /^(["']).*\1$/u.test(raw) ? raw.slice(1, -1) : raw;
+  }
+  return value;
+}
+
+/**
+ * The URL that tells whether `darius-web.service` is up. It reads `~/.config/darius/web.env`
+ * the way the unit does. The port is `DARIUS_WEB_PORT`, else 4747. The address comes from
+ * `DARIUS_WEB_BIND` (a comma list, IPv4 and IPv6): 127.0.0.1 when the list holds it or is
+ * not set, else the first loopback address in it, else the first address (an IPv6 address
+ * goes in brackets). The service listens only on the addresses in that list, so 127.0.0.1
+ * would never answer on a host that leaves it out (0.141.3). `/healthz` is answered before
+ * the Host check, so any of these addresses gets a 200, never a 421.
+ */
 export function webHealthUrl(home: string): string {
   let port = DEFAULT_WEB_PORT;
+  let bind = "";
   try {
     const text = readFileSync(join(home, ".config", "darius", "web.env"), "utf8");
-    for (const line of text.split("\n")) {
-      const match = /^\s*(?:export\s+)?DARIUS_WEB_PORT\s*=\s*["']?(\d{1,5})["']?\s*$/u.exec(line);
-      if (match?.[1] !== undefined) port = match[1];
-    }
+    const portValue = envValue(text, "DARIUS_WEB_PORT");
+    if (portValue !== undefined && /^\d{1,5}$/u.test(portValue)) port = portValue;
+    bind = envValue(text, "DARIUS_WEB_BIND") ?? "";
   } catch {
-    // No web.env: the unit runs on the default port.
+    // No web.env: the unit runs on the default port and address.
   }
-  return `http://127.0.0.1:${port}/healthz`;
+  const address = healthAddress(bind);
+  const host = address.includes(":") ? `[${address}]` : address;
+  return `http://${host}:${port}/healthz`;
 }
 
 /**

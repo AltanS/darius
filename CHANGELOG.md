@@ -2,6 +2,12 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.141.3] - 2026-11-26
+
+### Fixed
+
+- **`darius update` no longer rolls back on a host that binds the web service to other addresses.** The check after an update asked the web service on 127.0.0.1 only. With `DARIUS_WEB_BIND` in `web.env` set to other addresses, such as a tailnet list without 127.0.0.1, the service never answered there, the check failed and the update rolled back. It now asks an address the service listens on: 127.0.0.1 when the list holds it, else the first loopback address in it, else the first address (IPv6 in brackets). A `web.env` with no bind is unchanged.
+
 ## [0.141.2] - 2026-11-26
 
 ### Fixed

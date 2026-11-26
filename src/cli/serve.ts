@@ -75,6 +75,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { gzipSync } from "node:zlib";
 
+import { ANY_ADDRESS, splitWebBind } from "../core/web-bind.ts";
 import { errorMessage } from "../runtime.ts";
 import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
 import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREFIX, actionApi, findingApi, candleApi, isCandlePath, pendingApi, vigilApi } from "../web/action-api.ts";
@@ -106,7 +107,6 @@ function noRetry(): void {
   // Nothing to stop: no tailnet retry is pending.
 }
 export const DEFAULT_WEB_PORT = 4747;
-const ANY_ADDRESS: ReadonlySet<string> = new Set(["0.0.0.0", "::", "[::]", "*", ""]);
 
 function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
@@ -119,7 +119,7 @@ function stringFlag(args: ParsedArgs, name: string): string | undefined {
 export function webBind(flag: string | undefined): string[] | "auto" {
   const raw = flag ?? process.env.DARIUS_WEB_BIND ?? DEFAULT_WEB_BIND;
   if (raw === "auto") return "auto";
-  const binds = raw.split(",").map((bind) => bind.trim());
+  const binds = splitWebBind(raw);
   for (const bind of binds) {
     if (ANY_ADDRESS.has(bind)) {
       throw new UsageError(`--bind ${bind || '""'} would listen on every interface; use auto, 127.0.0.1 or this host's tailnet address`);

@@ -552,6 +552,35 @@ test("the health URL takes DARIUS_WEB_PORT from web.env", () => {
   assert.equal(webHealthUrl(home), "http://127.0.0.1:4748/healthz");
 });
 
+test("the health URL asks an address the service listens on (DARIUS_WEB_BIND of web.env)", () => {
+  const cases: Array<{ name: string; env: string | null; url: string }> = [
+    { name: "no web.env", env: null, url: "http://127.0.0.1:4747/healthz" },
+    { name: "port only", env: "DARIUS_WEB_PORT=4800\n", url: "http://127.0.0.1:4800/healthz" },
+    { name: "empty bind", env: "DARIUS_WEB_BIND=\n", url: "http://127.0.0.1:4747/healthz" },
+    { name: "auto", env: "DARIUS_WEB_BIND=auto\n", url: "http://127.0.0.1:4747/healthz" },
+    { name: "bind with 127.0.0.1 not first", env: "DARIUS_WEB_BIND=100.64.0.9,127.0.0.2,127.0.0.1\n", url: "http://127.0.0.1:4747/healthz" },
+    { name: "only 127.0.0.2 and tailnet addresses", env: "DARIUS_WEB_BIND=100.64.0.9,fd7a::9,127.0.0.2\n", url: "http://127.0.0.2:4747/healthz" },
+    { name: "IPv6 first, with a loopback later", env: "DARIUS_WEB_BIND=fd7a::9,100.64.0.9,127.0.0.2\nDARIUS_WEB_PORT=4748\n", url: "http://127.0.0.2:4748/healthz" },
+    { name: "IPv6 loopback", env: "DARIUS_WEB_BIND=fd7a::9,::1\n", url: "http://[::1]:4747/healthz" },
+    { name: "IPv6 first, no loopback", env: "DARIUS_WEB_BIND=fd7a::9,100.64.0.9\n", url: "http://[fd7a::9]:4747/healthz" },
+    { name: "tailnet address only", env: "DARIUS_WEB_BIND=100.64.0.9\n", url: "http://100.64.0.9:4747/healthz" },
+    { name: "spaces in the list", env: "DARIUS_WEB_BIND=100.64.0.9, 127.0.0.2\n", url: "http://127.0.0.2:4747/healthz" },
+    { name: "double quotes", env: 'DARIUS_WEB_BIND="100.64.0.9,127.0.0.3"\nDARIUS_WEB_PORT="4749"\n', url: "http://127.0.0.3:4749/healthz" },
+    { name: "single quotes", env: "DARIUS_WEB_BIND='100.64.0.9,fd7a::9'\n", url: "http://100.64.0.9:4747/healthz" },
+    { name: "export form", env: "export DARIUS_WEB_BIND=100.64.0.9,127.0.0.2\nexport DARIUS_WEB_PORT=4750\n", url: "http://127.0.0.2:4750/healthz" },
+    { name: "the last line wins", env: "DARIUS_WEB_BIND=100.64.0.9\nDARIUS_WEB_BIND=127.0.0.1\n", url: "http://127.0.0.1:4747/healthz" },
+    { name: "an any-address entry is skipped", env: "DARIUS_WEB_BIND=0.0.0.0,100.64.0.9\n", url: "http://100.64.0.9:4747/healthz" },
+  ];
+  for (const { name, env, url } of cases) {
+    const home = tempDir("web-env-bind");
+    if (env !== null) {
+      mkdirSync(join(home, ".config", "darius"), { recursive: true });
+      writeFileSync(join(home, ".config", "darius", "web.env"), env);
+    }
+    assert.equal(webHealthUrl(home), url, name);
+  }
+});
+
 // --- scripts/install.sh ------------------------------------------------------------------
 
 interface InstallRun {
