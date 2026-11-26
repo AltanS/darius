@@ -6497,42 +6497,10 @@
     font-size: 13px;
   }
 
-  /* The table of a machine's workspaces (0.141.0): one grid per row, so the whole row is one link. A card per row on a phone. */
 
-  .mw-row {
-    display: grid;
-    grid-template-columns: minmax(8rem, 1.5fr) 6rem 7rem 6rem 5rem minmax(8rem, 1fr);
-    gap: 12px;
-    align-items: center;
-    padding: 10px 12px;
-    border-top: 1px solid var(--color-sand);
-    font-size: 14px;
-    color: var(--color-parchment);
-  }
 
-  a.mw-row:hover {
-    background: var(--color-surface);
-    text-decoration: none;
-  }
 
-  .mw-row.fl-thead {
-    border-top: 0;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--color-muted);
-  }
 
-  .mw-c-num {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px 6px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .mw-c-last {
-    font-size: 13px;
-    color: var(--color-muted);
-  }
 
   /* The mark of this machine: small gold text in a square frame. */
 
@@ -6548,68 +6516,6 @@
     text-transform: none;
     white-space: nowrap;
     color: var(--color-gold);
-  }
-
-  /* Six columns need about 1200 px: below that each workspace is a card. */
-
-  @media (max-width: 1199px) {
-    .mw-row.fl-thead {
-      display: none;
-    }
-
-    .mw-row .fl-label {
-      position: static;
-      width: auto;
-      height: auto;
-      overflow: visible;
-      clip-path: none;
-      font-size: 12px;
-      color: var(--color-muted);
-    }
-
-    .mw-row {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 6px 16px;
-      padding: 12px;
-      grid-template-areas:
-        "name name role"
-        "health djinns open"
-        "last last last";
-    }
-
-    .mw-c-name {
-      grid-area: name;
-    }
-
-    .mw-c-role {
-      grid-area: role;
-      text-align: right;
-    }
-
-    .mw-c-health {
-      grid-area: health;
-    }
-
-    .mw-c-num:nth-child(4) {
-      grid-area: djinns;
-    }
-
-    .mw-c-num:nth-child(5) {
-      grid-area: open;
-    }
-
-    .mw-c-last {
-      grid-area: last;
-    }
-
-    /* On a card each value has its label before it. */
-
-    .mw-c-last {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 2px 6px;
-    }
   }
 
   @media (max-width: 1023px) {
@@ -6661,83 +6567,32 @@
   }
 
   .mb-sentence {
-    max-width: 75ch;
+    max-width: 100ch;
     margin: 0;
     font-size: 15px;
     line-height: 1.5;
   }
 
+  /* The two lists of a block sit one under the other (0.142.0): side by side, their columns would not stay readable at 1400 px. */
+
   .mb-groups {
     display: grid;
-    gap: 14px 32px;
-  }
-
-  @media (min-width: 900px) {
-    .mb-groups {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-    }
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
   }
 
   .mb-group {
     min-width: 0;
   }
 
-  .mb-label {
-    margin: 0 0 6px;
-  }
 
-  .mb-runs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 16px;
-    margin: 0;
-    padding: 0;
-    font-size: 14px;
-    list-style: none;
-  }
 
-  .mb-runs > li {
-    min-width: 0;
-  }
 
-  .mb-ws {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    max-width: 100%;
-    font-weight: 600;
-  }
 
-  .mb-ws .fl-dot {
-    align-self: center;
-  }
 
-  .mb-ws-name {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
 
-  .mb-djinns {
-    display: grid;
-    gap: 4px;
-    margin: 0;
-    padding: 0;
-    font-size: 14px;
-    list-style: none;
-  }
 
-  .mb-djinns > li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 10px;
-    min-width: 0;
-  }
 
-  .mb-djinn-name {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
 
   .mb-more {
     margin: 6px 0 0;
@@ -7331,6 +7186,454 @@
 
     .finder-hint {
       display: none;
+    }
+  }
+
+  /* --- the list table (0.142.0): one row grammar for the machine lists and the runs ---------------- */
+
+  /*
+   * A real table: the columns line up down the whole list. State, Name, Where, When, then
+   * extras. The name cell holds the row's link, stretched over the row; any other link in
+   * the row sits above it. A phone stacks each row into two lines.
+   */
+
+  .lt {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .lt-h {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-sand);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    white-space: nowrap;
+    color: var(--color-muted);
+  }
+
+  .lt-row {
+    position: relative;
+  }
+
+  .lt-row + .lt-row > td {
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .lt-row:has(.lt-link):hover {
+    background: color-mix(in srgb, var(--color-raised) 60%, transparent);
+  }
+
+  .lt-row:has(.lt-link):hover .lt-title {
+    color: var(--color-gold-hi);
+  }
+
+  .lt-c {
+    padding: 8px 10px;
+    vertical-align: middle;
+    white-space: nowrap;
+    color: var(--color-parchment);
+  }
+
+  /* The rail of a row that needs attention: 3 px, square, on the first cell. */
+
+  .lt-rail > td:first-child {
+    box-shadow: inset 3px 0 0 var(--edge);
+  }
+
+  .lt-live > td {
+    background: color-mix(in srgb, var(--color-run) 5%, transparent);
+  }
+
+  /* The state: a fixed width, so the names start at one x. */
+
+  .lt-state {
+    width: 7.5rem;
+  }
+
+  .lt-word {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--tone);
+  }
+
+  /* The name takes the room that is left; its title ends in an ellipsis. */
+
+  /* The name cell clips: nothing in it ever paints over the next cell. */
+
+  .lt-name {
+    width: 100%;
+    max-width: 0;
+    overflow: hidden;
+  }
+
+  .lt-sub {
+    display: flex;
+    min-width: 0;
+    margin-top: 2px;
+  }
+
+  .lt-sub-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lt-namebox {
+    display: flex;
+    align-items: baseline;
+    gap: 4px 10px;
+    min-width: 0;
+  }
+
+  .lt-namebox > .ws-icon,
+  .lt-namebox > .fl-icon {
+    align-self: center;
+  }
+
+  .lt-title {
+    flex: 0 1 auto;
+    min-width: 3rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-parchment);
+  }
+
+  a.lt-title:hover {
+    text-decoration: none;
+  }
+
+  .lt-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .lt-above {
+    position: relative;
+    z-index: 1;
+  }
+
+  .lt-phrase,
+  .lt-marks {
+    flex: 0 1000 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .lt-marks {
+    flex-shrink: 100;
+    color: var(--color-faint);
+  }
+
+  .lt-mark {
+    font-size: 12px;
+    color: var(--color-faint);
+  }
+
+  .lt-below .lt-namebox {
+    flex-wrap: wrap;
+  }
+
+  .lt-below .lt-phrase {
+    flex-basis: 100%;
+  }
+
+  .lt-num {
+    text-align: right;
+  }
+
+  .lt-time {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .lt-extra .chip-x + .chip-x {
+    margin-left: 6px;
+  }
+
+  .lt-muted {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  .lt-dash {
+    color: var(--color-faint);
+  }
+
+  .lt-late {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-late);
+  }
+
+  .lt-outcome {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--tone);
+  }
+
+  /* A day of the Runs page: its name, and the run count, muted. */
+
+  .lt-day > th {
+    padding: 14px 10px 6px;
+    border-bottom: 1px solid var(--color-sand);
+    font: 600 12px/1 var(--font-sans);
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+    color: var(--color-parchment);
+  }
+
+  .lt-day .lt-order {
+    margin-left: 8px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* The heading line of a list: its name and count, then its order, small and muted. */
+
+  .lt-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 10px;
+    margin: 0 0 6px;
+    font: 600 12px/1.4 var(--font-sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .lt-order {
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--color-faint);
+  }
+
+  .sect-aside .lt-order {
+    margin-right: 10px;
+  }
+
+  /* The copies of a machine: one wrapping line of names, each with its health word. */
+
+  .lt-copies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+    list-style: none;
+  }
+
+  .lt-copies > li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .lt-copy-word {
+    font-size: 12px;
+    color: var(--color-muted);
+  }
+
+  /* A machine page: the sentence reads as wide as on the Machines page; the legend keeps its distance from the list under it. */
+
+  .page-head .mp-sentence {
+    max-width: 100ch;
+  }
+
+  .fl-legend + .lt-head {
+    margin-top: 20px;
+  }
+
+  /* The machine lists keep their cells near the name: State, Name and the data read as one line. */
+
+  /* The machine tables size to their content, at most 64rem; the name column is 18 to 34rem, then its title is cut. */
+
+  .lt-capped {
+    width: auto;
+    max-width: 64rem;
+  }
+
+  .lt-capped .lt-name {
+    width: auto;
+    max-width: none;
+  }
+
+  .lt-capped .lt-namebox {
+    min-width: 18rem;
+    max-width: 34rem;
+  }
+
+  .lt-capped .lt-sub {
+    max-width: 34rem;
+  }
+
+  /*
+   * One line, cut with an ellipsis, but free to shrink: a clamped line wraps at words, so a
+   * column of long titles can still narrow to fit the page (a nowrap text could not).
+   */
+
+  .lt-title,
+  .lt-phrase,
+  .lt-sub-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* A run title truncates first; its mark keeps its full width. The Run column takes the free space. */
+
+  .lt-marks {
+    flex: none;
+  }
+
+
+  /* The Runs page: below 1800 px the table next to the filter is too narrow, so the filter sits above it as wrapping rows. */
+
+  @media (min-width: 901px) and (max-width: 1799px) {
+    .board:has(.rail-filter) {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .board:has(.rail-filter) .rail-filter {
+      order: -1;
+    }
+  }
+
+  .mp-copies {
+    margin-top: 12px;
+  }
+
+  .mb-copies {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  /* A phone: each row is two lines, the state and the name, then the other cells as small labelled values. */
+
+  @media (max-width: 720px) {
+    .lt thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .lt,
+    .lt tbody {
+      display: block;
+    }
+
+    .lt-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 2px 14px;
+      padding: 8px 10px;
+    }
+
+    .lt-row + .lt-row {
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .lt-row + .lt-row > td {
+      border-top: 0;
+    }
+
+    .lt-rail {
+      box-shadow: inset 3px 0 0 var(--edge);
+    }
+
+    .lt-rail > td:first-child {
+      box-shadow: none;
+    }
+
+    .lt-c {
+      display: block;
+      padding: 0;
+      order: 3;
+      font-size: 12px;
+    }
+
+    .lt-state {
+      order: 1;
+      width: auto;
+    }
+
+    .lt-capped .lt-namebox {
+      min-width: 0;
+    }
+
+    .lt-capped {
+      width: 100%;
+    }
+
+    .lt-name {
+      order: 2;
+      flex: 1 1 0;
+      width: auto;
+      max-width: none;
+      min-width: 0;
+      font-size: 14px;
+    }
+
+    /* A break after the name: the state and the name fill line 1, the rest flows on line 2. */
+
+    .lt-row::after {
+      content: "";
+      flex-basis: 100%;
+      order: 2;
+      height: 0;
+    }
+
+    .lt-c[data-label]::before {
+      content: attr(data-label) " ";
+      color: var(--color-faint);
+    }
+
+    .lt-c[data-label="Result"]::before {
+      content: none;
+    }
+
+    .lt-c[data-label="Result"]:empty {
+      display: none;
+    }
+
+    .lt-num {
+      text-align: left;
+    }
+
+    .lt-day {
+      display: block;
+    }
+
+    .lt-day > th {
+      display: block;
     }
   }
 }

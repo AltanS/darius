@@ -224,35 +224,47 @@ test("the mark of a chip: set when the probe data holds something to check, and 
   assert.equal(machines.peerNeedsCheck(peer({ version: "0.9.0" }), null), false, "no version of this machine: nothing to compare");
 });
 
-test("the block of the Machines page: the workspaces it runs with their health, the djinns that act first, at most eight", () => {
+test("the block of the Machines page: the workspaces it runs worst first with their first reason, the djinns that need a look first, at most eight", () => {
   const shop = workspace({
     places: [
       { host: "host-b", kind: "checkout", pinned: 0 },
       { host: "host-c", kind: "copy", pinned: 0 },
     ],
-    djinns: [djinn("a-idle", "idle", { lastOutcome: "complete" }), djinn("b-late", "late"), djinn("c-run", "running"), djinn("d-elsewhere", "running", { host: "host-c" }), djinn("e-never", "idle"), djinn("f-due", "due"), djinn("g-held", "held"), djinn("h-fail", "idle", { lastOutcome: "failed" })],
-  });
-  const copy = workspace({ name: "archive", health: "quiet", places: [{ host: "host-b", kind: "copy", pinned: 0 }], djinns: [] });
-  const block = machines.machineBlock({ name: "host-b", peer: undefined, host: undefined, workspaces: [shop, copy], selfVersion: null });
-  assert.deepEqual(block.runs, [{ name: "demo-shop", health: { tone: "bad", label: "Failing" } }], "a copy is not in Runs");
-  assert.deepEqual(
-    block.djinns.map((one) => [one.slug, one.word.label]),
-    [
-      ["c-run", "running"],
-      ["g-held", "held"],
-      ["b-late", "late"],
-      ["f-due", "due today"],
-      ["a-idle", "complete"],
-      ["e-never", "no run yet"],
-      ["h-fail", "failed"],
+    djinns: [
+      djinn("a-idle", "idle", { lastOutcome: "complete", lastAt: "2026-11-20T08:00:00.000Z", lastRun: "R-A" }),
+      djinn("b-late", "late", { nextDue: "2026-11-20" }),
+      djinn("c-run", "running", { nextDue: "2026-11-26" }),
+      djinn("d-elsewhere", "running", { host: "host-c" }),
+      djinn("e-never", "idle"),
+      djinn("f-due", "due", { nextDue: "2026-11-25" }),
+      djinn("g-held", "held", { nextDue: "2026-11-27" }),
+      djinn("h-fail", "idle", { lastOutcome: "failed", lastAt: "2026-11-25T08:00:00.000Z", nextDue: "2026-11-28" }),
+      djinn("i-asks", "idle", { lastOutcome: "complete", lastAt: "2026-11-24T08:00:00.000Z", lastRun: "R-ASK", nextDue: "2026-11-29" }),
+      djinn("j-newer", "idle", { lastOutcome: "complete", lastAt: "2026-11-23T08:00:00.000Z" }),
     ],
-    "state order, then the name; the machine's own djinns only",
+  });
+  const ok = workspace({ name: "notes", health: "ok", reasons: [], places: [{ host: "host-b", kind: "checkout", pinned: 0 }], djinns: [] });
+  const copy = workspace({ name: "archive", health: "quiet", places: [{ host: "host-b", kind: "copy", pinned: 0 }], djinns: [] });
+  const input = { name: "host-b", peer: undefined, host: undefined, selfVersion: null, lastRuns: [{ project: "demo-shop", item: "ritual/a-idle", host: "host-b", at: "2026-11-20T08:00:00.000Z", outcome: "complete", run: "R-A" }], openRuns: [], asking: new Set(["demo-shop/R-ASK"]) };
+  const block = machines.machineBlock({ ...input, workspaces: [ok, shop, copy] });
+  assert.deepEqual(
+    block.runs.map((row) => [row.name, row.health.label, row.reason, row.djinns, row.lastRun?.run ?? null]),
+    [
+      ["demo-shop", "Failing", "2 high candles lit", 9, "R-A"],
+      ["notes", "OK", null, 0, null],
+    ],
+    "worst health first; a copy is not in the list",
   );
-  assert.equal(block.moreDjinns, 0);
-  assert.equal(block.facts.djinns, 7);
-  const many = workspace({ places: shop.places, djinns: Array.from({ length: 11 }, (_, index) => djinn(`d${String(index).padStart(2, "0")}`, "idle")) });
-  const big = machines.machineBlock({ name: "host-b", peer: undefined, host: undefined, workspaces: [many], selfVersion: null });
-  assert.equal(big.djinns.length, 8);
-  assert.equal(big.moreDjinns, 3);
-  assert.deepEqual(machines.machineBlock({ name: "host-z", peer: undefined, host: undefined, workspaces: [shop], selfVersion: null }).runs, []);
+  assert.deepEqual(
+    block.djinns.map((one) => one.djinn.slug),
+    ["b-late", "f-due", "c-run", "g-held", "h-fail", "i-asks", "j-newer", "a-idle"],
+    "the ones that need a look by due date, oldest first; then by the last run, newest first; never by title",
+  );
+  assert.equal(block.moreDjinns, 1, "e-never, which never ran, is the ninth");
+  assert.equal(block.facts.djinns, 9);
+  const many = Array.from({ length: 8 }, (_, index) => workspace({ name: `w${String(index)}`, places: [{ host: "host-b", kind: "checkout", pinned: 0 }], djinns: [] }));
+  const big = machines.machineBlock({ ...input, workspaces: many });
+  assert.equal(big.runs.length, 6);
+  assert.equal(big.moreRuns, 2);
+  assert.deepEqual(machines.machineBlock({ ...input, name: "host-z", workspaces: [shop] }).runs, []);
 });

@@ -10,9 +10,8 @@ import { Link } from "react-router";
 import type { BackupsStatus, SystemDisk, SystemProject, SystemStatus } from "../../../src/web/api.ts";
 import { useClock } from "../lib/clock.tsx";
 import { href } from "../lib/paths.ts";
-import { byteSize, momentText, relativeTime } from "../lib/format.ts";
+import { byteSize, relativeTime } from "../lib/format.ts";
 import type { Tone } from "../lib/tone.ts";
-import { Time } from "./ui.tsx";
 
 const DAY_MS = 86_400_000;
 
@@ -159,69 +158,19 @@ export function Machine({ system }: MachineProps): React.ReactNode {
   );
 }
 
-// --- projects ----------------------------------------------------------------------------
+// --- the sync bucket ------------------------------------------------------------------------
 
-interface ProjectRowProps {
-  project: SystemProject;
-}
-
-function ProjectRow({ project }: ProjectRowProps): React.ReactNode {
-  const { today, offset } = useClock();
+/** The sync bucket of this machine, in one line. The projects are a table since 0.142.0 (`ProjectsTable`). */
+export function SyncRemote({ system }: { system: SystemStatus }): React.ReactNode {
   return (
-    <li className="sy-item">
-      <p className="sy-item-head">
-        <span className="sy-name">{project.project}</span>
-        <span className="sy-size">{byteSize(project.bytes)}</span>
-      </p>
-      <p className="sy-meta">
-        {project.lastSync === null ? (
-          <span className="ink-idle">never synced</span>
-        ) : (
-          <span>
-            synced <Time iso={project.lastSync} />, {momentText(project.lastSync, today, offset)}
-          </span>
-        )}
-        <span>
-          {project.rituals} {project.rituals === 1 ? "ritual" : "rituals"}
-        </span>
-        <span>
-          {project.vigils} {project.vigils === 1 ? "vigil" : "vigils"}
-        </span>
-        <span>
-          {project.runs} {project.runs === 1 ? "run" : "runs"}
-        </span>
-      </p>
-    </li>
-  );
-}
-
-interface ProjectsProps {
-  system: SystemStatus;
-}
-
-/** The projects of the store with their last sync, and the sync bucket. */
-export function Projects({ system }: ProjectsProps): React.ReactNode {
-  return (
-    <div className="stack">
-      <h3 className="fl-group-name">Projects and syncs</h3>
-      {system.projects.length === 0 ? (
-        <p className="panel-empty panel">This store holds no project yet.</p>
+    <p className="sy-remote">
+      {system.syncRemote === null ? (
+        "This machine has no sync bucket."
       ) : (
-        <ul className="sy-list panel">
-          {system.projects.map((project) => (
-            <ProjectRow key={project.project} project={project} />
-          ))}
-        </ul>
+        <>
+          Sync bucket: <code>{system.syncRemote.bucket}</code> at <code>{system.syncRemote.endpoint}</code>.
+        </>
       )}
-      <p className="sy-remote">
-        {system.syncRemote === null ? (
-          "This machine has no sync bucket."
-        ) : (
-          <>
-            Sync bucket: <code>{system.syncRemote.bucket}</code> at <code>{system.syncRemote.endpoint}</code>.
-          </>
-        )}
-      </p>
-    </div>
+    </p>
   );
 }

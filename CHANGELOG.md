@@ -2,6 +2,27 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.142.0] - 2026-11-26
+
+### Added
+
+- **Lists are aligned columns.** The lists of the machine pages, the Runs page and the "Recent runs" lists share one row grammar: a table with header cells whose columns line up down the whole list, in the order State, Name, Where, When, then extras. The state is a dot and one word in a fixed-width column. The name is the row's link, one line, with an ellipsis and the full title on hover, and at most one muted phrase. Times are relative, with the local time on hover. A zero or an empty cell is a muted dash. Every list says its order in its heading. The tables of the machine pages size to their content, at most 64rem wide, with a name column of 18 to 34rem, so the values sit near their name. A name cell clips: its title is cut first, a short mark stays beside it, and a long mark (a follow-up with its parent) goes on a muted line under it. On a phone a row is two lines: the state and the name, then the other cells as small labelled values.
+- **A machine page lists its recent runs.** "Recent runs here" shows the last 15 runs that ran on the machine, newest first, between "Running now" and the djinns. The fleet view keeps the newest 15 runs of each machine (`recentRuns`), from the same scan of each ledger that the status read makes.
+- **A run row names its machine.** `RunRow` has a new field `host`: the machine of its newest start or resume.
+
+### Changed
+
+- **Machines: one block per machine uses the full width.** "Runs" becomes "Workspaces it runs", a table of State, Workspace (with its first reason, such as "2 vigils flagged"), Djinns here and Last run here, worst health first, at most 6, then "and n more". The copies are one muted line under it: "Also shows a copy of 12: a, b, c, d and 8 more". "Djinns that live here" is a table of State, Djinn (with its workspace), Last run and Next, at most 8. The two lists sit one under the other.
+- **The djinns of a machine are sorted by what needs a look.** First the ones that run, wait, are late, ask you, failed their last run or are due today, the oldest due first; then the others by their last run, newest first; never by title. The State cell says only the djinn's own state: running, held, late, asks you, failed (its last run failed) or due today; any other djinn is a muted "ok", and the outcome of its last run stays in the Last run cell. "Next" says "in 3 h", "tomorrow 07:00", "Mon 07:00" or "late by 2 d".
+- **One machine.** The sentence under the title reads up to about 100 characters wide. "Workspaces on this machine" is split: a table "Runs here" with Open runs, and one wrapping line "Copies": the dot, the name as the link, and the health word only when it is not OK. "Djinns that live here" is one list of every djinn of the machine, one line each, with the workspace and a small "pinned" mark beside the title; the grouping by workspace and the limit of five are gone. "Projects and syncs" is one table of Workspace, Size, Rituals, Vigils, Runs and Synced, the largest first.
+- **Runs: one line per run, grouped by day.** The Runs page groups runs under "Today", "Yesterday" and "Mon 23 Nov" with the run count of each day, newest first. A row is Time (HH:MM), State, Run, Workspace (on lists over several workspaces), Machine (when more than one machine has runs in the list), Took, then the result chips. The Run column takes the free space; below 1800 px the filter sits above the list. "ritual" and "by timer" are gone from every row: only a run that did not start the default way has a small mark, such as "manual", "follow-up of", "from the web" or "by <name>". A held run says "Held". The "Recent runs" lists of the Rituals page and a workspace use the same row, with the weekday in the Time cell for a run that is not from today.
+- The demo data has a run on another machine, a run started by hand, a follow-up from the web and runs on three days.
+
+### Tests
+
+- Unit tests for the order and the state word of the djinns, the "Next" text, the runs by day, the Time cell, the mark of a run, the run host and the recent runs per machine.
+- The machine page tests read the new tables: their header cells, the order of the rows, the copies line, the projects table and that no cell says "none".
+
 ## [0.141.4] - 2026-11-26
 
 ### Fixed

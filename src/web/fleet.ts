@@ -11,18 +11,22 @@ import { loadavg, uptime } from "node:os";
 
 import { ritualState } from "../core/due.ts";
 import { RETIRED_AFTER_MS } from "../core/host-versions.ts";
-import { hostId, linesBy, readLedger } from "../core/ledger.ts";
+import { hostId, linesBy, readLedgerShared } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { listProjects, openProject } from "../core/store.ts";
 import { HOST_VERSION_TYPE } from "../core/sync.ts";
 import { globalLedger, newestBoxChecks } from "../runner/box-check.ts";
 import { isBun } from "../runtime.ts";
 import { VERSION } from "../version.ts";
-import type { FleetHost, FleetLast, FleetView, HostBoxCheck, HostDue, HostLive, HostOpenRun, HostVersionStep } from "./api.ts";
+import type { FleetHost, FleetLast, FleetRun, FleetView, RunRow, HostBoxCheck, HostDue, HostLive, HostOpenRun, HostVersionStep } from "./api.ts";
 import { readHostBackupStates } from "./backups.ts";
+import { runRowsShared } from "./status.ts";
 import { collectHosts } from "./system.ts";
 
 const NEXT_DUE_MAX = 10;
+
+/** How many runs per host the fleet view keeps (0.142.0): the "Recent runs here" list of a machine page. */
+export const FLEET_RECENT_RUNS = 15;
 
 let serveStartedAt: string | null = null;
 
@@ -33,14 +37,15 @@ export function markServeStarted(at: Date = new Date()): void {
 
 interface ProjectLedger {
   name: string;
-  lines: LedgerLine[];
+  /** The shared array of `readLedgerShared`: read only. */
+  lines: readonly LedgerLine[];
 }
 
 /** The ledger of every project here; a project that cannot be read adds none. */
 function projectLedgers(): ProjectLedger[] {
   return listProjects().flatMap((name) => {
     try {
-      return [{ name, lines: readLedger(openProject(name)) }];
+      return [{ name, lines: readLedgerShared(openProject(name)) }];
     } catch {
       return [];
     }
@@ -187,6 +192,30 @@ function newestPerItem(candidates: readonly FleetLast[]): FleetLast[] {
   return [...newest.values()];
 }
 
+/** The newest runs of each host, at most `FLEET_RECENT_RUNS` per host, newest first; imported runs left out. The run rows come from the shared scan of the status read. */
+export function recentRunsByHost(ledgers: readonly ProjectLedger[], max: number = FLEET_RECENT_RUNS): FleetRun[] {
+  // The rows of a project are newest first: keep at most `max` per host of each project, then merge.
+  const newestOf = (name: string, rows: readonly RunRow[]): FleetRun[] => {
+    const kept = new Map<string, number>();
+    const out: FleetRun[] = [];
+    for (const row of rows) {
+      if (row.who === "import") continue;
+      const seen = kept.get(row.host) ?? 0;
+      if (seen >= max) continue;
+      kept.set(row.host, seen + 1);
+      out.push(Object.assign({ project: name }, row));
+    }
+    return out;
+  };
+  const all = ledgers.flatMap(({ name, lines }) => newestOf(name, runRowsShared(lines))).toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+  const count = new Map<string, number>();
+  return all.filter((run) => {
+    const seen = count.get(run.host) ?? 0;
+    count.set(run.host, seen + 1);
+    return seen < max;
+  });
+}
+
 /** The hosts of the store and where things ran. A host whose newest line or chunk is older than 30 days is `retired`; this host never is. */
 export function collectFleet(now: Date = new Date()): FleetView {
   const self = hostId();
@@ -225,5 +254,5 @@ export function collectFleet(now: Date = new Date()): FleetView {
         .map((line): FleetLast => ({ project: name, item: line.item ?? "", host: line.host, at: line.at, outcome: isText(line.outcome) ? line.outcome : null })),
     ),
   );
-  return { self, generatedAt: now.toISOString(), hosts, lastRuns, lastSweeps, openRuns: openRunsOf(ledgers) };
+  return { self, generatedAt: now.toISOString(), hosts, lastRuns, lastSweeps, openRuns: openRunsOf(ledgers), recentRuns: recentRunsByHost(ledgers) };
 }

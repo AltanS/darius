@@ -7,10 +7,9 @@
  * states for the Machines page, the Overview and Places. Pure.
  */
 
-import type { FleetDjinn, FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState, WorkspaceHealth } from "../../../src/web/api.ts";
-import { healthWord } from "./fleet.ts";
+import type { FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState } from "../../../src/web/api.ts";
+import { runsHereRows, sortDjinns, type PlacedDjinn, type RunsHereRow } from "./lists.ts";
 import { age, counted, link, plain, time, type Part } from "./sentence.ts";
-import { outcomeTone, type Badge } from "./tone.ts";
 
 /** At most this many workspace names in a machine sentence, then "and n more". */
 export const SENTENCE_NAMES = 4;
@@ -169,50 +168,51 @@ export function peerNeedsCheck(peer: PeerHost, selfVersion: string | null): bool
 /** At most this many djinns in a block, then "and n more". */
 export const BLOCK_DJINNS = 8;
 
-/** The state word of a djinn: running, held, late, due today, or its last outcome when it is idle ("no run yet" when it never ran). */
-export function djinnWord(djinn: FleetDjinn): Badge {
-  if (djinn.state === "running") return { tone: "run", label: "running" };
-  if (djinn.state === "held") return { tone: "wait", label: "held" };
-  if (djinn.state === "late") return { tone: "late", label: "late" };
-  if (djinn.state === "due") return { tone: "wait", label: "due today" };
-  if (djinn.lastOutcome === null) return { tone: "idle", label: "no run yet" };
-  return { tone: outcomeTone(djinn.lastOutcome), label: djinn.lastOutcome };
-}
-
-const DJINN_RANK = { running: 0, held: 1, late: 2, due: 3, idle: 4 } as const satisfies Record<FleetDjinn["state"], number>;
-
-export interface BlockWorkspace {
-  name: string;
-  health: Badge;
-}
-
-export interface BlockDjinn {
-  workspace: string;
-  slug: string;
-  title: string;
-  word: Badge;
-}
+/** At most this many workspaces in a block, then "and n more". */
+export const BLOCK_WORKSPACES = 6;
 
 export interface MachineBlock {
   facts: MachineFacts;
   attention: Attention[];
-  /** The workspaces that run here. */
-  runs: BlockWorkspace[];
-  /** The djinns that live here, the ones that act first (running, held, late, due), at most `BLOCK_DJINNS`. */
-  djinns: BlockDjinn[];
+  /** The workspaces that run here, worst health first, at most `BLOCK_WORKSPACES`. */
+  runs: RunsHereRow[];
+  /** How many workspaces that run here the block does not list. */
+  moreRuns: number;
+  /** The djinns that live here in the order of every djinn list (`sortDjinns`), at most `BLOCK_DJINNS`. */
+  djinns: PlacedDjinn[];
   /** How many djinns the block does not list. */
   moreDjinns: number;
 }
 
+export interface BlockInput extends MachineInput {
+  /** The newest run of each ritual (`FleetView.lastRuns`). */
+  lastRuns: readonly FleetLast[];
+  /** The runs open on this machine. */
+  openRuns: readonly Pick<HostOpenRun, "project">[];
+  /** The runs that ask a question nobody answered, as `project/run`. */
+  asking: ReadonlySet<string>;
+}
+
+/** The djinns that live on a machine, each with its workspace and whether its last run asks you. */
+export function machineDjinns(name: string, workspaces: readonly FleetWorkspace[], asking: ReadonlySet<string>): PlacedDjinn[] {
+  return workspaces.flatMap((workspace) =>
+    workspace.djinns.filter((djinn) => djinn.host === name).map((djinn) => ({ workspace: workspace.name, djinn, asks: djinn.lastRun !== null && asking.has(`${workspace.name}/${djinn.lastRun}`) })),
+  );
+}
+
 /** Everything the block of one machine shows on the Machines page. */
-export function machineBlock(input: MachineInput): MachineBlock {
+export function machineBlock(input: BlockInput): MachineBlock {
   const facts = machineFacts(input);
-  const runs = input.workspaces.filter((workspace) => workspace.places.some((place) => place.host === input.name && place.kind === "checkout")).map((workspace) => ({ name: workspace.name, health: healthWord(workspace.health) }));
-  const djinns = input.workspaces
-    .flatMap((workspace) => workspace.djinns.filter((djinn) => djinn.host === input.name).map((djinn) => ({ workspace: workspace.name, djinn })))
-    .toSorted((left, right) => DJINN_RANK[left.djinn.state] - DJINN_RANK[right.djinn.state] || left.workspace.localeCompare(right.workspace) || left.djinn.title.localeCompare(right.djinn.title));
-  const shown = djinns.slice(0, BLOCK_DJINNS).map(({ workspace, djinn }) => ({ workspace, slug: djinn.slug, title: djinn.title, word: djinnWord(djinn) }));
-  return { facts, attention: machineAttention(facts, input.selfVersion), runs, djinns: shown, moreDjinns: djinns.length - shown.length };
+  const runs = runsHereRows(input.name, input.workspaces, input.lastRuns, input.openRuns);
+  const djinns = sortDjinns(machineDjinns(input.name, input.workspaces, input.asking));
+  return {
+    facts,
+    attention: machineAttention(facts, input.selfVersion),
+    runs: runs.slice(0, BLOCK_WORKSPACES),
+    moreRuns: Math.max(0, runs.length - BLOCK_WORKSPACES),
+    djinns: djinns.slice(0, BLOCK_DJINNS),
+    moreDjinns: Math.max(0, djinns.length - BLOCK_DJINNS),
+  };
 }
 
 // --- the split of states ---------------------------------------------------------------------------
@@ -265,42 +265,4 @@ export function openRunsLine(facts: readonly MachineFacts[]): string {
 /** "3" or "3, 1 unreachable": the count of the Machines row in Places. */
 export function machinesRowText(split: StateSplit, count: number): string {
   return split.worst === null ? String(count) : `${String(count)}, ${split.worst}`;
-}
-
-// --- the workspaces of one machine -----------------------------------------------------------------
-
-export interface MachineWorkspace {
-  name: string;
-  icon: FleetWorkspace["icon"];
-  role: "runs here" | "copy";
-  health: WorkspaceHealth;
-  djinns: number;
-  djinnsLate: number;
-  /** Open runs of it on this machine; null when the machine did not answer and the ledgers here know none. */
-  openRuns: number;
-  /** Its newest ritual run on this machine. */
-  lastRun: FleetLast | null;
-}
-
-/** The workspaces a machine holds: the ones it runs first, then its copies, each in the order of the Workspaces table. */
-export function machineWorkspaces(name: string, workspaces: readonly FleetWorkspace[], lastRuns: readonly FleetLast[], openRuns: readonly HostOpenRun[]): MachineWorkspace[] {
-  const rows = workspaces.flatMap((workspace): MachineWorkspace[] => {
-    const place = workspace.places.find((one) => one.host === name);
-    if (place === undefined) return [];
-    const djinns = workspace.djinns.filter((djinn) => djinn.host === name);
-    const last = lastRuns.filter((run) => run.project === workspace.name && run.host === name).toSorted((left, right) => right.at.localeCompare(left.at))[0] ?? null;
-    return [
-      {
-        name: workspace.name,
-        icon: workspace.icon,
-        role: place.kind === "checkout" ? "runs here" : "copy",
-        health: workspace.health,
-        djinns: djinns.length,
-        djinnsLate: djinns.filter((djinn) => djinn.state === "late").length,
-        openRuns: openRuns.filter((run) => run.project === workspace.name).length,
-        lastRun: last,
-      },
-    ];
-  });
-  return [...rows.filter((row) => row.role === "runs here"), ...rows.filter((row) => row.role === "copy")];
 }

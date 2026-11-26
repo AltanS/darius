@@ -3,33 +3,36 @@
  * "Machines / name"; the name with its state and the "this machine" mark;
  * one sentence built from variables (what it runs and shows, its open runs,
  * its djinns); what needs attention, only when something does; one line of
- * facts; the table of its workspaces; what runs there now; the djinns that
- * live there. The page of this machine adds "Store and disks" (what the
- * Status page showed up to 0.140.0; `/status` redirects here). Then the
- * details fold. Every list is grouped by workspace and shows at most five
- * rows per group, then "show all". A page in no workspace. Read-only.
+ * facts; the workspaces it runs (a table) and the copies it shows (one
+ * line); what runs there now; its recent runs; the djinns that live there
+ * (0.142.0: one list, the ones that need a look first). The page of this
+ * machine adds "Store and disks" (what the Status page showed up to
+ * 0.140.0; `/status` redirects here). Then the details fold. Running now is
+ * grouped by workspace, at most five rows per group, then "show all". A
+ * page in no workspace. Read-only.
  */
 
 import { data, Link } from "react-router";
 
-import type { BackupsStatus, FleetDjinn, HostOpenRun } from "../../../src/web/api.ts";
+import type { BackupsStatus, HostOpenRun } from "../../../src/web/api.ts";
 import type { Route } from "./+types/machine";
 import { Crumbs } from "../components/crumbs.tsx";
-import { HealthWord } from "../components/fleet.tsx";
 import { BoxWord, LedgerFacts, LiveFacts, Unknown } from "../components/machines.tsx";
+import { ListHead, OrderNote } from "../components/list-table.tsx";
+import { CopiesLine, DjinnTable, ProjectsTable, RunsHereTable } from "../components/machine-lists.tsx";
+import { RunTable } from "../components/runs.tsx";
 import { Sentence } from "../components/sentence.tsx";
-import { Machine, Projects, StatusStrip } from "../components/system.tsx";
+import { Machine, StatusStrip, SyncRemote } from "../components/system.tsx";
 import { Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
-import { WorkspaceGlyph } from "../components/workspace-icon.tsx";
 import { groupByWorkspace, LEGEND, type Group } from "../lib/fleet.ts";
 import { uptimeText } from "../lib/format.ts";
-import { machineAttention, machineFacts, machineSentence, machineWorkspaces, type MachineFacts, type MachineWorkspace } from "../lib/machines.ts";
+import { copyRows, runsHereRows, sortDjinns } from "../lib/lists.ts";
+import { machineAttention, machineDjinns, machineFacts, machineSentence, type MachineFacts } from "../lib/machines.ts";
 import { href, itemTarget, machineCrumbs } from "../lib/paths.ts";
 import { machineWord, peersOf } from "../lib/peers.ts";
 import { backupWord } from "../lib/state-words.ts";
 import { statusOf, workspacesOf } from "../lib/status.ts";
-import { outcomeTone } from "../lib/tone.ts";
-import { itemSlug } from "../lib/view.ts";
+import { activityRun, askingRuns, itemSlug } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -55,7 +58,6 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   // Its own word when it answered; else what the ledgers here say.
   const open = peer?.live?.openRuns ?? fleet.openRuns.filter((run) => run.host === name).map(({ host: _host, ...run }) => run);
   const running: TitledRun[] = open.map((run) => Object.assign({ title: titleOf(run.project, run.item) }, run));
-  const djinns = workspaces.flatMap((workspace) => workspace.djinns.filter((djinn) => djinn.host === name).map((djinn) => Object.assign({ workspace: workspace.name }, djinn)));
   const selfVersion = peers.find((entry) => entry.self)?.version ?? fleet.hosts.find((entry) => entry.self)?.version ?? null;
   const facts = machineFacts({ name, peer: peer ?? undefined, host: host ?? undefined, workspaces, selfVersion });
   return {
@@ -64,10 +66,14 @@ export async function loader({ context, params }: Route.LoaderArgs) {
     peer,
     facts,
     selfVersion,
-    rows: machineWorkspaces(name, workspaces, fleet.lastRuns, open),
+    runsHere: runsHereRows(name, workspaces, fleet.lastRuns, open),
+    copies: copyRows(name, workspaces),
     running: groupByWorkspace(running, (run) => run.project),
     runningFrom: peer?.live === undefined || peer.live === null ? "ledger" : "live",
-    djinns: groupByWorkspace(djinns, (djinn) => djinn.workspace),
+    // The order of every djinn list (0.142.0): the ones that need a look first, then by their last run.
+    djinns: sortDjinns(machineDjinns(name, workspaces, askingRuns(projects))),
+    // The newest runs that ran here, from the fleet view: no second ledger scan.
+    recent: fleet.recentRuns.filter((run) => run.host === name).map((run) => activityRun(run.project, projects.find((one) => one.name === run.project), run)),
     // The store and the disks: only on the page of this machine, which is the one that can read them.
     store: facts.self ? { system: context.system(), backups: context.backups() } : null,
   };
@@ -108,37 +114,6 @@ function RunGroups({ groups }: { groups: readonly Group<TitledRun>[] }): React.R
         ))}
       </ul>
       <ShowAll group={group} to={href({ to: "section", ws: group.workspace, section: "runs", query: { state: "running" } })} />
-    </div>
-  ));
-}
-
-function DjinnGroups({ groups }: { groups: readonly Group<FleetDjinn & { workspace: string }>[] }): React.ReactNode {
-  if (groups.length === 0) return <Empty>No djinn lives here.</Empty>;
-  return groups.map((group) => (
-    <div key={group.workspace} className="fl-group">
-      <h3 className="fl-group-name">
-        <Link to={href({ to: "overview", ws: group.workspace })}>{group.workspace}</Link>
-      </h3>
-      <ul className="sy-list panel">
-        {group.rows.map((djinn) => (
-          <li key={djinn.slug} className="sy-item">
-            <p className="sy-item-head">
-              <Link to={href({ to: "ritual", ws: group.workspace, slug: djinn.slug })} className="sy-name">
-                {djinn.title}
-              </Link>
-              {djinn.why === "pinned" ? <span className="text-muted">pinned</span> : null}
-              {djinn.lastOutcome === null ? (
-                <span className="text-muted">no run yet</span>
-              ) : (
-                <span>
-                  <Status tone={outcomeTone(djinn.lastOutcome)} label={djinn.lastOutcome} /> <Time iso={djinn.lastAt} />
-                </span>
-              )}
-            </p>
-          </li>
-        ))}
-      </ul>
-      <ShowAll group={group} to={href({ to: "section", ws: group.workspace, section: "rituals" })} />
     </div>
   ));
 }
@@ -211,58 +186,6 @@ function FactsRow({ facts }: { facts: MachineFacts }): React.ReactNode {
   );
 }
 
-/** The workspaces of the machine: the ones it runs first, then its copies; a row links to the workspace. */
-function WorkspaceTable({ rows }: { rows: readonly MachineWorkspace[] }): React.ReactNode {
-  if (rows.length === 0) return <Empty>This machine holds no workspace that this store knows.</Empty>;
-  return (
-    <div className="fl-table">
-      <div className="mw-row fl-thead" aria-hidden="true">
-        <span>Workspace</span>
-        <span>Role</span>
-        <span>Health</span>
-        <span>Djinns here</span>
-        <span>Open runs</span>
-        <span>Last run here</span>
-      </div>
-      <ul className="fl-rows">
-        {rows.map((row) => (
-          <li key={row.name}>
-            <Link to={href({ to: "overview", ws: row.name })} className="mw-row">
-              <span className="fl-c fl-c-name mw-c-name">
-                <WorkspaceGlyph icon={row.icon} className="fl-icon" />
-                <span className="fl-name">{row.name}</span>
-              </span>
-              <span className={row.role === "copy" ? "fl-c mw-c-role text-muted" : "fl-c mw-c-role"}>{row.role}</span>
-              <span className="fl-c mw-c-health">
-                <HealthWord health={row.health} />
-              </span>
-              <span className="fl-c mw-c-num">
-                <span className="fl-label">Djinns here</span>
-                <span className={row.djinns === 0 ? "fl-n is-zero" : "fl-n"}>{row.djinns}</span>
-                {row.djinnsLate === 0 ? null : <span className="fl-alarm ink-late">{`${String(row.djinnsLate)} late`}</span>}
-              </span>
-              <span className="fl-c mw-c-num">
-                <span className="fl-label">Open runs</span>
-                <span className={row.openRuns === 0 ? "fl-n is-zero" : "fl-n"}>{row.openRuns}</span>
-              </span>
-              <span className="fl-c mw-c-last">
-                <span className="fl-label">Last run here</span>
-                {row.lastRun === null ? (
-                  <span className="text-muted">none</span>
-                ) : (
-                  <>
-                    <Status tone={outcomeTone(row.lastRun.outcome)} label={row.lastRun.outcome ?? "open"} /> <Time iso={row.lastRun.at} />
-                  </>
-                )}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 /** What is wrong with the backups of this machine, in one short sentence; null when nothing is. */
 function backupTrouble(backups: BackupsStatus): string | null {
   if (backups.problems.length > 0) return backups.problems.length === 1 ? "One thing blocks backups." : `${backups.problems.length} things block backups.`;
@@ -282,14 +205,21 @@ function StoreAndDisks({ store }: { store: NonNullable<Route.ComponentProps["loa
           {store.system.backupBucketsDiffer ? " The machines back up to more than one bucket." : null}
         </p>
         <Machine system={store.system} />
-        <Projects system={store.system} />
+        <div className="stack">
+          <h3 className="lt-head">
+            <span className="lt-head-title">Projects and syncs</span>
+            <OrderNote>the largest first</OrderNote>
+          </h3>
+          {store.system.projects.length === 0 ? <p className="panel-empty panel">This store holds no project yet.</p> : <ProjectsTable projects={store.system.projects} />}
+          <SyncRemote system={store.system} />
+        </div>
       </div>
     </Section>
   );
 }
 
 export default function MachinePage({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { name, host, peer, facts, selfVersion, rows, running, runningFrom, djinns, store } = loaderData;
+  const { name, host, peer, facts, selfVersion, runsHere, copies, running, runningFrom, djinns, recent, store } = loaderData;
   const word = machineWord(facts.state);
   return (
     <div className="stack">
@@ -305,14 +235,24 @@ export default function MachinePage({ loaderData }: Route.ComponentProps): React
       <Attention facts={facts} selfVersion={selfVersion} />
       <FactsRow facts={facts} />
       <Section title="Workspaces on this machine" id="workspaces">
-        <p className="fl-legend">{LEGEND}</p>
-        <WorkspaceTable rows={rows} />
+        <div className="stack">
+          <p className="fl-legend">{LEGEND}</p>
+          <ListHead title="Runs here" count={runsHere.length} order="worst first" />
+          {runsHere.length === 0 ? <Empty>This machine runs no workspace.</Empty> : <RunsHereTable rows={runsHere} openRuns caption={`Workspaces ${name} runs, worst first`} />}
+          <div id="copies" className="mp-copies">
+            <ListHead title="Copies" count={copies.length} order="by name" />
+            <CopiesLine copies={copies} />
+          </div>
+        </div>
       </Section>
       <Section title={runningFrom === "live" ? "Running now" : "Running now, from the ledgers"} id="running">
         <RunGroups groups={running} />
       </Section>
-      <Section title="Djinns that live here" id="djinns">
-        <DjinnGroups groups={djinns} />
+      <Section title="Recent runs here" id="recent" aside={<OrderNote>newest first</OrderNote>}>
+        <RunTable runs={recent} showProject className="lt-capped" caption={`Recent runs on ${name}, newest first`} empty="No run ran here yet." />
+      </Section>
+      <Section title="Djinns that live here" id="djinns" aside={<OrderNote>needs a look first, then last run, newest first</OrderNote>}>
+        {djinns.length === 0 ? <Empty>No djinn lives here.</Empty> : <DjinnTable djinns={djinns} caption={`Djinns that live on ${name}`} />}
       </Section>
       {store === null ? null : <StoreAndDisks store={store} />}
       <Fold summary="Details: live facts, ledgers, versions">

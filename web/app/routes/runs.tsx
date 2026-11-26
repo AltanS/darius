@@ -3,7 +3,7 @@ import { data, Link, redirect } from "react-router";
 import type { Route } from "./+types/runs";
 import { Crumbs } from "../components/crumbs.tsx";
 import { ChipRow, chipClass } from "../components/chip-row.tsx";
-import { RunList } from "../components/runs.tsx";
+import { RunTable } from "../components/runs.tsx";
 import { Section } from "../components/ui.tsx";
 import { scopeProjects } from "../lib/home.ts";
 import { href, RUN_ACKS, RUN_KINDS, RUN_STARTERS, runsFilterOf, runsQuery, type RunsFilter } from "../lib/paths.ts";
@@ -64,7 +64,7 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
       <div className="board">
         <div className="board-main">
           <div className="panel">
-            <RunList runs={runs} showProject={project === ""} empty="No run matches this filter." />
+            <RunTable runs={runs} showProject={project === ""} byDay caption={project === "" ? "Runs of every workspace, by day, newest first" : `Runs in ${project}, by day, newest first`} empty="No run matches this filter." />
           </div>
         </div>
         <aside className="board-rail rail-first rail-filter">

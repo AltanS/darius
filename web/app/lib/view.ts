@@ -53,15 +53,26 @@ export function itemLabel(project: ProjectStatus | undefined, item: string): str
   return found?.title ?? slug;
 }
 
+/** One run of a project with its label, kind and manual mark. `project` is the status of the project, when this host has it. */
+export function activityRun(name: string, project: ProjectStatus | undefined, run: RunRow): ActivityRun {
+  return Object.assign({}, run, { project: name, slug: itemSlug(run.item), label: itemLabel(project, run.item), kind: itemKind(run.item), manual: itemManual(run.item, project?.rituals.find((ritual) => ritual.slug === itemSlug(run.item))) });
+}
+
 /** The runs of these projects, newest first, each with a readable label. */
 export function activity(projects: readonly ProjectStatus[], opts: { withImported: boolean }): ActivityRun[] {
   return projects
-    .flatMap((project) =>
-      project.runs
-        .filter((run) => opts.withImported || !isImported(run))
-        .map((run): ActivityRun => Object.assign({}, run, { project: project.name, slug: itemSlug(run.item), label: itemLabel(project, run.item), kind: itemKind(run.item), manual: itemManual(run.item, project.rituals.find((ritual) => ritual.slug === itemSlug(run.item))) })),
-    )
+    .flatMap((project) => project.runs.filter((run) => opts.withImported || !isImported(run)).map((run) => activityRun(project.name, project, run)))
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+/** The runs of these projects that ask a question nobody answered (`asksYou`), as `project/run`. */
+export function askingRuns(projects: readonly ProjectStatus[]): Set<string> {
+  return new Set(
+    projects.flatMap((project) => {
+      const runs = project.runs.map((run) => Object.assign({ project: project.name }, run));
+      return runs.filter((run) => asksYou(run, runs)).map((run) => `${project.name}/${run.run}`);
+    }),
+  );
 }
 
 /** A run row that may name its project (an activity run does). Runs of two projects never replace each other. */

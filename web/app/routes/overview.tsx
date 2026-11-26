@@ -6,7 +6,8 @@ import { WorkspaceHeader } from "../components/fleet.tsx";
 import { CardView, DoneRows, NextUp, NowList, Pieces, StatusStrip } from "../components/board.tsx";
 import { PhoneMore } from "../components/pulse.tsx";
 import { RowList } from "../components/row.tsx";
-import { ReportRow, RunList } from "../components/runs.tsx";
+import { ReportRow, RunTable } from "../components/runs.tsx";
+import { OrderNote } from "../components/list-table.tsx";
 import { Empty, SectHead, Time } from "../components/ui.tsx";
 import { WorkspaceList } from "../components/workspaces.tsx";
 import { healthSplit } from "../lib/fleet.ts";
@@ -134,10 +135,17 @@ function RecentRuns({ extras }: ReportsProps): React.ReactNode {
   const { recent } = extras;
   return (
     <section id="recent" className="section sec-recent">
-      <SectHead title="Recent runs" aside={<Link to={href({ to: "section", ws: extras.name, section: "runs" })}>All runs</Link>} />
+      <SectHead
+        title="Recent runs"
+        aside={
+          <>
+            <OrderNote>newest first</OrderNote> <Link to={href({ to: "section", ws: extras.name, section: "runs" })}>All runs</Link>
+          </>
+        }
+      />
       <div className="panel">
         <PhoneMore hidden={recent.length - RECENT_PHONE} noun="run">
-          <RunList runs={recent} showProject={false} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
+          <RunTable runs={recent} showProject={false} caption="Recent runs, newest first" empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
         </PhoneMore>
       </div>
     </section>

@@ -105,12 +105,14 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
         followUpOf: null,
         startedBy: startedByOf(line.who),
         ackKind: null,
+        host: line.host,
       };
       byRun.set(run, row);
     }
     if (line.type === "run.started") {
       row.startedBy = startedByOf(line.who);
       row.followUpOf ??= text(line.follow_up_of);
+      row.host = line.host;
     } else if (line.type === "run.acknowledged") {
       if (row.acknowledged === null) {
         row.acknowledged = { at: line.at, who: line.who, note: text(line.note) };
@@ -122,6 +124,7 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
       row.questions.push(...textList(line.questions));
     } else if (line.type === "run.resumed") {
       row.phase = "running";
+      row.host = line.host;
     } else if (line.type === "run.completed") {
       row.phase = "closed";
       row.outcome = text(line.outcome);
@@ -131,6 +134,21 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
     }
   }
   return [...byRun.values()].toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+/**
+ * The run rows of one state of a ledger (0.142.0), keyed on the array of `readLedgerShared`: with
+ * the ledger cache on, the status read and the fleet view of a request share one scan. The rows
+ * are shared: a reader copies a row before it changes one.
+ */
+const sharedRunRows = new WeakMap<readonly LedgerLine[], readonly RunRow[]>();
+
+export function runRowsShared(ledger: readonly LedgerLine[]): readonly RunRow[] {
+  const known = sharedRunRows.get(ledger);
+  if (known !== undefined) return known;
+  const rows = runRows(ledger);
+  sharedRunRows.set(ledger, rows);
+  return rows;
 }
 
 /**
@@ -357,9 +375,10 @@ function projectStatus(name: string, now: Date): ProjectStatus {
   const status: ProjectStatus = { name, icon: null, checkout, maxMode: null, lastSync: lastSync(name), rituals: [], runs: [], vigils: [], milestones: [], milestonesArchived: 0, findings: { needsYou: 0, open: 0 }, candles: { lit: 0 }, error: null };
   try {
     const project = openProject(name);
-    const ledger = readLedger(project);
+    const shared = readLedgerShared(project);
+    const ledger = [...shared];
     status.rituals = ritualRows(project, ledger, now, checkout);
-    status.runs = runRows(ledger).slice(0, RECENT_RUNS);
+    status.runs = runRowsShared(shared).slice(0, RECENT_RUNS);
     status.findings = findingCounts(collectFindings(project, ledger));
     status.candles = { lit: collectCandles(project, ledger).filter((candle) => candle.status === "lit").length };
     const stored = vigilRows(project, ledger);

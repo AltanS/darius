@@ -442,6 +442,7 @@ const FLEET: FleetView = {
   ],
   lastRuns: [{ project: "demo", item: "ritual/daily-report", host: "host-b", at: "2026-09-28T08:00:00.000Z", outcome: "complete", run: DONE }],
   lastSweeps: [{ project: "demo", item: "vigil/soak", host: "testhost", at: "2026-09-28T04:31:00.000Z", outcome: "failed" }],
+  recentRuns: [],
   openRuns: [{ run: HELD, project: "demo", item: "ritual/daily-report", phase: "held", startedAt: "2026-09-28T08:00:00.000Z", host: "testhost" }],
 };
 
@@ -901,7 +902,7 @@ test("a failed run: both pages say what happens next, then who acknowledged it; 
   // Every page shows an acknowledged failure quietly: grey "Failed, seen", never the failure colour.
   for (const path of ["/all", "/rituals", "/runs", "/w/demo", "/w/demo/rituals/daily-report", `/w/demo/runs/${FAILED}`]) {
     const page = await read(path, seen);
-    assert.match(page, /<span class="(?:status|rw-state) tone-idle">Failed, seen<\/span>/u, `${path}: the grey word`);
+    assert.match(page, /<span class="(?:status|rw-state|lt-word) tone-idle">(?:<span class="fl-dot" aria-hidden="true"><\/span>)?Failed, seen<\/span>/u, `${path}: the grey word`);
     for (const red of ["tone-bad", "edge-bad", "ink-bad"]) assert.equal(page.includes(red), false, `${path}: no ${red}`);
   }
   const card = await read("/w/demo", seen);
@@ -2730,7 +2731,7 @@ function runsContext(): WebContext {
   return { ...context, status: () => ({ ...STATUS, projects: [{ ...project, runs: rows }] }) };
 }
 
-const hrefs = (page: string): string[] => [...page.matchAll(/class="rw-title" href="\/w\/demo\/runs\/([0-9A-Z]+)"/gu)].map((one) => one[1] ?? "");
+const hrefs = (page: string): string[] => [...page.matchAll(/class="lt-title lt-link"[^>]* href="\/w\/demo\/runs\/([0-9A-Z]+)"/gu)].map((one) => one[1] ?? "");
 
 test("the Runs list filters on kind, who started it and what became of the questions", async () => {
   const ctx = runsContext();
@@ -2766,8 +2767,8 @@ test("the filter chip rows keep the other filters and mark the one that is on", 
 test("a row says what became of its questions, and a follow-up names its parent with a link", async () => {
   const page = await readPage("/w/demo/runs", runsContext());
   const row = (id: string): string => {
-    const at = page.indexOf(`class="rw-title" href="/w/demo/runs/${id}"`);
-    return between(page, at, page.indexOf("</li>", at));
+    const at = page.lastIndexOf("<tr", page.search(new RegExp(`class="lt-title lt-link"[^>]* href="/w/demo/runs/${id}"`, "u")));
+    return between(page, at, page.indexOf("</tr>", at));
   };
   assert.ok(textOf(row(L_DISMISSED)).includes("2 questions, dismissed"), "a bare dismissal is not an answer");
   assert.equal(textOf(row(L_DISMISSED)).includes("answered"), false);
@@ -2777,7 +2778,9 @@ test("a row says what became of its questions, and a follow-up names its parent 
   assert.ok(textOf(row(L_FOLLOW)).includes(`follow-up of ${L_PARENT.slice(-8)}`));
   assert.ok(row(L_FOLLOW).includes(`href="/w/demo/runs/${L_PARENT}"`), "the parent is a link");
   assert.equal(textOf(row(L_HAND)).includes("follow-up of"), false, "only a follow-up has the line");
-  assert.ok(textOf(row(L_FOLLOW)).includes("by web:altan"), "the who stays");
+  assert.ok(textOf(row(L_FOLLOW)).includes("from the web"), "a start from the web says so");
+  assert.ok(textOf(row(L_HAND)).includes("by altan@host"), "a start from the command line names who");
+  assert.equal(textOf(row(L_PARENT)).includes("by timer"), false, "the timer is the default and has no mark");
 });
 
 test("the old /runs?project= address still redirects and keeps the new filters", async () => {

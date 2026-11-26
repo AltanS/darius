@@ -397,6 +397,8 @@ export interface RunRow {
   startedBy: "web" | "timer" | "cli";
   /** What the first acknowledgement is (0.88.0): answers, a follow-up, a dismissal, or a note alone; null until acknowledged. */
   ackKind: "answered" | "dismissed" | "note" | "follow-up" | null;
+  /** The host the run ran on: the host of its newest start or resume (0.142.0). */
+  host: string;
 }
 
 /** Why a sweep failed: a wait that is expected, a check that is broken, or neither known (0.82.0). */
@@ -1327,6 +1329,13 @@ export interface FleetView {
   lastSweeps: FleetLast[];
   /** Every open run, on any host. */
   openRuns: (HostOpenRun & { host: string })[];
+  /** The newest runs of each host, at most 15 per host, newest first; imported runs left out (0.142.0). */
+  recentRuns: FleetRun[];
+}
+
+/** A run of the fleet view: the run row and its project. */
+export interface FleetRun extends RunRow {
+  project: string;
 }
 
 // --- the fleet of workspaces (0.140.0) -------------------------------------------------------

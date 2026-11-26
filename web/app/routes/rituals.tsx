@@ -4,9 +4,10 @@ import type { Route } from "./+types/rituals";
 import { ComingUp } from "../components/agenda.tsx";
 import { KindIcon } from "../components/kind.tsx";
 import { PhoneMore } from "../components/pulse.tsx";
-import { RunList } from "../components/runs.tsx";
+import { RunTable } from "../components/runs.tsx";
 import { SectionPageHead, TITLE_ICON } from "../components/section.tsx";
 import { SectHead } from "../components/ui.tsx";
+import { OrderNote } from "../components/list-table.tsx";
 import { buildAgenda } from "../lib/agenda.ts";
 import { scopeOfRequest } from "../lib/scope.ts";
 import { href } from "../lib/paths.ts";
@@ -48,10 +49,17 @@ export default function Rituals({ loaderData }: Route.ComponentProps): React.Rea
           <div className="board-main">
             <ComingUp agenda={agenda} anchors={false} target="" />
             <section id="recent" className="section">
-              <SectHead title="Recent runs" aside={<Link to={runsPath}>All runs</Link>} />
+              <SectHead
+                title="Recent runs"
+                aside={
+                  <>
+                    <OrderNote>newest first</OrderNote> <Link to={runsPath}>All runs</Link>
+                  </>
+                }
+              />
               <div className="panel">
                 <PhoneMore hidden={recent.length - RECENT_PHONE} noun="run">
-                  <RunList runs={recent} showProject={workspace === null} empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
+                  <RunTable runs={recent} showProject={workspace === null} caption="Recent runs, newest first" empty="darius has not run anything here yet." phoneShown={RECENT_PHONE} />
                 </PhoneMore>
               </div>
             </section>

@@ -49,6 +49,7 @@ function run(now: number, slug: string, phase: RunRow["phase"], outcome: string 
     followUpOf: null,
     startedBy: "timer",
     ackKind: null,
+    host: "demo",
     ...extra,
   };
 }
@@ -307,7 +308,7 @@ function findingCounts(rows: readonly FindingRow[]): FindingCounts {
 
 function project(now: number): ProjectStatus {
   const running = run(now, "link-check", "running", null, 6 * MINUTE, { who: "timer" });
-  const held = run(now, "price-sync", "held", null, 25 * MINUTE, { questions: ["Push the new prices to the live shop?", "Which currency rounds up?"] });
+  const held = run(now, "price-sync", "held", null, 25 * MINUTE, { questions: ["Push the new prices to the live shop?", "Which currency rounds up?"], host: "host-b" });
   const asks = run(now, "site-report", "closed", "complete", 5 * 60 * MINUTE, {
     result: { status: "attention", questions: 1, open: { ...NO_COUNTS, high: 2 }, fixed: 3 },
   });
@@ -315,9 +316,12 @@ function project(now: number): ProjectStatus {
   const done = [
     run(now, "link-check", "closed", "complete", 26 * 60 * MINUTE),
     run(now, "site-report", "closed", "complete", 29 * 60 * MINUTE),
-    run(now, "price-sync", "closed", "complete", 30 * 60 * MINUTE, { who: "operator" }),
-    run(now, "backup-check", "closed", "abandoned", 2 * DAY, { acknowledged: { at: ago(now, 2 * DAY - 30 * MINUTE), who: "operator", note: "disk was full" } }),
+    run(now, "price-sync", "closed", "complete", 30 * 60 * MINUTE, { who: "operator", startedBy: "cli", host: "host-b" }),
   ];
+  // Older days (0.142.0): an abandoned run, a follow-up of it started from the web, and a manual ritual done by hand, so the Runs page has three days.
+  const abandoned = run(now, "backup-check", "closed", "abandoned", 2 * DAY, { acknowledged: { at: ago(now, 2 * DAY - 30 * MINUTE), who: "operator", note: "disk was full" }, ackKind: "follow-up" });
+  const followUp = run(now, "backup-check", "closed", "complete", 2 * DAY - 60 * MINUTE, { who: "web:demo", startedBy: "web", followUpOf: abandoned.run });
+  const byHand = run(now, "uptime-review", "closed", "complete", 3 * DAY, { who: "operator", startedBy: "cli" });
   return {
     name: "demo-shop",
     icon: { kind: "emoji", text: "🛒" },
@@ -325,7 +329,7 @@ function project(now: number): ProjectStatus {
     maxMode: "report",
     lastSync: ago(now, 2 * MINUTE),
     error: null,
-    runs: [running, held, asks, failed, ...done],
+    runs: [running, held, asks, failed, ...done, abandoned, followUp, byHand],
     rituals: [
       ritual("site-report", "Nightly site report (djinn)", { skill: "site-report", nextDue: day(now, 0, 1) }),
       ritual("link-check", "Link checker (djinn)", { skill: "link-check", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
@@ -430,6 +434,8 @@ function fleetProjects(now: number): ProjectStatus[] {
 }
 
 export function demoStatus(now: number = Date.now()): HostStatus {
+  // The same run ids on every call: the status, the fleet view and the workspaces of one page agree.
+  serial = 0;
   return {
     host: "demo",
     version: "demo",
@@ -663,7 +669,12 @@ function demoRunHost(now: number, workspace: string, slug: string): string {
   return djinn?.host ?? "demo";
 }
 
-/** This host's live facts in the demo: the open runs of the demo status, all on this host. */
+/** The open runs of the demo status on one machine. */
+function demoOpenRuns(status: HostStatus, host: string): HostLive["openRuns"] {
+  return status.projects.flatMap((one) => one.runs.flatMap((row) => (row.phase === "closed" || row.host !== host ? [] : [{ run: row.run, project: one.name, item: row.item, phase: row.phase, startedAt: row.startedAt }])));
+}
+
+/** This host's live facts in the demo: the open runs of the demo status on this host. */
 export function demoHostLive(now: number): HostLive {
   const status = demoStatus(now);
   return {
@@ -675,7 +686,7 @@ export function demoHostLive(now: number): HostLive {
     now: new Date(now).toISOString(),
     uptimeSeconds: 12 * 86_400 + 3 * 3600,
     load: [0.42, 0.31, 0.27],
-    openRuns: status.projects.flatMap((one) => one.runs.flatMap((row) => (row.phase === "closed" ? [] : [{ run: row.run, project: one.name, item: row.item, phase: row.phase, startedAt: row.startedAt }]))),
+    openRuns: demoOpenRuns(status, "demo"),
     boxCheck: { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" },
     nextDue: [{ project: "atlas-docs", slug: "link-audit", nextDueAt: ago(now, -2 * 60 * MINUTE) }],
   };
@@ -693,7 +704,7 @@ export function demoPeers(now: number): PeerHost[] {
     now: checkedAt,
     uptimeSeconds: 4 * 86_400,
     load: [1.2, 0.9, 0.8],
-    openRuns: [],
+    openRuns: demoOpenRuns(demoStatus(now), "host-b"),
     boxCheck: { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" },
     nextDue: [{ project: "demo-shop", slug: "price-sync", nextDueAt: ago(now, -5 * 60 * MINUTE) }],
   };
@@ -737,7 +748,12 @@ export function demoFleet(now: number): FleetView {
     ],
     lastRuns,
     lastSweeps,
-    openRuns: demoHostLive(now).openRuns.map((row) => Object.assign({}, row, { host: "demo" })),
+    openRuns: ["demo", "host-b"].flatMap((host) => demoOpenRuns(status, host).map((row) => Object.assign({}, row, { host }))),
+    // The newest runs of each machine, at most 15 each, as the fleet view keeps them.
+    recentRuns: status.projects
+      .flatMap((one) => one.runs.filter((row) => row.who !== "import").map((row) => Object.assign({ project: one.name }, row)))
+      .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt))
+      .filter((row, index, all) => all.slice(0, index).filter((other) => other.host === row.host).length < 15),
   };
 }
 
