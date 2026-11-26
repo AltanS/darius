@@ -2,6 +2,18 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.141.4] - 2026-11-26
+
+### Fixed
+
+- **A slow page no longer makes a healthy machine look unreachable.** The probe of the other machines started from a page request, and its 1.5 s timer ran while that same request built the page. A page that took longer than about 1 s held the event loop: the request to the peer was not even sent, and the timer had already run out when the loop was free again. So each machine showed the other as "no answer in 1.5 s", while `/api/host.json` answered in 0.5 s. Now `darius serve` probes on its own timer, at the start and every 20 s, so a page only reads the result. The 1.5 s count only the time the process was free to read an answer: a tick that comes late counts at most 0.25 s. A peer that is truly down still shows as unreachable within about 20 s. The 20 minute rule for the two "unreachable" tones is unchanged.
+- **Pages of a big store are fast again.** On a host with 13 projects and about 130,000 ledger lines, a page took 0.8 to 7 s and `/api/host.json` 0.5 s. Each vigil row read the whole ledger again, each ritual did the same twice, and every reader of a page parsed every ledger again. Now the rows read one grouped pass, `darius serve` keeps each parsed ledger until one of its files changes (a new or renamed file, or a longer open file), and a run's details and its candles are kept with the ledger state they came from. A write from the web clears the ledger cache. The same store now answers a page in 0.1 to 0.3 s, about 0.6 s when the 10 s status cache is read again, and `/api/host.json` in 0.07 s. The activity of one day no longer builds entries for older lines.
+
+### Tests
+
+- The probe: a page that holds the event loop for longer than the timeout leaves a healthy peer (its own process) online, and a silent peer still fails. Serve's timer probes with no page.
+- The perf test serves a store of 13 projects with 200,000 ledger lines and checks the warm pages and `/api/host.json` against loose bounds, and that a new line shows on the next read.
+
 ## [0.141.3] - 2026-11-26
 
 ### Fixed

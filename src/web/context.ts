@@ -14,7 +14,7 @@ import type { LedgerLine, Ritual, Vigil } from "../core/model.ts";
 import { configDir, stateDir } from "../core/paths.ts";
 import { listProjects, openProject, type Project } from "../core/store.ts";
 import { resolveSnapshotSettings } from "../core/snapshot-settings.ts";
-import { hostId, readLedger } from "../core/ledger.ts";
+import { hostId, readLedger, readLedgerShared } from "../core/ledger.ts";
 import { followUpReadiness } from "../runner/follow-up-ready.ts";
 import { LOOPBACK_FOLLOW_UP } from "./action-api.ts";
 import { activityOf, pendingActivity } from "./activity.ts";
@@ -51,12 +51,12 @@ export function collectFindingRows(): FindingRow[] {
 }
 
 /** A reader of project ledgers that reads each one once. It throws for a project that cannot be read. */
-function cachedLedgers(): (name: string) => LedgerLine[] {
-  const ledgers = new Map<string, LedgerLine[]>();
+function cachedLedgers(): (name: string) => readonly LedgerLine[] {
+  const ledgers = new Map<string, readonly LedgerLine[]>();
   return (name) => {
     let lines = ledgers.get(name);
     if (lines === undefined) {
-      lines = readLedger(openProject(name));
+      lines = readLedgerShared(openProject(name));
       ledgers.set(name, lines);
     }
     return lines;
@@ -108,11 +108,23 @@ function withRunCandles(name: string, store: Project, ledger: readonly LedgerLin
   return activityOf(name, ledger, { ...input, openings: runOpenings(store, ledger) });
 }
 
-/** The candles a project's runs opened or raised, once per call. A ledger or a result that does not read gives none, not an error. */
-function runOpenings(store: Project, ledger: readonly LedgerLine[]): CandleOpening[] {
+/**
+ * The candles of the runs, by ledger state (0.141.4): keyed on the array of `readLedgerShared`,
+ * which stays the same until a line is added. The results a run names are blobs named by their
+ * hash, so the openings stay right as long as the ledger.
+ */
+const openingsByLedger = new WeakMap<readonly LedgerLine[], readonly CandleOpening[]>();
+
+/** The candles a project's runs opened or raised, once per ledger state. A ledger or a result that does not read gives none, not an error. */
+function runOpenings(store: Project, ledger: readonly LedgerLine[]): readonly CandleOpening[] {
+  const known = openingsByLedger.get(ledger);
+  if (known !== undefined) return known;
   try {
-    return candleOpenings(store, ledger);
+    const openings = candleOpenings(store, ledger);
+    openingsByLedger.set(ledger, openings);
+    return openings;
   } catch {
+    // Not kept: a result that does not read now may read on the next page.
     return [];
   }
 }
@@ -123,7 +135,7 @@ function newestFirst(left: { at: string }, right: { at: string }): number {
 }
 
 /** The ledger of a project, or nothing when it cannot be read. */
-function safeLedger(ledgerOf: (name: string) => LedgerLine[], name: string): LedgerLine[] {
+function safeLedger(ledgerOf: (name: string) => readonly LedgerLine[], name: string): readonly LedgerLine[] {
   try {
     return ledgerOf(name);
   } catch {

@@ -4,6 +4,7 @@
  * through `respond()` without a socket, over a throwaway store.
  */
 
+import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -17,7 +18,7 @@ process.env.DARIUS_TAILSCALE = join(SANDBOX, "no-tailscale");
 mkdirSync(process.env.DARIUS_CONFIG_DIR, { recursive: true });
 writeFileSync(join(process.env.DARIUS_CONFIG_DIR, "config.toml"), 'host = "host-a"\n');
 
-const { PeerProbe, failedState, isShortHostName, peerUrl, scrubReason, parseHostLive, peerHosts, enablePeerProbe, SYNCING_WITHIN_MS } = await import("../src/web/peers.ts");
+const { PeerProbe, currentPeerHosts, failedState, hostFetch, isShortHostName, loopTimeout, peerUrl, scrubReason, parseHostLive, peerHosts, enablePeerProbe, SYNCING_WITHIN_MS } = await import("../src/web/peers.ts");
 const { readWebPeers } = await import("../src/core/config.ts");
 const { respond, WebApp } = await import("../src/cli/serve.ts");
 const { appendLine } = await import("../src/core/ledger.ts");
@@ -327,4 +328,95 @@ test("current (0.140.0): a stale cache answers at once and starts a new probe in
   assert.deepEqual(probe.current().map((host) => host.state), ["self", "online", "online", "online"], "the old answer, at once");
   await probe.hosts();
   assert.equal(fetcher.asked.length, 6, "the stale read started one more round");
+});
+
+// --- a page build that holds the event loop (0.141.4) -------------------------------------
+
+/**
+ * A peer in its own process, on 127.0.0.1: it keeps answering while this process is busy,
+ * as a real peer does. It answers `/api/host.json` with `body` and prints its port.
+ */
+async function peerProcess(body: string): Promise<{ url: string; stop: () => void }> {
+  const code = `const http = require("node:http");
+const body = process.env.PEER_BODY;
+const server = http.createServer((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(body); });
+server.listen(0, "127.0.0.1", () => console.log(String(server.address().port)));`;
+  const child = spawn(process.execPath, ["-e", code], { env: { ...process.env, PEER_BODY: body }, stdio: ["ignore", "pipe", "inherit"] });
+  const port = await new Promise<string>((resolve, reject) => {
+    child.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8").trim()));
+    child.once("exit", (status) => reject(new Error(`the peer process ended (${String(status)})`)));
+  });
+  return { url: `http://127.0.0.1:${port}`, stop: () => child.kill() };
+}
+
+/** Holds the event loop, as a page build of a big store does. */
+function holdLoop(ms: number): void {
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    // busy
+  }
+}
+
+test("probe (0.141.4): a page that holds the event loop longer than the timeout does not make a healthy peer unreachable", async () => {
+  const peer = await peerProcess(JSON.stringify(live("host-b")));
+  try {
+    const probe = probeWith(hostFetch, { known: KNOWN.slice(0, 2), overrides: new Map([["host-b", peer.url]]), timeoutMs: 300 });
+    const round = probe.hosts();
+    // The probe has asked; the page now builds for longer than the whole timeout.
+    holdLoop(900);
+    const hosts = await round;
+    assert.deepEqual([hosts[1]?.state, hosts[1]?.reason], ["online", null]);
+  } finally {
+    peer.stop();
+  }
+});
+
+test("probe (0.141.4): a silent peer still fails after a held event loop, counting only the free time", async () => {
+  const fetcher = fakeFetch({ "host-b": () => new Promise<ProbeResponse>(() => undefined) });
+  const started = performance.now();
+  const round = probeWith(fetcher, { known: KNOWN.slice(0, 2), timeoutMs: 500 }).hosts();
+  holdLoop(600);
+  const hosts = await round;
+  const took = performance.now() - started;
+  assert.deepEqual([hosts[1]?.state, hosts[1]?.reason], ["unreachable", "no answer in 0.5 s"]);
+  // The held 600 ms count as one late tick (250 ms); the rest of the 500 ms is free time after it.
+  assert.ok(took >= 600 + 200 && took < 600 + 1_500, `took ${took.toFixed(0)} ms`);
+});
+
+test("loopTimeout (0.141.4): a late tick counts at most a quarter second; the wall time cap still ends it", async () => {
+  let clock = 0;
+  let expired = false;
+  const cancel = loopTimeout(1_000, () => (expired = true), () => clock);
+  // Ten ticks, each 10 s late: 2.5 s counted, but the 15 s wall cap is passed at the second one.
+  clock += 10_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(expired, false, "one late tick counts 250 ms, not 10 s");
+  clock += 10_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(expired, true, "20 s of wall time: over the cap");
+  cancel();
+});
+
+test("serve's own timer (0.141.4): the probe runs with no page, so the first page already has the answer; null stops it", async () => {
+  const peer = await peerProcess(JSON.stringify(live("host-b")));
+  const file = join(process.env.DARIUS_CONFIG_DIR ?? "", "config.toml");
+  try {
+    writeFileSync(file, `host = "host-a"\n\n[web.peers]\nhost-b = "${peer.url}"\n`);
+    const hostB = join(process.env.DARIUS_STATE_DIR ?? "", GLOBAL_PROJECT, "ledger", "host-b");
+    mkdirSync(hostB, { recursive: true });
+    const time = Date.now() - MINUTE;
+    writeFileSync(join(hostB, "open.jsonl"), `${JSON.stringify({ v: 1, id: ulid(time), at: new Date(time).toISOString(), host: "host-b", who: "sync", project: GLOBAL_PROJECT, type: "host.version", version: "1.0.0", compat: 1 })}\n`);
+    enablePeerProbe(1, 60_000);
+    const deadline = Date.now() + 5_000;
+    let b = currentPeerHosts().find((host) => host.host === "host-b");
+    while (b?.state !== "online" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      b = currentPeerHosts().find((host) => host.host === "host-b");
+    }
+    assert.equal(b?.state, "online", "the timer probed: no page asked");
+  } finally {
+    enablePeerProbe(null);
+    writeFileSync(file, 'host = "host-a"\n');
+    peer.stop();
+  }
 });

@@ -12,7 +12,7 @@ import { ritualState } from "../core/due.ts";
 import { collectFindings, findingCounts } from "../core/finding-index.ts";
 import { collectCandles } from "../core/candle-index.ts";
 import { latestHandoff } from "../core/handoff.ts";
-import { hostId, linesFor, readLedger } from "../core/ledger.ts";
+import { hostId, linesBy, linesFor, readLedger, readLedgerShared } from "../core/ledger.ts";
 import { detailActivity, milestoneActivityAt, readLegacyMilestoneDetailAt, type LegacyFile } from "../core/legacy-milestone-detail.ts";
 import { readLegacyMilestonesAt, type LegacyMilestone } from "../core/legacy-milestones.ts";
 import { readLegacyVigilsAt } from "../core/legacy-vigils.ts";
@@ -133,11 +133,19 @@ export function runRows(ledger: readonly LedgerLine[]): RunRow[] {
   return [...byRun.values()].toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
-/** The ritual's run that failed today, with who saw it; null when its latest run did not fail today. */
-function failedTodayOf(ledger: readonly LedgerLine[], slug: string, today: string): RitualRow["failedToday"] {
-  const run = failedToday(ledger, { slug, today });
+/**
+ * The ritual's run that failed today, with who saw it; null when its latest run did not fail today.
+ * `itemLines` are the ritual's lines, `byRun` every line by run: the lines of its latest run are
+ * all that `failedToday` and `viewRun` read of that run.
+ */
+function failedTodayOf(itemLines: readonly LedgerLine[], byRun: ReadonlyMap<string, readonly LedgerLine[]>, slug: string, today: string): RitualRow["failedToday"] {
+  const start = itemLines.findLast((line) => line.type === "run.started" && text(line.follow_up_of) === null);
+  const startRun = start === undefined ? null : text(start.run);
+  if (startRun === null) return null;
+  const runLines = byRun.get(startRun) ?? [];
+  const run = failedToday(runLines, { slug, today });
   if (run === undefined) return null;
-  const seen = viewRun(ledger, run).acknowledged;
+  const seen = viewRun(runLines, run).acknowledged;
   const acknowledged: Acknowledgement | null = seen === undefined ? null : { at: seen.at, who: seen.who, note: seen.note ?? null };
   return { run, acknowledged };
 }
@@ -162,10 +170,16 @@ function sourceOf(doc: Document<Ritual>, lifecycle: string, marker: Marker | nul
 function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout: string | null): RitualRow[] {
   const today = localToday(now);
   const marker = v3MarkerAt(checkout);
-  return project.listItems("ritual").flatMap((slug) => {
+  const slugs = project.listItems("ritual");
+  if (slugs.length === 0) return [];
+  // One pass over the ledger for all rituals: `ritualState` and `failedToday` read only these groups.
+  const byItem = linesBy(ledger, "item");
+  const byRun = linesBy(ledger, "run");
+  return slugs.flatMap((slug) => {
     const doc = project.readItem<Ritual>("ritual", slug);
     if (doc === null) return [];
-    const state = ritualState(doc, ledger, { now });
+    const itemLines = byItem.get(`ritual/${slug}`) ?? [];
+    const state = ritualState(doc, byItem.get(`ritual/${doc.header.slug}`) ?? [], { now });
     const { header } = doc;
     return [
       {
@@ -183,7 +197,7 @@ function ritualRows(project: Project, ledger: LedgerLine[], now: Date, checkout:
         lastCompleted: state.lastCompleted ?? null,
         heldRun: state.heldRun ?? null,
         openRun: state.openRun ?? null,
-        failedToday: failedTodayOf(ledger, slug, today),
+        failedToday: failedTodayOf(itemLines, byRun, slug, today),
         source: sourceOf(doc, state.lifecycle, marker),
         defCommit: header.def_commit ?? null,
         defHost: header.def_host ?? null,
@@ -223,9 +237,12 @@ function vigilRowOf(slug: string, doc: Document<Vigil>, lines: readonly LedgerLi
 }
 
 function vigilRows(project: Project, ledger: LedgerLine[]): VigilRow[] {
-  return project.listItems("vigil").flatMap((slug) => {
+  const slugs = project.listItems("vigil");
+  if (slugs.length === 0) return [];
+  const byItem = linesBy(ledger, "item");
+  return slugs.flatMap((slug) => {
     const doc = project.readItem<Vigil>("vigil", slug);
-    return doc === null ? [] : [vigilRowOf(slug, doc, linesFor(ledger, `vigil/${slug}`))];
+    return doc === null ? [] : [vigilRowOf(slug, doc, byItem.get(`vigil/${slug}`) ?? [])];
   });
 }
 
@@ -403,17 +420,35 @@ export function runFindings(projectName: string, run: string): { row: RunRow; fi
   return { row, findings: row.findingsSha === null ? null : getBlobText(project, row.findingsSha) };
 }
 
+/**
+ * The run details made from one state of a ledger, by run id (0.141.4). The key is the array of
+ * `readLedgerShared`: with the ledger cache on, it stays the same until a line is added, and the
+ * blobs a detail reads are named by their hash, so a detail stays right as long as its ledger.
+ * A page of a big workspace asks for about ten runs, and each one scans the whole ledger.
+ */
+const runDetails = new WeakMap<readonly LedgerLine[], Map<string, RunDetail | null>>();
+
 /** One run with its origin, its parsed findings and the follow-ups that came of it; null when the project or the run is unknown. */
 export function runDetail(projectName: string, run: string): RunDetail | null {
   if (!listProjects().includes(projectName)) return null;
   const project = openProject(projectName);
-  const ledger = readLedger(project);
-  const row = runRows(ledger).find((candidate) => candidate.run === run);
+  const ledger = readLedgerShared(project);
+  const known = runDetails.get(ledger) ?? new Map<string, RunDetail | null>();
+  runDetails.set(ledger, known);
+  if (!known.has(run)) known.set(run, buildRunDetail(project, ledger, run));
+  const detail = known.get(run) ?? null;
+  // A copy: the caller owns what it gets, and the memo keeps its own.
+  return detail === null ? null : structuredClone(detail);
+}
+
+function buildRunDetail(project: Project, ledger: readonly LedgerLine[], run: string): RunDetail | null {
+  const projectName = project.name;
+  const rows = runRows(ledger);
+  const row = rows.find((candidate) => candidate.run === run);
   if (row === undefined) return null;
   const findings = row.findingsSha === null ? null : getBlobText(project, row.findingsSha);
   const [itemKind = "", itemSlug = ""] = row.item.split("/");
   const result = runResult(project, ledger, run);
-  const rows = runRows(ledger);
   const children = followUpsOf(ledger, run).flatMap((child): FollowUpChild[] => {
     const childRow = rows.find((candidate) => candidate.run === child);
     if (childRow === undefined) return [];

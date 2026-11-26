@@ -12,10 +12,12 @@
  * caller: a tailnet device of an allowed login.
  *
  * All probes run at once, each gives up after 1.5 s, and the answer is kept
- * for 30 s, so a page never waits longer than one timeout and most pages do
- * not wait at all. A failed probe is `unreachable` when the host's ledger
- * lines are at most 20 minutes old (it syncs; its serve does not answer),
- * else `offline`. The web app words both "unreachable". The reason is a few words, never a URL or an address.
+ * for 30 s. No page waits for a probe (0.140.0). Since 0.141.4 `darius serve`
+ * probes on its own timer, every 20 s, so a page never starts one, and the
+ * 1.5 s count only the time this process was free to read the answer: a page
+ * that holds the event loop for 3 s does not make a healthy peer look silent.
+ * A failed probe is `unreachable` when the host's ledger lines are at most
+ * 20 minutes old (it syncs; its serve does not answer), else `offline`. The web app words both "unreachable". The reason is a few words, never a URL or an address.
  *
  * Only a process that turned the probe on asks the network: `darius serve`
  * does (`enablePeerProbe`). Anywhere else (tests, the CLI) the other hosts
@@ -34,6 +36,14 @@ import { collectFleet, collectHostLive } from "./fleet.ts";
 
 export const PROBE_TIMEOUT_MS = 1_500;
 export const PEER_TTL_MS = 30_000;
+/** How often `darius serve` probes on its own (0.141.4): below the TTL, so the cache stays fresh and no page starts a probe. */
+export const PEER_REFRESH_MS = 20_000;
+/** The tick of the probe's timeout clock. */
+const TICK_MS = 100;
+/** The most one tick counts: a tick that comes late because the event loop was busy counts this much, not the whole wait. */
+const TICK_MAX_MS = 250;
+/** However busy the event loop is, a probe gives up after this much wall time. */
+const PROBE_WALL_MAX_MS = 15_000;
 /** A host whose newest line is at most this old still syncs: its failed probe is `unreachable`, not `offline`. */
 export const SYNCING_WITHIN_MS = 20 * 60_000;
 export const HOST_JSON_PATH = "/api/host.json";
@@ -192,6 +202,36 @@ function timeoutReason(timeoutMs: number): string {
   return `no answer in ${(timeoutMs / 1000).toFixed(1)} s`;
 }
 
+function noCancel(): void {
+  // nothing to cancel yet
+}
+
+/**
+ * Calls `expire` once `ms` of free event loop time has passed (0.141.4), and returns a cancel.
+ * A timer that fires late, because a page build held the event loop, counts at most
+ * TICK_MAX_MS for that wait: while the loop is held, no answer can be read, so that time is
+ * not the peer's silence. After PROBE_WALL_MAX_MS of wall time it expires all the same.
+ */
+export function loopTimeout(ms: number, expire: () => void, clock: () => number = () => performance.now()): () => void {
+  const started = clock();
+  let last = started;
+  let counted = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = (): void => {
+    const now = clock();
+    counted += Math.min(Math.max(0, now - last), TICK_MAX_MS);
+    last = now;
+    if (counted >= ms || now - started >= Math.max(ms, PROBE_WALL_MAX_MS)) {
+      timer = undefined;
+      expire();
+      return;
+    }
+    timer = setTimeout(tick, Math.min(TICK_MS, ms - counted));
+  };
+  timer = setTimeout(tick, Math.min(TICK_MS, ms));
+  return () => clearTimeout(timer);
+}
+
 /**
  * A fetch over node:http and node:https that sends the Host header as given.
  * Node's own fetch drops a Host header, so the peer's Host check would see the
@@ -242,6 +282,17 @@ export class PeerProbe {
   hosts(): Promise<PeerHost[]> {
     const now = this.now();
     if (this.cache !== null && now >= this.cache.at && now - this.cache.at < this.ttlMs) return Promise.resolve(this.cache.value);
+    return this.round();
+  }
+
+  /** A probe round now, whatever the cache holds. `darius serve` calls it on its own timer. */
+  refresh(): Promise<PeerHost[]> {
+    if (this.options.fetch === null) return Promise.resolve(this.unprobedAll());
+    return this.round();
+  }
+
+  /** The probe round that runs, or a new one: one round at a time. */
+  private round(): Promise<PeerHost[]> {
     this.running ??= this.probeAll().finally(() => {
       this.running = null;
     });
@@ -310,12 +361,12 @@ export class PeerProbe {
     const fetcher = this.options.fetch;
     if (fetcher === null) return failed(configProblem ?? "not probed here");
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancel = noCancel;
     const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => {
+      cancel = loopTimeout(this.timeoutMs, () => {
         controller.abort();
         resolve("timeout");
-      }, this.timeoutMs);
+      });
     });
     try {
       const asked = (async (): Promise<HostLive | string> => {
@@ -333,7 +384,7 @@ export class PeerProbe {
     } catch (cause) {
       return failed(controller.signal.aborted ? timeoutReason(this.timeoutMs) : scrubReason(errorMessage(cause)));
     } finally {
-      clearTimeout(timer);
+      cancel();
     }
   }
 }
@@ -342,11 +393,38 @@ export class PeerProbe {
 
 let probePort: number | null = null;
 let probe: { key: string; probe: PeerProbe } | null = null;
+let refresher: ReturnType<typeof setInterval> | undefined;
+let firstRefresh: ReturnType<typeof setTimeout> | undefined;
 
-/** `darius serve` turns the probe on with its own port: the other hosts are asked on the same port. */
-export function enablePeerProbe(port: number | null): void {
+function stopRefresh(): void {
+  clearInterval(refresher);
+  clearTimeout(firstRefresh);
+  refresher = undefined;
+  firstRefresh = undefined;
+}
+
+/** One probe round of this process, in the background: a failure is already a host state. */
+function refreshNow(): void {
+  peerProbe()
+    .refresh()
+    .catch(() => undefined);
+}
+
+/**
+ * `darius serve` turns the probe on with its own port: the other hosts are asked on the same port.
+ * With `refreshMs` (serve passes PEER_REFRESH_MS) it also probes on its own: once at the start,
+ * then every `refreshMs`, so pages only read the cache. Null turns the probe and the timer off.
+ * The timer does not keep the process alive.
+ */
+export function enablePeerProbe(port: number | null, refreshMs: number | null = null): void {
+  stopRefresh();
   probePort = port;
   probe = null;
+  if (port === null || refreshMs === null) return;
+  firstRefresh = setTimeout(refreshNow, 0);
+  firstRefresh.unref();
+  refresher = setInterval(refreshNow, refreshMs);
+  refresher.unref();
 }
 
 /** The hosts the ledgers here know, for the probe. */

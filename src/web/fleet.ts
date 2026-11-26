@@ -11,7 +11,7 @@ import { loadavg, uptime } from "node:os";
 
 import { ritualState } from "../core/due.ts";
 import { RETIRED_AFTER_MS } from "../core/host-versions.ts";
-import { hostId, readLedger } from "../core/ledger.ts";
+import { hostId, linesBy, readLedger } from "../core/ledger.ts";
 import type { JsonValue, LedgerLine, Ritual } from "../core/model.ts";
 import { listProjects, openProject } from "../core/store.ts";
 import { HOST_VERSION_TYPE } from "../core/sync.ts";
@@ -117,10 +117,13 @@ function pinnedDue(ledgers: readonly ProjectLedger[], host: string, now: Date): 
   const due = ledgers.flatMap(({ name, lines }): HostDue[] => {
     try {
       const project = openProject(name);
+      // Grouped once per project, on the first pinned ritual: `ritualState` reads only the ritual's own lines.
+      let byItem: Map<string, LedgerLine[]> | null = null;
       return project.listItems("ritual").flatMap((slug): HostDue[] => {
         const doc = project.readItem<Ritual>("ritual", slug);
         if (doc === null || doc.header.host !== host) return [];
-        const state = ritualState(doc, lines, { now });
+        byItem ??= linesBy(lines, "item");
+        const state = ritualState(doc, byItem.get(`ritual/${doc.header.slug}`) ?? [], { now });
         return state.lifecycle === "active" ? [{ project: name, slug, nextDueAt: state.nextDueAt ?? null }] : [];
       });
     } catch {

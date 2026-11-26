@@ -48,7 +48,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, userInfo } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { loadConfig } from "./config.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
@@ -256,23 +256,94 @@ function ledgerFiles(dir: string): string[] {
     .toSorted();
 }
 
-/** Every line from every host dir, open and closed chunks, deduped by id, sorted by id. */
-export function readLedger(project: Project): LedgerLine[] {
-  const byId = new Map<string, { readonly line: LedgerLine; readonly text: string; readonly where: string }>();
-  for (const host of hostDirs(project)) {
+/** Every ledger file of a project, host dir by host dir, each in name order. */
+function ledgerPaths(project: Project): string[] {
+  return hostDirs(project).flatMap((host) => {
     const dir = join(ledgerRoot(project), host);
-    for (const file of ledgerFiles(dir)) {
-      const path = join(dir, file);
-      for (const line of parseLedgerText(readFileSync(path, "utf8"), path)) {
-        const text = JSON.stringify(line);
-        const seen = byId.get(line.id);
-        if (seen === undefined) {
-          byId.set(line.id, { line, text, where: path });
-          continue;
-        }
-        if (seen.text !== text) {
-          throw new Error(`${path}: line ${line.id} differs from the line with the same id in ${seen.where}`);
-        }
+    return ledgerFiles(dir).map((file) => join(dir, file));
+  });
+}
+
+let ledgerCacheOn = false;
+const ledgerCache = new Map<string, { readonly signature: string; readonly lines: readonly LedgerLine[] }>();
+
+/**
+ * Turns the ledger read cache on or off, and forgets what it holds (0.141.4). `darius serve`
+ * turns it on while it listens: every page reads every ledger several times, and the biggest
+ * stores parse in hundreds of milliseconds. The CLI and the tests leave it off.
+ */
+export function useLedgerCache(on: boolean): void {
+  ledgerCacheOn = on;
+  ledgerCache.clear();
+}
+
+/** Forgets the cached ledgers: the next read parses the files again. */
+export function clearLedgerCache(): void {
+  ledgerCache.clear();
+}
+
+/**
+ * What the files of a ledger are now: every file name, and the inode, size and change times of
+ * each host dir and each `open.jsonl`. Closed chunks are immutable and only ever appear by a
+ * rename into their dir, which changes the name list and the dir's times; an append changes the
+ * open file's size. So equal signatures mean equal lines, without a stat per chunk (a big
+ * project has thousands).
+ */
+function ledgerSignature(paths: readonly string[]): string | null {
+  const parts: string[] = [...paths];
+  const dirs = new Set(paths.map((path) => dirname(path)));
+  const watched = [...dirs, ...paths.filter((path) => basename(path) === OPEN_FILE)];
+  for (const path of watched) {
+    try {
+      const stat = statSync(path, { bigint: true });
+      parts.push(`${path}\u0000${String(stat.ino)}\u0000${String(stat.size)}\u0000${String(stat.mtimeNs)}\u0000${String(stat.ctimeNs)}`);
+    } catch {
+      // A file that went away between the listing and the stat: read without the cache.
+      return null;
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Every line from every host dir, open and closed chunks, deduped by id, sorted by id. With the
+ * cache on, a ledger whose files did not change since the last read comes from memory, as a new
+ * array of the same line objects.
+ */
+export function readLedger(project: Project): LedgerLine[] {
+  return [...readLedgerShared(project)];
+}
+
+/**
+ * `readLedger` without the copy, for readers that only read. With the cache on, the same array
+ * comes back until the ledger changes, so a reader may key a memo of what it derives on it
+ * (a WeakMap): a changed ledger is a new array. With the cache off every call parses again.
+ */
+export function readLedgerShared(project: Project): readonly LedgerLine[] {
+  const paths = ledgerPaths(project);
+  if (!ledgerCacheOn) return parseLedgerFiles(paths);
+  const key = ledgerRoot(project);
+  const signature = ledgerSignature(paths);
+  const cached = ledgerCache.get(key);
+  if (signature !== null && cached?.signature === signature) return cached.lines;
+  const lines = parseLedgerFiles(paths);
+  if (signature === null) ledgerCache.delete(key);
+  else ledgerCache.set(key, { signature, lines });
+  return lines;
+}
+
+function parseLedgerFiles(paths: readonly string[]): LedgerLine[] {
+  const byId = new Map<string, { readonly line: LedgerLine; readonly text: string; readonly where: string }>();
+  for (const path of paths) {
+    for (const line of parseLedgerText(readFileSync(path, "utf8"), path)) {
+      const text = JSON.stringify(line);
+      const seen = byId.get(line.id);
+      if (seen === undefined) {
+        byId.set(line.id, { line, text, where: path });
+        continue;
+      }
+      if (seen.text !== text) {
+        throw new Error(`${path}: line ${line.id} differs from the line with the same id in ${seen.where}`);
       }
     }
   }
@@ -299,6 +370,19 @@ function compareById(a: LedgerLine, b: LedgerLine): number {
 /** The lines about one item, e.g. "ritual/heartbeat", in ledger order. */
 export function linesFor(ledger: LedgerLine[], item: string): LedgerLine[] {
   return ledger.filter((line) => line.item === item);
+}
+
+/** The lines of each value of one text field (`item`, `run`), in ledger order: one pass, where a filter per value reads the whole ledger each time. */
+export function linesBy(ledger: readonly LedgerLine[], field: "item" | "run"): Map<string, LedgerLine[]> {
+  const groups = new Map<string, LedgerLine[]>();
+  for (const line of ledger) {
+    const value = line[field];
+    if (!isJsonString(value)) continue;
+    const lines = groups.get(value) ?? [];
+    if (lines.length === 0) groups.set(value, lines);
+    lines.push(line);
+  }
+  return groups;
 }
 
 // --- chunks, for sync --------------------------------------------------------

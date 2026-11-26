@@ -75,6 +75,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { gzipSync } from "node:zlib";
 
+import { clearLedgerCache, useLedgerCache } from "../core/ledger.ts";
 import { ANY_ADDRESS, splitWebBind } from "../core/web-bind.ts";
 import { errorMessage } from "../runtime.ts";
 import { HostCheck, allowedLogins, authorizeRequest, cachedWhois, proxyTrust, tailnetAddress, tailscaleWhois, type ProxyTrust, type WhoisLookup } from "../web/auth.ts";
@@ -82,7 +83,7 @@ import { ACTION_API_PREFIX, FINDING_API_PREFIX, PENDING_API_PATH, VIGIL_API_PREF
 import type { WebHandler } from "../web/api.ts";
 import { clearStatusCache, useStatusCache, webContext } from "../web/context.ts";
 import { collectHostLive, markServeStarted } from "../web/fleet.ts";
-import { enablePeerProbe, HOST_JSON_PATH } from "../web/peers.ts";
+import { enablePeerProbe, HOST_JSON_PATH, PEER_REFRESH_MS } from "../web/peers.ts";
 import { plainPage, renderForbidden, renderWrongHost } from "../web/html.ts";
 import { MAX_BODY, PUSH_API_PREFIX, pushApi } from "../web/push-api.ts";
 import { SNAPSHOT_API_PREFIX, snapshotApi } from "../web/snapshot-api.ts";
@@ -394,9 +395,11 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").slice(0, MAX_BODY + 1);
 }
 
-/** A write POST changed the store: the next page read must not come from the status cache. */
+/** A write POST changed the store: the next page read must not come from the status cache or the ledger cache. */
 function afterWrite(method: string | undefined): void {
-  if (method === "POST") clearStatusCache();
+  if (method !== "POST") return;
+  clearStatusCache();
+  clearLedgerCache();
 }
 
 async function handle(request: IncomingMessage, response: ServerResponse, gate: Gate, app: WebApp): Promise<void> {
@@ -538,8 +541,9 @@ export const serveCommand: Command = {
     const app = new WebApp();
     const servers: Server[] = [];
     useStatusCache(true);
+    useLedgerCache(true);
     markServeStarted();
-    enablePeerProbe(port);
+    enablePeerProbe(port, PEER_REFRESH_MS);
     let stopRetry: () => void = noRetry;
     try {
       if (binds === "auto") stopRetry = await listenAuto(port, gate, app, servers);
@@ -548,6 +552,7 @@ export const serveCommand: Command = {
       console.error(`darius serve: ${errorMessage(cause)}`);
       for (const server of servers) server.close();
       useStatusCache(false);
+      useLedgerCache(false);
       enablePeerProbe(null);
       return 1;
     }
@@ -565,6 +570,7 @@ export const serveCommand: Command = {
       const stop = (): void => {
         stopRetry();
         useStatusCache(false);
+        useLedgerCache(false);
         enablePeerProbe(null);
         const code = app.restart ? 75 : 0;
         let open = servers.length;

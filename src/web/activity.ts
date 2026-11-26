@@ -446,13 +446,17 @@ export function activityOf(project: string, lines: readonly LedgerLine[], input:
       evidence.set(line.item, [...(evidence.get(line.item) ?? []), line]);
       continue;
     }
+    // A line before `since` makes no entry (an entry's time is its line's), but the candle rows still track it (0.141.4).
+    const early = input.since !== undefined && line.at < input.since;
     // The candle rows come before the run's own row, and in reverse, so the newest-first list reads the run, then what it lit, in the order of the result.
     for (const { built, key } of openingEntries(line, opened.get(line.id) ?? [], candles).toReversed()) {
+      if (early) continue;
       const row = entryOf(line, built, input, runItems, key);
       if (row !== null && matches(line, row, input)) entries.push(row);
     }
     const folded = line.type === "vigil.swept" && line.item !== undefined ? (evidence.get(line.item) ?? []) : [];
     if (line.type === "vigil.swept" && line.item !== undefined) evidence.delete(line.item);
+    if (early && !CANDLE_LINES.has(line.type)) continue;
     const built = CANDLE_LINES.has(line.type) ? candleEntry(line, candles) : build(line, folded);
     if (built === null) continue;
     const entry = entryOf(line, built, input, runItems);
