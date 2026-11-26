@@ -13,6 +13,8 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { freePort } from "./helpers/free-port.ts";
+
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-workspace-icon-"));
 process.env.DARIUS_STATE_DIR = join(SANDBOX, "state");
 process.env.DARIUS_CONFIG_DIR = join(SANDBOX, "config");
@@ -252,10 +254,11 @@ test("serve answers the icon route to a loopback caller, through the access chec
   const log = console.log;
   console.log = () => undefined;
   try {
-    const serving = serveCommand.run(parseArgs(["--port", "47997", "--bind", "127.0.0.1"]));
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port), "--bind", "127.0.0.1"]));
     await new Promise((resolve) => setTimeout(resolve, 200));
     const answer = await new Promise<{ status: number; type: string; body: string }>((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port: 47_997, path: "/api/workspace-icon/icon-svg" }, (res) => {
+      const req = request({ host: "127.0.0.1", port, path: "/api/workspace-icon/icon-svg" }, (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"] ?? ""), body: Buffer.concat(chunks).toString("utf8") }));

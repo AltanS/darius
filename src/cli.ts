@@ -34,7 +34,7 @@ import { holdStdout, mergeDoctorJson, type DoctorParts, type StdoutHold } from "
 import { applyEngineEnv, doctorNotes, noTreeReason, removeOwnTreeLink, resolveTrackerRoot, type TrackerWhere } from "./core/tracker-root.ts";
 import { conflictAdvice, readTreeConflicts } from "./core/tree-conflicts.ts";
 import { projectVigils } from "./core/vigil-projection.ts";
-import { errorMessage, exitQuietlyOnBrokenPipe, isBun } from "./runtime.ts";
+import { errorMessage, exitQuietlyOnBrokenPipe, isBun, writeStdoutBeforeExit } from "./runtime.ts";
 import { VERSION } from "./version.ts";
 
 const HELP_INTRO = `darius ${VERSION}: rituals, vigils and milestones for agent-driven projects`;
@@ -538,4 +538,5 @@ async function runLegacyVerb(argv: string[], owned: OwnedKinds): Promise<number>
 }
 
 exitQuietlyOnBrokenPipe();
+writeStdoutBeforeExit();
 process.exitCode = await main(process.argv.slice(2));

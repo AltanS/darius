@@ -68,6 +68,21 @@ function isFullPipe(cause: Error): boolean {
   return "code" in cause && cause.code === "EAGAIN";
 }
 
+/** Writes all of `bytes` to stdout. Returns true when the reader has gone (EPIPE), false when all went out. */
+function writeBytesSync(bytes: Uint8Array): boolean {
+  let offset = 0;
+  while (offset < bytes.length) {
+    try {
+      offset += writeSync(1, bytes, offset);
+    } catch (cause) {
+      if (cause instanceof Error && isBrokenPipe(cause)) return true;
+      if (!(cause instanceof Error) || !isFullPipe(cause)) throw cause;
+      sleepSync(FULL_PIPE_WAIT_MS);
+    }
+  }
+  return false;
+}
+
 /**
  * Writes all of `text` to stdout before it returns (0.138.0). A stream write
  * that `process.exit` follows loses what does not fit in the pipe: a slow
@@ -75,15 +90,34 @@ function isFullPipe(cause: Error): boolean {
  * reader that has gone ends the write.
  */
 export function writeStdoutSync(text: string): void {
-  const bytes = new TextEncoder().encode(text);
-  let offset = 0;
-  while (offset < bytes.length) {
-    try {
-      offset += writeSync(1, bytes, offset);
-    } catch (cause) {
-      if (cause instanceof Error && isBrokenPipe(cause)) return;
-      if (!(cause instanceof Error) || !isFullPipe(cause)) throw cause;
-      sleepSync(FULL_PIPE_WAIT_MS);
-    }
-  }
+  writeBytesSync(new TextEncoder().encode(text));
+}
+
+type WriteDone = (error?: Error | null) => void;
+
+function isEncoding(value: BufferEncoding | WriteDone | undefined): value is BufferEncoding {
+  return typeof value === "string";
+}
+
+function isWriteDone(value: BufferEncoding | WriteDone | undefined): value is WriteDone {
+  return typeof value === "function";
+}
+
+/**
+ * Makes every write to stdout finish before it returns, when stdout is a pipe or a file.
+ * The legacy engine ends the process with `process.exit` itself, and a stream write
+ * that `process.exit` follows loses what does not fit in the pipe (`darius scan stubs`
+ * gave a reader 65536 bytes of 138893). A terminal is left alone. A reader that has gone
+ * ends the process quietly, as `exitQuietlyOnBrokenPipe` does.
+ */
+export function writeStdoutBeforeExit(): void {
+  if (process.stdout.isTTY) return;
+  process.stdout.write = (chunk: string | Uint8Array, encodingOrDone?: BufferEncoding | WriteDone, maybeDone?: WriteDone): boolean => {
+    const encoding: BufferEncoding = isEncoding(encodingOrDone) ? encodingOrDone : "utf8";
+    const done = isWriteDone(encodingOrDone) ? encodingOrDone : maybeDone;
+    const bytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk, encoding);
+    if (writeBytesSync(bytes)) process.exit();
+    if (done !== undefined) process.nextTick(done);
+    return true;
+  };
 }

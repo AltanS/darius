@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
+import { freePort } from "./helpers/free-port.ts";
 import { untilListening } from "./helpers/listening.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-web-perf-"));
@@ -29,7 +30,7 @@ const { GZIP_MIN_BYTES, acceptsGzip, compressedReply, serveCommand } = await imp
 const { STATUS_TTL_MS, cachedStatus, clearStatusCache, useStatusCache } = await import("../src/web/context.ts");
 const { openProject } = await import("../src/core/store.ts");
 
-const PORT = 47_998;
+const PORT = await freePort();
 const BIG = "x".repeat(1025);
 const PAGE = "/all";
 

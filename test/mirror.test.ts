@@ -26,6 +26,7 @@ import {
   chooseMirrorProjects,
   isInBackoff,
   isMirroredHere,
+  isPartialMirror,
   markMirrored,
   MIRRORED_LINE,
   MIRROR_RETRY_MS,
@@ -35,10 +36,11 @@ import {
 } from "../src/core/mirror.ts";
 import type { Document, LedgerLine, Policy, Ritual } from "../src/core/model.ts";
 import { createS3, S3NetworkError, type ListedObject, type S3, type S3Prefixes } from "../src/core/s3.ts";
-import { listProjects, openProject } from "../src/core/store.ts";
-import { syncProject } from "../src/core/sync.ts";
+import { getBlob, listBlobs, listProjects, openProject, putBlob } from "../src/core/store.ts";
+import { lastSyncAt, syncProject } from "../src/core/sync.ts";
 import { ulid } from "../src/core/ulid.ts";
 import { checkoutDir, LINKED_LINE, projectWorkdir, ritualHost } from "../src/core/workdir.ts";
+import { runDue } from "../src/runner/run-due.ts";
 import { startFakeS3 } from "./helpers/fake-s3.ts";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "darius-mirror-"));
@@ -340,6 +342,154 @@ test("mirror: an unreachable bucket adds nothing, and a refused listing is an er
   assert.match(denied.errors[0]?.error ?? "", /cannot list the bucket: S3 GET b: 403/u);
 });
 
+// --- a large first pull ----------------------------------------------------------------
+
+/** Puts `name` into `s3` as host-b: `chunks` chunks, each with `perChunk` lines that name a blob of their own. */
+async function seedLarge(s3: S3, name: string, chunks: number, perChunk: number): Promise<void> {
+  useHost(HOST_B);
+  try {
+    const cfg = loadConfig();
+    const project = openProject(name, { create: true });
+    for (let chunk = 0; chunk < chunks; chunk += 1) {
+      for (let line = 0; line < perChunk; line += 1) {
+        const sha = putBlob(project, `${name} blob ${String(chunk)}.${String(line)}\n`);
+        appendLine(project, { who: "test", type: "note", findings_sha: sha });
+      }
+      await syncProject(project, s3, cfg);
+    }
+  } finally {
+    useHost(HOST_A);
+  }
+}
+
+interface Recorder {
+  s3: MemoryS3;
+  /** The keys of `project` that a get answered, in order. */
+  fetched: string[];
+  /** Blob gets that answer before the link stalls (Infinity = never stalls). */
+  blobBudget: number;
+}
+
+/** Wraps `inner` so its gets are recorded, and blob gets of `project` stall once the budget is spent (a body that stopped coming). */
+function recording(inner: MemoryS3, project: string): Recorder {
+  const recorder: Recorder = { s3: inner, fetched: [], blobBudget: Number.POSITIVE_INFINITY };
+  recorder.s3 = {
+    ...inner,
+    async get(key) {
+      if (key.startsWith(`${project}/blobs/`)) {
+        if (recorder.blobBudget <= 0) throw new S3NetworkError(`S3 GET ${key}: the body stopped coming from https://bucket.example`, {});
+        recorder.blobBudget -= 1;
+      }
+      const got = await inner.get(key);
+      if (key.startsWith(`${project}/`)) recorder.fetched.push(key);
+      return got;
+    },
+  };
+  return recorder;
+}
+
+function pulledKeys(keys: readonly string[], project: string): string[] {
+  return keys.filter((key) => key.startsWith(`${project}/blobs/`) || key.startsWith(`${project}/ledger/host-b/`));
+}
+
+test("mirror: a large first pull that stalls part-way keeps its progress, is no error, and completes next run without fetching it again", async () => {
+  const inner = memoryS3();
+  await seedLarge(inner, "m-large", 4, 6);
+  const recorder = recording(inner, "m-large");
+  recorder.blobBudget = 9;
+  const t0 = Date.parse("2026-12-10T00:00:00Z");
+
+  const first = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), first, t0);
+  assert.deepEqual(first.errors, [], "a try that gained objects is no error of the run");
+  assert.deepEqual(first.mirrored, []);
+  assert.deepEqual(first.mirrorFailed, []);
+  assert.equal(first.mirrorPartial?.length, 1);
+  assert.equal(first.mirrorPartial?.[0]?.project, "m-large");
+  assert.ok((first.mirrorPartial?.[0]?.gained ?? 0) >= 9, JSON.stringify(first.mirrorPartial));
+  assert.deepEqual(readMirrorFailures(), [], "progress sets no backoff");
+  const project = openProject("m-large");
+  assert.ok(listProjects().includes("m-large"), "the progress stays on disk");
+  assert.equal(isPartialMirror(project), true);
+  assert.equal(lastSyncAt(project), undefined, "a partial copy has not synced in full");
+  assert.equal(listBlobs(project).length, 9);
+  assert.equal(project.listItems("ritual").length, 0, "no items before the full sync, so nothing to run or report as due");
+  // No line here names a blob this host lacks: a chunk is stored only after its blobs.
+  const named = linesOf("m-large", "note").map((line) => String(line.findings_sha));
+  assert.ok(named.length >= 6, "some chunks are here");
+  for (const sha of named) assert.notEqual(getBlob(project, sha), null, sha);
+  const firstPulled = pulledKeys(recorder.fetched, "m-large");
+
+  // The next run, 15 minutes later, with a link that works: it goes on where the first stopped.
+  recorder.blobBudget = Number.POSITIVE_INFINITY;
+  recorder.fetched.length = 0;
+  const second = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), second, t0 + 15 * 60_000);
+  assert.deepEqual(second.errors, []);
+  assert.deepEqual(second.mirrored, ["m-large"]);
+  assert.deepEqual(second.mirrorPartial, []);
+  assert.equal(isPartialMirror(openProject("m-large")), false);
+  assert.equal(listBlobs(openProject("m-large")).length, 24);
+  assert.equal(linesOf("m-large", MIRRORED_LINE).length, 1, "still marked once");
+  const again = pulledKeys(recorder.fetched, "m-large").filter((key) => firstPulled.includes(key));
+  assert.equal(again.filter((key) => key.includes("/blobs/")).length, 0, `no blob is fetched twice: ${again.join(" ")}`);
+  assert.ok(again.length <= 1, `at most the one chunk whose blobs were in flight is fetched again: ${again.join(" ")}`);
+});
+
+test("mirror: a partial copy whose try gains nothing is marked, kept, skipped for 24 h, and tried again after", async () => {
+  const inner = memoryS3();
+  await seedLarge(inner, "m-stuck", 2, 4);
+  const recorder = recording(inner, "m-stuck");
+  recorder.blobBudget = 3;
+  const t0 = Date.parse("2026-12-20T00:00:00Z");
+  const first = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), first, t0);
+  assert.equal(first.mirrorPartial?.[0]?.project, "m-stuck");
+  const kept = listBlobs(openProject("m-stuck")).length;
+
+  // The next try gets no blob at all: no progress.
+  recorder.blobBudget = 0;
+  const stuck = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), stuck, t0 + 15 * 60_000);
+  assert.deepEqual(stuck.mirrorPartial, []);
+  assert.equal(stuck.mirrorFailed?.[0]?.project, "m-stuck");
+  assert.equal(stuck.errors.length, 1, "no progress is an error of the run");
+  assert.deepEqual(
+    readMirrorFailures().map((failure) => failure.project),
+    ["m-stuck"],
+  );
+  assert.ok(listProjects().includes("m-stuck"), "what earlier runs pulled is kept");
+  assert.equal(listBlobs(openProject("m-stuck")).length, kept);
+
+  // Within 24 h: not opened, no request, no error.
+  inner.touched.clear();
+  recorder.fetched.length = 0;
+  const within = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), within, t0 + MIRROR_RETRY_MS - 60_000);
+  assert.deepEqual(within.errors, []);
+  assert.equal(inner.touched.has("m-stuck"), false);
+  assert.deepEqual(recorder.fetched, []);
+
+  // After 24 h it is tried again; with a working link it completes and the mark goes.
+  recorder.blobBudget = Number.POSITIVE_INFINITY;
+  const after = newRun();
+  await mirrorMissing(recorder.s3, loadConfig(), after, t0 + MIRROR_RETRY_MS + 20 * 60_000);
+  assert.deepEqual(after.mirrored, ["m-stuck"]);
+  assert.deepEqual(readMirrorFailures(), []);
+  assert.equal(isPartialMirror(openProject("m-stuck")), false);
+});
+
+test("run-due leaves a partial copy to the mirror: it does not sync it", async () => {
+  const s3 = memoryS3();
+  await seed(s3, ["m-runs"]);
+  markMirrored(openProject("m-runs", { create: true }));
+  s3.touched.clear();
+  const { report } = await runDue({ projects: ["m-runs"], isDryRun: false, who: "timer", timeoutMs: 60_000, inject: { cfg: loadConfig(), s3 } });
+  assert.deepEqual(report.errors, []);
+  assert.equal(report.projects[0]?.syncBefore, "mirror-partial");
+  assert.equal(s3.touched.has("m-runs"), false, "no request for the partial copy");
+});
+
 // --- the command, over HTTP ------------------------------------------------------------
 
 interface CliRun {
@@ -406,6 +556,30 @@ test("darius sync --all-projects: mirror on adds the mirrored fields and lists o
     assert.equal(fake.log.filter((line) => line.includes("delimiter")).length, 1, "one listing per run");
     assert.equal(linesOf("e-one", MIRRORED_LINE).length, 1);
     assert.equal(listProjects().includes("e-skip"), false);
+
+    // A partial copy (mirrored here, never synced in full) belongs to the mirror loop, not to the normal one.
+    const partial = openProject("e-part", { create: true });
+    useHost(hostB);
+    const seeded = openProject("e-part", { create: true });
+    appendLine(seeded, { who: "test", type: "note", text: "e-part" });
+    await syncProject(seeded, bucket, loadConfig());
+    useHost(hostA);
+    markMirrored(partial);
+    recordMirrorFailure({ project: "e-part", error: "x", at: new Date().toISOString() });
+    fake.log.length = 0;
+    const waiting = await runSync(["--all-projects", "--json"]);
+    assert.equal(waiting.code, 0, waiting.stdout);
+    const waitingJson: { projects: { project: string }[] } = JSON.parse(waiting.stdout);
+    assert.equal(waitingJson.projects.some((report) => report.project === "e-part"), false, "in backoff: the normal loop does not sync it either");
+    assert.equal(fake.log.some((line) => line.includes("e-part")), false, fake.log.join("\n"));
+    recordMirrorFailure({ project: "e-part", error: "x", at: "2000-01-01T00:00:00.000Z" });
+    const done = await runSync(["--all-projects", "--json"]);
+    assert.equal(done.code, 0, done.stdout);
+    const doneJson: { mirrored: string[]; mirrorPartial: unknown[]; projects: { project: string }[] } = JSON.parse(done.stdout);
+    assert.deepEqual(doneJson.mirrored, ["e-part"]);
+    assert.deepEqual(doneJson.mirrorPartial, []);
+    assert.equal(doneJson.projects.filter((report) => report.project === "e-part").length, 1, "synced once, by the mirror loop");
+    assert.equal(isPartialMirror(openProject("e-part")), false);
 
     // --pull-only never mirrors.
     fake.log.length = 0;

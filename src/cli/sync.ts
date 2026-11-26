@@ -37,21 +37,34 @@
  * in its 24 h failure backoff, it creates the project, appends one
  * `project.mirrored` ledger line and runs the normal full sync (push too). The
  * copy never runs work here until `darius link` names a checkout
- * (src/core/mirror.ts, src/core/workdir.ts). A prefix that fails is removed
- * again, recorded in `mirror-failures.json` in the state dir, and tried again
- * after 24 h. A failure is an error of the run (exit 1). `--pull-only` and
- * `--reseed` skip the mirror.
+ * (src/core/mirror.ts, src/core/workdir.ts). A large project can take several
+ * runs: a try that stops part-way but gained objects keeps them, is listed in
+ * `mirrorPartial`, is no error of the run, and goes on in the next run. Until
+ * its first full sync it is a partial copy, which only this mirror loop syncs
+ * (the normal loop skips it). A try that gained nothing is a failure: it is
+ * recorded in `mirror-failures.json` in the state dir and tried again after
+ * 24 h, and it is an error of the run (exit 1). A failed first try that gained
+ * nothing also removes the dir it made. `--pull-only` and `--reseed` skip the
+ * mirror.
  *
  * `--json` prints one object: {ok, projects: SyncReport[], errors: [{project, error}]}.
- * With the mirror on it adds `mirrored: string[]` (projects created in this run)
- * and `mirrorFailed: [{project, error}]`.
+ * With the mirror on it adds `mirrored: string[]` (projects created in this run),
+ * `mirrorFailed: [{project, error}]` and `mirrorPartial: [{project, error, gained}]`.
  */
 
 import { existsSync, rmSync } from "node:fs";
 
 import { loadConfig } from "../core/config.ts";
 import { loadCredentials } from "../core/credentials.ts";
-import { chooseMirrorProjects, clearMirrorFailure, markMirrored, readMirrorFailures, recordMirrorFailure } from "../core/mirror.ts";
+import {
+  chooseMirrorProjects,
+  clearMirrorFailure,
+  isPartialMirror,
+  markMirrored,
+  pulledObjects,
+  readMirrorFailures,
+  recordMirrorFailure,
+} from "../core/mirror.ts";
 import { projectDir, resolveProject } from "../core/paths.ts";
 import { scrubForLedger, stripUrlUserinfo } from "../core/redact.ts";
 import { createS3, S3NetworkError } from "../core/s3.ts";
@@ -101,6 +114,12 @@ export interface SyncRun {
   mirrored?: string[];
   /** Set when the mirror ran: the prefixes that failed in this run (each is also in `errors`). */
   mirrorFailed?: ProjectError[];
+  /** Set when the mirror ran: the partial copies that stopped part-way after they gained `gained` objects (not in `errors`). */
+  mirrorPartial?: PartialMirror[];
+}
+
+interface PartialMirror extends ProjectError {
+  gained: number;
 }
 
 interface ProjectSelection {
@@ -186,24 +205,64 @@ function shortError(cause: unknown): string {
   return scrubForLedger(stripUrlUserinfo(errorMessage(cause)));
 }
 
-/** The one project of a mirror run: create it, mark it, sync it in full. A failure removes what this run made. */
+/** Why a sync that did not throw is no full sync. */
+function skippedError(report: SyncReport): string {
+  if (report.skipped === "offline") return "the bucket stopped answering";
+  return report.outdated === undefined ? `skipped: ${report.skipped ?? "unknown"}` : outdatedLine(report.project, report.outdated);
+}
+
+/**
+ * The one project of a mirror run: create it or go on with its partial copy, mark it, sync it in full. A try
+ * that stops part-way keeps what it pulled; when it gained nothing, it is a failure (see the top of this file).
+ */
 async function mirrorOne(name: string, s3: S3, cfg: Config, run: SyncRun, now: number): Promise<void> {
   const isNew = !existsSync(projectDir(name));
+  let project: Project | null = null;
+  let before = 0;
+  let error: string;
   try {
-    const project = openProject(name, { create: true });
+    project = openProject(name, { create: true });
     // Before the sync: whatever the sync leaves of the project, it is a mirrored copy on this host.
     markMirrored(project);
-    run.reports.push(await syncOne(project, s3, cfg, false));
-    clearMirrorFailure(name);
-    run.mirrored?.push(name);
+    before = pulledObjects(project);
+    const report = await syncOne(project, s3, cfg, false);
+    run.reports.push(report);
+    if (report.skipped === undefined) {
+      clearMirrorFailure(name);
+      run.mirrored?.push(name);
+      return;
+    }
+    // Another host syncs the project right now; the next run goes on, and nothing is recorded.
+    if (report.skipped === "lease-held") return;
+    error = skippedError(report);
   } catch (cause) {
-    // Nothing of this host's own is in a project the mirror just made, so the next try starts clean.
-    if (isNew) rmSync(projectDir(name), { recursive: true, force: true });
-    const error = shortError(cause);
-    recordMirrorFailure({ project: name, error, at: new Date(now).toISOString() });
-    run.mirrorFailed?.push({ project: name, error });
-    run.errors.push({ project: name, error: `mirror: ${error}` });
+    error = shortError(cause);
   }
+  const gained = project === null ? 0 : pulledObjects(project) - before;
+  if (gained > 0) {
+    clearMirrorFailure(name);
+    run.mirrorPartial?.push({ project: name, error, gained });
+    return;
+  }
+  // A first try that gained nothing holds only this run's mirrored line, so the next try starts clean.
+  if (isNew) rmSync(projectDir(name), { recursive: true, force: true });
+  recordMirrorFailure({ project: name, error, at: new Date(now).toISOString() });
+  run.mirrorFailed?.push({ project: name, error });
+  run.errors.push({ project: name, error: `mirror: ${error}` });
+}
+
+/** False for a partial copy. A project that cannot be read counts as full: the normal loop reports its error. */
+function isFullProject(name: string): boolean {
+  try {
+    return !isPartialMirror(openProject(name));
+  } catch {
+    return true;
+  }
+}
+
+/** The local projects that are not partial copies: the normal loop syncs these, the mirror loop the rest. */
+function fullProjects(names: readonly string[]): string[] {
+  return names.filter((name) => isFullProject(name));
 }
 
 /**
@@ -213,6 +272,7 @@ async function mirrorOne(name: string, s3: S3, cfg: Config, run: SyncRun, now: n
 export async function mirrorMissing(s3: S3 & S3Prefixes, cfg: Config, run: SyncRun, now: number = Date.now()): Promise<void> {
   run.mirrored = [];
   run.mirrorFailed = [];
+  run.mirrorPartial = [];
   let prefixes: string[];
   try {
     prefixes = await s3.listPrefixes();
@@ -221,7 +281,9 @@ export async function mirrorMissing(s3: S3 & S3Prefixes, cfg: Config, run: SyncR
     run.errors.push({ project: "(mirror)", error: `cannot list the bucket: ${shortError(cause)}` });
     return;
   }
-  const todo = chooseMirrorProjects({ prefixes, exclude: cfg.sync.mirrorExclude, local: listProjects(), failures: readMirrorFailures(), now });
+  // A partial copy is local, but still the mirror's: it is chosen like a missing project, backoff included.
+  const local = fullProjects(listProjects());
+  const todo = chooseMirrorProjects({ prefixes, exclude: cfg.sync.mirrorExclude, local, failures: readMirrorFailures(), now });
   for (const name of todo) await mirrorOne(name, s3, cfg, run, now);
 }
 
@@ -230,7 +292,9 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
   const cfg = loadConfig();
   const s3 = remoteClient(cfg);
   const run: SyncRun = { reports: [], errors: [] };
-  for (const name of names) {
+  const isMirror = args.flags["all-projects"] === true && args.flags["pull-only"] !== true && args.flags.reseed !== true && cfg.sync.mirror;
+  // With the mirror on, a partial copy waits for the mirror loop below, which knows its backoff.
+  for (const name of isMirror ? fullProjects(names) : names) {
     try {
       const project = openProject(name, { create: isCreate(name) });
       run.reports.push(await syncOne(project, s3, cfg, args.flags["pull-only"] === true, args.flags.reseed === true));
@@ -239,7 +303,6 @@ async function syncAll(args: ParsedArgs): Promise<SyncRun> {
       run.errors.push({ project: name, error: errorMessage(cause) });
     }
   }
-  const isMirror = args.flags["all-projects"] === true && args.flags["pull-only"] !== true && args.flags.reseed !== true && cfg.sync.mirror;
   if (isMirror) await mirrorMissing(s3, cfg, run);
   return run;
 }
@@ -274,8 +337,11 @@ function describe(report: SyncReport): string {
  */
 function exitCode(run: SyncRun): number {
   if (run.errors.length > 0) return EXIT_FAILED;
-  if (run.reports.some((report) => report.skipped === "darius-outdated")) return EXIT_FAILED;
-  if (run.reports.some((report) => report.skipped === "offline")) return EXIT_INCONCLUSIVE;
+  // A partial copy that gained objects is progress, not a failure (see the top of this file).
+  const partial = new Set((run.mirrorPartial ?? []).map((one) => one.project));
+  const reports = run.reports.filter((report) => !partial.has(report.project));
+  if (reports.some((report) => report.skipped === "darius-outdated")) return EXIT_FAILED;
+  if (reports.some((report) => report.skipped === "offline")) return EXIT_INCONCLUSIVE;
   return EXIT_OK;
 }
 
@@ -303,7 +369,7 @@ export const syncCommand: Command = {
     const code = exitCode(run);
     await alertAfterSync();
     if (args.json) {
-      const mirror = run.mirrored === undefined ? {} : { mirrored: run.mirrored, mirrorFailed: run.mirrorFailed ?? [] };
+      const mirror = run.mirrored === undefined ? {} : { mirrored: run.mirrored, mirrorFailed: run.mirrorFailed ?? [], mirrorPartial: run.mirrorPartial ?? [] };
       console.log(JSON.stringify({ ok: code === EXIT_OK, projects: run.reports, errors: run.errors, ...mirror }));
       for (const failure of run.errors) console.error(`darius sync: ${failure.project}: ${failure.error}`);
       for (const report of run.reports) if (report.outdated !== undefined) console.error(`darius sync: ${outdatedLine(report.project, report.outdated)}`);
@@ -311,6 +377,9 @@ export const syncCommand: Command = {
     }
     for (const report of run.reports) console.log([describe(report), ...describeTree(report)].join("\n"));
     if (run.mirrored !== undefined && run.mirrored.length > 0) console.log(`+ mirrored here: ${run.mirrored.join(", ")}`);
+    for (const one of run.mirrorPartial ?? []) {
+      console.log(`~ ${one.project}: partial copy, ${String(one.gained)} objects pulled in this run, goes on in the next run (${one.error})`);
+    }
     for (const failure of run.errors) console.error(`! ${failure.project}: ${failure.error}`);
     if (run.reports.length === 0 && run.errors.length === 0) console.log("· no projects in the local store");
     return code;

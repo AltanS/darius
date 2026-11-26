@@ -84,7 +84,7 @@ export interface RitualEntry {
 
 export interface ProjectEntry {
   project: string;
-  /** "ok", "offline", "lease-held", "no-remote", "skipped" (dry run) or "error: ...". */
+  /** "ok", "offline", "lease-held", "no-remote", "mirror-partial" (src/core/mirror.ts), "skipped" (dry run) or "error: ...". */
   syncBefore: string;
   syncAfter: string;
   rituals: RitualEntry[];

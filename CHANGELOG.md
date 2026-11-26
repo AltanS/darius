@@ -2,6 +2,20 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.141.2] - 2026-11-26
+
+### Fixed
+
+- **A large first mirror pull no longer times out.** The 30 s request limit also covered the body of a download, so a large object on a slow link failed with a bare "The operation timed out.". Now the 30 s covers only the answer. A body fails only when no byte arrives for 30 s, and a stalled body counts as a network error.
+- **A failed pull keeps its progress.** The list of chunks already pulled is saved when a pull fails, a chunk is stored after its blobs, and a blob that got no answer or a stalled body is tried once more. The next run goes on where the last one stopped.
+- **A mirror try that gained objects is no error.** `darius sync --all-projects` lists it in the new JSON field `mirrorPartial` (project, error, gained) and prints a "partial copy" line. A try that gained nothing is still a failure: it is marked for 24 h and the run exits 1. The normal loop and run-due leave a partial copy to the mirror loop, and run-due reports it as `syncBefore: "mirror-partial"`.
+- **Output above 64 KB is no longer cut.** For verbs that end with `process.exit` (`scan stubs`, `scan artifacts`), a slow reader of the pipe got only the first 64 KB. Every write to a pipe or file now finishes before it returns.
+- **The tool check before a run knows `~`.** A `may` rule such as `Bash(~/bin/tool *)` was skipped as `tool-missing`. A tool that is `~` or starts with `~/` is now looked up under the home directory.
+
+### Tests
+
+- Fixed listen ports are replaced by free ports.
+
 ## [0.141.1] - 2026-11-25
 
 ### Fixed

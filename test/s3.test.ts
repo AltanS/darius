@@ -8,6 +8,7 @@
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { createServer } from "node:net";
 import {
   amzDateOf,
@@ -255,6 +256,70 @@ describe("createS3 refuses what it cannot do safely", () => {
     });
     const s3 = createS3(remoteFor(`http://127.0.0.1:${port}`), AWS_EXAMPLE);
     await assert.rejects(s3.head("k"), S3NetworkError);
+  });
+});
+
+/** An HTTP server whose every GET answers at once and then sends `pieces` body pieces, `gapMs` apart; `stallAfter` stops sending after that many. */
+async function trickleServer(o: { pieces: number; gapMs: number; stallAfter?: number }): Promise<{ endpoint: string; close: () => Promise<void> }> {
+  const open = new Set<ServerResponse>();
+  const server = createHttpServer((_request, response) => {
+    open.add(response);
+    response.writeHead(200, { etag: '"e1"', "content-type": "application/octet-stream" });
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (o.stallAfter !== undefined && sent >= o.stallAfter) return;
+      response.write(Buffer.from([sent]));
+      sent += 1;
+      if (sent < o.pieces) return;
+      clearInterval(timer);
+      response.end();
+    }, o.gapMs);
+    response.on("close", () => {
+      clearInterval(timer);
+      open.delete(response);
+    });
+  });
+  const port = await new Promise<number>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve(isAddressInfo(address) ? address.port : 1);
+    });
+  });
+  const close = (): Promise<void> =>
+    new Promise((resolve) => {
+      for (const response of open) response.destroy();
+      server.close(() => resolve());
+    });
+  return { endpoint: `http://127.0.0.1:${String(port)}`, close };
+}
+
+describe("a GetObject body is timed by its gaps, not by its length", () => {
+  const timing = { requestMs: 150, bodyIdleMs: 150 };
+
+  test("a body that takes longer than the request timeout but keeps coming arrives whole", async () => {
+    const server = await trickleServer({ pieces: 8, gapMs: 60 });
+    try {
+      const s3 = createS3(remoteFor(server.endpoint), AWS_EXAMPLE, timing);
+      const got = await s3.get("big/object");
+      assert.deepEqual([...(got?.body ?? [])], [0, 1, 2, 3, 4, 5, 6, 7], "480 ms of body under a 150 ms request timeout");
+      assert.equal(got?.etag, "e1");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a body that stops coming is a network error that names the key", async () => {
+    const server = await trickleServer({ pieces: 8, gapMs: 30, stallAfter: 2 });
+    try {
+      const s3 = createS3(remoteFor(server.endpoint), AWS_EXAMPLE, timing);
+      await assert.rejects(s3.get("big/object"), (error: Error) => {
+        assert.ok(error instanceof S3NetworkError);
+        assert.match(error.message, /S3 GET big\/object: the body stopped coming/u);
+        return true;
+      });
+    } finally {
+      await server.close();
+    }
   });
 });
 

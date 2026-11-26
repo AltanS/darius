@@ -8,6 +8,7 @@
  */
 
 import { accessSync, constants, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 /** Shell builtins and keywords: never on PATH, always there. */
@@ -48,12 +49,20 @@ function isExecutable(path: string): boolean {
  * The tools of `may` that `envPath` does not find. A tool with a `/` is
  * looked up as a path; a relative one (`./tools/x.sh`) against `dir`, the
  * run's checkout, because the run starts there and the timer does not
- * (0.66.0: the timer runs in $HOME).
+ * (0.66.0: the timer runs in $HOME). A tool that is `~` or starts with `~/`
+ * is looked up under `home`, as the shell expands it; `~user/...` is not.
  */
-export function missingTools(may: readonly string[], envPath: string, dir: string, found: (path: string) => boolean = isExecutable): string[] {
+export function missingTools(
+  may: readonly string[],
+  envPath: string,
+  dir: string,
+  found: (path: string) => boolean = isExecutable,
+  home: string = homedir(),
+): string[] {
   const dirs = envPath.split(":").filter((entry) => entry.startsWith("/"));
   return namedTools(may).filter((tool) => {
-    if (!tool.includes("/")) return !dirs.some((entry) => found(join(entry, tool)));
+    if (!tool.includes("/") && tool !== "~") return !dirs.some((entry) => found(join(entry, tool)));
+    if (tool === "~" || tool.startsWith("~/")) return !found(join(home, tool.slice(1)));
     return !found(isAbsolute(tool) ? tool : resolve(dir, tool));
   });
 }

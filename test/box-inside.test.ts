@@ -40,6 +40,8 @@ import {
 import { connectAuthority, connectTunnel, enterBox, exitCodeOf, forwardedSignals, readBoxMarker, startRelay } from "../src/core/box-inside.ts";
 import { decide, startBoxProxy, type BoxPolicy, type BoxProxy, type Decide } from "../src/core/box-proxy.ts";
 
+import { freePort } from "./helpers/free-port.ts";
+
 const DARIUS = fileURLToPath(new URL("../bin/darius", import.meta.url));
 const DIR = mkdtempSync(join(tmpdir(), "darius-box-inside-"));
 let count = 0;
@@ -397,12 +399,13 @@ test("darius box enter passes the exit code, 128 + signal, and 127 for a program
   const env = { DARIUS_BOX_MARKER: marker() };
   for (const runtime of ["node", "bun"]) {
     const runEnv = { ...env, DARIUS_RUNTIME: runtime };
-    const seven = await darius(["box", "enter", "--relay-port", "39002", "--proxy", join(DIR, "none.sock"), "--", "sh", "-c", "echo out; exit 7"], { env: runEnv });
+    const relayPort = String(await freePort());
+    const seven = await darius(["box", "enter", "--relay-port", relayPort, "--proxy", join(DIR, "none.sock"), "--", "sh", "-c", "echo out; exit 7"], { env: runEnv });
     assert.equal(seven.code, 7, `${runtime}: ${seven.stderr}`);
     assert.equal(seven.stdout, "out\n");
-    const killed = await darius(["box", "enter", "--relay-port", "39002", "--", "sh", "-c", "kill -TERM $$"], { env: runEnv });
+    const killed = await darius(["box", "enter", "--relay-port", relayPort, "--", "sh", "-c", "kill -TERM $$"], { env: runEnv });
     assert.equal(killed.code, 143, runtime);
-    const missing = await darius(["box", "enter", "--relay-port", "39002", "--", join(DIR, "no-such-program")], { env: runEnv });
+    const missing = await darius(["box", "enter", "--relay-port", relayPort, "--", join(DIR, "no-such-program")], { env: runEnv });
     assert.equal(missing.code, 127, runtime);
     assert.match(missing.stderr, /cannot start/u);
   }
@@ -412,9 +415,10 @@ test("darius box enter forwards SIGTERM, SIGINT and SIGHUP to the program", asyn
   const env = { DARIUS_BOX_MARKER: marker() };
   const signals = [["SIGTERM", 41], ["SIGINT", 42], ["SIGHUP", 43]] as const;
   for (const [signal, code] of signals) {
+    const relayPort = String(await freePort());
     const program = `process.on("${signal}", () => process.exit(${String(code)})); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);`;
     let sent = false;
-    const ran = await darius(["box", "enter", "--relay-port", "39003", "--", process.execPath, "-e", program], {
+    const ran = await darius(["box", "enter", "--relay-port", relayPort, "--", process.execPath, "-e", program], {
       env,
       onStdout: (text, child) => {
         if (sent || !text.includes("ready")) return;
@@ -448,14 +452,15 @@ test("the relay of darius box enter reaches the proxy while the program runs", a
   const echo = echoServer();
   const port = await listen(echo);
   const { proxy, path, lines } = await proxyFor(port);
+  const relayPort = await freePort();
   try {
     // The program speaks CONNECT to the relay, as an HTTPS_PROXY client does.
     const program = [
       'const net = require("node:net");',
-      `const s = net.connect(39004, "127.0.0.1", () => s.write("CONNECT 127.0.0.1:${String(port)} HTTP/1.1\\r\\nHost: x\\r\\n\\r\\nping"));`,
+      `const s = net.connect(${String(relayPort)}, "127.0.0.1", () => s.write("CONNECT 127.0.0.1:${String(port)} HTTP/1.1\\r\\nHost: x\\r\\n\\r\\nping"));`,
       'let got = ""; s.on("data", (c) => { got += c; if (got.endsWith("ping")) { process.stdout.write(got); process.exit(0); } });',
     ].join("\n");
-    const ran = await darius(["box", "enter", "--relay-port", "39004", "--proxy", path, "--", process.execPath, "-e", program], { env: { DARIUS_BOX_MARKER: marker() } });
+    const ran = await darius(["box", "enter", "--relay-port", String(relayPort), "--proxy", path, "--", process.execPath, "-e", program], { env: { DARIUS_BOX_MARKER: marker() } });
     assert.equal(ran.code, 0, ran.stderr);
     assert.equal(ran.stdout, "HTTP/1.1 200 Connection Established\r\n\r\nping");
     assert.equal(lines.length, 1);

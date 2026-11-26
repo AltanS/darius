@@ -17,15 +17,29 @@
  *                      that failed, with the scrubbed error and the time. A
  *                      failed prefix is skipped for MIRROR_RETRY_MS, then tried
  *                      again. A success removes its entry.
+ *
+ * A partial copy is a mirrored copy here whose first full sync has not
+ * finished: it has the `project.mirrored` line from this host and no
+ * `last_sync` in its sync.json. A large project can take several runs to
+ * arrive. A try that stops part-way keeps what it pulled and is no error of the
+ * run as long as it gained objects: the next run goes on from there (sync
+ * saves `seen`, and a blob on disk is never fetched again). A try that gained
+ * nothing is a failure, recorded above, so a copy that makes no progress is
+ * tried once per MIRROR_RETRY_MS, not on every run. Only the mirror loop syncs
+ * a partial copy: the normal loop of `darius sync --all-projects` and run-due
+ * leave it alone, so two processes never pull the same copy at once. A partial
+ * copy has no items yet (items come after the ledger, under the lease), so it
+ * has no rituals or vigils to run or to report as due.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { appendLine, defaultWho, hostId, readLedger } from "./ledger.ts";
+import { appendLine, defaultWho, hostId, listChunks, readLedger } from "./ledger.ts";
 import type { JsonValue, LedgerLine } from "./model.ts";
 import { stateDir } from "./paths.ts";
-import { isProjectName, type Project } from "./store.ts";
+import { isProjectName, listBlobs, type Project } from "./store.ts";
+import { lastSyncAt } from "./sync.ts";
 
 /** The ledger line that marks a project as a mirrored copy on the host that wrote it. */
 export const MIRRORED_LINE = "project.mirrored";
@@ -53,6 +67,19 @@ export function markMirrored(project: Project): boolean {
   if (isMirroredHere(readLedger(project))) return false;
   appendLine(project, { who: defaultWho(), type: MIRRORED_LINE });
   return true;
+}
+
+/** True for a mirrored copy here that never finished a full sync (see the top of this file). */
+export function isPartialMirror(project: Project): boolean {
+  // The cheap check first: almost every project has synced in full.
+  if (lastSyncAt(project) !== undefined) return false;
+  return isMirroredHere(readLedger(project));
+}
+
+/** The pulled objects of a project on disk: other hosts' chunks and the blobs. The mirror measures a try's progress with it. */
+export function pulledObjects(project: Project): number {
+  const here = hostId();
+  return listChunks(project).filter((chunk) => chunk.host !== here).length + listBlobs(project).length;
 }
 
 function failuresFile(): string {

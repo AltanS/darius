@@ -6,7 +6,7 @@
  * "S3 client operations"): PutObject, GetObject, HeadObject, DeleteObject,
  * ListObjectsV2, HeadBucket, CreateBucket. It works under Bun and Node alike
  * because it touches nothing but the web globals `fetch`, `crypto.subtle`,
- * `TextEncoder` and `AbortSignal`.
+ * `TextEncoder`, `AbortSignal`, `AbortController` and `DOMException`.
  *
  * Wire choices, each deliberate:
  * - Path-style URLs only (`<endpoint>/<bucket>/<key>`). SeaweedFS on the
@@ -27,6 +27,13 @@
  * GetBucketVersioning (`GET ?versioning`) lets `darius snapshot check` say
  * whether the bucket keeps old versions. A backend without the feature answers
  * 501, 400 or 405; that is `unknown`, never an error.
+ *
+ * Timeouts. A request gets REQUEST_TIMEOUT_MS to answer (a part gets
+ * PART_TIMEOUT_MS). The body of a GetObject is not under that budget: a large
+ * object on a slow link takes longer than 30 s to arrive, and it fails only
+ * when no byte came for BODY_IDLE_MS. Before, the 30 s covered the body too,
+ * and a large first pull failed with a bare "The operation timed out.".
+ * A body that stalls is an `S3NetworkError`, like a request with no answer.
  *
  * Errors: a 412 on a conditional put is `{ conflict: true }`. A 404 on get or
  * head is `null`. Every other non-2xx throws `S3Error` with the status and the
@@ -152,6 +159,8 @@ export class S3NetworkError extends Error {
 const SERVICE = "s3";
 const ALGORITHM = "AWS4-HMAC-SHA256";
 const REQUEST_TIMEOUT_MS = 30_000;
+/** A GetObject body fails when no byte came for this long, however long the whole body takes. */
+const BODY_IDLE_MS = 30_000;
 const ERROR_BODY_BYTES = 300;
 /** 10 000 pages of 1000 keys. A prefix that large is a bug, not a store. */
 const MAX_LIST_PAGES = 10_000;
@@ -375,6 +384,55 @@ interface RequestSpec {
   timeoutMs?: number;
 }
 
+/** The timeouts of one client. Tests pass short ones. */
+export interface S3Timing {
+  requestMs: number;
+  bodyIdleMs: number;
+}
+
+/** A timer that aborts its controller when `touch` was not called for a while. */
+interface IdleTimer {
+  touch: () => void;
+  stop: () => void;
+}
+
+/** An `IdleTimer` that aborts `controller` after `ms` without a `touch`. */
+function idleAbort(controller: AbortController, ms: number): IdleTimer {
+  const fire = (): void => controller.abort(new DOMException(`no data for ${String(ms)} ms`, "TimeoutError"));
+  let timer = setTimeout(fire, ms);
+  return {
+    touch() {
+      clearTimeout(timer);
+      timer = setTimeout(fire, ms);
+    },
+    stop() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+/** Reads a whole body; every chunk that arrives restarts the idle timer. */
+async function readBody(response: Response, idle: IdleTimer): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return new Uint8Array(0);
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  let next = await reader.read();
+  while (!next.done) {
+    idle.touch();
+    parts.push(next.value);
+    size += next.value.length;
+    next = await reader.read();
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
+  }
+  return body;
+}
+
 function bytesOf(body: Uint8Array | string): Uint8Array<ArrayBuffer> {
   // A copy, so the hash and the upload see the same bytes even if the caller
   // mutates its buffer, and so the type is backed by a plain ArrayBuffer.
@@ -407,7 +465,11 @@ function requireKey(key: string): void {
   if (key === "") throw new Error("S3: object key is empty");
 }
 
-export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload & S3Versioning & S3Copy & S3Prefixes {
+export function createS3(
+  cfg: RemoteConfig,
+  creds: Credentials,
+  timing: S3Timing = { requestMs: REQUEST_TIMEOUT_MS, bodyIdleMs: BODY_IDLE_MS },
+): S3 & S3Upload & S3Versioning & S3Copy & S3Prefixes {
   if (!cfg.path_style) throw new Error("S3: only path-style addressing is supported; set path_style = true");
   if (cfg.bucket === "") throw new Error("S3: bucket is empty");
   if (creds.accessKeyId === "" || creds.secretAccessKey === "") throw new Error("S3: credentials are empty");
@@ -418,7 +480,8 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload &
     return text.replaceAll(creds.secretAccessKey, "<redacted>").replaceAll(creds.accessKeyId, "<redacted>");
   }
 
-  async function send(spec: RequestSpec): Promise<Response> {
+  /** `signal` replaces the request's own timeout (a GetObject brings its idle timer). */
+  async function send(spec: RequestSpec, signal?: AbortSignal): Promise<Response> {
     const body = spec.body ?? new Uint8Array(0);
     const payloadHash = await sha256Hex(body);
     const amzDate = amzDateOf(new Date());
@@ -443,7 +506,7 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload &
         method: spec.method,
         headers: requestHeaders,
         body: spec.method === "PUT" || spec.method === "POST" ? body : undefined,
-        signal: AbortSignal.timeout(spec.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        signal: signal ?? AbortSignal.timeout(spec.timeoutMs ?? timing.requestMs),
       });
     } catch (error) {
       throw new S3NetworkError(`S3 ${spec.method} ${spec.key ?? cfg.bucket}: no response from ${endpoint.origin}`, {
@@ -623,14 +686,29 @@ export function createS3(cfg: RemoteConfig, creds: Credentials): S3 & S3Upload &
     async get(key) {
       requireKey(key);
       const spec: RequestSpec = { method: "GET", key };
-      const response = await send(spec);
-      if (response.status === 404) {
-        await response.body?.cancel();
-        return null;
+      // One timer for the answer, then for each stretch of the body without a byte (see the header, "Timeouts").
+      const controller = new AbortController();
+      const idle = idleAbort(controller, timing.requestMs);
+      try {
+        const response = await send(spec, controller.signal);
+        if (response.status === 404) {
+          await response.body?.cancel();
+          return null;
+        }
+        if (!response.ok) throw await failure(response, spec);
+        const etag = etagOf(response, spec);
+        const stalled = idleAbort(controller, timing.bodyIdleMs);
+        idle.stop();
+        try {
+          return { body: await readBody(response, stalled), etag };
+        } catch (error) {
+          throw new S3NetworkError(`S3 GET ${key}: the body stopped coming from ${endpoint.origin}`, { cause: error });
+        } finally {
+          stalled.stop();
+        }
+      } finally {
+        idle.stop();
       }
-      if (!response.ok) throw await failure(response, spec);
-      const etag = etagOf(response, spec);
-      return { body: new Uint8Array(await response.arrayBuffer()), etag };
     },
 
     async head(key) {

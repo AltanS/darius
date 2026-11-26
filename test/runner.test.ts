@@ -1988,6 +1988,15 @@ test("missingTools looks up a relative path in the checkout, not in the process 
   assert.deepEqual(missingTools(["Bash(./tools/z.sh *)", "Bash(../repo/tools/x.sh)"], "", "/repo", found), ["./tools/z.sh"]);
 });
 
+test("missingTools looks up ~ and ~/ under the home folder, and leaves ~user/ as a path in the checkout", () => {
+  const files = new Set(["/home/dev/x/tool", "/home/dev", "/repo/~other/tool"]);
+  const found = (path: string): boolean => files.has(path);
+  assert.deepEqual(missingTools(["Bash(~/x/tool --go)", "Bash(~ *)"], "", "/repo", found, "/home/dev"), []);
+  assert.deepEqual(missingTools(["Bash(~/x/gone *)"], "", "/repo", found, "/home/dev"), ["~/x/gone"]);
+  assert.deepEqual(missingTools(["Bash(~/x/tool)"], "", "/repo", found, "/home/other"), ["~/x/tool"]);
+  assert.deepEqual(missingTools(["Bash(~other/tool)", "Bash(~nobody/tool)"], "", "/repo", found, "/home/dev"), ["~nobody/tool"]);
+});
+
 test("a ritual whose may names a program the runner PATH lacks is skipped as tool-missing, before any run, and fails the batch", async () => {
   const project = "rd-tool-missing";
   seedRitual(project, { policy: { ...HEARTBEAT_POLICY, may: [...HEARTBEAT_POLICY.may, "Bash(no-such-tool-7x cli *)"] } });

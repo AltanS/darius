@@ -105,6 +105,7 @@ import { appendRunLog, isBoxChosen } from "../core/sandbox.ts";
 import { createS3, type S3 } from "../core/s3.ts";
 import { GLOBAL_PROJECT, itemRef, listProjects, openProject, putBlob, sha256Hex, type Project } from "../core/store.ts";
 import { readSummary, type ResultSummary } from "../core/result.ts";
+import { isPartialMirror } from "../core/mirror.ts";
 import { localToday } from "../core/sweep.ts";
 import { outdatedLine, syncProject } from "../core/sync.ts";
 import { ulid } from "../core/ulid.ts";
@@ -269,9 +270,14 @@ function remoteClient(cfg: Config | null): S3 | null {
   return createS3(cfg.remote, loadCredentials(cfg.remote.credentials));
 }
 
-/** One sync, as a report word, and the refusal's line when the compat floor refused it. Offline and a held project lease are not errors. */
+/**
+ * One sync, as a report word, and the refusal's line when the compat floor refused it. Offline and a held project lease are not errors.
+ * A partial mirrored copy (src/core/mirror.ts) is not synced here: the mirror loop of `darius sync` owns its pull, so two
+ * processes never pull it at once, and it has no items to run before that pull is done.
+ */
 async function syncStep(project: Project, remote: { s3: S3 | null; cfg: Config | null }): Promise<{ word: string; outdated?: string }> {
   if (remote.s3 === null || remote.cfg === null) return { word: "no-remote" };
+  if (isPartialMirror(project)) return { word: "mirror-partial" };
   const report = await syncProject(project, remote.s3, remote.cfg);
   if (report.outdated !== undefined) return { word: "darius-outdated", outdated: outdatedLine(project.name, report.outdated) };
   return { word: report.skipped ?? "ok" };
@@ -1222,6 +1228,7 @@ async function handleRitual(ctx: ProjectContext, slug: string): Promise<RitualEn
 const HELD_SYNCS: ReadonlyMap<string, string> = new Map([
   ["offline", "the bucket is unreachable"],
   ["darius-outdated", "this darius is too old to sync with the bucket"],
+  ["mirror-partial", "the mirrored copy here has not finished its first pull"],
 ]);
 
 /**

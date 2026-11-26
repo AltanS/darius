@@ -22,11 +22,12 @@
  *      "darius-outdated"` before anything is pulled or pushed. Otherwise,
  *      for a sync that pushes, this host's `host.version` line is appended
  *      when its newest one is missing or names another version.
- *   1. Pull chunks. Every listed chunk not in `sync.json.seen` is fetched and
- *      stored under `ledger/<its host>/`. Blobs its lines reference are
- *      fetched EAGERLY (see "Blob references"), then the chunk is marked seen.
- *      A crash before the mark only means the next sync fetches it again,
- *      which is a no-op.
+ *   1. Pull chunks. Every listed chunk not in `sync.json.seen` is fetched.
+ *      Blobs its lines reference are fetched EAGERLY (see "Blob
+ *      references"), then the chunk is stored under `ledger/<its host>/` and
+ *      marked seen. `seen` is saved when the pull fails too, so a long first
+ *      pull resumes where it stopped. A crash before the mark only means the
+ *      next sync fetches that chunk again, which is a no-op.
  *   2. Push chunks. This host's `open.jsonl` is closed into `<ulid>.jsonl`.
  *      Every own chunk not yet seen is pushed: its referenced blobs first,
  *      then the chunk. A 412 on either means it is already there. The chunk
@@ -66,7 +67,8 @@
  * `_sha` (`findings_sha`, `output_sha`) or is `sha_before` or `sha_lost`, at
  * any depth (a sweep's `checks[]` entries included). `sha_after` names an
  * item version, not a blob, and is skipped. Pull is eager: every blob a new
- * chunk names is fetched with the chunk, at most 8 requests in flight. That
+ * chunk names is fetched with the chunk, at most 8 requests in flight, and a
+ * blob GET with no answer or a stalled body is tried once more. That
  * keeps every read offline-safe and is cheap at tonight's sizes. A blob a
  * line names but nobody has is a real error, never a skip: push order
  * guarantees the blob reaches the bucket before the chunk that names it.
@@ -312,14 +314,25 @@ function textOf(body: Uint8Array, where: string): string {
   }
 }
 
-/** Runs `fn` over `items` with at most `limit` calls in flight. */
+/**
+ * Runs `fn` over `items` with at most `limit` calls in flight. After the first
+ * failure no worker starts another call: the failure ends the sync, and a
+ * worker that went on would keep downloading for a sync that is over.
+ */
 async function forEachLimited<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
+  let isFailed = false;
   async function worker(): Promise<void> {
-    while (next < items.length) {
+    while (next < items.length && !isFailed) {
       const item = items[next];
       next += 1;
-      if (item !== undefined) await fn(item);
+      if (item === undefined) continue;
+      try {
+        await fn(item);
+      } catch (cause) {
+        isFailed = true;
+        throw cause;
+      }
     }
   }
   const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
@@ -442,10 +455,20 @@ function saveSyncState(project: Project, state: SyncState): void {
 
 // --- blobs -------------------------------------------------------------------
 
+/** One blob GET, tried once more when no answer or no body came: one stalled object should not end a long pull. */
+async function getBlobObject(ctx: SyncContext, sha: string): Promise<{ body: Uint8Array } | null> {
+  try {
+    return await ctx.s3.get(blobKey(ctx, sha));
+  } catch (cause) {
+    if (!(cause instanceof S3NetworkError)) throw cause;
+    return ctx.s3.get(blobKey(ctx, sha));
+  }
+}
+
 async function pullBlobs(ctx: SyncContext, shas: Iterable<string>): Promise<void> {
   const missing = [...shas].filter((sha) => getBlob(ctx.project, sha) === null);
   await forEachLimited(missing, BLOB_CONCURRENCY, async (sha) => {
-    const got = await ctx.s3.get(blobKey(ctx, sha));
+    const got = await getBlobObject(ctx, sha);
     if (got === null) throw new Error(`${blobKey(ctx, sha)}: a ledger line names this blob, but the bucket has none`);
     if (sha256Hex(got.body) !== sha) throw new Error(`${blobKey(ctx, sha)}: content does not hash to its name`);
     putBlob(ctx.project, got.body);
@@ -465,22 +488,31 @@ async function pushBlobs(ctx: SyncContext, shas: Iterable<string>, source: strin
 
 // --- ledger ------------------------------------------------------------------
 
+/**
+ * Step 1. A chunk's blobs are stored before the chunk, so a pull that stops
+ * part-way leaves no line here that names a blob this host lacks. `seen` is
+ * saved even when the pull fails: the next sync starts after the last chunk
+ * that is complete here, and fetches none of them again.
+ */
 async function pullChunks(ctx: SyncContext): Promise<void> {
   const prefix = ledgerPrefix(ctx);
-  for (const object of await ctx.s3.list(prefix)) {
-    const relative = object.key.slice(prefix.length);
-    if (ctx.state.seen.has(relative)) continue;
-    const match = CHUNK_KEY.exec(relative);
-    const [, host, name] = match ?? [];
-    if (host === undefined || name === undefined) throw new Error(`${object.key}: not <host>/<ulid>.jsonl`);
-    const got = await ctx.s3.get(object.key);
-    if (got === null) throw new Error(`${object.key}: listed, then gone (nothing deletes chunks in v1)`);
-    const text = textOf(got.body, object.key);
-    if (writeRemoteChunk(ctx.project, { host, name, text }) === "written") ctx.report.pulledChunks += 1;
-    await pullBlobs(ctx, blobRefsOf(text, object.key));
-    ctx.state.seen.add(relative);
+  try {
+    for (const object of await ctx.s3.list(prefix)) {
+      const relative = object.key.slice(prefix.length);
+      if (ctx.state.seen.has(relative)) continue;
+      const match = CHUNK_KEY.exec(relative);
+      const [, host, name] = match ?? [];
+      if (host === undefined || name === undefined) throw new Error(`${object.key}: not <host>/<ulid>.jsonl`);
+      const got = await ctx.s3.get(object.key);
+      if (got === null) throw new Error(`${object.key}: listed, then gone (nothing deletes chunks in v1)`);
+      const text = textOf(got.body, object.key);
+      await pullBlobs(ctx, blobRefsOf(text, object.key));
+      if (writeRemoteChunk(ctx.project, { host, name, text }) === "written") ctx.report.pulledChunks += 1;
+      ctx.state.seen.add(relative);
+    }
+  } finally {
+    saveSyncState(ctx.project, ctx.state);
   }
-  saveSyncState(ctx.project, ctx.state);
 }
 
 /** Closes open.jsonl and pushes every own chunk the bucket has not seen, blobs first. */

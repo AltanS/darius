@@ -27,6 +27,7 @@ const { SETTINGS_COOKIE: APP_SETTINGS_COOKIE } = await import("../web/app/lib/se
 const { parseMarkdown } = await import("../src/web/markdown.ts");
 const { webContext } = await import("../src/web/context.ts");
 import type { MdSpan, RitualRow } from "../src/web/api.ts";
+import { freePort } from "./helpers/free-port.ts";
 import { untilListening } from "./helpers/listening.ts";
 import type { Ritual } from "../src/core/model.ts";
 const { HostCheck, allowedLogins, authorize, authorizeRequest, cachedWhois, hostOf, parseSelfNames, parseWhois, proxyTrust } = await import("../src/web/auth.ts");
@@ -334,10 +335,11 @@ test("serve listens on 127.0.0.1 and stops on SIGTERM", async () => {
   console.log = () => undefined;
   try {
     // auto: loopback now; the fake-less tailscale has no address, so no tailnet bind.
-    const serving = serveCommand.run(parseArgs(["--port", "47991"]));
-    await untilListening(47_991);
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port)]));
+    await untilListening(port);
     const status = await new Promise<number>((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port: 47_991, path: "/healthz" }, (res) => {
+      const req = request({ host: "127.0.0.1", port, path: "/healthz" }, (res) => {
         res.resume();
         resolve(res.statusCode ?? 0);
       });
@@ -369,26 +371,27 @@ test("serve dispatches POST /api/run/follow-up to the action API; every other wr
   const log = console.log;
   console.log = () => undefined;
   try {
-    const serving = serveCommand.run(parseArgs(["--port", "47992", "--bind", "127.0.0.1"]));
-    await untilListening(47_992);
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port), "--bind", "127.0.0.1"]));
+    await untilListening(port);
     const body = JSON.stringify({ project: "demo", run: "01JX", approve: [1] });
-    const loopback = await call(47_992, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
+    const loopback = await call(port, { method: "POST", path: "/api/run/follow-up", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
     assert.match(loopback.type, /^application\/json/u);
     assert.match(loopback.body, /the follow-up button needs a tailnet identity; open the page by its tailnet address/u, "loopback is \"this host\": refused before any other check");
-    const read = await call(47_992, { method: "GET", path: "/api/run/follow-up" });
+    const read = await call(port, { method: "GET", path: "/api/run/follow-up" });
     assert.equal(read.status, 405, "the action API takes POST only");
-    const ready = await call(47_992, { method: "GET", path: "/api/run/follow-up/ready?project=demo&run=01JX" });
+    const ready = await call(port, { method: "GET", path: "/api/run/follow-up/ready?project=demo&run=01JX" });
     assert.equal(ready.status, 200, "0.98.0: the readiness read is a GET, and the loopback viewer gets a plain answer");
     assert.match(ready.type, /^application\/json/u);
     assert.match(ready.body, /"ready":false.*the follow-up button needs a tailnet identity/u);
     for (const path of ["/", "/p/demo/runs/01JX", "/api/status.json", "/api/run"]) {
-      assert.equal((await call(47_992, { method: "POST", path, headers: { "content-type": "application/json" }, body })).status, 405, path);
+      assert.equal((await call(port, { method: "POST", path, headers: { "content-type": "application/json" }, body })).status, 405, path);
     }
-    const status = await call(47_992, { method: "GET", path: "/api/status.json" });
+    const status = await call(port, { method: "GET", path: "/api/status.json" });
     assert.equal(status.status, 200);
     assert.match(status.type, /^application\/json/u);
-    assert.equal((await call(47_992, { method: "GET", path: "/healthz" })).body, "ok\n");
+    assert.equal((await call(port, { method: "GET", path: "/healthz" })).body, "ok\n");
     process.emit("SIGTERM");
     assert.equal(await serving, 0);
   } finally {
@@ -694,15 +697,16 @@ test("serve dispatches POST /api/run/ack to the action API; the loopback viewer 
   const log = console.log;
   console.log = () => undefined;
   try {
-    const serving = serveCommand.run(parseArgs(["--port", "47995", "--bind", "127.0.0.1"]));
-    await untilListening(47_995);
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port), "--bind", "127.0.0.1"]));
+    await untilListening(port);
     const body = JSON.stringify({ project: "demo", run: "01JX" });
-    const loopback = await call(47_995, { method: "POST", path: "/api/run/ack", headers: { "content-type": "application/json" }, body });
+    const loopback = await call(port, { method: "POST", path: "/api/run/ack", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
     assert.match(loopback.type, /^application\/json/u);
     assert.match(loopback.body, /acknowledging a run needs a tailnet identity/u);
-    assert.equal((await call(47_995, { method: "GET", path: "/api/run/ack" })).status, 405);
-    assert.equal((await call(47_995, { method: "POST", path: "/api/run/acknowledge", headers: { "content-type": "application/json" }, body })).status, 404);
+    assert.equal((await call(port, { method: "GET", path: "/api/run/ack" })).status, 405);
+    assert.equal((await call(port, { method: "POST", path: "/api/run/acknowledge", headers: { "content-type": "application/json" }, body })).status, 404);
     process.emit("SIGTERM");
     assert.equal(await serving, 0);
   } finally {
@@ -714,15 +718,16 @@ test("serve dispatches POST /api/finding/close to the finding API; the loopback 
   const log = console.log;
   console.log = () => undefined;
   try {
-    const serving = serveCommand.run(parseArgs(["--port", "47993", "--bind", "127.0.0.1"]));
-    await untilListening(47_993);
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port), "--bind", "127.0.0.1"]));
+    await untilListening(port);
     const body = JSON.stringify({ project: "web-findings", ritual: "check", key: "link-12" });
-    const loopback = await call(47_993, { method: "POST", path: "/api/finding/close", headers: { "content-type": "application/json" }, body });
+    const loopback = await call(port, { method: "POST", path: "/api/finding/close", headers: { "content-type": "application/json" }, body });
     assert.equal(loopback.status, 403);
     assert.match(loopback.type, /^application\/json/u);
     assert.match(loopback.body, /closing a finding needs a tailnet identity/u);
-    assert.equal((await call(47_993, { method: "GET", path: "/api/finding/close" })).status, 405);
-    assert.equal((await call(47_993, { method: "POST", path: "/api/finding/open", headers: { "content-type": "application/json" }, body })).status, 404);
+    assert.equal((await call(port, { method: "GET", path: "/api/finding/close" })).status, 405);
+    assert.equal((await call(port, { method: "POST", path: "/api/finding/open", headers: { "content-type": "application/json" }, body })).status, 404);
     process.emit("SIGTERM");
     assert.equal(await serving, 0);
   } finally {
@@ -807,25 +812,26 @@ test("serve refuses a wrong Host with 421 on GET and POST; tailnet name, IP, loc
   process.env.DARIUS_TAILSCALE = fake;
   process.env.DARIUS_WEB_URL = "https://darius.example.com";
   try {
-    const serving = serveCommand.run(parseArgs(["--port", "47996", "--bind", "127.0.0.1"]));
-    await untilListening(47_996);
+    const port = await freePort();
+    const serving = serveCommand.run(parseArgs(["--port", String(port), "--bind", "127.0.0.1"]));
+    await untilListening(port);
     const body = JSON.stringify({ project: "demo", run: "01JX" });
     const post = { method: "POST", path: "/api/run/ack", body };
-    for (const host of ["evil.example", "evil.example:47996", "laptop.evil.example"]) {
-      const read = await call(47_996, { method: "GET", path: "/api/status.json", headers: { host } });
+    for (const host of ["evil.example", `evil.example:${String(port)}`, "laptop.evil.example"]) {
+      const read = await call(port, { method: "GET", path: "/api/status.json", headers: { host } });
       assert.equal(read.status, 421, `GET with Host ${host}`);
       assert.match(read.body, /does not answer to the name/u);
-      const write = await call(47_996, { ...post, headers: { host, origin: `http://${host}`, "content-type": "application/json" } });
+      const write = await call(port, { ...post, headers: { host, origin: `http://${host}`, "content-type": "application/json" } });
       assert.equal(write.status, 421, `POST with Host ${host}`);
     }
     assert.ok(errors.some((line) => /Host 'evil\.example' does not name this host/u.test(line)));
-    for (const host of ["laptop:47996", "laptop.example-tailnet.ts.net", "100.64.0.9:47996", "localhost:47996", "127.0.0.1:47996", "[::1]:47996", "darius.example.com"]) {
-      assert.equal((await call(47_996, { method: "GET", path: "/api/status.json", headers: { host } })).status, 200, `GET with Host ${host}`);
-      const write = await call(47_996, { ...post, headers: { host, "content-type": "application/json" } });
+    for (const host of [`laptop:${String(port)}`, "laptop.example-tailnet.ts.net", `100.64.0.9:${String(port)}`, `localhost:${String(port)}`, `127.0.0.1:${String(port)}`, `[::1]:${String(port)}`, "darius.example.com"]) {
+      assert.equal((await call(port, { method: "GET", path: "/api/status.json", headers: { host } })).status, 200, `GET with Host ${host}`);
+      const write = await call(port, { ...post, headers: { host, "content-type": "application/json" } });
       assert.equal(write.status, 403, `POST with Host ${host} reaches the action API, which refuses the loopback viewer`);
       assert.match(write.body, /acknowledging a run needs a tailnet identity/u);
     }
-    assert.equal((await call(47_996, { method: "GET", path: "/healthz", headers: { host: "evil.example" } })).body, "ok\n", "healthz takes any Host");
+    assert.equal((await call(port, { method: "GET", path: "/healthz", headers: { host: "evil.example" } })).body, "ok\n", "healthz takes any Host");
     process.emit("SIGTERM");
     assert.equal(await serving, 0);
   } finally {
