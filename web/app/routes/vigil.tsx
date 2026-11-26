@@ -80,13 +80,13 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
                     ...(failure.expected === null ? [] : [{ label: "Expected", value: <code className="inline-code">{failure.expected}</code> }]),
                     { label: "Result", value: failure.exit === null ? failure.outcome : `${failure.outcome}, exit ${failure.exit}` },
                     { label: "When", value: when(failure.at) },
-                    { label: "Host", value: failure.host },
+                    { label: "Machine", value: failure.host },
                     { label: "Kind", value: failKindText(failure.failKind) },
                   ]}
                 />
                 {failure.source === "body" ? <p className="rail-note">This sweep did not record Command and Expected. They come from the current body, which may have changed since.</p> : null}
                 <p className="fu-label">Output, last lines</p>
-                {failure.outputTail === null ? <p className="text-muted">The output is not stored on this host.</p> : failure.outputTail === "" ? <p className="text-muted">The check printed nothing.</p> : <pre className="code-block">{failure.outputTail}</pre>}
+                {failure.outputTail === null ? <p className="text-muted">The output is not stored on this machine.</p> : failure.outputTail === "" ? <p className="text-muted">The check printed nothing.</p> : <pre className="code-block">{failure.outputTail}</pre>}
               </div>
             </Section>
           )}
@@ -131,7 +131,7 @@ export default function Vigil({ loaderData }: Route.ComponentProps): React.React
           <Section title="The check">
             <div className="folds">
               <Fold summary="Checklist" open={failure === null}>
-                {vigil.body.length === 0 ? <Empty>No checklist on this host.</Empty> : <Markdown blocks={vigil.body} />}
+                {vigil.body.length === 0 ? <Empty>No checklist on this machine.</Empty> : <Markdown blocks={vigil.body} />}
               </Fold>
             </div>
           </Section>

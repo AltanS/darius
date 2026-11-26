@@ -58,18 +58,18 @@ export interface RunNowNotice {
 
 /** "Run 8SXQ2ABC started on host-b." */
 export function startedText(run: string, host: string | null): string {
-  return `Run ${shortRun(run)} started on ${host ?? "the host"}.`;
+  return `Run ${shortRun(run)} started on ${host ?? "the machine"}.`;
 }
 
 /** "<host> did not start it: <reason>." The server words a refusal this way already; an error without those words gets them. A reply that never came (status 0) stays as it is. */
 export function refusedStartText(error: string, host: string | null, status = 200): string {
   if (status === 0 || error.includes("did not start it")) return error;
-  return `${host ?? "The host"} did not start it: ${error.trim().replace(/[.\s]+$/u, "")}.`;
+  return `${host ?? "The machine"} did not start it: ${error.trim().replace(/[.\s]+$/u, "")}.`;
 }
 
 /** The text of a start the host has not confirmed: the server's sentence, else the same words. */
 export function pendingStartText(message: string | null, host: string | null): string {
-  return message ?? `${host ?? "The host"} has not confirmed the start yet. It shows in Now when it starts.`;
+  return message ?? `${host ?? "The machine"} has not confirmed the start yet. It shows in Now when it starts.`;
 }
 
 /**

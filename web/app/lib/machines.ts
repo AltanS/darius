@@ -8,8 +8,11 @@
  */
 
 import type { FleetHost, FleetLast, FleetWorkspace, HostBackup, HostBoxCheck, HostOpenRun, PeerHost, PeerState } from "../../../src/web/api.ts";
-import { runsHereRows, sortDjinns, type PlacedDjinn, type RunsHereRow } from "./lists.ts";
-import { age, counted, link, plain, time, type Part } from "./sentence.ts";
+import { onSchedule, runsHereRows, type OpenAsk, type PlacedRitual, type RunsHereRow } from "./lists.ts";
+import type { NeedPart } from "./home.ts";
+import { lookItems, type LookItem } from "./look.ts";
+import { age, counted, plain, time, type Part } from "./sentence.ts";
+import { TERMS, termCount } from "./terms.ts";
 
 /** At most this many workspace names in a machine sentence, then "and n more". */
 export const SENTENCE_NAMES = 4;
@@ -36,10 +39,11 @@ export interface MachineFacts {
   copies: string[];
   /** Its open runs, from its own answer; null when it did not answer. */
   openRuns: HostOpenRun[] | null;
-  djinns: number;
-  djinnsLate: number;
-  /** When the newest run of a djinn that lives here started; null when none ran. */
-  lastDjinnAt: string | null;
+  /** The rituals darius starts on it. */
+  rituals: number;
+  ritualsLate: number;
+  /** When the newest run of a ritual that darius starts here started; null when none ran. */
+  lastRitualAt: string | null;
 }
 
 export interface MachineInput {
@@ -56,8 +60,8 @@ export function machineFacts({ name, peer, host, workspaces, selfVersion }: Mach
   const live = peer?.live ?? null;
   const version = peer?.version ?? host?.version ?? null;
   const held = workspaces.flatMap((workspace) => workspace.places.filter((place) => place.host === name).map((place) => ({ workspace: workspace.name, kind: place.kind })));
-  const djinns = workspaces.flatMap((workspace) => workspace.djinns.filter((djinn) => djinn.host === name));
-  const starts = djinns.flatMap((djinn) => (djinn.lastAt === null ? [] : [djinn.lastAt])).toSorted();
+  const rituals = workspaces.flatMap((workspace) => workspace.djinns.filter((ritual) => ritual.host === name));
+  const starts = rituals.flatMap((ritual) => (ritual.lastAt === null ? [] : [ritual.lastAt])).toSorted();
   return {
     name,
     self: peer?.self === true || host?.self === true,
@@ -74,9 +78,9 @@ export function machineFacts({ name, peer, host, workspaces, selfVersion }: Mach
     runs: held.filter((one) => one.kind === "checkout").map((one) => one.workspace),
     copies: held.filter((one) => one.kind === "copy").map((one) => one.workspace),
     openRuns: live?.openRuns ?? null,
-    djinns: djinns.length,
-    djinnsLate: djinns.filter((djinn) => djinn.state === "late").length,
-    lastDjinnAt: starts.at(-1) ?? null,
+    rituals: rituals.length,
+    ritualsLate: rituals.filter((ritual) => ritual.state === "late").length,
+    lastRitualAt: starts.at(-1) ?? null,
   };
 }
 
@@ -86,75 +90,72 @@ export function machineNames(hosts: readonly FleetHost[], peers: readonly PeerHo
   return [...known, ...peers.map((peer) => peer.host).filter((name) => !known.includes(name))];
 }
 
-function workspaceLink(name: string): Part {
-  return link(name, { to: "overview", ws: name });
-}
-
-/** "(a, b, c, d and 3 more)": at most four names, each a link. */
-function namesInBrackets(names: readonly string[]): Part[] {
-  const shown = names.slice(0, SENTENCE_NAMES);
-  const more = names.length - shown.length;
-  const list = shown.flatMap((name, index) => (index === 0 ? [workspaceLink(name)] : [plain(", "), workspaceLink(name)]));
-  return [plain(" ("), ...list, ...(more === 0 ? [] : [plain(` and ${String(more)} more`)]), plain(")")];
-}
-
+/** Only a machine that is not plainly online says its state in the sentence: the state word and the "this machine" mark say the rest. */
 function stateParts(facts: MachineFacts): Part[] {
   const why = facts.reason === null ? "" : ` (${facts.reason})`;
-  const seen = facts.lastSeen === null ? [plain(" Its ledgers hold no line of it.")] : [plain(" Its ledgers were last seen "), time(facts.lastSeen), plain(".")];
-  const lastLine = facts.lastSeen === null ? [plain(" It has no ledger line here.")] : [plain(" Its last ledger line is "), age(facts.lastSeen), plain(" old.")];
-  if (facts.self) return [plain(`${facts.name} is this machine, the one that serves this page.`)];
-  if (facts.state === "online") return [plain(`${facts.name} is online.`)];
+  const seen = facts.lastSeen === null ? [plain(" darius has seen no activity of it. ")] : [plain(" Its last activity was "), time(facts.lastSeen), plain(". ")];
+  const lastLine = facts.lastSeen === null ? [plain(" darius has seen no activity of it. ")] : [plain(" Its last activity is "), age(facts.lastSeen), plain(" old. ")];
+  if (facts.self || facts.state === "online" || facts.state === "self") return [];
   if (facts.state === "unreachable" || facts.state === "offline") return [plain(`${facts.name} did not answer${why}.`), ...lastLine];
   if (facts.state === "checking") return [plain(`darius is still asking ${facts.name}.`), ...seen];
   return [plain(`darius did not ask ${facts.name}.`), ...seen];
 }
 
-function workspaceParts(facts: MachineFacts): Part[] {
-  const copies = facts.copies.length === 0 ? "." : ` and shows a copy of ${String(facts.copies.length)}.`;
-  if (facts.runs.length === 0) return [plain(` It runs no workspace${copies}`)];
-  return [plain(` It runs ${counted(facts.runs.length, "workspace", "workspaces")}`), ...namesInBrackets(facts.runs), plain(copies)];
+/** "host-a runs 2 workspaces and starts 11 rituals for them." The copies are in the line under the workspace table. */
+function workParts(facts: MachineFacts): Part[] {
+  const runs = facts.runs.length;
+  const rituals = facts.rituals;
+  const them = runs === 1 ? "it" : "them";
+  if (runs === 0 && rituals === 0) return [plain(`${facts.name} runs no ${TERMS.workspace.word}.`)];
+  if (runs === 0) return [plain(`${facts.name} runs no ${TERMS.workspace.word}; it starts ${termCount("ritual", rituals)}.`)];
+  if (rituals === 0) return [plain(`${facts.name} runs ${termCount("workspace", runs)}; darius starts no ${TERMS.ritual.word} for ${them}.`)];
+  return [plain(`${facts.name} runs ${termCount("workspace", runs)} and starts ${termCount("ritual", rituals)} for ${them}.`)];
 }
 
-function openRunParts(facts: MachineFacts): Part[] {
-  if (facts.openRuns === null) return [];
-  const count = facts.openRuns.length;
-  if (count === 0) return [plain(" No run is open now.")];
-  return [plain(count === 1 ? " 1 run is open now." : ` ${String(count)} runs are open now.`)];
-}
-
-function djinnParts(facts: MachineFacts): Part[] {
-  if (facts.djinns === 0) return [plain(" No djinn lives here.")];
-  const lead = facts.djinns === 1 ? " 1 djinn lives here" : ` ${String(facts.djinns)} djinns live here`;
-  if (facts.lastDjinnAt === null) return [plain(`${lead}; none has run yet.`)];
-  return [plain(`${lead}; the last one ran `), time(facts.lastDjinnAt), plain(".")];
+/** "Nothing is running now; the last run started 8 h ago." Open runs only when the machine answered. */
+function nowParts(facts: MachineFacts): Part[] {
+  const last = facts.lastRitualAt;
+  const open = facts.openRuns;
+  if (open === null) return last === null ? [] : [plain(" The last run started "), time(last), plain(".")];
+  const running = open.filter((run) => run.phase === "running").length;
+  const held = open.filter((run) => run.phase === "held").length;
+  const words = [running === 0 ? "" : `${counted(running, "run", "runs")} ${running === 1 ? "is" : "are"} running`, held === 0 ? "" : `${counted(held, "run", "runs")} ${held === 1 ? "waits" : "wait"} for your answer`].filter((word) => word !== "");
+  const now = words.length === 0 ? "Nothing is running now" : `${words.join(" and ")} now`;
+  return last === null ? [plain(` ${now}.`)] : [plain(` ${now}; the last run started `), time(last), plain(".")];
 }
 
 /**
- * The sentence at the top of a machine page: its state, the workspaces it
- * runs and shows, its open runs (only when it answered) and its djinns.
- * "host-b is online. It runs 2 workspaces (infra-notes, archive-2025) and
- * shows a copy of 1. No run is open now. 2 djinns live here; the last one ran 25 min ago."
+ * The status of a machine in short sentences, one idea each (0.143.0):
+ * its state when it is not plainly online, what it runs and starts, and
+ * what runs now. "host-a runs 2 workspaces and starts 11 rituals for
+ * them. Nothing is running now; the last run started 8 h ago."
  */
 export function machineSentence(facts: MachineFacts): Part[] {
-  return [...stateParts(facts), ...workspaceParts(facts), ...openRunParts(facts), ...djinnParts(facts)];
+  return [...stateParts(facts), ...workParts(facts), ...nowParts(facts)];
 }
 
-/** One thing on a machine that needs attention, with the command that fixes it when there is one. */
+/** What is wrong with a machine itself. */
+export type AttentionKey = "unreachable" | "retired" | "version" | "sandbox" | "backup-stale" | "backup-failed";
+
+/** One thing on a machine that needs a look: a short lead, the cause, and the command that fixes it when there is one. */
 export interface Attention {
+  key: AttentionKey;
+  /** "Did not answer", "Sandbox check failed". */
+  lead: string;
   text: string;
   command: string | null;
 }
 
-/** What needs attention on a machine, most urgent first; empty when nothing does. */
+/** What needs a look on a machine itself, most urgent first; empty when nothing does. */
 export function machineAttention(facts: MachineFacts, selfVersion: string | null): Attention[] {
   const items: Attention[] = [];
   const why = facts.reason === null ? "" : ` (${facts.reason})`;
-  if (facts.state === "unreachable" || facts.state === "offline") items.push({ text: `Its darius serve did not answer${why}. Live facts show only while darius serve runs on that machine, and [setup] units must list web there.`, command: "darius setup --systemd" });
-  if (facts.retired) items.push({ text: "It wrote no line in 30 days, so darius counts it as retired.", command: null });
-  if (facts.differs && facts.version !== null) items.push({ text: `It runs darius ${facts.version}, and this machine runs ${selfVersion ?? "another version"}.`, command: "darius update --hosts" });
-  if (facts.boxCheck !== null && facts.boxCheck.outcome !== "pass") items.push({ text: facts.boxCheck.outcome === "fail" ? "Its last box check failed." : `Its last box check ended ${facts.boxCheck.outcome}.`, command: "darius box check" });
-  if (facts.backup?.state === "stale") items.push({ text: `Its backup is stale${facts.backup.reason === null ? "" : `: ${facts.backup.reason}`}.`, command: null });
-  if (facts.backup?.state === "failed") items.push({ text: `Its last backup failed${facts.backup.error === null ? "" : `: ${facts.backup.error}`}.`, command: null });
+  if (facts.state === "unreachable" || facts.state === "offline") items.push({ key: "unreachable", lead: "Did not answer", text: `Its darius serve did not answer${why}. Live facts show only while darius serve runs on that machine, and [setup] units must list web there.`, command: "darius setup --systemd" });
+  if (facts.retired) items.push({ key: "retired", lead: "Retired", text: "It wrote no line in 30 days, so darius counts it as retired.", command: null });
+  if (facts.differs && facts.version !== null) items.push({ key: "version", lead: "Other darius version", text: `It runs darius ${facts.version}, and this machine runs ${selfVersion ?? "another version"}.`, command: "darius update --hosts" });
+  if (facts.boxCheck !== null && facts.boxCheck.outcome !== "pass") items.push({ key: "sandbox", lead: "Sandbox check failed", text: facts.boxCheck.outcome === "fail" ? `Its last ${TERMS.sandboxCheck.word} failed.` : `Its last ${TERMS.sandboxCheck.word} ended ${facts.boxCheck.outcome}.`, command: "darius box check" });
+  if (facts.backup?.state === "stale") items.push({ key: "backup-stale", lead: "Backup stale", text: `Its backup is stale${facts.backup.reason === null ? "" : `: ${facts.backup.reason}`}.`, command: null });
+  if (facts.backup?.state === "failed") items.push({ key: "backup-failed", lead: "Backup failed", text: `Its last backup failed${facts.backup.error === null ? "" : `: ${facts.backup.error}`}.`, command: null });
   return items;
 }
 
@@ -165,23 +166,24 @@ export function peerNeedsCheck(peer: PeerHost, selfVersion: string | null): bool
 
 // --- the block of the Machines page ----------------------------------------------------------------
 
-/** At most this many djinns in a block, then "and n more". */
-export const BLOCK_DJINNS = 8;
+/** At most this many rituals on schedule in a block, then "and n more". */
+export const BLOCK_ON_SCHEDULE = 5;
 
 /** At most this many workspaces in a block, then "and n more". */
 export const BLOCK_WORKSPACES = 6;
 
 export interface MachineBlock {
   facts: MachineFacts;
-  attention: Attention[];
+  /** What needs a look on this machine, in the order of the list (`lookItems`). */
+  look: LookItem[];
   /** The workspaces that run here, worst health first, at most `BLOCK_WORKSPACES`. */
   runs: RunsHereRow[];
   /** How many workspaces that run here the block does not list. */
   moreRuns: number;
-  /** The djinns that live here in the order of every djinn list (`sortDjinns`), at most `BLOCK_DJINNS`. */
-  djinns: PlacedDjinn[];
-  /** How many djinns the block does not list. */
-  moreDjinns: number;
+  /** The rituals on schedule here, next due first, at most `BLOCK_ON_SCHEDULE`. */
+  onSchedule: PlacedRitual[];
+  /** All rituals on schedule here. */
+  onScheduleTotal: number;
 }
 
 export interface BlockInput extends MachineInput {
@@ -189,29 +191,32 @@ export interface BlockInput extends MachineInput {
   lastRuns: readonly FleetLast[];
   /** The runs open on this machine. */
   openRuns: readonly Pick<HostOpenRun, "project">[];
-  /** The runs that ask a question nobody answered, as `project/run`. */
-  asking: ReadonlySet<string>;
+  /** The runs that wait for an answer (`openAsks`), by `project/run`. */
+  asks: ReadonlyMap<string, OpenAsk>;
+  /** What the need-you count of each workspace is made of (`needCounts().partsByProject`): the badge in Places is their sum. */
+  needs: Readonly<Record<string, readonly NeedPart[]>>;
 }
 
-/** The djinns that live on a machine, each with its workspace and whether its last run asks you. */
-export function machineDjinns(name: string, workspaces: readonly FleetWorkspace[], asking: ReadonlySet<string>): PlacedDjinn[] {
+/** The rituals darius starts on a machine, each with its workspace and the open question of its last run. */
+export function machineRituals(name: string, workspaces: readonly FleetWorkspace[], asks: ReadonlyMap<string, OpenAsk>): PlacedRitual[] {
   return workspaces.flatMap((workspace) =>
-    workspace.djinns.filter((djinn) => djinn.host === name).map((djinn) => ({ workspace: workspace.name, djinn, asks: djinn.lastRun !== null && asking.has(`${workspace.name}/${djinn.lastRun}`) })),
+    workspace.djinns.filter((ritual) => ritual.host === name).map((ritual) => ({ workspace: workspace.name, ritual, ask: ritual.lastRun === null ? null : (asks.get(`${workspace.name}/${ritual.lastRun}`) ?? null) })),
   );
 }
 
 /** Everything the block of one machine shows on the Machines page. */
 export function machineBlock(input: BlockInput): MachineBlock {
   const facts = machineFacts(input);
-  const runs = runsHereRows(input.name, input.workspaces, input.lastRuns, input.openRuns);
-  const djinns = sortDjinns(machineDjinns(input.name, input.workspaces, input.asking));
+  const runs = runsHereRows(input.name, input.workspaces, input.lastRuns, input.openRuns, input.asks, input.needs);
+  const rituals = machineRituals(input.name, input.workspaces, input.asks);
+  const quiet = onSchedule(rituals);
   return {
     facts,
-    attention: machineAttention(facts, input.selfVersion),
+    look: lookItems({ machine: input.name, rituals, attention: machineAttention(facts, input.selfVersion), page: "machines" }),
     runs: runs.slice(0, BLOCK_WORKSPACES),
     moreRuns: Math.max(0, runs.length - BLOCK_WORKSPACES),
-    djinns: djinns.slice(0, BLOCK_DJINNS),
-    moreDjinns: Math.max(0, djinns.length - BLOCK_DJINNS),
+    onSchedule: quiet.slice(0, BLOCK_ON_SCHEDULE),
+    onScheduleTotal: quiet.length,
   };
 }
 
@@ -251,15 +256,6 @@ export function stateSplit(states: readonly (PeerState | null)[]): StateSplit {
 /** "3 machines: 2 online, 1 unreachable." */
 export function stateLine(split: StateSplit): string {
   return split.parts.length === 0 ? `${split.lead}.` : `${split.lead}: ${split.parts.join(", ")}.`;
-}
-
-/** "3 runs are open now." over the machines that answered. */
-export function openRunsLine(facts: readonly MachineFacts[]): string {
-  const known = facts.filter((one) => one.openRuns !== null);
-  const count = known.reduce((sum, one) => sum + (one.openRuns?.length ?? 0), 0);
-  const where = known.length === facts.length ? "" : " on the machines that answered";
-  if (count === 0) return `No run is open now${where}.`;
-  return `${count === 1 ? "1 run is" : `${String(count)} runs are`} open now${where}.`;
 }
 
 /** "3" or "3, 1 unreachable": the count of the Machines row in Places. */

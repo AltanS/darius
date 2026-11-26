@@ -65,7 +65,7 @@ test("Needs you: each of its rules alone", () => {
   const cases: ReadonlyArray<readonly [Partial<HealthFacts>, string]> = [
     [{ candlesLow: 2 }, "2 candles lit"],
     [{ findingsNeedYou: 1 }, "1 open finding"],
-    [{ runsHeld: 1 }, "1 run held"],
+    [{ runsHeld: 1 }, "1 run waits for your answer"],
     [{ ritualsLate: 3 }, "3 rituals late"],
     [{ vigilsDue: 1 }, "1 vigil due"],
     [{ treeConflicts: 2 }, "2 tree conflicts"],

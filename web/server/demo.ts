@@ -331,10 +331,10 @@ function project(now: number): ProjectStatus {
     error: null,
     runs: [running, held, asks, failed, ...done, abandoned, followUp, byHand],
     rituals: [
-      ritual("site-report", "Nightly site report (djinn)", { skill: "site-report", nextDue: day(now, 0, 1) }),
-      ritual("link-check", "Link checker (djinn)", { skill: "link-check", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
-      ritual("price-sync", "Price sync (djinn)", { skill: "price-sync", nextDue: day(now, 0, 0), heldRun: held.run, host: "host-b" }),
-      ritual("backup-check", "Backup check (djinn)", { skill: "backup-check", nextDue: day(now, 0, 1), failedToday: { run: failed.run, acknowledged: null } }),
+      ritual("site-report", "Nightly site report", { skill: "site-report", nextDue: day(now, 0, 1) }),
+      ritual("link-check", "Link checker", { skill: "link-check", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run }),
+      ritual("price-sync", "Price sync", { skill: "price-sync", nextDue: day(now, 0, 0), heldRun: held.run, host: "host-b" }),
+      ritual("backup-check", "Backup check", { skill: "backup-check", nextDue: day(now, 0, 1), failedToday: { run: failed.run, acknowledged: null } }),
       ritual("uptime-review", "Uptime review", { mode: "off", cadence: "7d", nextDue: day(now, 0, -9), overdueDays: 9, lastCompleted: day(now, 0, -16) }),
       ritual("search-ranking", "Search ranking and content review", { mode: "off", cadence: "1w", nextDue: day(now, 0, -3), overdueDays: 3, lastCompleted: day(now, 0, -10) }),
       ritual("shipping-rates", "Shipping rates check", { mode: "off", cadence: "3d", nextDue: day(now, 0, -5), overdueDays: 5, lastCompleted: day(now, 0, -8) }),
@@ -380,10 +380,10 @@ function atlas(now: number): ProjectStatus {
     error: null,
     runs: [running, done],
     rituals: [
-      ritual("link-audit", "Docs link audit (djinn)", { skill: "link-audit", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run, host: "demo" }),
-      ritual("release-notes", "Release notes draft (djinn)", { skill: "release-notes", nextDue: day(now, 0, 2) }),
-      ritual("sitemap-check", "Sitemap check (djinn)", { skill: "sitemap-check", nextDue: day(now, 0, -2), isDue: true, overdueDays: 2 }),
-      ritual("changelog-digest", "Changelog digest (djinn)", { skill: "changelog-digest", nextDue: day(now, 0, 0), isDue: true }),
+      ritual("link-audit", "Docs link audit", { skill: "link-audit", cadence: "6h", nextDue: day(now, 0, 0), openRun: running.run, host: "demo" }),
+      ritual("release-notes", "Release notes draft", { skill: "release-notes", nextDue: day(now, 0, 2) }),
+      ritual("sitemap-check", "Sitemap check", { skill: "sitemap-check", nextDue: day(now, 0, -2), isDue: true, overdueDays: 2 }),
+      ritual("changelog-digest", "Changelog digest", { skill: "changelog-digest", nextDue: day(now, 0, 0), isDue: true }),
       ritual("dependency-review", "Dependency review", { mode: "off", cadence: "2w", nextDue: day(now, 0, -14), overdueDays: 14 }),
       ritual("style-guide", "Style guide pass", { mode: "off", cadence: "1m", nextDue: day(now, 0, 12) }),
     ],
@@ -406,7 +406,7 @@ function fieldNotes(now: number): ProjectStatus {
     lastSync: ago(now, 6 * MINUTE),
     error: null,
     runs: [done],
-    rituals: [ritual("notes-index", "Notes index (djinn)", { skill: "notes-index", nextDue: day(now, 0, 1), lastCompleted: day(now, 0, 0) })],
+    rituals: [ritual("notes-index", "Notes index", { skill: "notes-index", nextDue: day(now, 0, 1), lastCompleted: day(now, 0, 0) })],
     vigils: [],
     milestones: [],
     milestonesArchived: 0,
@@ -423,10 +423,10 @@ function plainProject(now: number, name: string, extra: Partial<ProjectStatus>):
 /** The extra workspaces of the fleet demo: one of each health that the first three do not show, and copies of workspaces that live on another host. */
 function fleetProjects(now: number): ProjectStatus[] {
   return [
-    plainProject(now, "mail-relay", { icon: { kind: "emoji", text: "✉" }, rituals: [ritual("bounce-scan", "Bounce scan (djinn)", { skill: "bounce-scan", nextDue: day(now, 0, 1) }), ritual("dns-check", "DNS check (djinn)", { skill: "dns-check", nextDue: day(now, 0, 1), host: "host-c" })] }),
-    plainProject(now, "ledger-tools", { rituals: [ritual("import-check", "Import check (djinn)", { skill: "import-check", nextDue: day(now, 0, 1) })], vigils: [vigil("rate-limit", "Rate limit holds", { due: day(now, 0, 0) })], findings: { needsYou: 1, open: 2 } }),
-    plainProject(now, "infra-notes", { checkout: null, lastSync: ago(now, 3 * 60 * MINUTE), rituals: [ritual("cert-scan", "Certificate scan (djinn)", { skill: "cert-scan", nextDue: day(now, 0, 2) })] }),
-    plainProject(now, "status-page", { checkout: null, lastSync: ago(now, 9 * MINUTE), rituals: [ritual("probe-review", "Probe review (djinn)", { skill: "probe-review", nextDue: day(now, 0, 1) })], vigils: [vigil("uptime-soak", "Uptime soak", { due: day(now, 0, 5) })] }),
+    plainProject(now, "mail-relay", { icon: { kind: "emoji", text: "✉" }, rituals: [ritual("bounce-scan", "Bounce scan", { skill: "bounce-scan", nextDue: day(now, 0, 1) }), ritual("dns-check", "DNS check", { skill: "dns-check", nextDue: day(now, 0, 1), host: "host-c" })] }),
+    plainProject(now, "ledger-tools", { rituals: [ritual("import-check", "Import check", { skill: "import-check", nextDue: day(now, 0, 1) })], vigils: [vigil("rate-limit", "Rate limit holds", { due: day(now, 0, 0) })], findings: { needsYou: 1, open: 2 } }),
+    plainProject(now, "infra-notes", { checkout: null, lastSync: ago(now, 3 * 60 * MINUTE), rituals: [ritual("cert-scan", "Certificate scan", { skill: "cert-scan", nextDue: day(now, 0, 2) })] }),
+    plainProject(now, "status-page", { checkout: null, lastSync: ago(now, 9 * MINUTE), rituals: [ritual("probe-review", "Probe review", { skill: "probe-review", nextDue: day(now, 0, 1) })], vigils: [vigil("uptime-soak", "Uptime soak", { due: day(now, 0, 5) })] }),
     plainProject(now, "old-site", { rituals: [ritual("crawl", "Crawl", { lifecycle: "retired", mode: "off" })] }),
     plainProject(now, "archive-2025", { checkout: null, lastSync: ago(now, 7 * MINUTE) }),
     plainProject(now, "broken-store", { error: ".darius.toml: line 3: expected a value" }),
@@ -566,6 +566,8 @@ const DEMO_HOLDS = new Map<string, string[]>([
   ["demo", ["archive-2025", "atlas-docs", "broken-store", "demo-shop", "field-notes", "infra-notes", "ledger-tools", "mail-relay", "old-site", "status-page"]],
   ["host-b", ["archive-2025", "demo-shop", "infra-notes"]],
   ["host-c", ["atlas-docs", "demo-shop", "mail-relay", "status-page"]],
+  // A machine with nothing to look at (0.143.0): online, the same darius, a passed sandbox check.
+  ["host-d", []],
 ]);
 
 /** How long ago each demo machine wrote its newest line. */
@@ -573,6 +575,7 @@ const DEMO_SEEN = new Map<string, number>([
   ["demo", MINUTE],
   ["host-b", 4 * MINUTE],
   ["host-c", 12 * MINUTE],
+  ["host-d", 2 * MINUTE],
 ]);
 
 /** The machine and the store of the demo: the same machine, version and workspaces as the demo peers and workspaces. */
@@ -692,7 +695,7 @@ export function demoHostLive(now: number): HostLive {
   };
 }
 
-/** Two hosts besides this one: host-b answers and runs another darius, host-c syncs but its serve does not answer. */
+/** Three hosts besides this one: host-b answers and runs another darius, host-c syncs but its serve does not answer, host-d answers and has nothing to look at. */
 export function demoPeers(now: number): PeerHost[] {
   const checkedAt = new Date(now).toISOString();
   const hostB: HostLive = {
@@ -708,10 +711,24 @@ export function demoPeers(now: number): PeerHost[] {
     boxCheck: { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" },
     nextDue: [{ project: "demo-shop", slug: "price-sync", nextDueAt: ago(now, -5 * 60 * MINUTE) }],
   };
+  const hostD: HostLive = {
+    host: "host-d",
+    version: "demo",
+    runtime: "bun",
+    runtimeVersion: "1.3.0",
+    serveStartedAt: ago(now, 6 * DAY),
+    now: checkedAt,
+    uptimeSeconds: 6 * 86_400,
+    load: [0.1, 0.08, 0.05],
+    openRuns: [],
+    boxCheck: { outcome: "pass", at: ago(now, DAY), darius: "demo" },
+    nextDue: [],
+  };
   return [
     { host: "demo", self: true, state: "self", live: demoHostLive(now), lastSeen: ago(now, MINUTE), version: "demo", reason: null, checkedAt },
     { host: "host-b", self: false, state: "online", live: hostB, lastSeen: ago(now, 4 * MINUTE), version: "demo-next", reason: null, checkedAt },
     { host: "host-c", self: false, state: "unreachable", live: null, lastSeen: ago(now, 12 * MINUTE), version: "demo", reason: "connection refused", checkedAt },
+    { host: "host-d", self: false, state: "online", live: hostD, lastSeen: ago(now, 2 * MINUTE), version: "demo", reason: null, checkedAt },
   ];
 }
 
@@ -720,7 +737,7 @@ function demoFleetHost(now: number, host: string, lastSeen: string, versions: Fl
   return { host, self: host === "demo", lastSeen, chunks: projects.length * 7, projects, backup: demoHostBackups(now).get(host) ?? null, version: versions[0]?.version ?? null, versions, boxCheck, retired: false };
 }
 
-/** The ledger view of the demo: three hosts, where each ritual and vigil last ran. */
+/** The ledger view of the demo: four hosts, where each ritual and vigil last ran. */
 export function demoFleet(now: number): FleetView {
   const status = demoStatus(now);
   // The newest run of each ritual, as the demo ledgers say it, on the machine its djinn runs on.
@@ -728,7 +745,8 @@ export function demoFleet(now: number): FleetView {
     facts.rituals.flatMap((row): FleetLast[] => {
       if (row.last === null) return [];
       const open = row.last.outcome === "running" || row.last.outcome === "held";
-      return [{ project: facts.name, item: `ritual/${row.slug}`, host: demoRunHost(now, facts.name, row.slug), at: row.last.at, outcome: open ? null : row.last.outcome, run: row.last.run }];
+      const entry: FleetLast = { project: facts.name, item: `ritual/${row.slug}`, host: demoRunHost(now, facts.name, row.slug), at: row.last.at, outcome: open ? null : row.last.outcome, run: row.last.run };
+      return [row.last.outcome === "held" ? Object.assign(entry, { phase: "held" as const }) : row.last.outcome === "running" ? Object.assign(entry, { phase: "running" as const }) : entry];
     }),
   );
   // Every vigil but each third was swept; every fourth sweep ran on host-c.
@@ -745,6 +763,7 @@ export function demoFleet(now: number): FleetView {
       demoFleetHost(now, "demo", ago(now, MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }, { version: "demo-old", at: ago(now, 9 * DAY) }], { outcome: "pass", at: ago(now, 20 * 60 * MINUTE), darius: "demo" }),
       demoFleetHost(now, "host-b", ago(now, 4 * MINUTE), [{ version: "demo-next", at: ago(now, 3 * DAY) }], { outcome: "fail", at: ago(now, 2 * DAY), darius: "demo-next" }),
       demoFleetHost(now, "host-c", ago(now, 12 * MINUTE), [{ version: "demo", at: ago(now, 2 * DAY) }], null),
+      demoFleetHost(now, "host-d", ago(now, 2 * MINUTE), [{ version: "demo", at: ago(now, 6 * DAY) }], { outcome: "pass", at: ago(now, DAY), darius: "demo" }),
     ],
     lastRuns,
     lastSweeps,

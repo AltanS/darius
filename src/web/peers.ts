@@ -108,7 +108,7 @@ export function failedState(lastSeen: string | null, now: number): Exclude<PeerS
 const ERROR_WORDS: ReadonlyArray<readonly [RegExp, string]> = [
   [/ECONNREFUSED|connection refused/iu, "connection refused"],
   [/ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|could not resolve|DNS/iu, "name not found"],
-  [/EHOSTUNREACH|ENETUNREACH|no route/iu, "host unreachable"],
+  [/EHOSTUNREACH|ENETUNREACH|no route/iu, "machine unreachable"],
   [/ECONNRESET|socket hang up|closed/iu, "connection closed"],
   [/certificate|TLS|SSL/iu, "TLS failed"],
 ];
@@ -167,10 +167,10 @@ export function parseHostLive(text: string, host: string): HostLive | string {
   try {
     body = JSON.parse(text);
   } catch {
-    return "answered no host facts";
+    return "answered no machine facts";
   }
-  if (!isRecord(body) || !isText(body.host) || !isText(body.version) || !isText(body.now) || !Array.isArray(body.openRuns) || !Array.isArray(body.nextDue) || !Array.isArray(body.load)) return "answered no host facts";
-  if (body.host !== host) return "answered as another host";
+  if (!isRecord(body) || !isText(body.host) || !isText(body.version) || !isText(body.now) || !Array.isArray(body.openRuns) || !Array.isArray(body.nextDue) || !Array.isArray(body.load)) return "answered no machine facts";
+  if (body.host !== host) return "answered as another machine";
   const [one, five, fifteen] = body.load;
   return {
     host: body.host,
@@ -193,8 +193,8 @@ function isReason(answer: HostLive | string): answer is string {
 
 function statusReason(status: number): string {
   if (status === 421) return "refused the host name (421)";
-  if (status === 403) return "refused this host (403)";
-  if (status === 404) return "has no host facts (404, darius before 0.139.0)";
+  if (status === 403) return "refused this machine (403)";
+  if (status === 404) return "has no machine facts (404, darius before 0.139.0)";
   return `answered ${String(status)}`;
 }
 

@@ -23,7 +23,7 @@ export function loader({ context, request, params: route }: Route.LoaderArgs) {
   const project = route.ws ?? "";
   const filter = activityFilterOf(new URL(request.url).searchParams);
   const status = statusOf(context);
-  if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this host.`, { status: 404 });
+  if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this machine.`, { status: 404 });
   // The self-test workspace stays out of the list of every project, as in the other lists, unless the settings show it (or the address names it).
   const { showSelftest } = readSettings(request.headers.get("cookie"));
   const names = new Set(status.projects.filter((candidate) => project === candidate.name || (project === "" && (showSelftest || !isSelftest(candidate.name)))).map((candidate) => candidate.name));

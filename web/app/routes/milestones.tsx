@@ -21,7 +21,7 @@ export function loader({ context, params, request }: Route.LoaderArgs) {
   const wanted = params.ws;
   if (wanted !== undefined) {
     const project = status.projects.find((candidate) => candidate.name === wanted);
-    if (project === undefined) throw data(`No workspace named ${wanted} on this host.`, { status: 404 });
+    if (project === undefined) throw data(`No workspace named ${wanted} on this machine.`, { status: 404 });
     return { scope: wanted, workspaces: [workspaceMilestones(project, status.today)] };
   }
   const { showSelftest } = readSettings(request.headers.get("cookie"));

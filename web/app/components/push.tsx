@@ -59,9 +59,9 @@ async function check(version: string): Promise<PushState> {
   const registration = await registerWorker(version);
   const response = await fetch("/api/push/key", { headers: { accept: "application/json" } });
   if (response.status === 404) return { kind: "unavailable", text: "This server has no notification endpoints. The dev server has none: run darius serve." };
-  if (!response.ok) return { kind: "failed", text: (await field(response, "error").catch(() => null)) ?? `The host answered ${response.status} for its push key.` };
+  if (!response.ok) return { kind: "failed", text: (await field(response, "error").catch(() => null)) ?? `The machine answered ${response.status} for its push key.` };
   const key = await field(response, "key");
-  if (key === null) return { kind: "unavailable", text: "No push keys on this host yet (darius push keys)." };
+  if (key === null) return { kind: "unavailable", text: "No push keys on this machine yet (darius push keys)." };
   const subscription = await registration.pushManager.getSubscription();
   return subscription === null ? { kind: "off", key } : { kind: "on" };
 }
@@ -72,7 +72,7 @@ type PushBody = PushSubscriptionJSON | { endpoint: string };
 async function post(path: string, body: PushBody): Promise<string | null> {
   const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
   if (response.ok) return null;
-  return (await field(response, "error").catch(() => null)) ?? `The host answered ${response.status}.`;
+  return (await field(response, "error").catch(() => null)) ?? `The machine answered ${response.status}.`;
 }
 
 async function turnOn(key: string): Promise<PushState> {

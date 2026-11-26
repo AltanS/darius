@@ -1,15 +1,14 @@
 /**
- * One machine (0.139.0, reworked in 0.141.0). Top to bottom: the trail
- * "Machines / name"; the name with its state and the "this machine" mark;
- * one sentence built from variables (what it runs and shows, its open runs,
- * its djinns); what needs attention, only when something does; one line of
- * facts; the workspaces it runs (a table) and the copies it shows (one
- * line); what runs there now; its recent runs; the djinns that live there
- * (0.142.0: one list, the ones that need a look first). The page of this
- * machine adds "Store and disks" (what the Status page showed up to
- * 0.140.0; `/status` redirects here). Then the details fold. Running now is
- * grouped by workspace, at most five rows per group, then "show all". A
- * page in no workspace. Read-only.
+ * One machine (0.139.0, reworked in 0.141.0 and 0.143.0). Top to bottom:
+ * the trail "Machines / name"; the name with its state and the "this
+ * machine" mark; short sentences on what it runs and starts and what runs
+ * now; the line that defines ritual and workspace; Needs a look (the
+ * rituals, then the machine itself, one button each); one line of facts;
+ * the workspaces it runs (Why starts with the need-you count of Places) and
+ * the copies it keeps; the rituals on schedule; what runs there now; its
+ * recent runs. The page of this machine adds "Store and disks" (`/status`
+ * redirects here). Then the details fold, the time note and the words of
+ * the page. A page in no workspace. Read-only.
  */
 
 import { data, Link } from "react-router";
@@ -19,20 +18,23 @@ import type { Route } from "./+types/machine";
 import { Crumbs } from "../components/crumbs.tsx";
 import { BoxWord, LedgerFacts, LiveFacts, Unknown } from "../components/machines.tsx";
 import { ListHead, OrderNote } from "../components/list-table.tsx";
-import { CopiesLine, DjinnTable, ProjectsTable, RunsHereTable } from "../components/machine-lists.tsx";
+import { CopiesLine, Definitions, LookList, OnScheduleTable, ProjectsTable, RunsHereTable, TableGloss, TermsHelp, TimeNote } from "../components/machine-lists.tsx";
 import { RunTable } from "../components/runs.tsx";
 import { Sentence } from "../components/sentence.tsx";
 import { Machine, StatusStrip, SyncRemote } from "../components/system.tsx";
 import { Empty, Fold, Section, Status, Time } from "../components/ui.tsx";
 import { groupByWorkspace, LEGEND, type Group } from "../lib/fleet.ts";
 import { uptimeText } from "../lib/format.ts";
-import { copyRows, runsHereRows, sortDjinns } from "../lib/lists.ts";
-import { machineAttention, machineDjinns, machineFacts, machineSentence, type MachineFacts } from "../lib/machines.ts";
+import { copyRows, onSchedule, onScheduleTitle, runsHereRows } from "../lib/lists.ts";
+import { lookItems } from "../lib/look.ts";
+import { machineAttention, machineFacts, machineRituals, machineSentence, type MachineFacts } from "../lib/machines.ts";
+import { needCounts } from "../lib/home.ts";
 import { href, itemTarget, machineCrumbs } from "../lib/paths.ts";
 import { machineWord, peersOf } from "../lib/peers.ts";
 import { backupWord } from "../lib/state-words.ts";
 import { statusOf, workspacesOf } from "../lib/status.ts";
-import { activityRun, askingRuns, itemSlug } from "../lib/view.ts";
+import { LABELS, MACHINE_PAGE_TERMS, STATE_WORDS, TERMS } from "../lib/terms.ts";
+import { activityRun, itemSlug, openAsks } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -60,18 +62,21 @@ export async function loader({ context, params }: Route.LoaderArgs) {
   const running: TitledRun[] = open.map((run) => Object.assign({ title: titleOf(run.project, run.item) }, run));
   const selfVersion = peers.find((entry) => entry.self)?.version ?? fleet.hosts.find((entry) => entry.self)?.version ?? null;
   const facts = machineFacts({ name, peer: peer ?? undefined, host: host ?? undefined, workspaces, selfVersion });
+  const asks = openAsks(projects);
+  const rituals = machineRituals(name, workspaces, asks);
   return {
     name,
     host,
     peer,
     facts,
-    selfVersion,
-    runsHere: runsHereRows(name, workspaces, fleet.lastRuns, open),
+    // The need-you count of each workspace from the source of the badges in Places: one number on both.
+    runsHere: runsHereRows(name, workspaces, fleet.lastRuns, open, asks, needCounts(statusOf(context)).partsByProject),
     copies: copyRows(name, workspaces),
     running: groupByWorkspace(running, (run) => run.project),
     runningFrom: peer?.live === undefined || peer.live === null ? "ledger" : "live",
-    // The order of every djinn list (0.142.0): the ones that need a look first, then by their last run.
-    djinns: sortDjinns(machineDjinns(name, workspaces, askingRuns(projects))),
+    // What needs a look here (0.143.0), and the rituals on schedule: a ritual is in one of the two, never both.
+    look: lookItems({ machine: name, rituals, attention: machineAttention(facts, selfVersion), page: "machine" }),
+    onSchedule: onSchedule(rituals),
     // The newest runs that ran here, from the fleet view: no second ledger scan.
     recent: fleet.recentRuns.filter((run) => run.host === name).map((run) => activityRun(run.project, projects.find((one) => one.name === run.project), run)),
     // The store and the disks: only on the page of this machine, which is the one that can read them.
@@ -104,7 +109,7 @@ function RunGroups({ groups }: { groups: readonly Group<TitledRun>[] }): React.R
               <Link to={href(itemTarget(run.project, run.item))} className="sy-name">
                 {run.title}
               </Link>
-              <Status tone={run.phase === "held" ? "wait" : "run"} label={run.phase === "held" ? "Held" : "Running"} />
+              <Status tone={run.phase === "held" ? "wait" : "run"} label={run.phase === "held" ? STATE_WORDS.waits : "Running"} />
               <span className="text-muted">
                 started <Time iso={run.startedAt} />
               </span>
@@ -116,29 +121,6 @@ function RunGroups({ groups }: { groups: readonly Group<TitledRun>[] }): React.R
       <ShowAll group={group} to={href({ to: "section", ws: group.workspace, section: "runs", query: { state: "running" } })} />
     </div>
   ));
-}
-
-/** What needs attention on the machine: a short list, each with its command when one fixes it. */
-function Attention({ facts, selfVersion }: { facts: MachineFacts; selfVersion: string | null }): React.ReactNode {
-  const items = machineAttention(facts, selfVersion);
-  if (items.length === 0) return null;
-  return (
-    <Section title="Needs attention" id="attention">
-      <ul className="mp-attention panel">
-        {items.map((item) => (
-          <li key={item.text}>
-            <span>{item.text}</span>
-            {item.command === null ? null : (
-              <>
-                {" Run "}
-                <code>{item.command}</code>.
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
 }
 
 /** One line of labelled values: darius, up, load, box check, last seen, last backup. */
@@ -154,18 +136,18 @@ function FactsRow({ facts }: { facts: MachineFacts }): React.ReactNode {
         <dt>Up</dt>
         <dd>{facts.uptimeSeconds === null ? <Unknown /> : uptimeText(facts.uptimeSeconds)}</dd>
       </div>
-      <div>
-        <dt>Load</dt>
+      <div title={LABELS.loadTitle}>
+        <dt>{LABELS.load}</dt>
         <dd>{facts.load === null ? <Unknown /> : facts.load.map((value) => value.toFixed(2)).join(" ")}</dd>
       </div>
       <div>
-        <dt>Box check</dt>
+        <dt>{LABELS.sandboxCheck}</dt>
         <dd>
           <BoxWord check={facts.boxCheck} />
         </dd>
       </div>
       <div>
-        <dt>Last seen</dt>
+        <dt>{LABELS.lastActivity}</dt>
         <dd>
           <Time iso={facts.lastSeen} />
         </dd>
@@ -219,7 +201,7 @@ function StoreAndDisks({ store }: { store: NonNullable<Route.ComponentProps["loa
 }
 
 export default function MachinePage({ loaderData }: Route.ComponentProps): React.ReactNode {
-  const { name, host, peer, facts, selfVersion, runsHere, copies, running, runningFrom, djinns, recent, store } = loaderData;
+  const { name, host, peer, facts, runsHere, copies, running, runningFrom, look, onSchedule: quiet, recent, store } = loaderData;
   const word = machineWord(facts.state);
   return (
     <div className="stack">
@@ -231,28 +213,39 @@ export default function MachinePage({ loaderData }: Route.ComponentProps): React
           {facts.self ? <span className="mt-this">this machine</span> : null}
         </h1>
         <Sentence className="mp-sentence" parts={machineSentence(facts)} />
+        <Definitions terms={["ritual", "workspace"]} className="def-line" />
       </header>
-      <Attention facts={facts} selfVersion={selfVersion} />
+      <Section title={LABELS.needsLook} id="look">
+        <LookList items={look} />
+      </Section>
       <FactsRow facts={facts} />
       <Section title="Workspaces on this machine" id="workspaces">
         <div className="stack">
           <p className="fl-legend">{LEGEND}</p>
-          <ListHead title="Runs here" count={runsHere.length} order="worst first" />
+          <ListHead title={LABELS.runsHere} count={runsHere.length} order="worst first" />
+          <TableGloss rows={runsHere} />
           {runsHere.length === 0 ? <Empty>This machine runs no workspace.</Empty> : <RunsHereTable rows={runsHere} openRuns caption={`Workspaces ${name} runs, worst first`} />}
           <div id="copies" className="mp-copies">
-            <ListHead title="Copies" count={copies.length} order="by name" />
+            <ListHead title="Copies" count={copies.length} order="by name; they run on other machines" />
             <CopiesLine copies={copies} />
           </div>
         </div>
+      </Section>
+      <Section title={`${LABELS.ritualsHere} (${String(facts.rituals)})`} id="rituals">
+        {facts.rituals === 0 ? (
+          <Empty>{`darius starts no ${TERMS.ritual.word} here.`}</Empty>
+        ) : (
+          <div className="stack">
+            <ListHead title={onScheduleTitle(quiet.length, facts.rituals)} order={LABELS.onScheduleOrder} />
+            {quiet.length === 0 ? <Empty>{`None: every ${TERMS.ritual.word} here is under ${LABELS.needsLook}.`}</Empty> : <OnScheduleTable rituals={quiet} caption={`Rituals on schedule on ${name}, next due first`} />}
+          </div>
+        )}
       </Section>
       <Section title={runningFrom === "live" ? "Running now" : "Running now, from the ledgers"} id="running">
         <RunGroups groups={running} />
       </Section>
       <Section title="Recent runs here" id="recent" aside={<OrderNote>newest first</OrderNote>}>
-        <RunTable runs={recent} showProject className="lt-capped" caption={`Recent runs on ${name}, newest first`} empty="No run ran here yet." />
-      </Section>
-      <Section title="Djinns that live here" id="djinns" aside={<OrderNote>needs a look first, then last run, newest first</OrderNote>}>
-        {djinns.length === 0 ? <Empty>No djinn lives here.</Empty> : <DjinnTable djinns={djinns} caption={`Djinns that live on ${name}`} />}
+        <RunTable runs={recent} showProject className="lt-capped" caption={`Recent runs on ${name}, newest first`} empty="No run ran here yet." answerWord />
       </Section>
       {store === null ? null : <StoreAndDisks store={store} />}
       <Fold summary="Details: live facts, ledgers, versions">
@@ -275,6 +268,8 @@ export default function MachinePage({ loaderData }: Route.ComponentProps): React
           )}
         </div>
       </Fold>
+      <TimeNote />
+      <TermsHelp terms={MACHINE_PAGE_TERMS} />
     </div>
   );
 }

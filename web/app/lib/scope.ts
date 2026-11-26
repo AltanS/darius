@@ -75,7 +75,7 @@ export function scopeOfRequest(status: HostStatus, request: Request, workspace: 
   const settings = readSettings(request.headers.get("Cookie"));
   const includeSelftest = settings.showSelftest;
   if (workspace !== undefined) {
-    if (!status.projects.some((project) => project.name === workspace)) throw data(`No workspace named ${workspace} on this host.`, { status: 404 });
+    if (!status.projects.some((project) => project.name === workspace)) throw data(`No workspace named ${workspace} on this machine.`, { status: 404 });
     const scope: HomeScope = { workspace, includeSelftest };
     return { settings, scope, projects: scopeProjects(status, scope) };
   }

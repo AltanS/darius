@@ -88,7 +88,7 @@ function WorkspaceMeta({ extras }: WorkspaceMetaProps): React.ReactNode {
           <span>
             synced <Time iso={extras.lastSync} />
           </span>
-          {extras.checkout === null ? <span>not linked on this host</span> : null}
+          {extras.checkout === null ? <span>not linked on this machine</span> : null}
         </p>
         {extras.checkout === null ? null : (
           <p className="ws-path">

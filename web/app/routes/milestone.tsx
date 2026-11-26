@@ -19,7 +19,7 @@ export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 export function loader({ context, params }: Route.LoaderArgs) {
   const status = statusOf(context);
   const project = status.projects.find((candidate) => candidate.name === params.ws);
-  if (project === undefined) throw data(`No workspace named ${params.ws} on this host.`, { status: 404 });
+  if (project === undefined) throw data(`No workspace named ${params.ws} on this machine.`, { status: 404 });
   const detail = context.milestone(params.ws, params.milestone);
   if (detail === null) throw data(`No open milestone ${params.milestone} in workspace ${params.ws}.`, { status: 404 });
   return { view: milestoneDetailView(detail, project.milestones, status.today) };

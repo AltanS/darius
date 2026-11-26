@@ -157,7 +157,7 @@ test("ackKindOf: a row that was acknowledged and carries no kind reads as answer
 
 test("the filter in words", () => {
   assert.equal(filterSentence(ANY_RUNS, "demo"), "All runs in demo, newest first.");
-  assert.equal(filterSentence({ ...ANY_RUNS, state: "held", kind: "follow-up" }, ""), "Held follow-up runs of every workspace, newest first.");
+  assert.equal(filterSentence({ ...ANY_RUNS, state: "held", kind: "follow-up" }, ""), "Follow-up runs that wait for your answer of every workspace, newest first.");
   assert.equal(filterSentence({ ...ANY_RUNS, kind: "scheduled", by: "timer", ack: "dismissed" }, "demo"), "Scheduled runs in demo, started by the timer, dismissed, newest first.");
   assert.equal(filterSentence({ ...ANY_RUNS, state: "running", by: "web", ack: "open", imported: true }, ""), "Runs still running of every workspace, started from the web, still open, imported runs included, newest first.");
   assert.equal(filterSentence({ ...ANY_RUNS, state: "weird" }, "demo"), "Runs that ended weird in demo, newest first.");

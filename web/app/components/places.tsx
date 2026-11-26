@@ -187,7 +187,7 @@ interface PlacesProps {
 }
 
 /** The server names the loopback viewer "this host" (src/web/auth.ts, and the CLI and the ledgers keep it); the app says "machine". */
-function viewerWord(viewer: string): string {
+export function viewerWord(viewer: string): string {
   return viewer === "this host" ? "this machine" : viewer;
 }
 

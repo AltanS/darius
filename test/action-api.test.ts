@@ -695,7 +695,7 @@ test("run now: a host lookup that throws is a 500 before anything is written; a 
   const lookup = { ...nowDeps(), nowHost: () => { throw new Error("links.toml is unreadable"); } };
   const refused = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true }), { who: "owner" }, lookup);
   assert.equal(refused.status, 500);
-  assert.match(errorOf(refused.body), /the ritual's host could not be read: links\.toml is unreadable/u);
+  assert.match(errorOf(refused.body), /the ritual's machine could not be read: links\.toml is unreadable/u);
   assert.deepEqual([lookup.calls, lookup.started], [[], []], "no ack, no run");
   const spawn = {
     ...nowDeps(),
@@ -713,7 +713,7 @@ test("run now: a host name that is not a plain host name is refused before the a
     const stub = { ...nowDeps(), nowHost: () => host };
     const sent = await actionApi(ackRequest({ ...ACK_NEW_BODY, runNow: true, answers: [{ n: 1, text: "yes" }] }), { who: "owner" }, stub);
     assert.equal(sent.status, 409, JSON.stringify(host));
-    assert.equal(errorOf(sent.body), "nothing written: the ritual's host name is not valid");
+    assert.equal(errorOf(sent.body), "nothing written: the ritual's machine name is not valid");
     assert.deepEqual([stub.calls, stub.started], [[], []], "no ack on this host, none over ssh, no run");
   }
   const fine = { ...nowDeps(), nowHost: () => "host-b.tail1234.ts.net" };
@@ -1074,11 +1074,11 @@ test("held: a run that is not held is 409 and nothing is written or started", as
   appendLine(openProject(PROJECT), { who: "timer", type: "run.started", item: "ritual/daily", run: running });
   const refusedRunning = await send(running);
   assert.equal(refusedRunning.status, 409);
-  assert.match(errorOf(refusedRunning.body), /is not held \(phase: running\)/u);
+  assert.match(errorOf(refusedRunning.body), /does not wait for your answer \(phase: running\)/u);
   const closed = seedAsk("01JCLOSED00000000000000AAA");
   const refusedClosed = await send(closed);
   assert.equal(refusedClosed.status, 409);
-  assert.match(errorOf(refusedClosed.body), /is not held \(phase: closed\)/u);
+  assert.match(errorOf(refusedClosed.body), /does not wait for your answer \(phase: closed\)/u);
   assert.deepEqual([stub.calls, stub.started, answeredLines(running), answeredLines(closed)], [[], [], [], []]);
 });
 
@@ -1112,7 +1112,7 @@ test("held: when the ritual belongs to another host, the answer and the resume b
     const bad = { ...nowDeps(RESUMES), nowHost: () => host };
     const refused = await actionApi(answerRequest({ project: PROJECT, run, answers: [{ n: 1, text: "yes" }], resume: true }), { who: "owner" }, bad);
     assert.equal(refused.status, 409, JSON.stringify(host));
-    assert.match(errorOf(refused.body), /^nothing written: the ritual's host name is not valid$/u);
+    assert.match(errorOf(refused.body), /^nothing written: the ritual's machine name is not valid$/u);
     assert.deepEqual([bad.calls, bad.started], [[], []]);
   }
   const broken = { ...nowDeps(RESUMES), nowHost: () => { throw new Error("links.toml is unreadable"); } };
@@ -1219,7 +1219,7 @@ test("held: a double POST is refused. The first answers and resumes, the second 
   assert.ok(isRecord(first.body) && first.body.resumed === true);
   const second = await actionApi(answerRequest({ ...body, answers: [{ n: 1, text: "again" }] }), { who: "owner" }, stub);
   assert.equal(second.status, 409);
-  assert.match(errorOf(second.body), /is not held \(phase: running\)/u);
+  assert.match(errorOf(second.body), /does not wait for your answer \(phase: running\)/u);
   assert.deepEqual(answeredLines(run).map((line) => line.text), ["yes"], "the second click wrote nothing");
 });
 

@@ -76,4 +76,4 @@ Left out of the v3 design on purpose (design section 14).
 
 ## Architecture
 
-- The central server, with a service per host and the djinns (paused discussion).
+- The central server, with a service per host and the rituals (paused discussion).

@@ -2,7 +2,7 @@
  * Workspaces (0.140.0 as Fleet, renamed in 0.141.0): how many workspaces,
  * and how healthy. One headline sentence whose counts filter the table; the
  * legend; the workspace table, worst first (health, reasons, the machines
- * that run it, djinns, vigils, candles, last activity), a card per workspace
+ * that run it, the rituals darius starts, vigils, candles, last activity), a card per workspace
  * on a phone. A page in no workspace. Read-only. `/fleet` and `/topology`
  * redirect here.
  */
@@ -20,6 +20,7 @@ import { href } from "../lib/paths.ts";
 import { peersOf } from "../lib/peers.ts";
 import { readSettings } from "../lib/settings.ts";
 import { workspacesOf } from "../lib/status.ts";
+import { LABELS } from "../lib/terms.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -116,7 +117,7 @@ function WorkspaceRow({ workspace }: { workspace: FleetWorkspace }): React.React
           <RunsOn workspace={workspace} />
         </span>
         <span className="fl-c fl-c-num">
-          <span className="fl-label">Djinns</span>
+          <span className="fl-label">{LABELS.columnRituals}</span>
           <Count value={counts.djinns} alarm={counts.djinnsLate} alarmText="late" tone="late" />
         </span>
         <span className="fl-c fl-c-num">
@@ -144,7 +145,7 @@ function WorkspaceTable({ workspaces }: { workspaces: readonly FleetWorkspace[] 
         <span>Workspace</span>
         <span>Why</span>
         <span>Runs on</span>
-        <span>Djinns</span>
+        <span title={LABELS.ritualsDarius}>{LABELS.columnRituals}</span>
         <span>Vigils</span>
         <span>Candles</span>
         <span>Last activity</span>

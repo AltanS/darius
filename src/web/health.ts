@@ -89,7 +89,7 @@ const CANNOT_START_WORDS = new Map([
 function needsReasons(facts: HealthFacts, now: number): string[] {
   return [
     ...counted(facts.ritualsFailedOnce, "run failed", "runs failed"),
-    ...counted(facts.runsHeld, "run held", "runs held"),
+    ...counted(facts.runsHeld, "run waits for your answer", "runs wait for your answer"),
     ...counted(facts.candlesLow, "candle lit", "candles lit"),
     ...counted(facts.findingsNeedYou, "open finding", "open findings"),
     ...counted(facts.ritualsLate, "ritual late", "rituals late"),

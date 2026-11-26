@@ -21,8 +21,8 @@ function ritual(extra: Partial<RitualRow> = {}): RitualRow {
 
 test("a run has one word and one tone for each state", () => {
   assert.deepEqual(runWord(run({ phase: "running", outcome: null }), false), { tone: "run", label: "Running" });
-  assert.deepEqual(runWord(run({ phase: "held", outcome: null }), false), { tone: "wait", label: "Waiting for you" });
-  assert.deepEqual(runWord(run(), true), { tone: "wait", label: "Asks you" });
+  assert.deepEqual(runWord(run({ phase: "held", outcome: null }), false), { tone: "wait", label: "Waits for your answer" });
+  assert.deepEqual(runWord(run(), true), { tone: "wait", label: "Waits for your answer" });
   assert.deepEqual(runWord(run(), false), { tone: "ok", label: "Complete" });
   assert.deepEqual(runWord(run({ outcome: "failed" }), false), { tone: "bad", label: "Failed" });
   assert.deepEqual(runWord(run({ outcome: "failed", acknowledged: { who: "me", at: "2026-09-30T02:00:00Z", note: null } }), false), { tone: "idle", label: "Failed, seen" });
@@ -46,7 +46,7 @@ test("a date is late, due today, or a date phrase in the quiet tone", () => {
 });
 
 test("a ritual reads as waiting, running, late, due today or its next date", () => {
-  assert.equal(ritualWord(ritual({ heldRun: "r" }), TODAY).label, "Waiting for you");
+  assert.equal(ritualWord(ritual({ heldRun: "r" }), TODAY).label, "Waits for your answer");
   assert.equal(ritualWord(ritual({ openRun: "r" }), TODAY).label, "Running");
   assert.equal(ritualWord(ritual({ nextDue: "2026-09-17", overdueDays: 13 }), TODAY).label, "13 days late");
   assert.equal(ritualWord(ritual({ nextDue: TODAY, isDue: true }), TODAY).label, "Due today");
@@ -70,7 +70,7 @@ test("a vigil is flagged, or shows its verdict once closed; an armed one has no 
 test("only a state that needs attention draws a rail", () => {
   assert.equal(railOf(lateWord(2)), "late");
   assert.equal(railOf({ tone: "run", label: "Running" }), "run");
-  assert.equal(railOf({ tone: "wait", label: "Asks you" }), "wait");
+  assert.equal(railOf({ tone: "wait", label: "Waits for your answer" }), "wait");
   assert.equal(railOf({ tone: "bad", label: "Failed" }), "bad");
   assert.equal(railOf({ tone: "idle", label: "Failed, seen" }), null);
   assert.equal(railOf({ tone: "ok", label: "Complete" }), null);

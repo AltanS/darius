@@ -171,7 +171,7 @@ test("running and held djinns sit in Today with their state word; a failure toda
     ]),
   ]);
   assert.deepEqual(titles(agenda, "Today"), ["holds", "runs"]);
-  assert.deepEqual(agenda.groups.find((group) => group.label === "Today")?.rows.map((row) => row.state?.label), ["Waiting for you", "Running"]);
+  assert.deepEqual(agenda.groups.find((group) => group.label === "Today")?.rows.map((row) => row.state?.label), ["Waits for your answer", "Running"]);
   assert.deepEqual(titles(agenda, "Tomorrow"), ["broke"]);
   assert.equal(agenda.groups.find((group) => group.label === "Tomorrow")?.rows[0]?.state?.label, "Failed");
   assert.equal(agenda.overdue, 0, "a held djinn is not overdue");
@@ -196,7 +196,7 @@ test("a complete run that asks the operator something shows as Asks you", () => 
     ackKind: null,
   };
   const agenda = build([project("shop", [ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-01" })], [], [asks])]);
-  assert.equal(agenda.groups[0]?.rows[0]?.state?.label, "Asks you");
+  assert.equal(agenda.groups[0]?.rows[0]?.state?.label, "Waits for your answer");
 });
 
 test("the project name shows only when more than one project contributes", () => {
@@ -286,7 +286,7 @@ test("asksYou: a complete run with open questions asks, until a newer complete r
   assert.equal(asksYou(OLD_ASKS, [NEWER(), OLD_ASKS]), false, "a newer complete run hides it");
   assert.equal(asksYou(OLD_ASKS, [NEWER({ who: "darius" }), OLD_ASKS]), false, "a follow-up run is a run of the same ritual, so it counts, whoever started it");
   assert.equal(runState(OLD_ASKS, [NEWER(), OLD_ASKS]).label, "Complete", "the state word is plain too");
-  assert.equal(runState(OLD_ASKS, [OLD_ASKS]).label, "Asks you");
+  assert.equal(runState(OLD_ASKS, [OLD_ASKS]).label, "Waits for your answer");
 });
 
 test("asksYou: a newer run that failed, is held, is still running, or belongs to another ritual or project does not hide it", () => {
@@ -303,7 +303,7 @@ test("asksYou: a newer run that failed, is held, is still running, or belongs to
 test("the agenda row of a ritual drops Asks you once a newer complete run replaced the question", () => {
   const report = ritual("report", { mode: "report", skill: "report", nextDue: "2026-10-01" });
   const asks = build([project("shop", [report], [], [OLD_ASKS])]);
-  assert.equal(asks.groups[0]?.rows[0]?.state?.label, "Asks you");
+  assert.equal(asks.groups[0]?.rows[0]?.state?.label, "Waits for your answer");
   const gone = build([project("shop", [report], [], [NEWER(), OLD_ASKS])]);
   assert.equal(gone.groups[0]?.rows[0]?.state, null);
 });

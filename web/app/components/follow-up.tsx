@@ -160,7 +160,7 @@ export function FollowUpCard({ project, run, readiness, questions, items }: Foll
           <Status tone="idle" label="off" /> A follow-up cannot start from this page: {readiness.reason}
         </p>
         <div className="next-cmd">
-          <p>On a host with the checkout and herdr, run:</p>
+          <p>On a machine with the checkout and herdr, run:</p>
           <Command command={followUpCommand(run, project, commandQuestions(questions))} />
         </div>
       </div>

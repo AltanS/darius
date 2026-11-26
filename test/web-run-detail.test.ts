@@ -224,7 +224,7 @@ test("thenLines: each follow-up with how it stands, and each run that read the a
     [
       "Then: follow-up 000000AA, done 09:40, 2 changed",
       "Then: follow-up 000000BB, running",
-      "Then: follow-up 000000CC, waiting for you",
+      "Then: follow-up 000000CC, waits for your answer",
       "Then: follow-up 000000DD, failed 09:40",
       "Then: follow-up 000000EE, done 09:40",
       "Your answer was read by the run of Tue 05:00",

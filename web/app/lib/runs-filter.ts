@@ -8,6 +8,7 @@
 import type { RunRow } from "../../../src/web/api.ts";
 import type { RunsFilter } from "./paths.ts";
 import { ackKindOf } from "./result.ts";
+import { STATE_WORDS } from "./terms.ts";
 import { isOpenAsk } from "./view.ts";
 
 /** True when the run closed with this outcome, or is in this phase. `held` and `running` are phases; anything else is an outcome. */
@@ -51,16 +52,17 @@ function capital(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** What the filter lists, by state and kind: "Held follow-up runs", "Runs still running", "All runs". */
+/** What the filter lists, by state and kind: "Follow-up runs that wait for your answer", "Runs still running", "All runs". */
 function subject(filter: RunsFilter): string {
   const runs = `${KIND_WORDS[filter.kind]}runs`;
   if (filter.state === "") return filter.kind === "" ? "All runs" : capital(runs);
   if (filter.state === "running") return `${capital(runs)} still running`;
-  if (filter.state === "held" || filter.state === "complete" || filter.state === "failed" || filter.state === "abandoned") return `${capital(filter.state)} ${runs}`;
+  if (filter.state === "held") return `${capital(runs)} that ${STATE_WORDS.waits.replace(/^waits\b/u, "wait")}`;
+  if (filter.state === "complete" || filter.state === "failed" || filter.state === "abandoned") return `${capital(filter.state)} ${runs}`;
   return `${capital(runs)} that ended ${filter.state}`;
 }
 
-/** The filter in words: "Held follow-up runs of every workspace, started from the web, answered, newest first." */
+/** The filter in words: "Follow-up runs that wait for your answer of every workspace, started from the web, answered, newest first." */
 export function filterSentence(filter: RunsFilter, project: string): string {
   const where = project === "" ? " of every workspace" : ` in ${project}`;
   const imported = filter.imported ? ", imported runs included" : "";

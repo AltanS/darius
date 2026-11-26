@@ -256,7 +256,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
             {row.skill === null || row.host === null ? null : " "}
             {row.host === null ? null : (
               <>
-                Runs on <code className="inline-code">{row.host}</code> only; the timer of any other host skips it.
+                Runs on <code className="inline-code">{row.host}</code> only; the timer of any other machine skips it.
               </>
             )}
           </p>
@@ -339,7 +339,7 @@ export default function Ritual({ loaderData }: Route.ComponentProps): React.Reac
                   />
                   {fromGit ? (
                     <p className="rail-note">
-                      Git owns this definition. To change it, edit <code className="inline-code">.darius.toml</code> and commit. Pause, resume, host and due stay with <code className="inline-code">darius ritual set</code>.
+                      Git owns this definition. To change it, edit <code className="inline-code">.darius.toml</code> and commit. Pause, resume, machine and due stay with <code className="inline-code">darius ritual set</code>.
                     </p>
                   ) : null}
                 </Fold>

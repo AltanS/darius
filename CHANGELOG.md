@@ -2,6 +2,35 @@
 
 All notable changes to darius. SemVer; see CLAUDE.md, "Versioning".
 
+## [0.143.0] - 2026-11-26
+
+### Added
+
+- **Machines says what needs you first.** The headline names the machines, each machine problem in a short sentence, then the rituals that need a look by machine, each part a link to its item or its block: "Both machines are online. host-b runs another darius version. 6 rituals need a look: 2 on host-a, 4 on host-b." More than two machine problems name the machines: "3 machine problems need a look: host-a, host-b." With nothing wrong: "Both machines are online. All 19 rituals are on schedule." It counts no workspaces and no rival total: the workspace counts are the badges in Places.
+- **Needs a look.** Each machine block and each machine page starts with "Rituals that need a look (n)" and, when there is any, "The machine itself (n)": one sentence per problem with its cause, and one small button at the right end ("Answer", "Open run", "Open ritual", "Open machine"). A ritual that waits for your answer, one whose last run failed, one that is late; a ritual that failed and is late says both: "Its last run failed 18 h ago, and it has been late for 23 d." The machine itself: did not answer, another darius version, a failed sandbox check, a stale backup. Each kind has its own icon shape, so "late" and "waits for your answer" differ by more than colour. With nothing to do it is one muted line.
+- **Words are defined where they are used.** `web/app/lib/terms.ts` holds every word of the machine pages with a one-line plain definition; headings and column names take their words from it. A line under the headline defines ritual and workspace, in body text with the defined word in semibold; a line under the workspace table heading defines vigil and candle when a row uses them; a closed "What do these words mean?" list at the foot of Machines and of a machine page lists them all. New term: finding.
+- **Times have an anchor.** A muted line at the foot of the machine pages names the zone of the machine that serves the page and the time now.
+- The demo has a fourth machine with nothing to look at, and its ritual titles no longer say "(djinn)".
+
+### Changed
+
+- **The row is a ritual, everywhere; the machine pages do not say djinn.** A machine says what it runs in short sentences: "host-a runs 2 workspaces and starts 11 rituals for them. Nothing is running now; the last run started 8 h ago." The copies are in the line under the workspace table: "Also keeps a copy of 12 workspaces that run on other machines". The workspace header and the Workspaces page say "Rituals darius starts", "runs here", "runs on host-b" or "only on host-b" instead of "Djinns", "lives here" and "(pinned)", and the pinned mark is gone from the machine lists.
+- **A held run and an open question read "waits for your answer"** in the machine lists, the recent runs of a machine page, its running runs and the workspace header, instead of "held" and "asks you".
+- **The workspaces a machine runs** are a table of Health, Workspace, Why, Rituals (a number, or "none") and Last run (muted). When something there needs you, Why gives the count of its badge in Places and exactly what it is made of, from the same source, each part a link that sums to the count: "5 items need you: 2 runs to answer, 2 flagged vigils, 1 lit candle". Otherwise it gives the three worst health reasons, then "and n more" as a link with every reason in its title. The health word is the only colour in a row.
+- **Rituals on schedule.** The rituals in Needs a look are not listed again. The others are one table, "On schedule (9 of 11)", of Ritual, Workspace, Last run and Next, next due first, with titles that wrap instead of being cut; no State column and no "ok"; "complete" is muted. Machines shows at most 5 per machine, then "and n more" as a link; a machine page shows all.
+- **Next is a day and a time:** "today 14:00", "tomorrow 06:00", "Tue 00:00", "Mon 7 Dec 07:00", with the full local date and time in the title.
+- **One visual priority.** Gold is for the page title, the machine name and the action buttons. A link in a sentence or a table cell is body text with an underline; a heading inside a block is muted.
+- **Plainer facts.** "Box check" becomes "Sandbox check", "Last ledger line" and "Last seen" become "Last activity", and "Load" becomes "Load (1, 5, 15 min)" with its meaning in the title. The foot line of a block is at least 13 px.
+
+### Fixed
+
+- **A held run no longer reads "running" in the Workspaces table.** The fleet view keeps the phase of an open last run (`FleetLast.phase`), and the table takes its word from the same source as the ritual lists.
+
+### Tests
+
+- Unit tests for the Needs a look builder (each kind, the order, the wording, the buttons, failed and late), the headline (machines first, nothing wrong, singular and plural, a machine that did not answer), the reasons of a workspace (the three worst, and n more), the parts of a need-you count (they sum to it for every demo workspace), the On schedule heading, the Next text, the word of a last run and the held fix, the need-you count of a row, the machine sentence, and the terms (the headings use them; the glossary names each).
+- The machine page tests read the new structure: the headline and its anchors, the definition lines, the order inside a block, the new columns, the Why cell and the badge in Places showing one number, no djinn outside the words list, the time note and the words list.
+
 ## [0.142.0] - 2026-11-26
 
 ### Added

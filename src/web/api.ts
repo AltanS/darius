@@ -1314,6 +1314,8 @@ export interface FleetLast {
   outcome: string | null;
   /** The run id; absent for a sweep. */
   run?: string;
+  /** While the run is open: running, or held for an answer (0.143.0). Absent for a closed run and a sweep. */
+  phase?: "running" | "held";
 }
 
 /** The hosts of the synced store and where things ran, from the ledgers here. */

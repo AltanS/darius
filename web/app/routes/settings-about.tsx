@@ -1,10 +1,11 @@
-/** Settings, About: the host, the version, who is looking and the way to the profiles. */
+/** Settings, About: the machine, the version, who is looking and the way to the profiles. */
 
 import { Link, useRouteLoaderData } from "react-router";
 
 import type { Route } from "./+types/settings-about";
 import type { loader as rootLoader } from "../root.tsx";
 import { Gem } from "../components/nav-icons.tsx";
+import { viewerWord } from "../components/places.tsx";
 import { SettingRow, SettingsCard } from "../components/settings-ui.tsx";
 import { href } from "../lib/paths.ts";
 import { statusOf } from "../lib/status.ts";
@@ -22,18 +23,18 @@ export default function SettingsAbout({ loaderData }: Route.ComponentProps): Rea
   const profiles = loaderData.profiles;
   return (
     <div className="st-body">
-      <SettingsCard title="This host">
-        <SettingRow label="Host" help="The machine that serves this page.">
+      <SettingsCard title="This machine">
+        <SettingRow label="Machine" help="The computer that serves this page.">
           <span className="st-value">{root?.host}</span>
         </SettingRow>
-        <SettingRow label="Version" help="The darius release on this host.">
+        <SettingRow label="Version" help="The darius release on this machine.">
           <span className="st-value st-value-gem">
             <Gem size={20} busy label="Emblem loader, shown as an example" />
             darius {root?.version}
           </span>
         </SettingRow>
-        <SettingRow label="Seen by" help="Who this host thinks you are.">
-          <span className="st-value">{root?.viewer}</span>
+        <SettingRow label="Seen by" help="Who this machine thinks you are.">
+          <span className="st-value">{root === undefined ? undefined : viewerWord(root.viewer)}</span>
         </SettingRow>
         <SettingRow label="Profiles" help="Named presets for starting an agent harness.">
           <Link to={href({ to: "host", page: "profiles" })} className="st-value st-value-link">

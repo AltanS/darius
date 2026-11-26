@@ -127,7 +127,7 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain, p
       return;
     }
     if (result.id !== null && result.at !== null) {
-      const host = result.host ?? "the host";
+      const host = result.host ?? "the machine";
       seedStart({ id: result.id, state: "starting", host, at: result.at, kind: "vigil-check", project, item: slug });
       setAsked({ id: result.id, host, at: result.at });
     }
@@ -135,7 +135,7 @@ export function CheckNow({ project, slug, subject, canWrite, blocked, explain, p
     void revalidate();
   };
 
-  const host = entry !== undefined && entry.state !== "unknown" ? entry.host : (tracked?.host ?? "the host");
+  const host = entry !== undefined && entry.state !== "unknown" ? entry.host : (tracked?.host ?? "the machine");
   const cooldown = cooldownFrom === null ? null : cooldownText(cooldownFrom, now, offset, cooling?.retryAt);
   if (checking && tracked !== null) {
     const age = Math.max(0, now - Date.parse(tracked.at));

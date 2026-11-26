@@ -633,7 +633,7 @@ test("follow-up: a host name that could act as an ssh option starts nothing", as
   const deps = stub({ readiness: ready(["vuln"], "-oProxyCommand=x", "host-a") });
   const refused = await candleApi(post(ANSWER_PATH, FOLLOW), TAILNET, deps);
   assert.equal(refused.status, 409);
-  assert.match(errorOf(refused.body), /host name is not valid/u);
+  assert.match(errorOf(refused.body), /machine name is not valid/u);
   assert.deepEqual(deps.starts, []);
 });
 

@@ -95,7 +95,7 @@ function clearCredentials(): PushApiReply {
 function startRun(start: RunStarter): PushApiReply {
   const resolved = resolveSnapshotSettings();
   if (resolved.problems.length > 0) return fail(400, `fix the settings first: ${resolved.problems.join("; ")}`);
-  if (!resolved.settings.enabled) return fail(400, "snapshots are off on this host");
+  if (!resolved.settings.enabled) return fail(400, "snapshots are off on this machine");
   if (runningSnapshot(resolved.settings.dir) !== null) return fail(409, "a snapshot is already running");
   start();
   return { status: 202, body: { ok: true, started: true } };

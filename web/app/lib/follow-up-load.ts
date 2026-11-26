@@ -93,11 +93,11 @@ export function readReadiness(status: number, text: string): Loaded {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { state: "failed", message: `The host answered ${String(status)} with text that is not JSON.` };
+    return { state: "failed", message: `The machine answered ${String(status)} with text that is not JSON.` };
   }
-  if (!isRecord(parsed)) return { state: "failed", message: `The host answered ${String(status)} with an unexpected body.` };
-  if (parsed.ok !== true) return { state: "failed", message: textOf(parsed.error) ?? `The host answered ${String(status)}.` };
-  const host = textOf(parsed.host) ?? "this host";
+  if (!isRecord(parsed)) return { state: "failed", message: `The machine answered ${String(status)} with an unexpected body.` };
+  if (parsed.ok !== true) return { state: "failed", message: textOf(parsed.error) ?? `The machine answered ${String(status)}.` };
+  const host = textOf(parsed.host) ?? "this machine";
   if (parsed.ready === false) {
     const off: FollowUpReadiness = { ready: false, host, reason: textOf(parsed.reason) ?? "a follow-up cannot start now" };
     const rightHost = textOf(parsed.rightHost);
@@ -109,7 +109,7 @@ export function readReadiness(status: number, text: string): Loaded {
   const questions = questionsOf(parsed.questions);
   const items = itemsOf(parsed.items);
   const profile = textOf(parsed.profile);
-  if (parsed.ready !== true || questions === null || items === null || profile === undefined) return { state: "failed", message: "The host sent a follow-up check that this page cannot read." };
+  if (parsed.ready !== true || questions === null || items === null || profile === undefined) return { state: "failed", message: "The machine sent a follow-up check that this page cannot read." };
   const ready: FollowUpReadiness = { ready: true, host, profile, surface: parsed.surface === "headless" || parsed.surface === "hc" ? parsed.surface : "herdr", questions, items };
   const via = textOf(parsed.via);
   if (via !== undefined) ready.via = via;
@@ -123,6 +123,6 @@ export async function fetchReadiness(project: string, run: string, signal: Abort
     const response = await fetch(`/api/run/follow-up/ready?${query.toString()}`, { headers: { accept: "application/json" }, cache: "no-store", signal });
     return readReadiness(response.status, await response.text());
   } catch {
-    return { state: "failed", message: "The host did not answer. Check the connection and open the page again." };
+    return { state: "failed", message: "The machine did not answer. Check the connection and open the page again." };
   }
 }

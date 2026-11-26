@@ -691,7 +691,7 @@ test("the ritual page of a repo ritual shows where git defines it, the schedule 
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: repo } : null) };
   const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
   const text = page.replaceAll(/<[^>]+>/gu, "");
-  assert.ok(text.includes("Defined in .darius.toml at commit abcdef123456, host host-a"), "the source line");
+  assert.ok(text.includes("Defined in .darius.toml at commit abcdef123456, machine host-a"), "the source line");
   assert.ok(text.includes("(uncommitted changes)"), "dirty");
   assert.ok(text.includes("07:00 Europe/Berlin") && text.includes("30m"), "at, zone and timeout");
   assert.ok(text.includes("Arguments") && text.includes("--site acme"), "the skill arguments");
@@ -923,7 +923,7 @@ test("the ritual page says where a pinned ritual runs", async () => {
   const pinned = { ...project.rituals[0]!, host: "host-b" };
   const ctx: WebContext = { ...context, ritual: (name, slug) => (name === "demo" && slug === "daily-report" ? { ...RITUAL, row: pinned } : null) };
   const page = (await (await handler(new Request("http://darius.test/w/demo/rituals/daily-report"), ctx)).text()).replaceAll("<!-- -->", "");
-  assert.ok(page.includes(`Runs on <code class="inline-code">host-b</code> only; the timer of any other host skips it.`));
+  assert.ok(page.includes(`Runs on <code class="inline-code">host-b</code> only; the timer of any other machine skips it.`));
   assert.equal((await get("/w/demo/rituals/daily-report")).body.includes("Runs on"), false, "no pin, no line");
 });
 
@@ -1041,7 +1041,7 @@ test("a run with a result: the banner, tiles, the question with the ack command,
   const page = await readPage(`/w/demo/runs/${ASKS}`, ctx);
   assert.equal(page.includes(EVIL), false, "result text never becomes a script");
   assert.equal(h1Of(page), "Findings heading", "the report heading stays the title");
-  assert.ok(page.includes('<span class="rw-state tone-wait">Asks you</span>'), "the run state asks");
+  assert.ok(page.includes('<span class="rw-state tone-wait">Waits for your answer</span>'), "the run state asks");
 
   const result = page.indexOf('<h2 class="label">Result</h2>');
   const questions = page.indexOf('<h2 class="label">Questions for you</h2>');
@@ -1277,7 +1277,7 @@ test("the form's rules: Use recommendation fills one box, each button posts its 
   const refused = rules.runNowNotice({ ...ok, host: "host-b", runNowError: "host-b did not start it: run 01KX is held." });
   assert.equal(refused.tone, "bad");
   assert.equal(refused.text, "host-b did not start it: run 01KX is held.", "the server's wording stays as it is");
-  assert.equal(rules.runNowNotice({ ...ok, runNowError: "ssh to host-c failed" }).text, "The host did not start it: ssh to host-c failed.", "any other error gets the same words");
+  assert.equal(rules.runNowNotice({ ...ok, runNowError: "ssh to host-c failed" }).text, "The machine did not start it: ssh to host-c failed.", "any other error gets the same words");
   assert.equal(rules.refusedStartText("The host did not answer.", null, 0), "The host did not answer.", "a reply that never came is no refusal of the host");
   // Once the page follows the start, the line changes with it.
   assert.equal(rules.followedNotice(slow, undefined), slow);
@@ -1378,7 +1378,7 @@ test("a held run without a question shows no form", async () => {
   const home = await readPage("/all", heldContext({ questions: [], holdFrom: 0 }));
   const card = cardOf(home, `held-${HELD}`);
   assert.equal(card.includes("<form"), false);
-  assert.ok(card.includes("The run is held without a question"));
+  assert.ok(card.includes("The run waits for your answer, but it has no question"));
 });
 
 test("the held form's rules: the current hold, the body Answer and resume posts, the notice", () => {
@@ -1513,14 +1513,14 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   const cardAt = home.indexOf(`<article id="asks-${ASKS}"`);
   const card = between(home, cardAt, home.indexOf("</article>", cardAt));
   assert.ok(card.includes("card-accent edge-wait"), "a waiting edge");
-  assert.ok(card.includes("Asks you"));
+  assert.ok(card.includes("Waits for your answer"));
   assert.ok(card.includes(`href="/w/demo/runs/${ASKS}"`), "it opens the run");
   assert.ok(card.includes("Daily &lt;script&gt;alert(1)&lt;/script&gt; report"), "the ritual label");
   assert.ok(card.includes("demo, by timer, 1 question"), "the question count");
   assert.ok(card.includes("Delete the two old landing pages &lt;script&gt;alert(1)&lt;/script&gt; now?") && card.includes("Yes, delete them."), "the question and its recommendation");
   assert.equal(card.includes("darius run ack"), false, "the terminal command moved to the run page");
   assert.equal(home.includes('id="done-demo-daily-report"'), false, "the run shows once, not also under Done lately");
-  assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Asks you<\/span>/su, "Coming up says so");
+  assert.match(comingOf(await readPage("/rituals", ctx)), /<li class="rw rw-rail tone-wait">.*<span class="rw-state tone-wait">Waits for your answer<\/span>/su, "Coming up says so");
   assert.match(home, /<span class="places-need">1 needs you<\/span>/u, "Places counts the thing that needs you");
 
   const runs = await readPage("/runs", ctx);
@@ -1534,7 +1534,7 @@ test("a run that asks: an Asks you card on home, tags in the lists, and no page 
   assert.ok(ritual.includes('<div class="card card-accent edge-wait">'), "the latest report card waits");
 
   const project = await readPage("/w/demo", ctx);
-  assert.match(project, /id="reports".*?<li class="rw rw-rail tone-wait">.*?Asks you/su, "the latest-report row waits, with a rail");
+  assert.match(project, /id="reports".*?<li class="rw rw-rail tone-wait">.*?Waits for your answer/su, "the latest-report row waits, with a rail");
   for (const page of [home, runs, ritual, project]) assert.equal(page.includes(EVIL), false);
 });
 
@@ -1780,7 +1780,7 @@ test("the vigil page: the failure block, the output as text in a pre, the last s
   assert.deepEqual(crumbsOf(page.body).map((step) => step.text), ["Workspaces", "demo", "Vigils", "Guard soak"]);
   assert.ok(text.includes("Why flagged") && text.includes("Last sweeps"));
   const plain = text.replaceAll(/<[^>]+>/gu, "");
-  for (const part of ["Step1: the page", "Commandcurl -sf http://localhost/", "Expectedexit 0", "Resultfail, exit 1", "Hosthost-a", "Check broken: the check itself failed"]) assert.ok(plain.includes(part), part);
+  for (const part of ["Step1: the page", "Commandcurl -sf http://localhost/", "Expectedexit 0", "Resultfail, exit 1", "Machinehost-a", "Check broken: the check itself failed"]) assert.ok(plain.includes(part), part);
   const pre = /<pre class="code-block">(.*?)<\/pre>/su.exec(text)?.[1] ?? "";
   assert.ok(pre.includes("curl: (22) the page said &lt;b&gt;bold&lt;/b&gt; &amp; &quot;more&quot;"), "the output is text in a pre");
   assert.ok(pre.includes("&lt;script&gt;alert(1)&lt;/script&gt;"), "HTML-looking output is escaped");
@@ -1799,7 +1799,7 @@ test("the vigil page of a vigil that is not flagged has no failure block; an old
   assert.ok(calm.includes("This vigil has not been swept yet.") && calm.includes("Closed because: done"));
   const old: WebContext = { ...context, vigil: () => ({ ...VIGIL, failure: { ...VIGIL.failure!, source: "body", outputTail: null } }) };
   const text = (await (await handler(new Request("http://darius.test/w/demo/vigils/soak"), old)).text()).replaceAll("<!-- -->", "");
-  assert.ok(text.includes("did not record Command and Expected") && text.includes("The output is not stored on this host."));
+  assert.ok(text.includes("did not record Command and Expected") && text.includes("The output is not stored on this machine."));
   assert.equal((await get("/w/demo/vigils/ghost")).status, 404);
   assert.equal((await get("/w/ghost/vigils/soak")).status, 404);
 });
@@ -2101,7 +2101,7 @@ test("the backups tab: an env-locked field, no secret, the controls", async () =
   const page = await get("/settings/backups");
   assert.equal(page.status, 200);
   const body = page.body;
-  for (const text of ["Backups", "Back up now", "Snapshots", "this host", "not on this host", "bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "Set by the environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this host", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf", "Copies go to bucket"]) {
+  for (const text of ["Backups", "Back up now", "Snapshots", "this machine", "not on this machine", "bucket", "darius-testhost-20260928T070000Z.tar.gz", "50 MiB", "Delete here", "Delete in bucket", "Set by the environment", "DARIUS_SNAPSHOT_ENDPOINT", "Reset to default", "saved on this machine", "Remove the saved key", "Test the bucket", "Set these with environment variables", "DARIUS_SNAPSHOT_SECRET_ACCESS_KEY", "/home/test/.config/darius/web.env", "tar -xzf", "Copies go to bucket"]) {
     assert.ok(body.includes(text), `the backups tab shows: ${text}`);
   }
   const input = (id: string): string => [...body.matchAll(/<input\b[^>]*>/gu)].map((match) => match[0]).find((tag) => tag.includes(`id="${id}"`)) ?? "";
@@ -2155,7 +2155,7 @@ test("the backups tab: the remote copy says at once whether there is one", async
   const none: BackupsStatus = { ...BACKUPS, remoteConfigured: false, remote: null, settings: { ...BACKUPS.settings, endpoint: { value: "", source: "default" }, bucket: { value: "", source: "default" } } };
   const response = await handler(new Request("http://darius.test/settings/backups"), { ...context, backups: () => none });
   const body = (await response.text()).replaceAll("<!-- -->", "");
-  assert.ok(body.includes("No remote copy set up. Snapshots stay on this host only."), "no remote copy is said plainly");
+  assert.ok(body.includes("No remote copy set up. Snapshots stay on this machine only."), "no remote copy is said plainly");
   assert.match(body, /aria-expanded="false"[^>]*>Set up a remote copy<\/button>/u, "the button offers to set one up");
   assert.equal(body.includes(">Test the bucket</button>"), false, "no bucket test without a bucket");
 });
@@ -2944,12 +2944,12 @@ test("Settings, Notifications: a read-only email line, with no address and no bu
   const set = await candlePage("/settings/notifications");
   assert.ok(set.text.includes("Email: set up"));
   const notSet = await candlePage("/settings/notifications", { emailSetUp: () => false });
-  assert.ok(notSet.text.includes("Email: not set up on this host"));
+  assert.ok(notSet.text.includes("Email: not set up on this machine"));
   assert.equal(/<input[^>]*type="(?:email|text)"/u.test(notSet.body), false, "no field");
   assert.equal(notSet.text.toLowerCase().includes("test email"), false, "no test button");
 });
 
 test("Settings, Notifications: a broken email file shows as a problem with its reason", async () => {
   const broken = await candlePage("/settings/notifications", { emailSetUp: () => false, emailProblem: () => "email.json is not valid JSON" });
-  assert.ok(broken.text.includes("Email: not set up on this host. Problem: email.json is not valid JSON"));
+  assert.ok(broken.text.includes("Email: not set up on this machine. Problem: email.json is not valid JSON"));
 });

@@ -344,7 +344,7 @@ export function HeldForm({ project, row }: HeldFormProps): React.ReactNode {
         <StartLine notice={notice} project={project} />
       ) : (
         <div className="fu-acts">
-          <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this held run" disabled={isLocked || isTooBig || !filled}>
+          <BusyButton busy={busy} type="submit" className="st-btn st-btn-main" aria-label="Answer and resume: this run that waits for your answer" disabled={isLocked || isTooBig || !filled}>
             {busy ? "Starting…" : "Answer and resume"}
           </BusyButton>
         </div>

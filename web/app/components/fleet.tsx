@@ -2,8 +2,9 @@
  * The parts of the workspace pages (0.140.0, 0.141.0): a health word with
  * its dot, the reasons, and the head of a workspace Overview: the trail, the
  * name as the title with its health word, the status sentence, four compact
- * count links and its djinns. Colour is never the only signal: every dot
- * comes with its word.
+ * count links and the rituals darius starts for it (0.143.0: the row is a
+ * ritual; a djinn is the session that performs one). Colour is never the
+ * only signal: every dot comes with its word.
  */
 
 import { Link } from "react-router";
@@ -11,6 +12,7 @@ import { Link } from "react-router";
 import type { FleetDjinn, FleetWorkspace, WorkspaceHealth } from "../../../src/web/api.ts";
 import { healthWord, shownReasons, workspaceSentence } from "../lib/fleet.ts";
 import { href } from "../lib/paths.ts";
+import { LABELS, STATE_WORDS } from "../lib/terms.ts";
 import { outcomeTone, type Tone } from "../lib/tone.ts";
 import { Crumbs } from "./crumbs.tsx";
 import { Sentence } from "./sentence.tsx";
@@ -51,7 +53,7 @@ export function Reasons({ reasons, max = 2 }: ReasonsProps): React.ReactNode {
 
 const DJINN_STATES = {
   running: { tone: "run", label: "running" },
-  held: { tone: "wait", label: "held" },
+  held: { tone: "wait", label: STATE_WORDS.waits },
   late: { tone: "late", label: "late" },
   due: { tone: "wait", label: "due today" },
   idle: { tone: "idle", label: "next due" },
@@ -82,11 +84,12 @@ function DjinnRow({ ws, djinn, self }: DjinnRowProps): React.ReactNode {
       <span className="fl-djinn-host">
         {djinn.host === null ? (
           <span className="text-muted">any machine</span>
+        ) : djinn.why === "pinned" ? (
+          <span className="fl-runs-on">{djinn.host === self ? "only on this machine" : `only on ${djinn.host}`}</span>
+        ) : djinn.host === self ? (
+          <span>runs here</span>
         ) : (
-          <>
-            {djinn.host === self ? <span>lives here</span> : <span className="fl-runs-on">{`lives on ${djinn.host}`}</span>}
-            {djinn.why === "pinned" ? <span className="text-muted"> (pinned)</span> : null}
-          </>
+          <span className="fl-runs-on">{`runs on ${djinn.host}`}</span>
         )}
       </span>
       <span className="fl-djinn-last">
@@ -94,7 +97,7 @@ function DjinnRow({ ws, djinn, self }: DjinnRowProps): React.ReactNode {
           <span className="text-muted">no run yet</span>
         ) : (
           <>
-            <Status tone={lastTone(djinn.lastOutcome)} label={djinn.lastOutcome} /> <Time iso={djinn.lastAt} />
+            <Status tone={lastTone(djinn.lastOutcome)} label={djinn.lastOutcome === "held" ? STATE_WORDS.waits : djinn.lastOutcome} /> <Time iso={djinn.lastAt} />
           </>
         )}
       </span>
@@ -109,7 +112,7 @@ interface CountLinkProps {
   alarm: number;
   alarmText: string;
   tone: "late" | "bad" | "wait";
-  /** A second line under the label: "11 djinns". */
+  /** A second line under the label: "11 darius starts". */
   sub?: string;
 }
 
@@ -126,7 +129,7 @@ function CountLink({ to, label, count, alarm, alarmText, tone, sub }: CountLinkP
   );
 }
 
-/** The djinns the header lists before "Show all". */
+/** The rituals the header lists before "Show all". */
 const HEADER_DJINNS = 3;
 
 interface HeaderProps {
@@ -155,20 +158,20 @@ export function WorkspaceHeader({ workspace, self }: HeaderProps): React.ReactNo
         </h1>
         <Sentence className="ws-sentence" parts={workspaceSentence(workspace, self)} />
       </header>
-      <section className="fl-head panel" aria-label={`${ws}: counts and djinns`}>
+      <section className="fl-head panel" aria-label={`${ws}: counts and rituals`}>
         <nav className="fl-counts" aria-label={`${ws}: counts`}>
-          <CountLink to={ritualsHref} label="Rituals" count={counts.rituals} alarm={counts.ritualsLate} alarmText="late" tone="late" sub={`${String(counts.djinns)} ${counts.djinns === 1 ? "djinn" : "djinns"}`} />
+          <CountLink to={ritualsHref} label="Rituals" count={counts.rituals} alarm={counts.ritualsLate} alarmText="late" tone="late" sub={`${String(counts.djinns)} darius starts`} />
           <CountLink to={href({ to: "section", ws, section: "vigils" })} label="Vigils" count={counts.vigilsOpen} alarm={counts.vigilsFlagged} alarmText="flagged" tone="bad" />
           <CountLink to={href({ to: "section", ws, section: "candles" })} label="Candles" count={counts.candlesLit} alarm={0} alarmText="" tone="wait" />
           <CountLink to={href({ to: "section", ws, section: "findings" })} label="Findings" count={counts.findingsOpen} alarm={counts.findingsNeedYou} alarmText="to decide" tone="wait" />
         </nav>
         <div id="djinns" className="fl-djinns">
           <p className="fl-djinns-head">
-            <span className="label">Djinns</span>
+            <span className="label">{LABELS.ritualsDarius}</span>
             {workspace.djinns.length > HEADER_DJINNS ? <Link to={ritualsHref}>{`Show all ${String(workspace.djinns.length)}`}</Link> : null}
           </p>
           {djinns.length === 0 ? (
-            <p className="text-muted">No djinn works for this workspace.</p>
+            <p className="text-muted">darius starts no ritual for this workspace.</p>
           ) : (
             <ul className="fl-djinn-list">
               {djinns.map((djinn) => (

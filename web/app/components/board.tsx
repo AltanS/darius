@@ -251,7 +251,7 @@ export function CardView({ card, canWrite }: CardViewProps): React.ReactNode {
       {hasBody ? (
         <div className="hc-body">
           {card.candle === null ? null : <CandleActions row={card.candle} canWrite={canWrite} />}
-          {card.kind === "held" && card.questions.length === 0 ? <p className="empty">The run is held without a question. Resume or close it from the command line.</p> : null}
+          {card.kind === "held" && card.questions.length === 0 ? <p className="empty">The run waits for your answer, but it has no question. Resume or close it from the command line.</p> : null}
           {card.questions.length === 0 ? null : canWrite && card.held !== null ? (
             <HeldForm key={heldKey(card.held.row)} project={card.held.project} row={card.held.row} />
           ) : (

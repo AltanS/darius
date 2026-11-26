@@ -383,7 +383,7 @@ export const LOOPBACK_REOPEN = "reopening a finding needs a tailnet identity; op
 export const LOOPBACK_ACK = "acknowledging a run needs a tailnet identity; open the page by its tailnet address";
 
 /** Why the loopback viewer cannot answer a held run; the same reason as the acknowledgement. */
-export const LOOPBACK_ANSWER = "answering a held run needs a tailnet identity; open the page by its tailnet address";
+export const LOOPBACK_ANSWER = "answering a run that waits for your answer needs a tailnet identity; open the page by its tailnet address";
 
 /** Why the loopback viewer cannot check a vigil; the same reason as the others, and the page hides the button for it. */
 export const LOOPBACK_CHECK = "checking a vigil needs a tailnet identity; open the page by its tailnet address";
@@ -772,7 +772,7 @@ async function acknowledge(request: ActionRequest, viewer: ActionViewer, deps: A
     try {
       host = targetHost(deps, body.project, slug);
     } catch (cause) {
-      return fail(500, `the ritual's host could not be read: ${errorMessage(cause)}`);
+      return fail(500, `the ritual's machine could not be read: ${errorMessage(cause)}`);
     }
     if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
     on = host.on;
@@ -840,7 +840,7 @@ async function spawnWatched(
 /** The host a ritual's verb goes to with `--on`, or why it cannot go. Undefined when this host is right. */
 function targetHost(deps: ActionDeps, project: string, slug: string): { on: string | undefined } | { failed: string } {
   const on = (deps.nowHost ?? ritualNowHost)(project, slug);
-  if (on !== undefined && !HOST_NAME.test(on)) return { failed: "the ritual's host name is not valid" };
+  if (on !== undefined && !HOST_NAME.test(on)) return { failed: "the ritual's machine name is not valid" };
   return { on };
 }
 
@@ -900,7 +900,7 @@ async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: Ac
   if (view.item === undefined) return fail(400, `no run ${body.run} in ${body.project}`);
   const slug = ritualSlug(view.item);
   if (slug === undefined) return fail(400, "only a run of a ritual can be resumed");
-  if (view.phase !== "held") return fail(409, `run ${body.run} is not held (phase: ${view.phase ?? "unknown"})`);
+  if (view.phase !== "held") return fail(409, `run ${body.run} does not wait for your answer (phase: ${view.phase ?? "unknown"})`);
   const first = view.holdFrom + 1;
   const last = view.questions.length;
   const stray = body.answers.find((answer) => answer.n < first || answer.n > last);
@@ -909,7 +909,7 @@ async function answerHeld(request: ActionRequest, viewer: ActionViewer, deps: Ac
   try {
     host = targetHost(deps, body.project, slug);
   } catch (cause) {
-    return fail(500, `the ritual's host could not be read: ${errorMessage(cause)}`);
+    return fail(500, `the ritual's machine could not be read: ${errorMessage(cause)}`);
   }
   if ("failed" in host) return fail(409, `nothing written: ${host.failed}`);
   const who = `web:${viewer.who}`;
@@ -1218,7 +1218,7 @@ const CANDLE_LIGHT_PATH = `${CANDLE_API_PREFIX}light`;
 /** Why the loopback viewer cannot settle a candle; the same reason as a finding: a run could settle its own. */
 export const LOOPBACK_CANDLE_SETTLE = "settling a candle needs a tailnet identity; open the page by its tailnet address";
 /** Why the loopback viewer cannot light a candle: any local process is that viewer, and a local script has the CLI. */
-export const LOOPBACK_CANDLE_LIGHT = "lighting a candle over HTTP needs a tailnet identity; on this host use darius candle light";
+export const LOOPBACK_CANDLE_LIGHT = "lighting a candle over HTTP needs a tailnet identity; on this machine use darius candle light";
 
 const ANSWER_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "followUp"]);
 const ACCEPT_CANDLE_KEYS: ReadonlySet<string> = new Set(["project", "key", "note", "vigilVerdict"]);
@@ -1468,7 +1468,7 @@ async function startCandleFollowUp(candle: CandleFollowUp, viewer: ActionViewer,
   if (!ready.items.some((item) => item.key === key)) return fail(409, `run ${run} has no open decision on candle '${key}' to follow up. Answer it without a follow-up.`);
   const on = ready.via === undefined ? undefined : ready.host;
   // The name comes from the store. A name that starts with `-` would reach ssh as an option.
-  if (on !== undefined && !HOST_NAME.test(on)) return fail(409, "the follow-up did not start: the ritual's host name is not valid");
+  if (on !== undefined && !HOST_NAME.test(on)) return fail(409, "the follow-up did not start: the ritual's machine name is not valid");
   const who = `web:${viewer.who}`;
   const argv = ["candle", "answer", "--follow-up", flagArg("project", project), flagArg("note", note), flagArg("who", who)];
   if (on !== undefined) argv.push(flagArg("on", on));

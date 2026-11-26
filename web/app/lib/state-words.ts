@@ -7,14 +7,19 @@
 
 import type { HostBackupState, RitualRow, RunRow, VigilRow } from "../../../src/web/api.ts";
 import { dayGap, dayName, shortDate } from "./format.ts";
+import { STATE_WORDS } from "./terms.ts";
 import type { Badge, Tone } from "./tone.ts";
 
 /** Days ahead that read as a weekday date ("Fri 2 Oct"); a later date reads "15 Nov". */
 const WEEKDAY_DAYS = 14;
 
 export const RUNNING: Badge = { tone: "run", label: "Running" };
-export const WAITING_FOR_YOU: Badge = { tone: "wait", label: "Waiting for you" };
-export const ASKS_YOU: Badge = { tone: "wait", label: "Asks you" };
+/** The word of a run that waits for a person, as on the machine pages (`STATE_WORDS.waits`), with a capital. */
+const WAITS_LABEL = `${STATE_WORDS.waits.charAt(0).toUpperCase()}${STATE_WORDS.waits.slice(1)}`;
+/** A held run. */
+export const WAITING_FOR_YOU: Badge = { tone: "wait", label: WAITS_LABEL };
+/** A complete run that asks a question nobody answered. It has its own object so a row can tell it from a held run, and the same word. */
+export const ASKS_YOU: Badge = { tone: "wait", label: WAITS_LABEL };
 /** A start the web asked for that shows no run yet (0.90.0). */
 export const STARTING: Badge = { tone: "run", label: "Starting" };
 /** A start the web asked for that the CLI refused, or that shows no run after 15 minutes. */

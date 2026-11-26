@@ -15,6 +15,9 @@ phases with their done checks. If you are about to argue *why not* rather than *
 probably in its decision table. Change the concept in the same commit as the code that departs
 from it.
 
+**Keep [`docs/glossary.md`](docs/glossary.md) true.** A change of a term, or of a word the web app
+or the CLI shows, updates the glossary in the same commit.
+
 ## Status
 
 darius is at phase 2 of the migration in `docs/concept.md`, with parts of later phases built. The

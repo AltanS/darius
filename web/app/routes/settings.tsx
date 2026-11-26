@@ -30,7 +30,7 @@ export default function SettingsLayout(): React.ReactNode {
     <div className="st">
       <header className="page-head st-head">
         <h1 className="page-title">Settings</h1>
-        <p className="lede">How darius looks on this device, and how this host backs up. The look stays in this browser.</p>
+        <p className="lede">How darius looks on this device, and how this machine backs up. The look stays in this browser.</p>
       </header>
       <nav aria-label="Settings sections" className="st-tabs">
         {TABS.map(({ page, label, end }) => (

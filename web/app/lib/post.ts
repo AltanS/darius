@@ -79,7 +79,7 @@ function parse(status: number, text: string): PostResult {
   try {
     reply = new Map(Object.entries(Object(JSON.parse(text))));
   } catch {
-    return failed(status, `The host answered ${status} with text that is not JSON.`);
+    return failed(status, `The machine answered ${status} with text that is not JSON.`);
   }
   const error = reply.get("error");
   const textOf = (key: string): string | null => {
@@ -87,7 +87,7 @@ function parse(status: number, text: string): PostResult {
     return value === undefined || value === null || value === "" ? null : String(value);
   };
   if (reply.get("ok") !== true) {
-    const refusal = failed(status, error === undefined || error === null || error === "" ? `The host answered ${status}.` : String(error));
+    const refusal = failed(status, error === undefined || error === null || error === "" ? `The machine answered ${status}.` : String(error));
     const retryAt = textOf("retryAt");
     const lastCheckedAt = textOf("lastCheckedAt");
     if (retryAt !== null) refusal.retryAt = retryAt;
@@ -137,7 +137,7 @@ export async function postJson(path: string, body: PostBody): Promise<PostResult
   try {
     text = await response.text();
   } catch {
-    return failed(response.status, `The host answered ${response.status}, but the answer could not be read.`);
+    return failed(response.status, `The machine answered ${response.status}, but the answer could not be read.`);
   }
   return parse(response.status, text);
 }

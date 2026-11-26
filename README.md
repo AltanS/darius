@@ -26,20 +26,26 @@ its whole tracker tree in the darius store, and `darius onboard` moves a repo th
 
 ## The words darius uses
 
-- **Project**: one tracked repo. Its name comes from `.darius.toml`.
-- **Ritual**: recurring work with a schedule, such as "write the daily report at 07:00". A skill
-  holds the steps. darius starts a headless Claude Code session to follow them. This is a **run**.
-- **Vigil**: a one-shot check that waits for a date or an event, such as "check the logs after the
+The full list is in [`docs/glossary.md`](docs/glossary.md). It also gives the web words. The CLI
+says project and host. The web app says workspace and machine. They are the same things.
+
+- **Project**: one tracked repo. Its name comes from `.darius.toml`. The web app says **workspace**.
+- **Ritual**: recurring work that darius starts by itself, on a schedule, such as "write the daily
+  report at 07:00". A skill holds the steps. darius starts a headless Claude Code session, a
+  **djinn**, to perform it. One execution is a **run**.
+- **Vigil**: a one-time check that waits for a date or an event, such as "check the logs after the
   first real batch". You close it with a verdict.
-- **Held question**: a run stops when it reaches something the ritual's `hold` list names. It asks
-  you. You answer in the terminal UI, and the run goes on.
+- **Held run**: a run stops when it reaches something the ritual's `hold` list names. It asks you.
+  You answer in the terminal UI, and the run goes on. The web app says the run "waits for your
+  answer".
 - **Candle**: a problem that needs you, such as a vulnerable dependency. A run or a script lights it by
   key. It stays open until you answer it, accept it or it goes out.
 - **Policy**: the limits of a ritual. It sets the mode (`off`, `report` or `act`), the commands the
   run may use (`may`), and the patterns that stop it (`hold`).
 - **Store**: darius's own state. It lives outside your repo, in `~/.local/share/darius`.
 - **Bucket**: an S3-compatible bucket that you run. The store of every host syncs through it.
-- **Host**: one machine that runs darius. Each host has its own copy of the store.
+- **Host**: one machine that runs darius. Each host has its own copy of the store. The web app says
+  **machine**.
 
 ## What it looks like in use
 

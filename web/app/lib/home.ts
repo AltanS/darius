@@ -565,8 +565,27 @@ function projectNeeds(clock: Clock, generatedAt: string, project: ProjectStatus)
   };
 }
 
+/** One kind of thing that needs the operator in a project, and how many (0.143.0): the parts the badge count is the sum of. */
+export interface NeedPart {
+  kind: "answer" | "failed" | "stuck" | "vigil" | "candle" | "unreadable";
+  count: number;
+}
+
+/** What makes up the need-you count of a project, the kinds with a count above zero, in a fixed order. The count is their sum, nothing else. */
+function needPartsOf(needs: ProjectNeeds): NeedPart[] {
+  const parts: NeedPart[] = [
+    { kind: "answer", count: needs.held.length + needs.asks.length },
+    { kind: "failed", count: needs.failed.length },
+    { kind: "stuck", count: needs.stuck.length },
+    { kind: "vigil", count: needs.flagged.length },
+    { kind: "candle", count: needs.project.candles.lit },
+    { kind: "unreadable", count: needs.unreadable ? 1 : 0 },
+  ];
+  return parts.filter((part) => part.count > 0);
+}
+
 function needsSize(needs: ProjectNeeds): number {
-  return needs.held.length + needs.asks.length + needs.failed.length + needs.stuck.length + needs.flagged.length + needs.project.candles.lit + (needs.unreadable ? 1 : 0);
+  return needPartsOf(needs).reduce((sum, part) => sum + part.count, 0);
 }
 
 export interface NeedCounts {
@@ -574,19 +593,24 @@ export interface NeedCounts {
   total: number;
   /** The same count for each project by name, self-test projects included (they add to the total only when the operator shows them). */
   byProject: Record<string, number>;
+  /** What each count is made of, by project: the parts sum to `byProject` (0.143.0). */
+  partsByProject: Record<string, NeedPart[]>;
 }
 
 /** The things that need the operator, per project and in total: what the verdict says and the badges show. */
 export function needCounts(status: HostStatus, includeSelftest = false): NeedCounts {
   const clock: Clock = { now: Date.parse(status.generatedAt), today: status.today, offset: status.utcOffset };
   const byProject: Record<string, number> = {};
+  const partsByProject: Record<string, NeedPart[]> = {};
   let total = 0;
   for (const project of status.projects) {
-    const size = needsSize(projectNeeds(clock, status.generatedAt, project));
+    const needs = projectNeeds(clock, status.generatedAt, project);
+    const size = needsSize(needs);
     byProject[project.name] = size;
+    partsByProject[project.name] = needPartsOf(needs);
     if (includeSelftest || !isSelftest(project.name)) total += size;
   }
-  return { total, byProject };
+  return { total, byProject, partsByProject };
 }
 
 /** "3 things need you", for the badge title. */

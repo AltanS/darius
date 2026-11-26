@@ -7,14 +7,15 @@
 
 import type { Target } from "./paths.ts";
 
-export type Part = { kind: "text"; text: string } | { kind: "link"; text: string; to: Target } | { kind: "time"; iso: string; age: boolean };
+/** A link may carry a `title`: the plain definition of a word in it ("a vigil is ..."), never the only place of a needed meaning. */
+export type Part = { kind: "text"; text: string } | { kind: "link"; text: string; to: Target; title?: string } | { kind: "time"; iso: string; age: boolean };
 
 export function plain(value: string): Part {
   return { kind: "text", text: value };
 }
 
-export function link(value: string, to: Target): Part {
-  return { kind: "link", text: value, to };
+export function link(value: string, to: Target, title?: string): Part {
+  return title === undefined ? { kind: "link", text: value, to } : { kind: "link", text: value, to, title };
 }
 
 export function time(iso: string): Part {

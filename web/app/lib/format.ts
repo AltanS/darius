@@ -195,3 +195,10 @@ export function ackCommand(run: string, project: string): string {
 export function decideCommand(run: string, project: string): string {
   return `darius run ack ${run} --answer 1="your answer" --project ${project}`;
 }
+
+/** "UTC+01:00" for an offset in minutes east of UTC. */
+export function zoneName(offset: number): string {
+  const sign = offset < 0 ? "-" : "+";
+  const size = Math.abs(offset);
+  return `UTC${sign}${String(Math.floor(size / 60)).padStart(2, "0")}:${String(size % 60).padStart(2, "0")}`;
+}

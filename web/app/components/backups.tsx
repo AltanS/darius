@@ -255,7 +255,7 @@ function SnapshotRow({ row, remoteConfigured, remotePrune }: SnapshotRowProps): 
       <span className="bk-size">{byteSize(row.bytes)}</span>
       <span className="bk-files">{row.files === null ? <span className="bk-none">files not known</span> : `${row.files} ${row.files === 1 ? "file" : "files"}`}</span>
       <span className="bk-where">
-        <Mark on={row.local} yes="this host" no="not on this host" />
+        <Mark on={row.local} yes="this machine" no="not on this machine" />
         {row.remote || remoteConfigured ? <Mark on={row.remote} yes="bucket" no="not in the bucket" /> : null}
       </span>
       <p className="bk-meta">
@@ -287,7 +287,7 @@ function SnapshotRow({ row, remoteConfigured, remotePrune }: SnapshotRowProps): 
           </>
         ) : (
           <span className="bk-ask" role="group" aria-label="Confirm the delete">
-            <span className="bk-ask-q">{ask === "local" ? "Delete from this host?" : "Delete from the bucket?"}</span>
+            <span className="bk-ask-q">{ask === "local" ? "Delete from this machine?" : "Delete from the bucket?"}</span>
             <BusyButton busy={busy} className="st-btn st-btn-small st-btn-danger" disabled={busy} onClick={() => void remove(ask)}>
               Yes
             </BusyButton>
@@ -304,7 +304,7 @@ function SnapshotRow({ row, remoteConfigured, remotePrune }: SnapshotRowProps): 
 
 function SnapshotList({ backups }: StateProps): React.ReactNode {
   const { snapshots, remoteConfigured, storePath, localBytes, settings } = backups;
-  const intro = snapshots.length === 0 ? undefined : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This host holds ${byteSize(localBytes)}.`;
+  const intro = snapshots.length === 0 ? undefined : `${snapshots.length} ${snapshots.length === 1 ? "snapshot" : "snapshots"}, newest first. This machine holds ${byteSize(localBytes)}.`;
   return (
     <SettingsCard title="Snapshots" intro={intro}>
       {snapshots.length === 0 ? (
@@ -433,7 +433,7 @@ function requestValue(field: FieldSpec, value: string | boolean): { ok: true; va
 /** The saved remote copy in one line, so a first look tells whether there is one. */
 function RemoteSummary({ backups }: StateProps): React.ReactNode {
   const { settings, remoteConfigured } = backups;
-  if (!remoteConfigured) return "No remote copy set up. Snapshots stay on this host only.";
+  if (!remoteConfigured) return "No remote copy set up. Snapshots stay on this machine only.";
   const prefix = settings.prefix.value;
   return (
     <>
@@ -531,7 +531,7 @@ function SettingsForm({ backups }: StateProps): React.ReactNode {
         </div>
         {backups.remoteConfigured ? <BucketTest /> : null}
       </SettingsCard>
-      <SettingsCard title="Dead-man ping" intro="A service outside your network can tell you when the pings stop, also when every host is down.">
+      <SettingsCard title="Dead-man ping" intro="A service outside your network can tell you when the pings stop, also when every machine is down.">
         {rows(PING_FIELDS)}
       </SettingsCard>
       {unsaved.length === 0 ? (
@@ -589,7 +589,7 @@ function Credentials({ backups }: StateProps): React.ReactNode {
       setNote({ tone: "bad", text: "Fill in both the access key id and the secret key." });
       return;
     }
-    void send("/api/snapshots/credentials", { accessKeyId: keyId.trim(), secretAccessKey: secret }, "The key pair is saved on this host.");
+    void send("/api/snapshots/credentials", { accessKeyId: keyId.trim(), secretAccessKey: secret }, "The key pair is saved on this machine.");
   };
 
   const intro = (
@@ -608,7 +608,7 @@ function Credentials({ backups }: StateProps): React.ReactNode {
           <SettingRow label="Access key id" htmlFor="bk-key-id">
             <input id="bk-key-id" className="st-input st-input-long" type="text" autoComplete="off" autoCapitalize="off" spellCheck={false} value={keyId} onChange={(event) => setKeyId(event.currentTarget.value)} />
           </SettingRow>
-          <SettingRow label="Secret key" htmlFor="bk-secret" help="The page writes the pair to this host and never shows it again.">
+          <SettingRow label="Secret key" htmlFor="bk-secret" help="The page writes the pair to this machine and never shows it again.">
             <input
               id="bk-secret"
               className="st-input st-input-long"

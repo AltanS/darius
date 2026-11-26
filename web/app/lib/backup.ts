@@ -27,8 +27,8 @@ export interface FieldSpec {
 
 export const LOCAL_FIELDS: readonly FieldSpec[] = [
   { key: "enabled", wire: "enabled", kind: "toggle", label: "Make snapshots", hint: "Off stops the timer from making new ones.", width: "short" },
-  { key: "dir", wire: "dir", kind: "text", label: "Folder", hint: "Where this host keeps its snapshots. A leading ~ is the home folder.", width: "long" },
-  { key: "keep", wire: "keep", kind: "number", label: "Keep on this host", hint: "How many of the newest snapshots stay here.", width: "short" },
+  { key: "dir", wire: "dir", kind: "text", label: "Folder", hint: "Where this machine keeps its snapshots. A leading ~ is the home folder.", width: "long" },
+  { key: "keep", wire: "keep", kind: "number", label: "Keep on this machine", hint: "How many of the newest snapshots stay here.", width: "short" },
 ];
 
 export const REMOTE_FIELDS: readonly FieldSpec[] = [
@@ -36,7 +36,7 @@ export const REMOTE_FIELDS: readonly FieldSpec[] = [
   { key: "bucket", wire: "bucket", kind: "text", label: "Bucket", hint: "An empty endpoint and an empty bucket mean no remote copy.", width: "medium" },
   { key: "region", wire: "region", kind: "text", label: "Region", hint: "The region name the service expects.", width: "medium" },
   { key: "prefix", wire: "prefix", kind: "text", label: "Prefix", hint: "A folder inside the bucket. Empty uses the top.", width: "medium" },
-  { key: "pathStyle", wire: "path_style", kind: "toggle", label: "Path style", hint: "Put the bucket in the path, not in the host name.", width: "short" },
+  { key: "pathStyle", wire: "path_style", kind: "toggle", label: "Path style", hint: "Put the bucket in the path, not in the machine name.", width: "short" },
   { key: "allowHttp", wire: "allow_http", kind: "toggle", label: "Allow plain http", hint: "Only for a service on a trusted network.", width: "short" },
   { key: "sse", wire: "sse", kind: "toggle", label: "Server side encryption", hint: "Ask the service to encrypt each object.", width: "short" },
   { key: "keepRemote", wire: "keep_remote", kind: "number", label: "Keep in the bucket", hint: "How many of the newest snapshots stay in the bucket. Ignored when darius may not delete there.", width: "short" },
@@ -86,7 +86,7 @@ export function sourceWord(source: SettingSource): string {
 /** What the key pair is, in words. */
 export function credentialsWord(source: "env" | "file" | "none"): string {
   if (source === "env") return "from the environment";
-  return source === "file" ? "saved on this host" : "not set";
+  return source === "file" ? "saved on this machine" : "not set";
 }
 
 /** A short form of a sha256: the first 12 characters. */

@@ -1,109 +1,124 @@
 /**
- * The row grammar of the lists (0.142.0): the djinns of a machine, the
- * runs by day, the mark of a run that did not start the default way, the
- * "Next" text of a djinn and the workspaces a machine runs. Every list puts
- * its columns in one order (State, Name, Where, When, then extras) and says
- * its order in its heading. Pure, so the server and the browser agree.
+ * The row grammar of the lists (0.142.0, words of 0.143.0): the rituals of
+ * a machine, the runs by day, the mark of a run that did not start the
+ * default way, the "Next" text of a ritual and the workspaces a machine
+ * runs. Every list says its order in its heading. Pure, so the server and
+ * the browser agree.
  */
 
 import type { FleetDjinn, FleetLast, FleetWorkspace, HostOpenRun, RunRow } from "../../../src/web/api.ts";
-import { clockTime, dayGap, dayName, hostDate, nextDay, relativeTime, roughDuration } from "./format.ts";
+import { clockTime, dayGap, dayName, hostDate, nextDay, roughDuration } from "./format.ts";
 import { HEALTHS, healthWord } from "./fleet.ts";
+import type { NeedPart } from "./home.ts";
+import { LABELS, STATE_WORDS } from "./terms.ts";
 import { outcomeTone, type Badge } from "./tone.ts";
 
-// --- the djinns of a machine -------------------------------------------------------------------
+// --- the rituals of a machine --------------------------------------------------------------------
 
-/** A djinn and the workspace it belongs to. */
-export interface PlacedDjinn {
-  workspace: string;
-  djinn: FleetDjinn;
-  /** Its last run closed complete with a question nobody answered yet. */
-  asks: boolean;
+/** An open question of a run: how many questions, and since when. */
+export interface OpenAsk {
+  questions: number;
+  at: string;
 }
 
-/** A closed outcome that counts as a failure in a djinn's state. */
-function failedLast(djinn: FleetDjinn): boolean {
-  const outcome = djinn.lastOutcome;
+/** A ritual that darius starts on a machine, with its workspace. */
+export interface PlacedRitual {
+  workspace: string;
+  ritual: FleetDjinn;
+  /** Its last run waits for an answer: held, or closed complete with a question nobody answered. Null when it does not. */
+  ask: OpenAsk | null;
+}
+
+/** A closed outcome that counts as a failure. */
+function failedLast(ritual: FleetDjinn): boolean {
+  const outcome = ritual.lastOutcome;
   return outcome !== null && outcome !== "running" && outcome !== "held" && outcomeTone(outcome) === "bad";
 }
 
-/**
- * The state word of a djinn, its own state only: running, held, late, asks
- * you, failed (its last run failed), due today. Any other djinn is a muted
- * "ok": the outcome of its last run is in the Last run cell, not here.
- */
-export function djinnStateWord(placed: PlacedDjinn): Badge {
-  const { djinn } = placed;
-  if (djinn.state === "running") return { tone: "run", label: "running" };
-  if (djinn.state === "held") return { tone: "wait", label: "held" };
-  if (djinn.state === "late") return { tone: "late", label: "late" };
-  if (placed.asks) return { tone: "wait", label: "asks you" };
-  if (failedLast(djinn)) return { tone: "bad", label: "failed" };
-  if (djinn.state === "due") return { tone: "gold", label: "due today" };
-  return { tone: "idle", label: "ok" };
+/** Why a ritual needs a look, most urgent first; null for a ritual on schedule. Running and due today are on schedule. */
+export type RitualProblem = "waits" | "failed" | "late";
+
+export function ritualProblem(placed: PlacedRitual): RitualProblem | null {
+  const { ritual } = placed;
+  if (ritual.state === "held" || placed.ask !== null) return "waits";
+  if (ritual.state === "running") return null;
+  if (failedLast(ritual)) return "failed";
+  if (ritual.state === "late") return "late";
+  return null;
 }
 
-/** A djinn needs a look: it runs, waits, is late, asks, failed its last run, or is due today. */
-export function needsLook(placed: PlacedDjinn): boolean {
-  const { djinn } = placed;
-  return djinn.state !== "idle" || placed.asks || failedLast(djinn);
+/** The due time as a sort key; a ritual with no schedule sorts last. */
+function nextKey(placed: PlacedRitual): string {
+  return placed.ritual.nextDueAt ?? placed.ritual.nextDue ?? "\uffff";
 }
 
-function byDueOldestFirst(left: PlacedDjinn, right: PlacedDjinn): number {
-  return (left.djinn.nextDueAt ?? left.djinn.nextDue ?? "~").localeCompare(right.djinn.nextDueAt ?? right.djinn.nextDue ?? "~");
+/** Code-point order: ISO times and dates sort by time, and the no-schedule key sorts after both. */
+function byText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
-function byLastRunNewestFirst(left: PlacedDjinn, right: PlacedDjinn): number {
-  return (right.djinn.lastAt ?? "").localeCompare(left.djinn.lastAt ?? "");
+/** The same ritual always lands in the same place: by workspace and slug, never by title. */
+function byKey(left: PlacedRitual, right: PlacedRitual): number {
+  return left.workspace.localeCompare(right.workspace) || left.ritual.slug.localeCompare(right.ritual.slug);
 }
 
-/** The same djinn always lands in the same place: by workspace and slug, never by title. */
-function byKey(left: PlacedDjinn, right: PlacedDjinn): number {
-  return left.workspace.localeCompare(right.workspace) || left.djinn.slug.localeCompare(right.djinn.slug);
+/** The rituals on schedule: next due first (one with no schedule last), then by workspace and slug. */
+export function onSchedule(rituals: readonly PlacedRitual[]): PlacedRitual[] {
+  return rituals.filter((one) => ritualProblem(one) === null).toSorted((left, right) => byText(nextKey(left), nextKey(right)) || byKey(left, right));
 }
 
-/**
- * The order of every djinn list: first the ones that need a look, the
- * oldest due first; then all others by the date of their last run, newest
- * first (one that never ran last). Never by title.
- */
-export function sortDjinns(djinns: readonly PlacedDjinn[]): PlacedDjinn[] {
-  const look = djinns.filter(needsLook).toSorted((left, right) => byDueOldestFirst(left, right) || byKey(left, right));
-  const rest = djinns.filter((one) => !needsLook(one)).toSorted((left, right) => byLastRunNewestFirst(left, right) || byKey(left, right));
-  return [...look, ...rest];
+/** The rituals that need a look, by kind (waits, failed, late), then the oldest due first. */
+export function withProblems(rituals: readonly PlacedRitual[]): Array<PlacedRitual & { problem: RitualProblem }> {
+  const order: readonly RitualProblem[] = ["waits", "failed", "late"];
+  return rituals
+    .flatMap((one) => {
+      const problem = ritualProblem(one);
+      return problem === null ? [] : [Object.assign({ problem }, one)];
+    })
+    .toSorted((left, right) => order.indexOf(left.problem) - order.indexOf(right.problem) || byText(nextKey(left), nextKey(right)) || byKey(left, right));
 }
 
-/** The "Next" cell of a djinn: when it is due next, or how late it is. */
+/** "On schedule (9 of 11)": the rituals on schedule of all that darius starts here; the others are the ones above. "On schedule (11)" when all are. */
+export function onScheduleTitle(quiet: number, rituals: number): string {
+  return quiet === rituals ? `${LABELS.onSchedule} (${String(rituals)})` : `${LABELS.onSchedule} (${String(quiet)} of ${String(rituals)})`;
+}
+
+/** The "Next" cell of a ritual: when it is due next, or how late it is, with the full local moment for a title. */
 export interface NextText {
   text: string;
   /** Late: the text is "late by 2 d" in the late tone. */
   late: boolean;
+  /** "Thu 26 Nov 07:00"; null when only a day is known. */
+  title: string | null;
 }
 
 /**
- * When a djinn runs next, for its "Next" cell. Late: "late by 1 d". Due
- * and past: "due now". Later today: "in 3 h". Tomorrow: "tomorrow 07:00".
- * Within six days: "Mon 07:00". Later: "Mon 7 Dec". No schedule: null.
+ * When a ritual runs next, for its "Next" cell. The future is always a day
+ * word and a time: "today 14:00", "tomorrow 07:00", "Mon 07:00" within six
+ * days, "Mon 7 Dec 07:00" later. Late: "late by 1 d". Due and past: "due
+ * now". No schedule: null.
  */
-export function nextText(djinn: Pick<FleetDjinn, "state" | "nextDueAt" | "nextDue">, clock: { now: number; today: string; offset: number }): NextText | null {
+export function nextText(ritual: Pick<FleetDjinn, "state" | "nextDueAt" | "nextDue">, clock: { now: number; today: string; offset: number }): NextText | null {
   const { now, today, offset } = clock;
-  if (djinn.nextDueAt === null) {
-    if (djinn.nextDue === null) return null;
-    const days = dayGap(today, djinn.nextDue);
-    if (days < 0) return { text: `late by ${String(-days)} d`, late: djinn.state === "late" };
-    if (days === 0) return { text: "today", late: false };
-    return { text: days === 1 ? "tomorrow" : `in ${String(days)} d`, late: false };
+  if (ritual.nextDueAt === null) {
+    if (ritual.nextDue === null) return null;
+    const days = dayGap(today, ritual.nextDue);
+    if (days < 0) return { text: `late by ${String(-days)} d`, late: ritual.state === "late", title: null };
+    if (days === 0) return { text: "today", late: false, title: null };
+    return { text: days === 1 ? "tomorrow" : dayName(`${ritual.nextDue}T12:00:00.000Z`, 0), late: false, title: null };
   }
-  const at = Date.parse(djinn.nextDueAt);
+  const at = Date.parse(ritual.nextDueAt);
   if (Number.isNaN(at)) return null;
-  if (djinn.state === "late") return { text: `late by ${roughDuration(Math.max(0, now - at))}`, late: true };
-  if (at <= now) return { text: "due now", late: false };
-  const date = hostDate(djinn.nextDueAt, offset);
-  if (date === today) return { text: relativeTime(djinn.nextDueAt, now), late: false };
-  const time = clockTime(djinn.nextDueAt, offset);
-  if (date === nextDay(today)) return { text: `tomorrow ${time}`, late: false };
-  const day = dayName(djinn.nextDueAt, offset);
-  return dayGap(today, date) <= 6 ? { text: `${day.split(" ")[0] ?? day} ${time}`, late: false } : { text: day, late: false };
+  const title = fullMoment(ritual.nextDueAt, offset);
+  if (ritual.state === "late") return { text: `late by ${roughDuration(Math.max(0, now - at))}`, late: true, title };
+  if (at <= now) return { text: "due now", late: false, title };
+  const date = hostDate(ritual.nextDueAt, offset);
+  const time = clockTime(ritual.nextDueAt, offset);
+  if (date === today) return { text: `today ${time}`, late: false, title };
+  if (date === nextDay(today)) return { text: `tomorrow ${time}`, late: false, title };
+  const day = dayName(ritual.nextDueAt, offset);
+  return { text: dayGap(today, date) <= 6 ? `${day.split(" ")[0] ?? day} ${time}` : `${day} ${time}`, late: false, title };
 }
 
 // --- the runs by day ------------------------------------------------------------------------
@@ -184,47 +199,59 @@ export interface RunsHereRow {
   name: string;
   icon: FleetWorkspace["icon"];
   health: Badge;
-  /** The first of its reasons: "2 candles lit"; null when it has none. */
-  reason: string | null;
-  djinns: number;
-  djinnsLate: number;
+  /** Its reasons, worst first: "2 vigils flagged"; empty for OK. */
+  reasons: string[];
+  /** The things that need you there: the one count of its badge in Places (`needCounts`), the sum of `needParts`. */
+  needs: number;
+  /** What that count is made of, by kind. */
+  needParts: NeedPart[];
+  /** The rituals darius starts for it on this machine. */
+  rituals: number;
   openRuns: number;
   /** Its newest ritual run on this machine. */
   lastRun: FleetLast | null;
+  /** The word of that run: its outcome, "running", or "waits for your answer". */
+  lastWord: Badge | null;
 }
 
 /**
  * The workspaces a machine runs (its project folder is linked there), worst
- * health first, then by name; each with its djinns there, its open runs
- * there and its newest ritual run there.
+ * health first, then by name; each with its rituals there, its open runs
+ * there and its newest ritual run there. `asks` holds the runs that wait for
+ * an answer (`project/run`), so a run reads the same word here as in the
+ * ritual lists. `needs` holds what the need-you count of each workspace is
+ * made of, from the root loader's source (`needCounts().partsByProject`), so
+ * the Why cell and the badge in Places show one number and its parts.
  */
-export function runsHereRows(name: string, workspaces: readonly FleetWorkspace[], lastRuns: readonly FleetLast[], openRuns: readonly Pick<HostOpenRun, "project">[]): RunsHereRow[] {
+export function runsHereRows(name: string, workspaces: readonly FleetWorkspace[], lastRuns: readonly FleetLast[], openRuns: readonly Pick<HostOpenRun, "project">[], asks: ReadonlyMap<string, OpenAsk> = new Map(), needs: Readonly<Record<string, readonly NeedPart[]>> = {}): RunsHereRow[] {
   return workspaces
     .filter((workspace) => workspace.places.some((place) => place.host === name && place.kind === "checkout"))
     .toSorted((left, right) => HEALTHS.indexOf(left.health) - HEALTHS.indexOf(right.health) || left.name.localeCompare(right.name))
     .map((workspace) => {
-      const djinns = workspace.djinns.filter((djinn) => djinn.host === name);
       const last = lastRuns.filter((run) => run.project === workspace.name && run.host === name).toSorted((left, right) => right.at.localeCompare(left.at))[0] ?? null;
+      const asked = last?.run !== undefined && asks.has(`${workspace.name}/${last.run}`);
       return {
         name: workspace.name,
         icon: workspace.icon,
         health: healthWord(workspace.health),
-        reason: workspace.reasons[0] ?? null,
-        djinns: djinns.length,
-        djinnsLate: djinns.filter((djinn) => djinn.state === "late").length,
+        reasons: workspace.health === "ok" ? [] : workspace.reasons,
+        needs: (needs[workspace.name] ?? []).reduce((sum, part) => sum + part.count, 0),
+        needParts: [...(needs[workspace.name] ?? [])],
+        rituals: workspace.djinns.filter((ritual) => ritual.host === name).length,
         openRuns: openRuns.filter((run) => run.project === workspace.name).length,
         lastRun: last,
+        lastWord: last === null ? null : lastRunWord(last.outcome, last.phase ?? null, asked),
       };
     });
 }
 
-/** A workspace a machine only shows a copy of, with its health. */
+/** A workspace a machine only keeps a copy of, with its health. */
 export interface CopyRow {
   name: string;
   health: Badge;
 }
 
-/** The copies a machine shows, by name. */
+/** The copies a machine keeps, by name. */
 export function copyRows(name: string, workspaces: readonly FleetWorkspace[]): CopyRow[] {
   return workspaces
     .filter((workspace) => workspace.places.some((place) => place.host === name && place.kind === "copy"))
@@ -232,9 +259,14 @@ export function copyRows(name: string, workspaces: readonly FleetWorkspace[]): C
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/** The words of a last run: its outcome; "running" while open, "held" while it waits for an answer. */
-export function lastRunWord(outcome: string | null): Badge {
-  if (outcome === null || outcome === "running") return { tone: "run", label: "running" };
-  if (outcome === "held") return { tone: "wait", label: "held" };
+/**
+ * The word of a last run, the same in every machine list: "running" while
+ * it works, "waits for your answer" while it is held or when it closed with
+ * a question nobody answered, else its outcome. An open run whose phase is
+ * unknown (null outcome, no phase) reads "running".
+ */
+export function lastRunWord(outcome: string | null, phase: "running" | "held" | null = null, asks = false): Badge {
+  if (phase === "held" || outcome === "held" || asks) return { tone: "wait", label: STATE_WORDS.waits };
+  if (phase === "running" || outcome === null || outcome === "running") return { tone: "run", label: STATE_WORDS.running };
   return { tone: outcomeTone(outcome), label: outcome };
 }

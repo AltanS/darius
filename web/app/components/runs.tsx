@@ -9,7 +9,8 @@ import { answerCommand, clockTime, duration, hostDate, shortDate, shortRun } fro
 import { href } from "../lib/paths.ts";
 import { ackKindOf, summaryTags } from "../lib/result.ts";
 import { nestRuns } from "../lib/ritual-activity.ts";
-import { datePhrase, railOf } from "../lib/state-words.ts";
+import { ASKS_YOU, datePhrase, railOf } from "../lib/state-words.ts";
+import { STATE_WORDS } from "../lib/terms.ts";
 import type { Badge } from "../lib/tone.ts";
 import { ackText, decisionText, runState, type ActivityRun, type Excerpt, type HostClock, type NextStep } from "../lib/view.ts";
 import { AckButton } from "./ack.tsx";
@@ -106,12 +107,15 @@ interface RunTableProps {
   phoneShown?: number;
   /** An extra class on the table: `lt-capped` caps its width. */
   className?: string;
+  /** A held run and a run with an open question say "waits for your answer", the word of the machine lists (0.143.0). */
+  answerWord?: boolean;
 }
 
-/** The state of a run row: as `runState`, with "Held" for a held run. */
-function runRowState(run: ActivityRun, runs: readonly ActivityRun[]): Badge {
+/** The state of a run row: as `runState`; with `answerWord`, the lowercase "waits for your answer" for a held run and one that asks you. */
+function runRowState(run: ActivityRun, runs: readonly ActivityRun[], answerWord = false): Badge {
   const state = runState(run, runs);
-  return run.phase === "held" ? { tone: state.tone, label: "Held" } : state;
+  if (answerWord && (run.phase === "held" || state === ASKS_YOU)) return { tone: "wait", label: STATE_WORDS.waits };
+  return state;
 }
 
 /** The marks after a run title: what is not the default about it. */
@@ -155,12 +159,13 @@ interface RunCellsInput {
   machines: boolean;
   withDay: boolean;
   clock: { now: number; today: string; offset: number };
+  answerWord: boolean;
 }
 
 /** The cells of one run row: Time, State, Run, Workspace, Machine, Took, then the result chips. */
-function runCells({ run, runs, named, machines, withDay, clock }: RunCellsInput): React.ReactNode[] {
+function runCells({ run, runs, named, machines, withDay, clock, answerWord }: RunCellsInput): React.ReactNode[] {
   const { now, today, offset } = clock;
-  const state = runRowState(run, runs);
+  const state = runRowState(run, runs, answerWord);
   const took = run.endedAt === null ? "" : duration(run.startedAt, run.endedAt);
   const counts = run.result === null ? [] : summaryTags(run.result, null);
   const isImport = run.who === "import";
@@ -199,7 +204,7 @@ function runCells({ run, runs, named, machines, withDay, clock }: RunCellsInput)
  * and the starter show only when they are not the default. Grouped by day
  * on the Runs page; a "Recent runs" list shows the day in the Time cell.
  */
-export function RunTable({ runs, showProject, byDay = false, empty, caption, phoneShown = runs.length, className }: RunTableProps): React.ReactNode {
+export function RunTable({ runs, showProject, byDay = false, empty, caption, phoneShown = runs.length, className, answerWord = false }: RunTableProps): React.ReactNode {
   const clock = useClock();
   const { today, offset } = clock;
   if (runs.length === 0) return <Empty>{empty}</Empty>;
@@ -215,10 +220,10 @@ export function RunTable({ runs, showProject, byDay = false, empty, caption, pho
     { label: "Result", kind: "extra" },
   ];
   const rowOf = (run: ActivityRun, index: number): React.ReactNode => {
-    const state = runRowState(run, runs);
+    const state = runRowState(run, runs, answerWord);
     return (
       <ListRow key={`${run.project}/${run.run}`} rail={railOf(state)} className={[index >= phoneShown ? "phone-extra" : "", run.phase === "running" ? "lt-live" : ""].filter((part) => part !== "").join(" ") || undefined}>
-        {runCells({ run, runs, named, machines, withDay: !byDay, clock })}
+        {runCells({ run, runs, named, machines, withDay: !byDay, clock, answerWord })}
       </ListRow>
     );
   };
@@ -264,7 +269,7 @@ interface QuestionsProps {
  */
 export function Questions({ project, run, canWrite }: QuestionsProps): React.ReactNode {
   if (run.questions.length === 0) {
-    return <Empty>The run is held without a question. Resume or close it from the command line.</Empty>;
+    return <Empty>The run waits for your answer, but it has no question. Resume or close it from the command line.</Empty>;
   }
   if (canWrite && run.questions.length > (run.holdFrom ?? 0)) {
     return (

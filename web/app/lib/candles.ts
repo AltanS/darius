@@ -272,7 +272,7 @@ const NOT_SET_UP = "not set up on host";
 /** One delivery line: "Push: sent from host-a on 27 Sep.", "Email: not set up on host-b.", "Email: not sent yet." */
 export function deliveryText(delivery: CandleDelivery, offset: number): string {
   const channel = CHANNEL_WORDS[delivery.channel];
-  const host = delivery.host === undefined ? "the host" : delivery.host;
+  const host = delivery.host === undefined ? "the machine" : delivery.host;
   const day = delivery.at === undefined ? "" : ` on ${shortDate(hostDate(delivery.at, offset))}`;
   if (delivery.state === "sent") return `${channel}: sent from ${host}${day}.`;
   if (delivery.state === "waiting") return `${channel}: not sent yet.`;

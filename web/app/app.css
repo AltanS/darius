@@ -6617,7 +6617,7 @@
   }
 
   .mb-facts dt {
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .mb-facts dd {
@@ -7530,6 +7530,259 @@
     margin: 8px 0 0;
     font-size: 13px;
     color: var(--color-muted);
+  }
+
+  /* --- what needs a look (0.143.0): one sentence per problem, the next step covers the item ---------- */
+
+  .nl-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .nl-item {
+    position: relative;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: start;
+    max-width: 100ch;
+    padding: 8px 12px;
+    border: 1px solid var(--color-sand);
+    background: color-mix(in srgb, var(--tone) 6%, var(--color-surface));
+  }
+
+  .nl-item:hover {
+    border-color: var(--tone);
+  }
+
+  .nl-icon {
+    margin-top: 3px;
+    color: var(--tone);
+  }
+
+  .nl-text {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .nl-lead {
+    font-weight: 700;
+    color: var(--tone);
+  }
+
+  /* The next step: a small bordered button at the right end, the only gold in the item. */
+
+  .nl-action {
+    align-self: center;
+    padding: 3px 12px;
+    border: 1px solid var(--color-gold);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--color-gold);
+    text-decoration: none;
+  }
+
+  .nl-item:hover .nl-action {
+    background: color-mix(in srgb, var(--color-gold) 14%, transparent);
+    color: var(--color-gold-hi);
+  }
+
+  .nl-action::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .nl-above {
+    position: relative;
+    z-index: 1;
+  }
+
+  .nl-text code {
+    font-size: 13px;
+  }
+
+  .nl-help,
+  .nl-none {
+    max-width: 100ch;
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .nl-none {
+    margin: 0;
+  }
+
+  .nl-head {
+    color: var(--color-muted);
+  }
+
+  .nl-group + .nl-group {
+    margin-top: 12px;
+  }
+
+  .nl-help {
+    margin: 0 0 6px;
+  }
+
+  /* The words of the page, defined where they are first used: under the headline, under a table heading. */
+
+  .def-line,
+  .lt-gloss {
+    max-width: 100ch;
+    margin: 6px 0 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--color-parchment);
+  }
+
+  .def-word {
+    font-weight: 600;
+  }
+
+  .lt-gloss {
+    margin: 0 0 6px;
+  }
+
+  /*
+   * Gold is for the page title, the machine name and the action buttons. A link inside a sentence
+   * or a table cell is body text with an underline; a heading inside a block is muted.
+   */
+
+  .fl-headline a,
+  .mb-sentence a,
+  .mp-sentence a,
+  .mb-copies a,
+  .mb-more a,
+  .lt-copies a,
+  .lt-why-link {
+    color: var(--color-parchment);
+    text-decoration: underline;
+    text-decoration-color: var(--color-sand-hi);
+    text-underline-offset: 3px;
+  }
+
+  .fl-headline a:hover,
+  .mb-sentence a:hover,
+  .mp-sentence a:hover,
+  .mb-copies a:hover,
+  .mb-more a:hover,
+  .lt-copies a:hover,
+  .lt-why-link:hover {
+    color: var(--color-gold-hi);
+  }
+
+  .lt-head {
+    color: var(--color-muted);
+  }
+
+  /* The machine lists: a title or a Why that wraps instead of ending in an ellipsis. */
+
+  .lt-c.lt-wrap {
+    white-space: normal;
+  }
+
+  .lt-text.lt-wrap {
+    min-width: 12rem;
+    max-width: 30rem;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  .lt-wrap .lt-title {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: none;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .lt-capped .lt-wrap .lt-namebox {
+    min-width: 14rem;
+    max-width: 30rem;
+  }
+
+  .lt-ws-name,
+  .lt-word-muted {
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+
+  /* A last run that links to its run stays muted: only a word other than complete carries colour. */
+
+  .lt-rituals .lt-time a.lt-above {
+    color: var(--color-muted);
+  }
+
+  .lt-rituals .lt-time a.lt-above:hover {
+    color: var(--color-gold-hi);
+  }
+
+  .mb .lt-head,
+  .mb .lt-order,
+  .mb .lt-dash {
+    color: var(--color-muted);
+  }
+
+  /* The clock of the page and the words it uses, at its foot. */
+
+  .time-note {
+    margin: 0;
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+
+  .terms {
+    max-width: 100ch;
+    font-size: 14px;
+  }
+
+  .terms > summary {
+    cursor: pointer;
+    color: var(--color-gold);
+  }
+
+  .terms-list {
+    display: grid;
+    gap: 4px;
+    margin: 8px 0 0;
+    padding: 12px 16px;
+    border: 1px solid var(--color-sand);
+  }
+
+  .terms-list > div {
+    display: grid;
+    grid-template-columns: 9rem minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .terms-list dt {
+    font-weight: 600;
+  }
+
+  .terms-list dd {
+    margin: 0;
+    color: var(--color-muted);
+  }
+
+  /* A phone: the button of a "needs a look" item goes under its sentence. */
+
+  @media (max-width: 720px) {
+    .nl-item {
+      grid-template-columns: 16px minmax(0, 1fr);
+    }
+
+    .nl-action {
+      grid-column: 2;
+      justify-self: start;
+    }
   }
 
   /* A phone: each row is two lines, the state and the name, then the other cells as small labelled values. */

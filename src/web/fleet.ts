@@ -244,7 +244,7 @@ export function collectFleet(now: Date = new Date()): FleetView {
     ledgers.flatMap(({ name, lines: projectLines }) =>
       runStates(projectLines)
         .filter((state) => state.item.startsWith("ritual/"))
-        .map((state): FleetLast => ({ project: name, item: state.item, host: state.host, at: state.startedAt, outcome: state.outcome, run: state.run })),
+        .map((state): FleetLast => Object.assign({ project: name, item: state.item, host: state.host, at: state.startedAt, outcome: state.outcome, run: state.run }, state.phase === "closed" ? {} : { phase: state.phase })),
     ),
   );
   const lastSweeps = newestPerItem(

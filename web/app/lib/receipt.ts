@@ -91,7 +91,7 @@ function followTail(facts: ReceiptFacts): string {
   const follow = facts.follow;
   if (follow === null) return "";
   if (follow.state === "running") return `, running${follow.host === null ? "" : ` on ${follow.host}`}`;
-  if (follow.state === "held") return ", waiting for you";
+  if (follow.state === "held") return ", waits for your answer";
   if (follow.state === "failed") return ", failed";
   return follow.changed > 0 ? `, done, ${follow.changed} changed` : ", done";
 }

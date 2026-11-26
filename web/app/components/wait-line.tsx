@@ -40,7 +40,7 @@ interface WaitLineProps {
 
 /** The text under a busy button: "Asking <host> to start the run." It shows after 2 s of `active`, and it has no gem. Only an empty live region renders before. */
 export function WaitLine({ active, host, what = "run" }: WaitLineProps): React.ReactNode {
-  const own = useRouteLoaderData<typeof rootLoader>("root")?.host ?? "the host";
+  const own = useRouteLoaderData<typeof rootLoader>("root")?.host ?? "the machine";
   const late = useAfter(active, WAIT_LINE_AFTER_MS);
   // The live region stays in the page, so a screen reader announces the line when it fills.
   return <div role="status">{late ? <p className="rail-note">{waitingText(host ?? own, what)}</p> : null}</div>;

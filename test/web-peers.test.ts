@@ -164,7 +164,7 @@ test("probe: refusals, bad bodies and a host that answers with another name are 
   const hosts = await probeWith(fetcher, { known }).hosts();
   assert.deepEqual(
     hosts.map((host) => host.reason),
-    ["refused this host (403)", "refused the host name (421)", "answered no host facts", "answered as another host", "has no host facts (404, darius before 0.139.0)"],
+    ["refused this machine (403)", "refused the host name (421)", "answered no machine facts", "answered as another machine", "has no machine facts (404, darius before 0.139.0)"],
   );
   assert.ok(hosts.every((host) => host.state === "unreachable" && host.live === null));
 });
@@ -181,8 +181,8 @@ test("scrubReason drops URLs, addresses and paths, and keeps it short", () => {
 
 test("parseHostLive checks the shape and the host", () => {
   assert.deepEqual(parseHostLive(JSON.stringify(live("host-b")), "host-b"), live("host-b"));
-  assert.equal(parseHostLive(JSON.stringify({ host: "host-b" }), "host-b"), "answered no host facts");
-  assert.equal(parseHostLive("[]", "host-b"), "answered no host facts");
+  assert.equal(parseHostLive(JSON.stringify({ host: "host-b" }), "host-b"), "answered no machine facts");
+  assert.equal(parseHostLive("[]", "host-b"), "answered no machine facts");
 });
 
 test("a broken [web.peers] does not stop the strip: the default URLs are asked", async () => {

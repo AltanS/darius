@@ -1,0 +1,1 @@
+import{F as e,L as t}from"./chunk-OB3PAWPO-zbfVsNFB.js";var n=t(e(),1);function r(e,t){let[r,i]=(0,n.useState)(!1);return(0,n.useEffect)(()=>{if(!e){i(!1);return}let n=setTimeout(()=>i(!0),t);return()=>clearTimeout(n)},[e,t]),e&&r}export{r as t};

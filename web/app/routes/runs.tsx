@@ -8,6 +8,7 @@ import { Section } from "../components/ui.tsx";
 import { scopeProjects } from "../lib/home.ts";
 import { href, RUN_ACKS, RUN_KINDS, RUN_STARTERS, runsFilterOf, runsQuery, type RunsFilter } from "../lib/paths.ts";
 import { filterSentence, runMatches } from "../lib/runs-filter.ts";
+import { STATE_WORDS } from "../lib/terms.ts";
 import { readSettings } from "../lib/settings.ts";
 import { statusOf } from "../lib/status.ts";
 import { activity } from "../lib/view.ts";
@@ -31,7 +32,7 @@ export function loader({ context, request, params: route }: Route.LoaderArgs) {
   const project = route.ws ?? "";
   const filter = runsFilterOf(params);
   const status = statusOf(context);
-  if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this host.`, { status: 404 });
+  if (project !== "" && !status.projects.some((candidate) => candidate.name === project)) throw data(`No workspace named ${project} on this machine.`, { status: 404 });
   // The self-test workspace stays out of the list of every project, as in all other lists, unless the settings show it (or the address names it).
   const { showSelftest } = readSettings(request.headers.get("cookie"));
   const projects = project === "" ? scopeProjects(status, { workspace: null, includeSelftest: showSelftest }) : status.projects;
@@ -85,7 +86,7 @@ export default function Runs({ loaderData }: Route.ComponentProps): React.ReactN
               <ChipRow label="State" current={filter.state}>
                 {["", ...STATES].map((name) => (
                   <Link key={name} to={change({ state: name })} className={chipClass(name === filter.state)} aria-current={name === filter.state ? "true" : undefined}>
-                    {name === "" ? "any state" : name}
+                    {name === "" ? "any state" : name === "held" ? STATE_WORDS.waits : name}
                   </Link>
                 ))}
                 <Link to={change({ imported: !filter.imported })} className={chipClass(filter.imported, true)} aria-current={filter.imported ? "true" : undefined}>

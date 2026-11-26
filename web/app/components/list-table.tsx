@@ -97,17 +97,19 @@ interface NameCellProps {
   marks?: React.ReactNode;
   /** A second muted line under the title, in the same cell: a mark too long to sit beside it. */
   sub?: React.ReactNode;
+  /** The title wraps to more lines instead of ending in an ellipsis (0.143.0). */
+  wrap?: boolean;
 }
 
 /** The name: the title as the row's link, and at most one muted phrase. */
-export function NameCell({ title, to, lead, phrase, below = false, marks, sub }: NameCellProps): React.ReactNode {
+export function NameCell({ title, to, lead, phrase, below = false, marks, sub, wrap = false }: NameCellProps): React.ReactNode {
   const name = to === undefined ? <span className="lt-title" title={title}>{title}</span> : (
     <Link to={to} className="lt-title lt-link" title={title}>
       {title}
     </Link>
   );
   return (
-    <td className={`lt-c lt-name${below ? " lt-below" : ""}`}>
+    <td className={`lt-c lt-name${below ? " lt-below" : ""}${wrap ? " lt-wrap" : ""}`}>
       <div className="lt-namebox">
         {lead}
         {name}
@@ -128,20 +130,26 @@ interface CellProps {
   label: string;
   kind?: Column["kind"];
   children: React.ReactNode;
+  /** The text wraps instead of staying on one line (0.143.0): a Why cell. */
+  wrap?: boolean;
 }
 
 /** Any other cell: a value with its column word for the phone. */
-export function Cell({ label, kind = "text", children }: CellProps): React.ReactNode {
+export function Cell({ label, kind = "text", children, wrap = false }: CellProps): React.ReactNode {
   return (
-    <td className={`lt-c lt-${kind}`} data-label={label}>
+    <td className={`lt-c lt-${kind}${wrap ? " lt-wrap" : ""}`} data-label={label}>
       {children}
     </td>
   );
 }
 
-/** An empty value or a zero: a muted dash, never "none", never a bright 0. */
-export function Dash(): React.ReactNode {
-  return <span className="lt-dash">-</span>;
+/** An empty value or a zero: a muted dash, never a bright 0. `title` says why it is empty: "no run yet". */
+export function Dash({ title }: { title?: string }): React.ReactNode {
+  return (
+    <span className="lt-dash" title={title}>
+      -
+    </span>
+  );
 }
 
 /** A count: the number, or a dash for zero. */

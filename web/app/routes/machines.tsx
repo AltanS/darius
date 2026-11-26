@@ -1,14 +1,14 @@
 /**
- * Machines (0.139.0, blocks since 0.141.1): every machine of the synced
- * store. One sentence with the states and the open runs, the versions
- * warning, then one block per machine, stacked at full width (the same
- * markup on a phone). A block says what lives on the machine: its state, its
- * name (the link to its page), the "this machine" mark, "n to check" when
- * its Needs attention list is not empty, the machine sentence, the
- * workspaces it runs and the copies it shows, the djinns that live there
- * (0.142.0: two tables, one under the other), and a muted row of facts. The live facts come from each machine's
- * own `darius serve`, the rest from the synced ledgers. A page in no
- * workspace. Read-only. `/hosts` redirects here.
+ * Machines (0.139.0, blocks since 0.141.1, "what needs me?" first since
+ * 0.143.0): every machine of the synced store. The headline counts what
+ * needs a look, each count a link to its item, then the machine states. Then
+ * one block per machine, stacked at full width (the same markup on a
+ * phone): its state, its name (the link to its page), the "this machine"
+ * mark, the machine sentence, Needs a look, the workspaces it runs and the
+ * copies it keeps, the rituals on schedule there, and a muted row of facts.
+ * The live facts come from each machine's own `darius serve`, the rest from
+ * the synced ledgers. A page in no workspace. Read-only. `/hosts` redirects
+ * here.
  */
 
 import { Link } from "react-router";
@@ -17,14 +17,18 @@ import type { Route } from "./+types/machines";
 import { BoxWord, Unknown } from "../components/machines.tsx";
 import { Sentence } from "../components/sentence.tsx";
 import { ListHead } from "../components/list-table.tsx";
-import { DjinnTable, RunsHereTable } from "../components/machine-lists.tsx";
+import { Definitions, LookList, OnScheduleTable, RunsHereTable, TableGloss, TermsHelp, TimeNote } from "../components/machine-lists.tsx";
 import { Time } from "../components/ui.tsx";
 import { uptimeText } from "../lib/format.ts";
-import { machineBlock, machineNames, machineSentence, openRunsLine, SENTENCE_NAMES, stateLine, stateSplit, type MachineBlock } from "../lib/machines.ts";
+import { machinesHeadline } from "../lib/look.ts";
+import { machineBlock, machineNames, machineSentence, SENTENCE_NAMES, type MachineBlock } from "../lib/machines.ts";
 import { href } from "../lib/paths.ts";
 import { differentVersions, machineWord, peersOf } from "../lib/peers.ts";
 import { statusOf, workspacesOf } from "../lib/status.ts";
-import { askingRuns } from "../lib/view.ts";
+import { LABELS, MACHINE_PAGE_TERMS, TERMS } from "../lib/terms.ts";
+import { needCounts } from "../lib/home.ts";
+import { onScheduleTitle } from "../lib/lists.ts";
+import { openAsks } from "../lib/view.ts";
 
 export { RouteError as ErrorBoundary } from "../components/route-error.tsx";
 
@@ -33,11 +37,14 @@ export async function loader({ context }: Route.LoaderArgs) {
   const peers = await peersOf(context);
   const workspaces = workspacesOf(context).workspaces;
   const selfVersion = peers.find((peer) => peer.self)?.version ?? fleet.hosts.find((host) => host.self)?.version ?? null;
-  const asking = askingRuns(statusOf(context).projects);
+  const status = statusOf(context);
+  const asks = openAsks(status.projects);
+  // The need-you count of each workspace from the source of the badges in Places: one number on both.
+  const needs = needCounts(status).partsByProject;
   const blocks = machineNames(fleet.hosts, peers).map((name) => {
     const peer = peers.find((one) => one.host === name);
     const openRuns = peer?.live?.openRuns ?? fleet.openRuns.filter((run) => run.host === name);
-    return machineBlock({ name, peer, host: fleet.hosts.find((host) => host.host === name), workspaces, selfVersion, lastRuns: fleet.lastRuns, openRuns, asking });
+    return machineBlock({ name, peer, host: fleet.hosts.find((host) => host.host === name), workspaces, selfVersion, lastRuns: fleet.lastRuns, openRuns, asks, needs });
   });
   return { blocks, versions: differentVersions(peers) };
 }
@@ -54,14 +61,15 @@ function StateWord({ facts }: { facts: MachineBlock["facts"] }): React.ReactNode
   );
 }
 
-/** "Also shows a copy of 12: a, b, c, d and 8 more": each name a link to its workspace. */
+/** "Also keeps a copy of 12 workspaces that run on other machines: a, b, c, d and 8 more": each name a link to its workspace. */
 function CopiesNote({ copies, machine }: { copies: readonly string[]; machine: string }): React.ReactNode {
   if (copies.length === 0) return null;
   const shown = copies.slice(0, SENTENCE_NAMES);
   const more = copies.length - shown.length;
+  const what = copies.length === 1 ? `1 ${TERMS.workspace.word} that runs` : `${String(copies.length)} ${TERMS.workspace.plural} that run`;
   return (
     <p className="mb-copies">
-      {`Also shows a copy of ${String(copies.length)}: `}
+      {`Also keeps a ${TERMS.copy.word} of ${what} on other machines: `}
       {shown.map((name, index) => (
         <span key={name}>
           {index === 0 ? null : index === shown.length - 1 && more === 0 ? " and " : ", "}
@@ -84,7 +92,8 @@ function RunsGroup({ block }: { block: MachineBlock }): React.ReactNode {
   const total = block.runs.length + block.moreRuns;
   return (
     <div className="mb-group">
-      <ListHead title="Workspaces it runs" count={total} order="worst first" />
+      <ListHead title={LABELS.workspacesItRuns} count={total} order="worst first" />
+      <TableGloss rows={block.runs} />
       {total === 0 ? <p className="text-muted">It runs no workspace.</p> : <RunsHereTable rows={block.runs} caption={`Workspaces ${block.facts.name} runs, worst first`} />}
       {block.moreRuns === 0 ? null : (
         <p className="mb-more">
@@ -96,23 +105,25 @@ function RunsGroup({ block }: { block: MachineBlock }): React.ReactNode {
   );
 }
 
-/** The djinns that live on the machine: the ones that need a look first, then by their last run; at most eight, then "and n more". */
-function DjinnsGroup({ block }: { block: MachineBlock }): React.ReactNode {
-  const total = block.djinns.length + block.moreDjinns;
+/** The rituals on schedule here, next due first: at most five, then "and n more". The ones with a problem are under Needs a look, never twice. */
+function OnScheduleGroup({ block }: { block: MachineBlock }): React.ReactNode {
+  const { facts, onSchedule, onScheduleTotal } = block;
+  if (facts.rituals === 0) return null;
+  const more = onScheduleTotal - onSchedule.length;
   return (
     <div className="mb-group">
-      <ListHead title="Djinns that live here" count={total} order="needs a look first, then last run, newest first" />
-      {total === 0 ? <p className="text-muted">No djinn lives here.</p> : <DjinnTable djinns={block.djinns} caption={`Djinns that live on ${block.facts.name}`} />}
-      {block.moreDjinns === 0 ? null : (
+      <ListHead title={onScheduleTitle(onScheduleTotal, facts.rituals)} order={LABELS.onScheduleOrder} />
+      {onScheduleTotal === 0 ? <p className="text-muted">None: every ritual here is under Needs a look.</p> : <OnScheduleTable rituals={onSchedule} caption={`Rituals on schedule on ${facts.name}, next due first`} />}
+      {more <= 0 ? null : (
         <p className="mb-more">
-          <Link to={href({ to: "machine", host: block.facts.name, hash: "djinns" })}>{`and ${String(block.moreDjinns)} more`}</Link>
+          <Link to={href({ to: "machine", host: facts.name, hash: "rituals" })}>{`and ${String(more)} more`}</Link>
         </p>
       )}
     </div>
   );
 }
 
-/** One muted row: darius, up, load, box check, the age of the last ledger line. */
+/** One muted row: darius, up, load, sandbox check, last activity. */
 function FactsRow({ facts }: { facts: MachineBlock["facts"] }): React.ReactNode {
   return (
     <dl className="mb-facts">
@@ -124,18 +135,18 @@ function FactsRow({ facts }: { facts: MachineBlock["facts"] }): React.ReactNode 
         <dt>Up</dt>
         <dd>{facts.uptimeSeconds === null ? <Unknown /> : uptimeText(facts.uptimeSeconds)}</dd>
       </div>
-      <div>
-        <dt>Load</dt>
+      <div title={LABELS.loadTitle}>
+        <dt>{LABELS.load}</dt>
         <dd>{facts.load === null ? <Unknown /> : facts.load.map((value) => value.toFixed(2)).join(" ")}</dd>
       </div>
       <div>
-        <dt>Box check</dt>
+        <dt>{LABELS.sandboxCheck}</dt>
         <dd>
           <BoxWord check={facts.boxCheck} />
         </dd>
       </div>
       <div>
-        <dt>Last ledger line</dt>
+        <dt>{LABELS.lastActivity}</dt>
         <dd>{facts.lastSeen === null ? <Unknown /> : <Time iso={facts.lastSeen} />}</dd>
       </div>
     </dl>
@@ -143,25 +154,21 @@ function FactsRow({ facts }: { facts: MachineBlock["facts"] }): React.ReactNode 
 }
 
 function MachineBlockView({ block }: { block: MachineBlock }): React.ReactNode {
-  const { facts, attention } = block;
+  const { facts, look } = block;
   return (
-    <li className="mb panel">
+    <li className="mb panel" id={`machine-${facts.name}`}>
       <div className="mb-head">
         <StateWord facts={facts} />
         <h2 className="mb-name">
           <Link to={href({ to: "machine", host: facts.name })}>{facts.name}</Link>
         </h2>
         {facts.self ? <span className="mt-this">this machine</span> : null}
-        {attention.length === 0 ? null : (
-          <Link to={href({ to: "machine", host: facts.name, hash: "attention" })} className="mb-check">
-            {`${String(attention.length)} to check`}
-          </Link>
-        )}
       </div>
       <Sentence className="mb-sentence" parts={machineSentence(facts)} />
+      <LookList items={look} />
       <div className="mb-groups">
         <RunsGroup block={block} />
-        <DjinnsGroup block={block} />
+        <OnScheduleGroup block={block} />
       </div>
       <FactsRow facts={facts} />
     </li>
@@ -170,11 +177,13 @@ function MachineBlockView({ block }: { block: MachineBlock }): React.ReactNode {
 
 export default function MachinesPage({ loaderData }: Route.ComponentProps): React.ReactNode {
   const { blocks, versions } = loaderData;
+  const headline = machinesHeadline({ items: blocks.flatMap((one) => one.look), states: blocks.map((one) => one.facts.state), onSchedule: blocks.reduce((sum, one) => sum + one.onScheduleTotal, 0) });
   return (
     <div className="stack">
       <header className="page-head page-head-tight">
         <h1 className="page-title">Machines</h1>
-        <p className="fl-headline">{`${stateLine(stateSplit(blocks.map((one) => one.facts.state)))} ${openRunsLine(blocks.map((one) => one.facts))}`}</p>
+        <Sentence className="fl-headline" parts={headline} />
+        <Definitions terms={["ritual", "workspace"]} className="def-line" />
       </header>
       {versions.length === 0 ? null : (
         <p className="page-warn tone-late" role="status">
@@ -186,6 +195,8 @@ export default function MachinesPage({ loaderData }: Route.ComponentProps): Reac
           <MachineBlockView key={block.facts.name} block={block} />
         ))}
       </ul>
+      <TimeNote />
+      <TermsHelp terms={MACHINE_PAGE_TERMS} />
     </div>
   );
 }

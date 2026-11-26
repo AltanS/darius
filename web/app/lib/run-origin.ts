@@ -88,7 +88,7 @@ export function originView(origin: RunOrigin, startedAt: string, clock: HostMome
 function childTail(child: FollowUpChild, clock: HostMoment): string {
   const { row } = child;
   if (row.phase === "running") return ", running";
-  if (row.phase === "held") return ", waiting for you";
+  if (row.phase === "held") return ", waits for your answer";
   const end = row.endedAt === null ? "" : ` ${momentText(row.endedAt, clock.today, clock.offset)}`;
   if (row.outcome !== "complete") return `, ${row.outcome ?? "closed"}${end}`;
   const changed = row.result?.fixed ?? 0;

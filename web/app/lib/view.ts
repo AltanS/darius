@@ -65,14 +65,22 @@ export function activity(projects: readonly ProjectStatus[], opts: { withImporte
     .toSorted((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
-/** The runs of these projects that ask a question nobody answered (`asksYou`), as `project/run`. */
-export function askingRuns(projects: readonly ProjectStatus[]): Set<string> {
-  return new Set(
-    projects.flatMap((project) => {
-      const runs = project.runs.map((run) => Object.assign({ project: project.name }, run));
-      return runs.filter((run) => asksYou(run, runs)).map((run) => `${project.name}/${run.run}`);
-    }),
-  );
+/**
+ * The runs that wait for an answer (0.143.0), as `project/run`: a held run
+ * with the questions of its newest hold, and a complete run whose question
+ * nobody answered (`asksYou`). The machine lists say "waits for your answer"
+ * for both, from this one map.
+ */
+export function openAsks(projects: readonly ProjectStatus[]): Map<string, { questions: number; at: string }> {
+  const asks = new Map<string, { questions: number; at: string }>();
+  for (const project of projects) {
+    const runs = project.runs.map((run) => Object.assign({ project: project.name }, run));
+    for (const run of runs) {
+      if (run.phase === "held") asks.set(`${project.name}/${run.run}`, { questions: Math.max(1, run.questions.length - (run.holdFrom ?? 0)), at: run.startedAt });
+      if (asksYou(run, runs)) asks.set(`${project.name}/${run.run}`, { questions: run.result?.questions ?? 1, at: run.endedAt ?? run.startedAt });
+    }
+  }
+  return asks;
 }
 
 /** A run row that may name its project (an activity run does). Runs of two projects never replace each other. */
@@ -237,7 +245,7 @@ export function sourceText(ritual: RitualRow, now: number): string | null {
   if (ritual.source === "unmanaged") return "Not in .darius.toml. This ritual never runs unattended.";
   if (ritual.source !== "repo") return null;
   const commit = ritual.defCommit === null ? "no commit" : `commit ${ritual.defCommit}`;
-  const host = ritual.defHost === null ? "" : `, host ${ritual.defHost}`;
+  const host = ritual.defHost === null ? "" : `, machine ${ritual.defHost}`;
   const age = ritual.defAt === null ? "" : `, ${relativeTime(ritual.defAt, now)}`;
   const dirty = ritual.defDirty ? " (uncommitted changes)" : "";
   return `Defined in .darius.toml at ${commit}${host}${age}${dirty}`;
